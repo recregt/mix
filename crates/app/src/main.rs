@@ -13,18 +13,12 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
 
-    if !matches!(
-        cli.command,
-        Command::Doctor | Command::Bootstrap | Command::Status
-    ) && let Err(e) = mix_bootstrap::Environment::open().await
-    {
-        eprintln!("{e}\n\nrun `mix doctor` to reset mix's managed state.");
-        std::process::exit(1);
+    if !matches!(cli.command, Command::Doctor { .. } | Command::Bootstrap) {
+        commands::doctor::report_health().await?;
     }
 
     match cli.command {
         Command::Bootstrap => commands::bootstrap::run().await,
-        Command::Doctor => commands::doctor::run().await,
-        Command::Status => commands::status::run().await,
+        Command::Doctor { fix } => commands::doctor::run(fix).await,
     }
 }

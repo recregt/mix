@@ -1,6 +1,5 @@
 pub mod bootstrap;
 pub mod doctor;
-pub mod status;
 
 fn report(outcome: mix_bootstrap::Outcome, message: &str) -> anyhow::Result<()> {
     match outcome {

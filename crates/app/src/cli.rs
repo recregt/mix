@@ -10,6 +10,8 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Command {
     Bootstrap,
-    Doctor,
-    Status,
+    Doctor {
+        #[arg(long)]
+        fix: bool,
+    },
 }
