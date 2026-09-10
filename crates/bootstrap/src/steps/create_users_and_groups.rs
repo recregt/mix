@@ -35,6 +35,7 @@ impl Step for CreateUsersAndGroups {
                 &[
                     "--system",
                     "--no-create-home",
+                    "--no-user-group",
                     "--home-dir",
                     "/var/empty",
                     "--shell",
@@ -42,6 +43,8 @@ impl Step for CreateUsersAndGroups {
                     "--uid",
                     &uid,
                     "--gid",
+                    NIXBLD_GROUP,
+                    "--groups",
                     NIXBLD_GROUP,
                     "--comment",
                     &comment,
