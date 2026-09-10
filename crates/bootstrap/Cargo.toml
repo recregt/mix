@@ -1,0 +1,23 @@
+[package]
+name = "mix-bootstrap"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[features]
+default = []
+embed-tarball = []
+
+[dependencies]
+mix-core = { path = "../core" }
+async-trait = { workspace = true }
+lzma-rs = { workspace = true }
+nix = { workspace = true }
+reqwest = { workspace = true }
+sha2 = { workspace = true }
+tar = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[build-dependencies]
+sha2 = { workspace = true }
