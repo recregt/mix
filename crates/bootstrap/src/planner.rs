@@ -5,7 +5,7 @@ use crate::steps::{
     FetchAndUnpack,
 };
 
-pub fn install_steps() -> Vec<Box<dyn Step>> {
+pub fn bootstrap_steps() -> Vec<Box<dyn Step>> {
     vec![
         Box::new(CreateNixDir),
         Box::new(CreateNixTree),

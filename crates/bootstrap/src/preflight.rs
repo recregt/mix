@@ -4,13 +4,18 @@ use mix_core::{Error, Result};
 
 use crate::detect::{self, Wsl};
 
+pub enum RootStatus {
+    AlreadyRoot,
+    ReExecuted { exit_code: i32 },
+}
+
 pub fn is_root() -> bool {
     nix::unistd::Uid::effective().is_root()
 }
 
-pub fn ensure_root(reason: &'static str) -> Result<()> {
+pub fn ensure_root(reason: &'static str) -> Result<RootStatus> {
     if is_root() {
-        return Ok(());
+        return Ok(RootStatus::AlreadyRoot);
     }
 
     eprintln!("mix needs root to {reason}; re-running via `sudo`...");
@@ -36,7 +41,9 @@ pub fn ensure_root(reason: &'static str) -> Result<()> {
         detail: e.to_string(),
     })?;
 
-    std::process::exit(status.code().unwrap_or(1));
+    Ok(RootStatus::ReExecuted {
+        exit_code: status.code().unwrap_or(1),
+    })
 }
 
 pub fn check_not_nixos() -> Result<()> {

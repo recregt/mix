@@ -1,7 +1,7 @@
+mod bootstrap;
 mod constants;
 pub mod detect;
 mod doctor;
-mod install;
 mod manifest;
 mod pins;
 mod planner;
@@ -11,8 +11,8 @@ mod tarball;
 mod teardown;
 mod util;
 
+pub use bootstrap::bootstrap;
 pub use doctor::doctor;
-pub use install::install;
 
 pub struct Environment(());
 
@@ -21,4 +21,9 @@ impl Environment {
         manifest::verify().await?;
         Ok(Self(()))
     }
+}
+
+pub enum Outcome {
+    Bootstrapped(Environment),
+    ReExecuted { exit_code: i32 },
 }

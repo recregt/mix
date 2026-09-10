@@ -9,7 +9,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    Install,
+    Bootstrap,
     Doctor,
     Status,
 }
