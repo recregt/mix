@@ -18,8 +18,31 @@ pub enum Error {
     #[error("network error: {0}")]
     Network(String),
 
-    #[error("{artifact} does not match what mix expects: {detail}")]
+    #[error("{artifact}: {detail}\n\nRun `mix doctor --fix` to reconcile configuration drift.")]
     Integrity { artifact: String, detail: String },
+
+    #[error(
+        "this system already manages its own environment natively; mix's bootstrap isn't needed here."
+    )]
+    UnsupportedHost,
+
+    #[error(
+        "mix's sandboxed build environment needs a real Linux kernel. If this is WSL, upgrade to \
+         WSL2 (`wsl --set-version <distro> 2`) and retry."
+    )]
+    UnsupportedKernel,
+
+    #[error("{hint}\n\nmix requires systemd to manage its background services.")]
+    SystemdNotReady { hint: &'static str },
+
+    #[error(
+        "an existing, unmanaged runtime was detected on this system; mix requires a dedicated \
+         managed environment. Remove it before continuing."
+    )]
+    AlreadyManaged,
+
+    #[error("mix does not support this platform ({0})")]
+    UnsupportedTarget(String),
 
     #[error("{0}")]
     Other(String),

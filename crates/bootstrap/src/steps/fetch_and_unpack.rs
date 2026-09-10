@@ -19,7 +19,7 @@ pub struct FetchAndUnpack;
 #[async_trait]
 impl Step for FetchAndUnpack {
     fn name(&self) -> &'static str {
-        "fetch, unpack, and activate Nix"
+        "fetch and activate the managed runtime"
     }
 
     async fn check(&self) -> Result<bool> {

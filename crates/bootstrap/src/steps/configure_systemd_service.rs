@@ -11,7 +11,7 @@ pub struct ConfigureSystemdService;
 #[async_trait]
 impl Step for ConfigureSystemdService {
     fn name(&self) -> &'static str {
-        "configure nix-daemon systemd service"
+        "configure the managed background service"
     }
 
     async fn check(&self) -> Result<bool> {

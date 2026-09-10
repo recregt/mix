@@ -4,8 +4,7 @@ use mix_core::{Error, Result};
 
 use crate::detect::{self, Wsl};
 
-pub enum RootStatus {
-    AlreadyRoot,
+pub enum EscalationOutcome {
     ReExecuted { exit_code: i32 },
 }
 
@@ -13,13 +12,7 @@ pub fn is_root() -> bool {
     nix::unistd::Uid::effective().is_root()
 }
 
-pub fn ensure_root(reason: &'static str) -> Result<RootStatus> {
-    if is_root() {
-        return Ok(RootStatus::AlreadyRoot);
-    }
-
-    eprintln!("mix needs root to {reason}; re-running via `sudo`...");
-
+pub fn escalate() -> Result<EscalationOutcome> {
     let current_exe = std::env::current_exe().map_err(|e| Error::Io {
         path: "/proc/self/exe".into(),
         source: e,
@@ -41,16 +34,14 @@ pub fn ensure_root(reason: &'static str) -> Result<RootStatus> {
         detail: e.to_string(),
     })?;
 
-    Ok(RootStatus::ReExecuted {
+    Ok(EscalationOutcome::ReExecuted {
         exit_code: status.code().unwrap_or(1),
     })
 }
 
 pub fn check_not_nixos() -> Result<()> {
     if Path::new("/etc/NIXOS").exists() {
-        return Err(Error::Other(
-            "this looks like NixOS already -- mix's bootstrap is for non-NixOS Linux/WSL2".into(),
-        ));
+        return Err(Error::UnsupportedHost);
     }
     Ok(())
 }
@@ -64,20 +55,14 @@ pub async fn check_nix_not_installed() -> Result<()> {
         .is_ok();
 
     if already {
-        return Err(Error::Other(
-            "Nix already appears to be installed (`nix-env --version` succeeded)".into(),
-        ));
+        return Err(Error::AlreadyManaged);
     }
     Ok(())
 }
 
 pub fn check_not_wsl1() -> Result<()> {
     if detect::wsl::detect() == Wsl::V1 {
-        return Err(Error::Other(
-            "WSL1 detected -- Nix's sandbox needs a real Linux kernel, which WSL1 doesn't \
-             provide. Upgrade the distro to WSL2 (`wsl --set-version <distro> 2`) and retry."
-                .into(),
-        ));
+        return Err(Error::UnsupportedKernel);
     }
     Ok(())
 }
@@ -96,7 +81,5 @@ pub fn check_systemd_ready() -> Result<()> {
          isn't systemd)."
     };
 
-    Err(Error::Other(format!(
-        "{hint} mix's default install needs systemd to run the Nix daemon."
-    )))
+    Err(Error::SystemdNotReady { hint })
 }

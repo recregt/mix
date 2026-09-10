@@ -66,7 +66,10 @@ async fn check_one(artifact: &ManagedArtifact) -> Result<()> {
                 .await
                 .map_err(|_| integrity(path, "missing"))?;
             if contents != expected {
-                return Err(integrity(path, "contents don't match mix's managed copy"));
+                return Err(integrity(
+                    path,
+                    "configuration drift detected (contents modified)",
+                ));
             }
         }
         ManagedArtifact::Group { name, gid } => {

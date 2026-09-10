@@ -1,13 +1,10 @@
-use mix_core::Result;
+use mix_core::{Error, Result};
 
-use crate::preflight::RootStatus;
-use crate::{Outcome, bootstrap, preflight, teardown};
+use crate::{Environment, bootstrap, preflight, teardown};
 
-pub async fn doctor() -> Result<Outcome> {
-    if let RootStatus::ReExecuted { exit_code } =
-        preflight::ensure_root("reset mix's managed state")?
-    {
-        return Ok(Outcome::ReExecuted { exit_code });
+pub async fn doctor() -> Result<Environment> {
+    if !preflight::is_root() {
+        return Err(Error::NotRoot("reset the managed environment"));
     }
 
     teardown::teardown().await?;

@@ -25,7 +25,7 @@ pub struct CreateNixTree;
 #[async_trait]
 impl Step for CreateNixTree {
     fn name(&self) -> &'static str {
-        "create the /nix/var directory tree"
+        "create managed runtime directory tree"
     }
 
     async fn check(&self) -> Result<bool> {

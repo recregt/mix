@@ -1,3 +1,9 @@
+use crate::ui;
+
 pub async fn run() -> anyhow::Result<()> {
-    super::report(mix_bootstrap::bootstrap().await?, "Nix installed.")
+    super::ensure_root_or_exit("initialize the managed environment");
+
+    mix_bootstrap::bootstrap().await?;
+    ui::ok("System environment initialized and ready.");
+    Ok(())
 }

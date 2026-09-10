@@ -1,23 +1,30 @@
+use crate::ui;
+
 pub async fn run(fix: bool) -> anyhow::Result<()> {
     if fix {
-        return super::report(
-            mix_bootstrap::doctor().await?,
-            "mix reset its managed state and reinstalled Nix.",
-        );
+        super::ensure_root_or_exit("reset the managed environment");
+
+        mix_bootstrap::doctor().await?;
+        ui::ok("System state successfully restored to pristine condition.");
+        return Ok(());
     }
 
-    report_health().await
+    check().await
 }
 
-pub async fn report_health() -> anyhow::Result<()> {
+pub async fn check() -> anyhow::Result<()> {
     match mix_bootstrap::Environment::open().await {
         Ok(_) => {
-            println!("ok: mix's managed state is intact.");
+            ui::ok("System health is intact.");
             Ok(())
         }
         Err(e) => {
-            println!("not ok: {e}\n\nrun `mix doctor --fix` to reset it.");
+            ui::fail(check_failed_message(e));
             std::process::exit(1);
         }
     }
+}
+
+pub fn check_failed_message(e: impl std::fmt::Display) -> String {
+    format!("System health check failed: {e}")
 }

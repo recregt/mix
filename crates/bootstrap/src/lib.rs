@@ -22,8 +22,3 @@ impl Environment {
         Ok(Self(()))
     }
 }
-
-pub enum Outcome {
-    Bootstrapped(Environment),
-    ReExecuted { exit_code: i32 },
-}

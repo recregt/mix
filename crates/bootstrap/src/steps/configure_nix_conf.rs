@@ -8,7 +8,7 @@ pub struct ConfigureNixConf;
 #[async_trait]
 impl Step for ConfigureNixConf {
     fn name(&self) -> &'static str {
-        "write nix.conf and shell profile snippet"
+        "write runtime configuration"
     }
 
     async fn check(&self) -> Result<bool> {

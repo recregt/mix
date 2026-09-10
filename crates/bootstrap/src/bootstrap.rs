@@ -1,11 +1,10 @@
-use mix_core::{Plan, Result};
+use mix_core::{Error, Plan, Result};
 
-use crate::preflight::RootStatus;
-use crate::{Environment, Outcome, planner, preflight};
+use crate::{Environment, planner, preflight};
 
-pub async fn bootstrap() -> Result<Outcome> {
-    if let RootStatus::ReExecuted { exit_code } = preflight::ensure_root("bootstrap Nix")? {
-        return Ok(Outcome::ReExecuted { exit_code });
+pub async fn bootstrap() -> Result<Environment> {
+    if !preflight::is_root() {
+        return Err(Error::NotRoot("bootstrap the managed environment"));
     }
 
     preflight::check_not_nixos()?;
@@ -15,5 +14,5 @@ pub async fn bootstrap() -> Result<Outcome> {
 
     Plan::new(planner::bootstrap_steps()).run().await?;
 
-    Ok(Outcome::Bootstrapped(Environment::open().await?))
+    Environment::open().await
 }

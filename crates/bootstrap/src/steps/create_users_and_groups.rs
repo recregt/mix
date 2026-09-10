@@ -29,7 +29,7 @@ impl Step for CreateUsersAndGroups {
             }
 
             let uid = (NIXBLD_UID_BASE + n).to_string();
-            let comment = format!("Nix build user {n}");
+            let comment = format!("mix build user {n}");
             run(
                 "useradd",
                 &[

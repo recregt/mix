@@ -19,11 +19,7 @@ pub fn embedded() -> Option<&'static [u8]> {
 
 pub fn host_pin() -> Result<&'static TarballPin> {
     let key = host_target_key();
-    pin_for(&key).ok_or_else(|| {
-        Error::Other(format!(
-            "mix does not have a pinned Nix release for this target ({key})"
-        ))
-    })
+    pin_for(&key).ok_or(Error::UnsupportedTarget(key))
 }
 
 fn host_target_key() -> String {
@@ -39,7 +35,7 @@ pub async fn bytes() -> Result<Vec<u8>> {
     tracing::info!(
         url = pin.url,
         version = crate::pins::NIX_VERSION,
-        "fetching Nix tarball"
+        "fetching runtime archive"
     );
     let response = reqwest::get(pin.url)
         .await
@@ -76,7 +72,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 pub fn unpack(tarball: &[u8], dest: &Path) -> Result<()> {
     let mut decompressed = Vec::new();
     lzma_rs::xz_decompress(&mut Cursor::new(tarball), &mut decompressed)
-        .map_err(|e| Error::Other(format!("decompressing Nix tarball: {e}")))?;
+        .map_err(|e| Error::Other(format!("decompressing runtime archive: {e}")))?;
 
     let mut archive = tar::Archive::new(Cursor::new(decompressed));
     archive.set_preserve_permissions(true);
