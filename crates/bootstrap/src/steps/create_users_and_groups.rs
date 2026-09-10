@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use mix_core::{Result, Step};
 
-use crate::constants::{NIXBLD_GROUP, NIXBLD_UID_BASE, NIXBLD_USER_COUNT};
+use crate::constants::{NIXBLD_GID, NIXBLD_GROUP, NIXBLD_UID_BASE, NIXBLD_USER_COUNT};
 use crate::util::run;
 
 pub struct CreateUsersAndGroups;
@@ -13,12 +13,13 @@ impl Step for CreateUsersAndGroups {
     }
 
     async fn check(&self) -> Result<bool> {
-        Ok(group_exists(NIXBLD_GROUP) && all_users_exist())
+        Ok(group_has_gid(NIXBLD_GROUP, NIXBLD_GID) && all_users_exist())
     }
 
     async fn execute(&mut self) -> Result<()> {
         if !group_exists(NIXBLD_GROUP) {
-            run("groupadd", &["--system", NIXBLD_GROUP]).await?;
+            let gid = NIXBLD_GID.to_string();
+            run("groupadd", &["--system", "--gid", &gid, NIXBLD_GROUP]).await?;
         }
 
         for n in 1..=NIXBLD_USER_COUNT {
@@ -60,6 +61,13 @@ pub fn user_name(n: u32) -> String {
 
 pub fn group_exists(name: &str) -> bool {
     nix::unistd::Group::from_name(name).ok().flatten().is_some()
+}
+
+pub fn group_has_gid(name: &str, gid: u32) -> bool {
+    nix::unistd::Group::from_name(name)
+        .ok()
+        .flatten()
+        .is_some_and(|group| group.gid.as_raw() == gid)
 }
 
 pub fn user_exists(name: &str) -> bool {

@@ -10,6 +10,7 @@ pub enum ManagedArtifact {
     },
     Group {
         name: &'static str,
+        gid: u32,
     },
     SystemdUnit {
         name: &'static str,

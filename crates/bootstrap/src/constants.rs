@@ -1,4 +1,5 @@
 pub const NIXBLD_GROUP: &str = "nixbld";
+pub const NIXBLD_GID: u32 = 30_000;
 pub const NIXBLD_USER_COUNT: u32 = 32;
 pub const NIXBLD_UID_BASE: u32 = 30_000;
 

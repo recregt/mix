@@ -4,10 +4,10 @@ use std::path::Path;
 use mix_core::{Error, ManagedArtifact, Manifest, Result};
 
 use crate::constants::{
-    NIX_CONF, NIX_CONF_DEST, NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SOCKET_DEST, NIXBLD_GROUP,
-    PROFILE_SNIPPET, PROFILE_SNIPPET_DEST,
+    NIX_CONF, NIX_CONF_DEST, NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SOCKET_DEST, NIXBLD_GID,
+    NIXBLD_GROUP, PROFILE_SNIPPET, PROFILE_SNIPPET_DEST,
 };
-use crate::steps::create_users_and_groups::{all_users_exist, group_exists};
+use crate::steps::create_users_and_groups::{all_users_exist, group_has_gid};
 
 pub const MANIFEST: Manifest = &[
     ManagedArtifact::Directory {
@@ -22,7 +22,10 @@ pub const MANIFEST: Manifest = &[
         path: PROFILE_SNIPPET_DEST,
         expected: PROFILE_SNIPPET,
     },
-    ManagedArtifact::Group { name: NIXBLD_GROUP },
+    ManagedArtifact::Group {
+        name: NIXBLD_GROUP,
+        gid: NIXBLD_GID,
+    },
     ManagedArtifact::SystemdUnit {
         name: "nix-daemon.service",
         dest: NIX_DAEMON_SERVICE_DEST,
@@ -66,9 +69,9 @@ async fn check_one(artifact: &ManagedArtifact) -> Result<()> {
                 return Err(integrity(path, "contents don't match mix's managed copy"));
             }
         }
-        ManagedArtifact::Group { name } => {
-            if !group_exists(name) {
-                return Err(integrity(name, "group does not exist"));
+        ManagedArtifact::Group { name, gid } => {
+            if !group_has_gid(name, gid) {
+                return Err(integrity(name, "group is missing or has the wrong gid"));
             }
         }
         ManagedArtifact::SystemdUnit { name, dest } => {

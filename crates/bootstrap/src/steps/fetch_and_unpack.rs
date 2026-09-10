@@ -1,10 +1,13 @@
 use std::io::Write as _;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use mix_core::{Error, Result, Step};
+use nix::fcntl::{AT_FDCWD, AtFlags};
+use nix::unistd::{Gid, Uid, fchownat};
 
+use crate::constants::NIXBLD_GID;
 use crate::pins::NIX_VERSION;
 use crate::tarball;
 
@@ -47,6 +50,7 @@ fn provision(tarball_bytes: &[u8]) -> Result<()> {
 
     let unpacked_root = find_single_child(scratch.path(), |name| name.starts_with("nix-"))?;
     move_store_into_place(&unpacked_root)?;
+    ensure_store_ownership()?;
 
     let nix_pkg = resolve_backlink(&unpacked_root, |name| {
         name.ends_with(&format!("-nix-{NIX_VERSION}"))
@@ -168,6 +172,47 @@ fn make_read_only(root: &Path) -> Result<()> {
         let mut perms = meta.permissions();
         perms.set_mode(perms.mode() & !0o222);
         std::fs::set_permissions(&path, perms).map_err(|e| Error::Io { path, source: e })?;
+    }
+    Ok(())
+}
+
+fn ensure_store_ownership() -> Result<()> {
+    let target_gid = Gid::from_raw(NIXBLD_GID);
+    let root_uid = Uid::from_raw(0);
+
+    let mut stack = vec![PathBuf::from(NIX_STORE)];
+    while let Some(path) = stack.pop() {
+        let meta = std::fs::symlink_metadata(&path).map_err(|e| Error::Io {
+            path: path.clone(),
+            source: e,
+        })?;
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        if meta.is_dir() {
+            let entries = std::fs::read_dir(&path).map_err(|e| Error::Io {
+                path: path.clone(),
+                source: e,
+            })?;
+            for entry in entries {
+                let entry = entry.map_err(|e| Error::Io {
+                    path: path.clone(),
+                    source: e,
+                })?;
+                stack.push(entry.path());
+            }
+        }
+
+        if meta.gid() != NIXBLD_GID || meta.uid() != 0 {
+            fchownat(
+                AT_FDCWD,
+                &path,
+                Some(root_uid),
+                Some(target_gid),
+                AtFlags::AT_SYMLINK_NOFOLLOW,
+            )
+            .map_err(|e| Error::Other(format!("chown {}: {e}", path.display())))?;
+        }
     }
     Ok(())
 }
