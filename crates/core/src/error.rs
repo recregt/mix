@@ -18,7 +18,7 @@ pub enum Error {
     #[error("network error: {0}")]
     Network(String),
 
-    #[error("{artifact}: {detail}\n\nRun `mix doctor --fix` to reconcile configuration drift.")]
+    #[error("{artifact}: {detail}")]
     Integrity { artifact: String, detail: String },
 
     #[error(
@@ -44,8 +44,17 @@ pub enum Error {
     #[error("mix does not support this platform ({0})")]
     UnsupportedTarget(String),
 
-    #[error("{0}")]
-    Other(String),
+    #[error("required environment variable `{0}` is not set")]
+    MissingEnv(&'static str),
+
+    #[error("decompressing archive: {0}")]
+    Decompression(String),
+
+    #[error("archive layout was not what mix expected: {0}")]
+    MalformedArchive(String),
+
+    #[error("background task panicked: {0}")]
+    TaskPanicked(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

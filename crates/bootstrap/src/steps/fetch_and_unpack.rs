@@ -31,7 +31,7 @@ impl Step for FetchAndUnpack {
 
         tokio::task::spawn_blocking(move || provision(&bytes))
             .await
-            .map_err(|e| Error::Other(format!("provisioning task panicked: {e}")))??;
+            .map_err(|e| Error::TaskPanicked(e.to_string()))??;
 
         Ok(())
     }
@@ -82,7 +82,7 @@ fn find_single_child(dir: &Path, pred: impl Fn(&str) -> bool) -> Result<PathBuf>
 
     match matches.len() {
         1 => Ok(matches.remove(0)),
-        n => Err(Error::Other(format!(
+        n => Err(Error::MalformedArchive(format!(
             "expected exactly one matching entry in {}, found {n}",
             dir.display()
         ))),
@@ -211,7 +211,10 @@ fn ensure_store_ownership() -> Result<()> {
                 Some(target_gid),
                 AtFlags::AT_SYMLINK_NOFOLLOW,
             )
-            .map_err(|e| Error::Other(format!("chown {}: {e}", path.display())))?;
+            .map_err(|e| Error::Io {
+                path: path.clone(),
+                source: std::io::Error::from(e),
+            })?;
         }
     }
     Ok(())
@@ -251,10 +254,7 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
         detail: e.to_string(),
     })?;
     if !output.status.success() {
-        return Err(Error::Command {
-            command: "nix-store --load-db".into(),
-            detail: String::from_utf8_lossy(&output.stderr).into_owned(),
-        });
+        return Err(crate::util::command_error("nix-store --load-db", &output));
     }
 
     Ok(())
@@ -278,19 +278,14 @@ fn activate_default_profile(nix_pkg: &Path, nss_cacert_pkg: &Path) -> Result<()>
         })?;
 
     if !output.status.success() {
-        return Err(Error::Command {
-            command: "nix-env --install".into(),
-            detail: String::from_utf8_lossy(&output.stderr).into_owned(),
-        });
+        return Err(crate::util::command_error("nix-env --install", &output));
     }
 
     Ok(())
 }
 
 fn root_home() -> Result<String> {
-    std::env::var("HOME").map_err(|_| {
-        Error::Other("$HOME is not set -- mix expects to run as root via `sudo --set-home`".into())
-    })
+    std::env::var("HOME").map_err(|_| Error::MissingEnv("HOME"))
 }
 
 #[cfg(test)]

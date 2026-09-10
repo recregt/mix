@@ -26,5 +26,7 @@ pub async fn check() -> anyhow::Result<()> {
 }
 
 pub fn check_failed_message(e: impl std::fmt::Display) -> String {
-    format!("System health check failed: {e}")
+    format!(
+        "System health check failed: {e}\n\nRun `mix doctor --fix` to reconcile configuration drift."
+    )
 }

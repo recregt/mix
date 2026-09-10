@@ -72,7 +72,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 pub fn unpack(tarball: &[u8], dest: &Path) -> Result<()> {
     let mut decompressed = Vec::new();
     lzma_rs::xz_decompress(&mut Cursor::new(tarball), &mut decompressed)
-        .map_err(|e| Error::Other(format!("decompressing runtime archive: {e}")))?;
+        .map_err(|e| Error::Decompression(e.to_string()))?;
 
     let mut archive = tar::Archive::new(Cursor::new(decompressed));
     archive.set_preserve_permissions(true);

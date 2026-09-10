@@ -12,13 +12,24 @@ pub async fn run(command: &str, args: &[&str]) -> Result<()> {
         })?;
 
     if !output.status.success() {
-        return Err(Error::Command {
-            command: command.into(),
-            detail: String::from_utf8_lossy(&output.stderr).into_owned(),
-        });
+        return Err(command_error(command, &output));
     }
 
     Ok(())
+}
+
+pub fn command_error(command: impl Into<String>, output: &std::process::Output) -> Error {
+    let detail = if !output.stderr.is_empty() {
+        String::from_utf8_lossy(&output.stderr).trim().to_string()
+    } else if !output.stdout.is_empty() {
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    } else {
+        format!("exited with status {}", output.status)
+    };
+    Error::Command {
+        command: command.into(),
+        detail,
+    }
 }
 
 pub async fn files_match(a: &str, b: &str) -> bool {
