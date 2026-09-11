@@ -6,6 +6,12 @@ pub struct TarballPin {
     pub sha256: &'static str,
 }
 
+impl TarballPin {
+    pub fn filename(&self) -> &'static str {
+        self.url.rsplit('/').next().unwrap_or(self.url)
+    }
+}
+
 pub const NIX_TARBALLS: &[TarballPin] = &[
     TarballPin {
         target: "x86_64-linux",
@@ -15,10 +21,21 @@ pub const NIX_TARBALLS: &[TarballPin] = &[
     TarballPin {
         target: "aarch64-linux",
         url: "https://releases.nixos.org/nix/nix-2.35.2/nix-2.35.2-aarch64-linux.tar.xz",
-        sha256: "UNVERIFIED-run-scripts/bump-nix.sh",
+        sha256: "4d0302a2910f5eec1c33b8deef634f04899a75737e7001ec49908d003ae5efda",
     },
 ];
 
 pub fn pin_for(target: &str) -> Option<&'static TarballPin> {
     NIX_TARBALLS.iter().find(|p| p.target == target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filename_extracts_the_last_url_segment() {
+        let pin = pin_for("x86_64-linux").unwrap();
+        assert_eq!(pin.filename(), "nix-2.35.2-x86_64-linux.tar.xz");
+    }
 }

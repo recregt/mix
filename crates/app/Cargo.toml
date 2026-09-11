@@ -10,6 +10,6 @@ path = "src/main.rs"
 [dependencies]
 mix-bootstrap = { path = "../bootstrap" }
 anyhow = "1.0.104"
-clap = { version = "4.6.6", features = ["derive"] }
+clap = { version = "4.6.6", features = ["derive", "env"] }
 tokio = { workspace = true }
-tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tracing-subscriber = "0.3.23"

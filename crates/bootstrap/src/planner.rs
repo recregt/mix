@@ -5,12 +5,12 @@ use crate::steps::{
     FetchAndUnpack,
 };
 
-pub fn bootstrap_steps() -> Vec<Box<dyn Step>> {
+pub fn bootstrap_steps(mirror: Option<&str>) -> Vec<Box<dyn Step>> {
     vec![
         Box::new(CreateNixDir),
         Box::new(CreateNixTree),
         Box::new(CreateUsersAndGroups),
-        Box::new(FetchAndUnpack),
+        Box::new(FetchAndUnpack::new(mirror)),
         Box::new(ConfigureNixConf),
         Box::new(ConfigureSystemdService),
     ]

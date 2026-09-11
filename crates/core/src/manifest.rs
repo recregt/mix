@@ -15,6 +15,11 @@ pub enum ManagedArtifact {
     SystemdUnit {
         name: &'static str,
         dest: &'static str,
+        must_be_active: bool,
+    },
+    PathExists {
+        name: &'static str,
+        path: &'static str,
     },
 }
 

@@ -14,7 +14,17 @@ use crate::tarball;
 const NIX_STORE: &str = "/nix/store";
 const DEFAULT_PROFILE: &str = "/nix/var/nix/profiles/default";
 
-pub struct FetchAndUnpack;
+pub struct FetchAndUnpack {
+    mirror: Option<String>,
+}
+
+impl FetchAndUnpack {
+    pub fn new(mirror: Option<&str>) -> Self {
+        Self {
+            mirror: mirror.map(String::from),
+        }
+    }
+}
 
 #[async_trait]
 impl Step for FetchAndUnpack {
@@ -27,7 +37,7 @@ impl Step for FetchAndUnpack {
     }
 
     async fn execute(&mut self) -> Result<()> {
-        let bytes = tarball::bytes().await?;
+        let bytes = tarball::bytes(self.mirror.as_deref()).await?;
 
         tokio::task::spawn_blocking(move || provision(&bytes))
             .await
@@ -49,7 +59,9 @@ fn provision(tarball_bytes: &[u8]) -> Result<()> {
     tarball::unpack(tarball_bytes, scratch.path())?;
 
     let unpacked_root = find_single_child(scratch.path(), |name| name.starts_with("nix-"))?;
+    tracing::debug!("moving Nix store into place");
     move_store_into_place(&unpacked_root)?;
+    tracing::debug!("fixing Nix store ownership");
     ensure_store_ownership()?;
 
     let nix_pkg = resolve_backlink(&unpacked_root, |name| {
@@ -57,7 +69,9 @@ fn provision(tarball_bytes: &[u8]) -> Result<()> {
     })?;
     let nss_cacert_pkg = resolve_backlink(&unpacked_root, |name| name.contains("-nss-cacert-"))?;
 
+    tracing::debug!("loading Nix database");
     load_db(&nix_pkg, &unpacked_root.join(".reginfo"))?;
+    tracing::debug!("activating default profile");
     activate_default_profile(&nix_pkg, &nss_cacert_pkg)?;
 
     Ok(())
@@ -98,26 +112,29 @@ fn resolve_backlink(unpacked_root: &Path, pred: impl Fn(&str) -> bool) -> Result
 }
 
 fn move_store_into_place(unpacked_root: &Path) -> Result<()> {
-    let src_store = unpacked_root.join("store");
-    std::fs::create_dir_all(NIX_STORE).map_err(|e| Error::Io {
-        path: NIX_STORE.into(),
+    move_entries_into(&unpacked_root.join("store"), Path::new(NIX_STORE))
+}
+
+fn move_entries_into(src_store: &Path, dest_store: &Path) -> Result<()> {
+    std::fs::create_dir_all(dest_store).map_err(|e| Error::Io {
+        path: dest_store.to_path_buf(),
         source: e,
     })?;
 
-    let entries: Vec<_> = std::fs::read_dir(&src_store)
+    let entries: Vec<_> = std::fs::read_dir(src_store)
         .map_err(|e| Error::Io {
-            path: src_store.clone(),
+            path: src_store.to_path_buf(),
             source: e,
         })?
         .collect::<std::io::Result<Vec<_>>>()
         .map_err(|e| Error::Io {
-            path: src_store.clone(),
+            path: src_store.to_path_buf(),
             source: e,
         })?;
 
     for entry in entries {
         let src_path = entry.path();
-        let dest_path = Path::new(NIX_STORE).join(entry.file_name());
+        let dest_path = dest_store.join(entry.file_name());
 
         if dest_path.exists() {
             let remove = if dest_path.is_dir() {
@@ -177,10 +194,15 @@ fn make_read_only(root: &Path) -> Result<()> {
 }
 
 fn ensure_store_ownership() -> Result<()> {
-    let target_gid = Gid::from_raw(NIXBLD_GID);
-    let root_uid = Uid::from_raw(0);
+    ensure_ownership_under(
+        Path::new(NIX_STORE),
+        Uid::from_raw(0),
+        Gid::from_raw(NIXBLD_GID),
+    )
+}
 
-    let mut stack = vec![PathBuf::from(NIX_STORE)];
+fn ensure_ownership_under(root: &Path, uid: Uid, gid: Gid) -> Result<()> {
+    let mut stack = vec![root.to_path_buf()];
     while let Some(path) = stack.pop() {
         let meta = std::fs::symlink_metadata(&path).map_err(|e| Error::Io {
             path: path.clone(),
@@ -203,12 +225,12 @@ fn ensure_store_ownership() -> Result<()> {
             }
         }
 
-        if meta.gid() != NIXBLD_GID || meta.uid() != 0 {
+        if meta.gid() != gid.as_raw() || meta.uid() != uid.as_raw() {
             fchownat(
                 AT_FDCWD,
                 &path,
-                Some(root_uid),
-                Some(target_gid),
+                Some(uid),
+                Some(gid),
                 AtFlags::AT_SYMLINK_NOFOLLOW,
             )
             .map_err(|e| Error::Io {
@@ -226,7 +248,10 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
         source: e,
     })?;
 
-    let mut child = std::process::Command::new(nix_pkg.join("bin/nix-store"))
+    let nix_store = nix_pkg.join("bin/nix-store");
+    tracing::debug!("running command: {} --load-db", nix_store.display());
+
+    let mut child = std::process::Command::new(&nix_store)
         .arg("--load-db")
         .env("HOME", root_home()?)
         .env_remove("NIX_REMOTE")
@@ -253,6 +278,13 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
         command: "nix-store --load-db".into(),
         detail: e.to_string(),
     })?;
+
+    tracing::trace!(
+        "command output: nix-store --load-db\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
     if !output.status.success() {
         return Err(crate::util::command_error("nix-store --load-db", &output));
     }
@@ -261,7 +293,15 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
 }
 
 fn activate_default_profile(nix_pkg: &Path, nss_cacert_pkg: &Path) -> Result<()> {
-    let output = std::process::Command::new(nix_pkg.join("bin/nix-env"))
+    let nix_env = nix_pkg.join("bin/nix-env");
+    tracing::debug!(
+        "running command: {} --profile {DEFAULT_PROFILE} --install {} {}",
+        nix_env.display(),
+        nix_pkg.display(),
+        nss_cacert_pkg.display()
+    );
+
+    let output = std::process::Command::new(&nix_env)
         .arg("--profile")
         .arg(DEFAULT_PROFILE)
         .arg("--install")
@@ -276,6 +316,12 @@ fn activate_default_profile(nix_pkg: &Path, nss_cacert_pkg: &Path) -> Result<()>
             command: "nix-env --install".into(),
             detail: e.to_string(),
         })?;
+
+    tracing::trace!(
+        "command output: nix-env --install\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     if !output.status.success() {
         return Err(crate::util::command_error("nix-env --install", &output));
@@ -331,5 +377,114 @@ mod tests {
 
         let resolved = resolve_backlink(root.path(), |name| name.contains("-nss-cacert-")).unwrap();
         assert_eq!(resolved, real_pkg);
+    }
+
+    #[test]
+    fn move_entries_into_relocates_and_symlinks_back() {
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("pkg-a"), "content").unwrap();
+
+        let dest = tempfile::tempdir().unwrap();
+        let dest_store = dest.path().join("store");
+
+        move_entries_into(src.path(), &dest_store).unwrap();
+
+        let moved = dest_store.join("pkg-a");
+        assert!(moved.is_file());
+        assert_eq!(std::fs::read_to_string(&moved).unwrap(), "content");
+
+        let backlink = src.path().join("pkg-a");
+        assert!(backlink.is_symlink());
+        assert_eq!(std::fs::read_link(&backlink).unwrap(), moved);
+    }
+
+    #[test]
+    fn move_entries_into_makes_moved_files_read_only() {
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("pkg-a"), "content").unwrap();
+
+        let dest = tempfile::tempdir().unwrap();
+        let dest_store = dest.path().join("store");
+
+        move_entries_into(src.path(), &dest_store).unwrap();
+
+        let mode = std::fs::metadata(dest_store.join("pkg-a"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o222, 0);
+    }
+
+    #[test]
+    fn move_entries_into_replaces_an_existing_destination_entry() {
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("pkg-a"), "new content").unwrap();
+
+        let dest = tempfile::tempdir().unwrap();
+        let dest_store = dest.path().join("store");
+        std::fs::create_dir_all(&dest_store).unwrap();
+        std::fs::write(dest_store.join("pkg-a"), "stale content").unwrap();
+
+        move_entries_into(src.path(), &dest_store).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(dest_store.join("pkg-a")).unwrap(),
+            "new content"
+        );
+    }
+
+    #[test]
+    fn make_read_only_strips_write_bits_recursively() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::write(nested.join("file"), "x").unwrap();
+
+        make_read_only(dir.path()).unwrap();
+
+        let mode = std::fs::metadata(nested.join("file"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o222, 0);
+    }
+
+    #[test]
+    fn make_read_only_does_not_follow_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        std::fs::write(target.path().join("outside"), "x").unwrap();
+        std::os::unix::fs::symlink(target.path().join("outside"), dir.path().join("link")).unwrap();
+
+        make_read_only(dir.path()).unwrap();
+
+        let mode = std::fs::metadata(target.path().join("outside"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_ne!(mode & 0o222, 0);
+    }
+
+    #[test]
+    fn ensure_ownership_under_is_a_noop_when_already_matching() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f"), "x").unwrap();
+
+        let uid = Uid::current();
+        let gid = Gid::current();
+
+        assert!(ensure_ownership_under(dir.path(), uid, gid).is_ok());
+    }
+
+    #[test]
+    fn ensure_ownership_under_skips_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(target.path(), dir.path().join("link")).unwrap();
+
+        let uid = Uid::current();
+        let gid = Gid::current();
+
+        assert!(ensure_ownership_under(dir.path(), uid, gid).is_ok());
     }
 }
