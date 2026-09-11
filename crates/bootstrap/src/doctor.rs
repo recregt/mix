@@ -13,5 +13,5 @@ pub async fn doctor(mirror: Option<&str>) -> Result<Environment> {
     preflight::check_nix_not_installed().await?;
 
     teardown::teardown().await?;
-    bootstrap::bootstrap(mirror).await
+    bootstrap::run_steps(mirror).await
 }
