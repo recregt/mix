@@ -7,7 +7,9 @@ mod pins;
 mod planner;
 pub mod preflight;
 mod steps;
-mod tarball;
+/// Archive handling internals, exposed for benchmarks only. Not a stable API.
+#[doc(hidden)]
+pub mod tarball;
 mod teardown;
 mod util;
 

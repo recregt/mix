@@ -9,3 +9,11 @@ license = "MPL-2.0"
 async-trait = { workspace = true }
 thiserror = "2.0.20"
 tracing = { workspace = true }
+
+[dev-dependencies]
+divan = { version = "5.0.1", package = "codspeed-divan-compat" }
+tokio = { workspace = true }
+
+[[bench]]
+name = "plan"
+harness = false
