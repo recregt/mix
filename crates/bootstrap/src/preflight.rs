@@ -22,6 +22,8 @@ const ENV_ALLOWLIST: &[&str] = &[
     "https_proxy",
     "no_proxy",
     "MIX_NIX_MIRROR",
+    "WSL_DISTRO_NAME",
+    "WSL_INTEROP",
 ];
 
 fn allowed_env_vars(get: impl Fn(&str) -> Option<String>) -> Vec<(&'static str, String)> {
@@ -168,5 +170,22 @@ mod tests {
     #[test]
     fn allowed_env_vars_empty_when_nothing_set() {
         assert!(allowed_env_vars(|_| None).is_empty());
+    }
+
+    #[test]
+    fn allowed_env_vars_preserves_wsl_detection_vars() {
+        let mut env = std::collections::HashMap::new();
+        env.insert("WSL_DISTRO_NAME".to_string(), "Ubuntu".to_string());
+        env.insert("WSL_INTEROP".to_string(), "/run/WSL/1_interop".to_string());
+
+        let result = allowed_env_vars(|key| env.get(key).cloned());
+
+        assert_eq!(
+            result,
+            vec![
+                ("WSL_DISTRO_NAME", "Ubuntu".to_string()),
+                ("WSL_INTEROP", "/run/WSL/1_interop".to_string()),
+            ]
+        );
     }
 }
