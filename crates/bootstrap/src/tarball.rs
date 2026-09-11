@@ -55,6 +55,7 @@ async fn fetch_and_verify(url: &str, expected_sha256: &str) -> Result<Vec<u8>> {
     );
     let response = reqwest::get(url)
         .await
+        .and_then(reqwest::Response::error_for_status)
         .map_err(|e| Error::Network(e.to_string()))?;
     let bytes = response
         .bytes()
@@ -179,6 +180,20 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Integrity { .. }));
+    }
+
+    #[tokio::test]
+    async fn fetch_and_verify_rejects_a_404_instead_of_hashing_the_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(404).set_body_bytes(b"<html>404</html>".to_vec()))
+            .mount(&server)
+            .await;
+
+        let err = fetch_and_verify(&server.uri(), &"0".repeat(64))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Network(_)));
     }
 
     #[tokio::test]
