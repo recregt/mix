@@ -3,6 +3,8 @@ name = "mix-bootstrap"
 version = "0.1.0"
 edition = "2024"
 build = "build.rs"
+authors = ["Ömer Tekin"]
+license = "MPL-2.0"
 
 [features]
 default = []

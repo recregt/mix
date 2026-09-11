@@ -195,6 +195,24 @@ def test_doctor_fix_restores_a_deleted_default_profile(container, mock_nix_serve
     assert container.path_exists("/nix/var/nix/profiles/default/bin/nix-env")
 
 
+def test_bootstrap_auto_escalates_for_a_sudo_user(container, mock_nix_server):
+    container.exec("useradd", "--create-home", "ciuser", check=True)
+    container.exec(
+        "bash",
+        "-c",
+        "echo 'ciuser ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ciuser",
+        check=True,
+    )
+
+    result = container.exec(
+        "mix", "bootstrap", "--mirror", mock_nix_server["url"], user="ciuser"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "re-running with sudo" in result.stderr.lower()
+    assert container.path_exists("/nix/var/nix/profiles/default/bin/nix-env")
+
+
 def test_doctor_fix_repairs_injected_drift(container, mock_nix_server):
     _bootstrap(container, mock_nix_server)
 

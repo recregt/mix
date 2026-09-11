@@ -1,26 +1,31 @@
+use std::process::ExitCode;
+
+use super::RootStatus;
 use crate::ui;
 
-pub async fn run(fix: bool, mirror: Option<String>) -> anyhow::Result<()> {
+pub async fn run(fix: bool, mirror: Option<String>) -> anyhow::Result<ExitCode> {
     if fix {
-        super::ensure_root_or_exit("reset the managed environment");
+        if let RootStatus::ReExecuted(code) = super::ensure_root()? {
+            return Ok(code);
+        }
 
         mix_bootstrap::doctor(mirror.as_deref()).await?;
         ui::ok("System state successfully restored to pristine condition.");
-        return Ok(());
+        return Ok(ExitCode::SUCCESS);
     }
 
     check().await
 }
 
-pub async fn check() -> anyhow::Result<()> {
+pub async fn check() -> anyhow::Result<ExitCode> {
     match mix_bootstrap::Environment::open().await {
         Ok(_) => {
             ui::ok("System health is intact.");
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
         Err(e) => {
             ui::fail(check_failed_message(e));
-            std::process::exit(1);
+            Ok(ExitCode::FAILURE)
         }
     }
 }

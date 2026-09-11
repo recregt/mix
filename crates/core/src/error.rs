@@ -3,7 +3,7 @@ use std::path::PathBuf;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(
-        "administrator privileges required to {0}.\n\
+        "root privileges required to {0}.\n\
          Please re-run this command with sudo:\n\
          \x20 sudo mix ..."
     )]
@@ -55,13 +55,13 @@ pub enum Error {
     #[error("`mix` does not support this platform ({0})")]
     UnsupportedTarget(String),
 
-    #[error("required environment variable `{0}` is not set.")]
+    #[error("required environment variable `{0}` is not set")]
     MissingEnv(&'static str),
 
     #[error("decompressing archive: {0}")]
     Decompression(String),
 
-    #[error("archive layout was not what mix expected: {0}")]
+    #[error("archive layout was not what `mix` expected: {0}")]
     MalformedArchive(String),
 
     #[error("background task panicked: {0}")]

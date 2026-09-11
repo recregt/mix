@@ -13,6 +13,7 @@ import pytest
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 CACHE_DIR = pathlib.Path(os.environ.get("XDG_CACHE_HOME", pathlib.Path.home() / ".cache")) / "mix-bootstrap-tests"
 IMAGE_TAG = "mix-bootstrap-test:latest"
+REMOTE_IMAGE = os.environ.get("MIX_TEST_IMAGE")
 
 
 def _pin(target: str) -> tuple[str, str]:
@@ -50,16 +51,23 @@ def mix_binary():
 @pytest.fixture(scope="session")
 def container_image():
     containerfile = pathlib.Path(__file__).parent / "Containerfile"
-    subprocess.run(
-        ["podman", "build", "-q", "-t", IMAGE_TAG, "-f", str(containerfile), str(containerfile.parent)],
-        check=True,
-    )
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    with open(CACHE_DIR / "container-image.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if REMOTE_IMAGE:
+            pull = subprocess.run(["podman", "pull", REMOTE_IMAGE])
+            if pull.returncode == 0:
+                return REMOTE_IMAGE
+        subprocess.run(
+            ["podman", "build", "-q", "-t", IMAGE_TAG, "-f", str(containerfile), str(containerfile.parent)],
+            check=True,
+        )
     return IMAGE_TAG
 
 
 @pytest.fixture(scope="session")
 def nix_tarball():
-    CACHE_DIR.mkdir(exist_ok=True)
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
     dest = CACHE_DIR / NIX_FILENAME
 
     with open(CACHE_DIR / f"{NIX_FILENAME}.lock", "w") as lock:

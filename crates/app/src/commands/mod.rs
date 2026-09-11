@@ -1,24 +1,26 @@
 pub mod bootstrap;
 pub mod doctor;
 
+use std::process::ExitCode;
+
 use crate::ui;
 
-pub fn ensure_root_or_exit(reason: &str) {
+pub enum RootStatus {
+    AlreadyRoot,
+    ReExecuted(ExitCode),
+}
+
+pub fn ensure_root() -> anyhow::Result<RootStatus> {
     if mix_bootstrap::preflight::is_root() {
-        return;
+        return Ok(RootStatus::AlreadyRoot);
     }
 
-    ui::info(format!(
-        "`mix` requires administrator privileges to {reason}. Re-executing with sudo..."
-    ));
+    ui::info("Root required. Re-running with sudo...");
 
-    match mix_bootstrap::preflight::escalate() {
-        Ok(mix_bootstrap::preflight::EscalationOutcome::ReExecuted { exit_code }) => {
-            std::process::exit(exit_code)
-        }
-        Err(e) => {
-            ui::fail(e);
-            std::process::exit(1);
-        }
-    }
+    let mix_bootstrap::preflight::EscalationOutcome::ReExecuted { exit_code } =
+        mix_bootstrap::preflight::escalate()?;
+
+    Ok(RootStatus::ReExecuted(ExitCode::from(
+        exit_code.clamp(0, 255) as u8,
+    )))
 }
