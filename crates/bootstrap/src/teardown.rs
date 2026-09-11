@@ -4,7 +4,7 @@ use crate::constants::{
     NIX_CONF_DEST, NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SOCKET_DEST, NIXBLD_GROUP,
     NIXBLD_USER_COUNT, PROFILE_SNIPPET_DEST,
 };
-use crate::steps::create_users_and_groups::user_name;
+use crate::steps::create_users_and_groups::{group_exists, user_exists, user_name};
 use crate::util::run;
 
 pub async fn teardown() -> Result<()> {
@@ -18,32 +18,44 @@ pub async fn teardown() -> Result<()> {
     );
     warn_on_failure(
         "remove nix-daemon.socket unit",
-        tokio::fs::remove_file(NIX_DAEMON_SOCKET_DEST).await,
+        remove_file_if_present(NIX_DAEMON_SOCKET_DEST).await,
     );
     warn_on_failure(
         "remove nix-daemon.service unit",
-        tokio::fs::remove_file(NIX_DAEMON_SERVICE_DEST).await,
+        remove_file_if_present(NIX_DAEMON_SERVICE_DEST).await,
     );
     warn_on_failure("reload systemd", run("systemctl", &["daemon-reload"]).await);
 
     for n in 1..=NIXBLD_USER_COUNT {
-        warn_on_failure("delete build user", run("userdel", &[&user_name(n)]).await);
+        let name = user_name(n);
+        if user_exists(&name) {
+            warn_on_failure("delete build user", run("userdel", &[&name]).await);
+        }
     }
-    warn_on_failure(
-        "delete nixbld group",
-        run("groupdel", &[NIXBLD_GROUP]).await,
-    );
+    if group_exists(NIXBLD_GROUP) {
+        warn_on_failure(
+            "delete nixbld group",
+            run("groupdel", &[NIXBLD_GROUP]).await,
+        );
+    }
 
     warn_on_failure(
         "remove nix.conf",
-        tokio::fs::remove_file(NIX_CONF_DEST).await,
+        remove_file_if_present(NIX_CONF_DEST).await,
     );
     warn_on_failure(
         "remove profile snippet",
-        tokio::fs::remove_file(PROFILE_SNIPPET_DEST).await,
+        remove_file_if_present(PROFILE_SNIPPET_DEST).await,
     );
 
     Ok(())
+}
+
+async fn remove_file_if_present(path: &str) -> std::io::Result<()> {
+    match tokio::fs::remove_file(path).await {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
 }
 
 fn warn_on_failure<T, E: std::fmt::Display>(

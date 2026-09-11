@@ -26,4 +26,9 @@ tracing = { workspace = true }
 sha2 = "0.11.0"
 
 [dev-dependencies]
+divan = { version = "5.0.1", package = "codspeed-divan-compat" }
 wiremock = "0.6"
+
+[[bench]]
+name = "tarball"
+harness = false

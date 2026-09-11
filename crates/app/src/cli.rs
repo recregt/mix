@@ -22,7 +22,7 @@ pub enum Command {
 
     /// Inspect system health, or repair configuration drift
     Doctor {
-        /// Restore the managed system state to a pristine condition (requires sudo)
+        /// Restore the managed system state to a pristine condition
         #[arg(long)]
         fix: bool,
 
