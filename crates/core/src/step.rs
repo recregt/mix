@@ -27,7 +27,7 @@ impl Plan {
 
             tracing::info!("running: {}", step.name());
             if let Err(e) = step.execute().await {
-                tracing::error!("step failed: {} ({e})", step.name());
+                tracing::debug!("step failed: {} ({e})", step.name());
                 return Err(e);
             }
         }
