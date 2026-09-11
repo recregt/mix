@@ -2,6 +2,8 @@ mod cli;
 mod commands;
 mod ui;
 
+use std::process::ExitCode;
+
 use clap::Parser;
 use tracing_subscriber::filter::LevelFilter;
 
@@ -17,7 +19,7 @@ fn level_filter(verbosity: u8) -> LevelFilter {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> ExitCode {
     let cli = Cli::parse();
 
     tracing_subscriber::fmt()
@@ -33,7 +35,7 @@ async fn main() {
     ) && let Err(e) = mix_bootstrap::Environment::open().await
     {
         ui::fail(commands::doctor::check_failed_message(e));
-        std::process::exit(1);
+        return ExitCode::FAILURE;
     }
 
     let result = match cli.command {
@@ -41,8 +43,11 @@ async fn main() {
         Command::Doctor { fix, mirror } => commands::doctor::run(fix, mirror).await,
     };
 
-    if let Err(e) = result {
-        ui::fail(e);
-        std::process::exit(1);
+    match result {
+        Ok(code) => code,
+        Err(e) => {
+            ui::fail(e);
+            ExitCode::FAILURE
+        }
     }
 }
