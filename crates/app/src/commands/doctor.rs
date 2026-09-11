@@ -14,6 +14,10 @@ pub async fn run(fix: bool, mirror: Option<String>) -> anyhow::Result<ExitCode> 
         return Ok(ExitCode::SUCCESS);
     }
 
+    if mirror.is_some() {
+        ui::info("--mirror has no effect without --fix; ignoring it.");
+    }
+
     check().await
 }
 
