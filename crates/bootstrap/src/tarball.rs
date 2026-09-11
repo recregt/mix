@@ -22,6 +22,10 @@ pub fn host_pin() -> Result<&'static TarballPin> {
     pin_for(&key).ok_or(Error::UnsupportedTarget(key))
 }
 
+fn pin_filename(pin: &TarballPin) -> &'static str {
+    pin.url.rsplit('/').next().unwrap_or(pin.url)
+}
+
 fn host_target_key() -> String {
     format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
 }
@@ -33,7 +37,7 @@ pub async fn bytes(mirror: Option<&str>) -> Result<Vec<u8>> {
 
     let pin = host_pin()?;
     let url = match filter_mirror(mirror) {
-        Some(base) => mirror_url(base, pin.filename()),
+        Some(base) => mirror_url(base, pin_filename(pin)),
         None => pin.url.to_string(),
     };
 
@@ -256,6 +260,12 @@ mod tests {
             filter_mirror(Some("http://mirror.internal")),
             Some("http://mirror.internal")
         );
+    }
+
+    #[test]
+    fn pin_filename_extracts_the_last_url_segment() {
+        let pin = pin_for("x86_64-linux").unwrap();
+        assert_eq!(pin_filename(pin), "nix-2.35.2-x86_64-linux.tar.xz");
     }
 
     #[test]

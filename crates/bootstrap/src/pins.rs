@@ -6,12 +6,6 @@ pub struct TarballPin {
     pub sha256: &'static str,
 }
 
-impl TarballPin {
-    pub fn filename(&self) -> &'static str {
-        self.url.rsplit('/').next().unwrap_or(self.url)
-    }
-}
-
 pub const NIX_TARBALLS: &[TarballPin] = &[
     TarballPin {
         target: "x86_64-linux",
@@ -27,15 +21,4 @@ pub const NIX_TARBALLS: &[TarballPin] = &[
 
 pub fn pin_for(target: &str) -> Option<&'static TarballPin> {
     NIX_TARBALLS.iter().find(|p| p.target == target)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn filename_extracts_the_last_url_segment() {
-        let pin = pin_for("x86_64-linux").unwrap();
-        assert_eq!(pin.filename(), "nix-2.35.2-x86_64-linux.tar.xz");
-    }
 }
