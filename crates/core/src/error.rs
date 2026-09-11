@@ -41,7 +41,7 @@ pub enum Error {
     )]
     UnsupportedKernel,
 
-    #[error("{hint}\n\nmix requires systemd to manage its background services.")]
+    #[error("{hint}")]
     SystemdNotReady { hint: &'static str },
 
     #[error(
@@ -52,7 +52,7 @@ pub enum Error {
     )]
     AlreadyManaged,
 
-    #[error("mix does not support this platform ({0})")]
+    #[error("`mix` does not support this platform ({0})")]
     UnsupportedTarget(String),
 
     #[error("required environment variable `{0}` is not set.")]
