@@ -78,7 +78,7 @@ async fn fetch_and_verify(url: &str, expected_sha256: &str) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut out = String::with_capacity(digest.len() * 2);
     for byte in digest {

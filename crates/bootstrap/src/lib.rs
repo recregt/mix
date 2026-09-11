@@ -1,15 +1,17 @@
 mod bootstrap;
 mod constants;
-pub mod detect;
 mod doctor;
 mod manifest;
 mod pins;
 mod planner;
-pub mod preflight;
 mod steps;
-mod tarball;
 mod teardown;
 mod util;
+
+pub mod detect;
+pub mod preflight;
+#[doc(hidden)]
+pub mod tarball;
 
 pub use bootstrap::bootstrap;
 pub use doctor::doctor;
