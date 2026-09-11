@@ -1,7 +1,8 @@
 use async_trait::async_trait;
-use mix_core::{Error, Result, Step};
+use mix_core::{Result, Step};
 
 use crate::constants::{NIX_CONF, NIX_CONF_DEST, PROFILE_SNIPPET, PROFILE_SNIPPET_DEST};
+use crate::util::{create_dir_all, write_file};
 
 pub struct ConfigureNixConf;
 
@@ -32,18 +33,7 @@ async fn matches_expected(path: &str, expected: &str) -> bool {
 
 async fn write(path: &str, contents: &str) -> Result<()> {
     if let Some(dir) = std::path::Path::new(path).parent() {
-        tokio::fs::create_dir_all(dir)
-            .await
-            .map_err(|e| Error::Io {
-                path: dir.to_path_buf(),
-                source: e,
-            })?;
+        create_dir_all(dir).await?;
     }
-    tokio::fs::write(path, contents)
-        .await
-        .map_err(|e| Error::Io {
-            path: path.into(),
-            source: e,
-        })?;
-    Ok(())
+    write_file(path, contents).await
 }

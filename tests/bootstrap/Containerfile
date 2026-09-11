@@ -1,0 +1,9 @@
+FROM docker.io/library/ubuntu:24.04
+
+RUN apt-get update -qq \
+    && apt-get install -y -qq systemd sudo passwd procps ca-certificates \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+STOPSIGNAL SIGRTMIN+3
+CMD ["/lib/systemd/systemd"]

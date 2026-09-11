@@ -1,8 +1,9 @@
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use async_trait::async_trait;
-use mix_core::{Error, Result, Step};
+use mix_core::{Result, Step};
+
+use crate::util::{create_dir_all, set_permissions};
 
 const PATHS: &[&str] = &[
     "/nix/var",
@@ -34,18 +35,8 @@ impl Step for CreateNixTree {
 
     async fn execute(&mut self) -> Result<()> {
         for path in PATHS {
-            tokio::fs::create_dir_all(path)
-                .await
-                .map_err(|e| Error::Io {
-                    path: (*path).into(),
-                    source: e,
-                })?;
-            tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
-                .await
-                .map_err(|e| Error::Io {
-                    path: (*path).into(),
-                    source: e,
-                })?;
+            create_dir_all(*path).await?;
+            set_permissions(*path, 0o755).await?;
         }
         Ok(())
     }

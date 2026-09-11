@@ -1,8 +1,12 @@
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "mix", version, about = "Reproducible systems, made effortless")]
 pub struct Cli {
+    /// Increase log verbosity (-v steps, -vv commands, -vvv command output)
+    #[arg(short, long, action = ArgAction::Count, global = true)]
+    pub verbose: u8,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -10,12 +14,20 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Command {
     /// Initialize runtime and system dependencies
-    Bootstrap,
+    Bootstrap {
+        /// Alternate base URL to fetch the pinned Nix archive from (e.g. an internal mirror)
+        #[arg(long, env = "MIX_NIX_MIRROR")]
+        mirror: Option<String>,
+    },
 
     /// Inspect system health, or repair configuration drift
     Doctor {
         /// Restore the managed system state to a pristine condition (requires sudo)
         #[arg(long)]
         fix: bool,
+
+        /// Alternate base URL to fetch the pinned Nix archive from (e.g. an internal mirror)
+        #[arg(long, env = "MIX_NIX_MIRROR")]
+        mirror: Option<String>,
     },
 }

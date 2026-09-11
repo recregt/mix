@@ -3,27 +3,42 @@ mod commands;
 mod ui;
 
 use clap::Parser;
+use tracing_subscriber::filter::LevelFilter;
 
 use cli::{Cli, Command};
 
+fn level_filter(verbosity: u8) -> LevelFilter {
+    match verbosity {
+        0 => LevelFilter::WARN,
+        1 => LevelFilter::INFO,
+        2 => LevelFilter::DEBUG,
+        _ => LevelFilter::TRACE,
+    }
+}
+
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
-
     let cli = Cli::parse();
 
-    if !matches!(cli.command, Command::Doctor { .. } | Command::Bootstrap)
-        && let Err(e) = mix_bootstrap::Environment::open().await
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_max_level(level_filter(cli.verbose))
+        .without_time()
+        .with_target(false)
+        .init();
+
+    if !matches!(
+        cli.command,
+        Command::Doctor { .. } | Command::Bootstrap { .. }
+    ) && let Err(e) = mix_bootstrap::Environment::open().await
     {
         ui::fail(commands::doctor::check_failed_message(e));
         std::process::exit(1);
     }
 
     let result = match cli.command {
-        Command::Bootstrap => commands::bootstrap::run().await,
-        Command::Doctor { fix } => commands::doctor::run(fix).await,
+        Command::Bootstrap { mirror } => commands::bootstrap::run(mirror).await,
+        Command::Doctor { fix, mirror } => commands::doctor::run(fix, mirror).await,
     };
 
     if let Err(e) = result {

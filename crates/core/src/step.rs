@@ -21,12 +21,15 @@ impl Plan {
     pub async fn run(&mut self) -> Result<()> {
         for step in &mut self.steps {
             if step.check().await? {
-                tracing::debug!(step = step.name(), "already satisfied, skipping");
+                tracing::debug!("skipping (already satisfied): {}", step.name());
                 continue;
             }
 
-            tracing::info!(step = step.name(), "running");
-            step.execute().await?;
+            tracing::info!("running: {}", step.name());
+            if let Err(e) = step.execute().await {
+                tracing::debug!("step failed: {} ({e})", step.name());
+                return Err(e);
+            }
         }
 
         Ok(())

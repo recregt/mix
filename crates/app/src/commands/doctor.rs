@@ -1,10 +1,10 @@
 use crate::ui;
 
-pub async fn run(fix: bool) -> anyhow::Result<()> {
+pub async fn run(fix: bool, mirror: Option<String>) -> anyhow::Result<()> {
     if fix {
         super::ensure_root_or_exit("reset the managed environment");
 
-        mix_bootstrap::doctor().await?;
+        mix_bootstrap::doctor(mirror.as_deref()).await?;
         ui::ok("System state successfully restored to pristine condition.");
         return Ok(());
     }

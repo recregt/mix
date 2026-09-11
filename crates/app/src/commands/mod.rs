@@ -9,7 +9,7 @@ pub fn ensure_root_or_exit(reason: &str) {
     }
 
     ui::info(format!(
-        "mix requires administrator privileges to {reason}. Re-executing with sudo..."
+        "`mix` requires administrator privileges to {reason}. Re-executing with sudo..."
     ));
 
     match mix_bootstrap::preflight::escalate() {
