@@ -106,6 +106,8 @@ pub async fn systemd_unit_is_active(name: &str) -> bool {
     tracing::debug!("checking systemd unit is-active: {name}");
     Command::new("systemctl")
         .args(["is-active", "--quiet", name])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
         .await
         .is_ok_and(|status| status.success())
