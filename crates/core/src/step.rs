@@ -31,63 +31,104 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
     }
 
     pub async fn run(&mut self) -> Result<(), E> {
-        let mut executed = Vec::new();
+        let mut attempted = Attempted::default();
 
-        for idx in 0..self.steps.len() {
-            let step = &mut self.steps[idx];
-            let name = step.name();
-
-            let satisfied = match step.check().await {
-                Ok(satisfied) => satisfied,
-                Err(e) => {
-                    tracing::debug!("check failed: {name} ({e})");
-                    Self::unwind(&mut self.steps, &executed, &mut self.failed_rollbacks).await;
-                    return Err(e);
+        let failure = 'run: {
+            for (idx, step) in self.steps.iter_mut().enumerate() {
+                match step.check().await {
+                    Ok(true) => {
+                        tracing::debug!("skipping (already satisfied): {}", step.name());
+                        continue;
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        tracing::debug!("check failed: {} ({e})", step.name());
+                        break 'run Some(e);
+                    }
                 }
-            };
 
-            if satisfied {
-                tracing::debug!("skipping (already satisfied): {name}");
+                tracing::info!("running: {}", step.name());
+                attempted.insert(idx);
+                if let Err(e) = step.execute().await {
+                    tracing::debug!("step failed: {} ({e})", step.name());
+                    break 'run Some(e);
+                }
+            }
+
+            None
+        };
+
+        match failure {
+            Some(e) => {
+                Box::pin(self.unwind(&attempted)).await;
+                Err(e)
+            }
+            None => Ok(()),
+        }
+    }
+
+    async fn unwind(&mut self, attempted: &Attempted) {
+        for idx in (0..self.steps.len()).rev() {
+            if !attempted.contains(idx) {
                 continue;
             }
 
-            tracing::info!("running: {name}");
-            if let Err(e) = step.execute().await {
-                tracing::debug!("step failed: {name} ({e})");
-                Self::rollback_one(&mut self.steps, idx, &mut self.failed_rollbacks).await;
-                Self::unwind(&mut self.steps, &executed, &mut self.failed_rollbacks).await;
-                return Err(e);
+            let step = &mut self.steps[idx];
+            let name = step.name();
+
+            tracing::info!("rolling back: {name}");
+            if let Err(e) = step.rollback().await {
+                tracing::error!("rollback failed: {name} ({e})");
+                self.failed_rollbacks.push(format!("{name}: {e}"));
             }
-
-            executed.push(idx);
-        }
-
-        Ok(())
-    }
-
-    async fn rollback_one(
-        steps: &mut [Box<dyn Step<Error = E>>],
-        idx: usize,
-        failed_rollbacks: &mut Vec<String>,
-    ) {
-        let step = &mut steps[idx];
-        let name = step.name();
-
-        tracing::info!("rolling back: {name}");
-        if let Err(e) = step.rollback().await {
-            tracing::error!("rollback failed: {name} ({e})");
-            failed_rollbacks.push(format!("{name}: {e}"));
         }
     }
+}
 
-    async fn unwind(
-        steps: &mut [Box<dyn Step<Error = E>>],
-        executed: &[usize],
-        failed_rollbacks: &mut Vec<String>,
-    ) {
-        for &idx in executed.iter().rev() {
-            Self::rollback_one(steps, idx, failed_rollbacks).await;
+#[derive(Default)]
+struct Attempted {
+    inline: u64,
+    spilled: Vec<u64>,
+}
+
+const INLINE_BITS: usize = u64::BITS as usize;
+
+impl Attempted {
+    #[inline]
+    fn insert(&mut self, idx: usize) {
+        if idx < INLINE_BITS {
+            self.inline |= 1 << idx;
+        } else {
+            self.insert_spilled(idx);
         }
+    }
+
+    #[inline]
+    fn contains(&self, idx: usize) -> bool {
+        if idx < INLINE_BITS {
+            self.inline & (1 << idx) != 0
+        } else {
+            self.contains_spilled(idx)
+        }
+    }
+
+    #[cold]
+    fn insert_spilled(&mut self, idx: usize) {
+        let (word, bit) = Self::spilled_position(idx);
+        if self.spilled.len() <= word {
+            self.spilled.resize(word + 1, 0);
+        }
+        self.spilled[word] |= bit;
+    }
+
+    #[cold]
+    fn contains_spilled(&self, idx: usize) -> bool {
+        let (word, bit) = Self::spilled_position(idx);
+        self.spilled.get(word).is_some_and(|bits| bits & bit != 0)
+    }
+
+    fn spilled_position(idx: usize) -> (usize, u64) {
+        (idx / INLINE_BITS - 1, 1 << (idx % INLINE_BITS))
     }
 }
 
@@ -271,6 +312,40 @@ mod tests {
             ]
         );
         assert_eq!(plan.failed_rollbacks(), ["b: probe error"]);
+    }
+
+    #[tokio::test]
+    async fn rollback_covers_plans_larger_than_the_inline_bitset() {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut steps: Vec<Box<dyn Step<Error = ProbeError>>> = (0..64)
+            .map(|_| {
+                Box::new(Recorder {
+                    name: "early",
+                    fail_execute: false,
+                    fail_rollback: false,
+                    log: log.clone(),
+                }) as Box<dyn Step<Error = ProbeError>>
+            })
+            .collect();
+        steps.push(Box::new(Noop {
+            satisfied: true,
+            fail: false,
+        }));
+        steps.push(Box::new(Recorder {
+            name: "late",
+            fail_execute: true,
+            fail_rollback: false,
+            log: log.clone(),
+        }));
+
+        let mut plan = Plan::new(steps);
+        assert!(matches!(plan.run().await, Err(ProbeError)));
+
+        let log = log.lock().unwrap();
+        assert_eq!(log.len(), 130);
+        assert_eq!(log[64], "execute:late");
+        assert_eq!(log[65], "rollback:late");
+        assert!(log[66..].iter().all(|entry| entry == "rollback:early"));
     }
 
     #[tokio::test]
