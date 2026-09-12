@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    paths:
+      - crates/**
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/codspeed.yml
   workflow_dispatch:
 
 concurrency:
@@ -35,8 +40,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      - name: Install cargo-codspeed
-        run: cargo install cargo-codspeed --locked
+      - uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063 # v2.87.9
+        with:
+          tool: cargo-codspeed
 
       - name: Build the benchmark targets
         run: cargo codspeed build --locked --measurement-mode simulation
