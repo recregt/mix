@@ -2,8 +2,8 @@ use std::os::unix::fs::PermissionsExt;
 
 use crate::constants::{
     DEFAULT_PROFILE_NIX_ENV, NIX_CONF, NIX_CONF_DEST, NIX_DAEMON_SERVICE_DEST,
-    NIX_DAEMON_SOCKET_DEST, NIX_OWNERSHIP_MARKER, NIXBLD_GID, NIXBLD_GROUP, NIXBLD_USER_COUNT,
-    PROFILE_SNIPPET, PROFILE_SNIPPET_DEST,
+    NIX_DAEMON_SOCKET_DEST, NIX_OWNERSHIP_MARKER, NIX_STORE, NIXBLD_GID, NIXBLD_GROUP,
+    NIXBLD_USER_COUNT, PROFILE_SNIPPET, PROFILE_SNIPPET_DEST,
 };
 use crate::error::{Error, Result};
 use crate::steps::create_nix_tree::{DirectorySpec, NIX_TREE};
@@ -104,10 +104,16 @@ impl ManagedArtifact {
 }
 
 pub fn manifest() -> Vec<ManagedArtifact> {
-    let mut items = vec![ManagedArtifact::Directory(DirectorySpec {
-        path: "/nix",
-        mode: 0o755,
-    })];
+    let mut items = vec![
+        ManagedArtifact::Directory(DirectorySpec {
+            path: "/nix",
+            mode: 0o755,
+        }),
+        ManagedArtifact::Directory(DirectorySpec {
+            path: NIX_STORE,
+            mode: 0o1775,
+        }),
+    ];
     items.extend(NIX_TREE.iter().copied().map(ManagedArtifact::Directory));
     items.extend([
         ManagedArtifact::PathExists {
@@ -452,5 +458,17 @@ mod tests {
                 dir.mode
             );
         }
+    }
+
+    #[test]
+    fn manifest_audits_the_nix_store_directory() {
+        let items = manifest();
+        assert!(
+            items.iter().any(|artifact| matches!(
+                artifact,
+                ManagedArtifact::Directory(spec) if spec.path == NIX_STORE && spec.mode == 0o1775
+            )),
+            "manifest is missing an entry for {NIX_STORE}"
+        );
     }
 }

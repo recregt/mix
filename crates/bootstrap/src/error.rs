@@ -58,6 +58,9 @@ pub enum Error {
         cause: Box<Error>,
         summary: String,
     },
+
+    #[error("interrupted; rolled back any partially applied changes")]
+    Interrupted,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

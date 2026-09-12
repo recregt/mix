@@ -4,7 +4,7 @@ use crate::constants::{
     NIX_CONF_DEST, NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SOCKET_DEST, NIXBLD_GROUP,
     NIXBLD_USER_COUNT, PROFILE_SNIPPET_DEST,
 };
-use crate::steps::create_users_and_groups::{group_exists, user_exists, user_name};
+use crate::steps::create_users_and_groups::{delete_user, group_exists, user_exists, user_name};
 use crate::util::{run, warn_on_failure};
 
 pub async fn teardown() -> Result<()> {
@@ -29,7 +29,7 @@ pub async fn teardown() -> Result<()> {
     for n in 1..=NIXBLD_USER_COUNT {
         let name = user_name(n);
         if user_exists(&name) {
-            warn_on_failure("delete build user", run("userdel", &[&name]).await);
+            delete_user(&name).await;
         }
     }
     if group_exists(NIXBLD_GROUP) {

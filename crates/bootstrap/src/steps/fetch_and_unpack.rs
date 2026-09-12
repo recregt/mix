@@ -7,13 +7,12 @@ use mix_core::{Error as CoreError, Step};
 use nix::fcntl::{AT_FDCWD, AtFlags};
 use nix::unistd::{Gid, Uid, User, fchownat};
 
-use crate::constants::NIXBLD_GID;
+use crate::constants::{NIX_STORE, NIXBLD_GID};
 use crate::error::{Error, Result};
 use crate::pins::NIX_VERSION;
 use crate::tarball;
 use crate::util::is_file;
 
-const NIX_STORE: &str = "/nix/store";
 const DEFAULT_PROFILE: &str = "/nix/var/nix/profiles/default";
 
 #[derive(Default)]
@@ -235,7 +234,7 @@ fn move_entries_into(
     for entry in entries {
         let src_path = entry.path();
         let dest_path = dest_store.join(entry.file_name());
-        let is_new = !dest_path.exists();
+        let is_new = dest_path.symlink_metadata().is_err();
 
         if !is_new {
             let remove = if dest_path.is_dir() {
@@ -640,6 +639,26 @@ mod tests {
         assert!(move_entries_into(&missing_src, &dest_store, &mut created).is_err());
 
         assert_eq!(created, vec![dest_store.join("pkg-a")]);
+    }
+
+    #[test]
+    fn move_entries_into_does_not_record_a_dangling_symlink_as_newly_created() {
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("pkg-a"), "new content").unwrap();
+
+        let dest = tempfile::tempdir().unwrap();
+        let dest_store = dest.path().join("store");
+        std::fs::create_dir_all(&dest_store).unwrap();
+        std::os::unix::fs::symlink("/does/not/exist", dest_store.join("pkg-a")).unwrap();
+
+        let mut created = Vec::new();
+        move_entries_into(src.path(), &dest_store, &mut created).unwrap();
+
+        assert!(created.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(dest_store.join("pkg-a")).unwrap(),
+            "new content"
+        );
     }
 
     #[test]

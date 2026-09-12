@@ -11,6 +11,7 @@ use crate::pins::{TarballPin, pin_for};
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
+const MAX_DOWNLOAD_BYTES: usize = 1024 * 1024 * 1024;
 
 #[cfg(feature = "embed-tarball")]
 pub fn embedded() -> Option<&'static [u8]> {
@@ -66,22 +67,24 @@ async fn fetch_and_verify(url: &str, expected_sha256: &str) -> Result<Vec<u8>> {
         "fetching runtime archive: {url} (nix {})",
         crate::pins::NIX_VERSION
     );
-    fetch_and_verify_with_timeouts(
+    fetch_and_verify_with_limits(
         url,
         expected_sha256,
         CONNECT_TIMEOUT,
         READ_TIMEOUT,
         REQUEST_TIMEOUT,
+        MAX_DOWNLOAD_BYTES,
     )
     .await
 }
 
-async fn fetch_and_verify_with_timeouts(
+async fn fetch_and_verify_with_limits(
     url: &str,
     expected_sha256: &str,
     connect_timeout: Duration,
     read_timeout: Duration,
     request_timeout: Duration,
+    max_bytes: usize,
 ) -> Result<Vec<u8>> {
     let client = reqwest::Client::builder()
         .connect_timeout(connect_timeout)
@@ -90,13 +93,23 @@ async fn fetch_and_verify_with_timeouts(
         .build()
         .map_err(network_error)?;
 
-    let response = client
+    let mut response = client
         .get(url)
         .send()
         .await
         .and_then(reqwest::Response::error_for_status)
         .map_err(network_error)?;
-    let bytes = response.bytes().await.map_err(network_error)?.to_vec();
+
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(network_error)? {
+        if bytes.len() + chunk.len() > max_bytes {
+            return Err(Error::Integrity {
+                artifact: url.to_string(),
+                detail: format!("download exceeded the {max_bytes}-byte limit"),
+            });
+        }
+        bytes.extend_from_slice(&chunk);
+    }
 
     let digest = sha256_hex(&bytes);
     if digest != expected_sha256 {
@@ -265,6 +278,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fetch_and_verify_aborts_a_download_past_the_byte_limit() {
+        let mut server = Server::new_async().await;
+        let body = vec![0u8; 64];
+        let _mock = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_body(body.clone())
+            .create_async()
+            .await;
+
+        let err = fetch_and_verify_with_limits(
+            &server.url(),
+            &sha256_hex(&body),
+            CONNECT_TIMEOUT,
+            READ_TIMEOUT,
+            REQUEST_TIMEOUT,
+            8,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, Error::Integrity { .. }));
+    }
+
+    #[tokio::test]
     async fn fetch_and_verify_rejects_a_404_instead_of_hashing_the_body() {
         let mut server = Server::new_async().await;
         let _mock = server
@@ -289,12 +326,13 @@ mod tests {
             std::thread::sleep(Duration::from_secs(5));
         });
 
-        let err = fetch_and_verify_with_timeouts(
+        let err = fetch_and_verify_with_limits(
             &format!("http://{addr}/"),
             &"0".repeat(64),
             Duration::from_millis(500),
             Duration::from_millis(200),
             Duration::from_secs(10),
+            MAX_DOWNLOAD_BYTES,
         )
         .await
         .unwrap_err();
@@ -314,12 +352,13 @@ mod tests {
         });
 
         let started = std::time::Instant::now();
-        let err = fetch_and_verify_with_timeouts(
+        let err = fetch_and_verify_with_limits(
             &format!("http://{addr}/"),
             &"0".repeat(64),
             Duration::from_secs(1),
             Duration::from_millis(200),
             Duration::from_secs(10),
+            MAX_DOWNLOAD_BYTES,
         )
         .await
         .unwrap_err();

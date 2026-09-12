@@ -54,7 +54,16 @@ impl Step for ConfigureSystemdService {
         if self.started_socket {
             warn_on_failure(
                 "disable nix-daemon.socket",
-                run("systemctl", &["disable", "--now", "nix-daemon.socket"]).await,
+                run(
+                    "systemctl",
+                    &[
+                        "disable",
+                        "--now",
+                        "nix-daemon.socket",
+                        "nix-daemon.service",
+                    ],
+                )
+                .await,
             );
             self.started_socket = false;
         }
