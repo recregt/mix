@@ -2,9 +2,10 @@ use std::io::{Cursor, Read};
 use std::path::Path;
 use std::time::Duration;
 
-use mix_core::{Error, Result};
+use mix_core::Error as CoreError;
 use sha2::{Digest, Sha256};
 
+use crate::error::{Error, Result};
 use crate::pins::{TarballPin, pin_for};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -159,7 +160,7 @@ pub fn unpack(tarball: &[u8], dest: &Path) -> Result<()> {
         return Err(Error::Decompression(detail));
     }
 
-    unpacked.map_err(|e| Error::Io {
+    unpacked.map_err(|e| CoreError::Io {
         path: dest.to_path_buf(),
         source: e,
     })?;
@@ -453,7 +454,7 @@ mod tests {
         let compressed = xz_compress(b"this is not a tar archive");
         let dest = tempfile::tempdir().unwrap();
         let err = unpack(&compressed, dest.path()).unwrap_err();
-        assert!(matches!(err, Error::Io { .. }));
+        assert!(matches!(err, Error::Core(mix_core::Error::Io { .. })));
     }
 
     #[test]

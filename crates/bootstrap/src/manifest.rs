@@ -1,13 +1,14 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use mix_core::{Error, ManagedArtifact, Manifest, Result};
+use mix_core::{ManagedArtifact, Manifest};
 
 use crate::constants::{
     DEFAULT_PROFILE_NIX_ENV, NIX_CONF, NIX_CONF_DEST, NIX_DAEMON_SERVICE_DEST,
     NIX_DAEMON_SOCKET_DEST, NIX_OWNERSHIP_MARKER, NIXBLD_GID, NIXBLD_GROUP, NIXBLD_USER_COUNT,
     PROFILE_SNIPPET, PROFILE_SNIPPET_DEST,
 };
+use crate::error::{Error, Result};
 use crate::steps::create_users_and_groups::{all_uids_valid, all_users_valid, group_has_gid};
 
 pub const MANIFEST: Manifest = &[

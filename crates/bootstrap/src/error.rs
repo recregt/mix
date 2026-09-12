@@ -9,6 +9,18 @@ pub enum Error {
     )]
     Network(#[source] Box<dyn std::error::Error + Send + Sync>),
 
+    #[error("{artifact}: {detail}")]
+    Integrity { artifact: String, detail: String },
+
+    #[error("unsupported platform: {0}")]
+    UnsupportedTarget(String),
+
+    #[error("decompressing archive: {0}")]
+    Decompression(String),
+
+    #[error("unexpected archive layout: {0}")]
+    MalformedArchive(String),
+
     #[error(
         "root privileges required to {0}.\n\
          Please re-run this command with sudo:\n\
@@ -42,3 +54,18 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn network_error_preserves_the_source_chain_and_the_mirror_hint() {
+        let boxed: Box<dyn std::error::Error + Send + Sync> = "connection reset".into();
+        let err = Error::Network(boxed);
+
+        assert!(err.to_string().contains("--mirror"));
+        let source = std::error::Error::source(&err).expect("source should be preserved");
+        assert_eq!(source.to_string(), "connection reset");
+    }
+}

@@ -3,11 +3,12 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use mix_core::{Error, Result, Step};
+use mix_core::{Error as CoreError, Step};
 use nix::fcntl::{AT_FDCWD, AtFlags};
 use nix::unistd::{Gid, Uid, User, fchownat};
 
 use crate::constants::NIXBLD_GID;
+use crate::error::{Error, Result};
 use crate::pins::NIX_VERSION;
 use crate::tarball;
 
@@ -28,6 +29,8 @@ impl FetchAndUnpack {
 
 #[async_trait]
 impl Step for FetchAndUnpack {
+    type Error = Error;
+
     fn name(&self) -> &'static str {
         "fetch and activate the managed runtime"
     }
@@ -41,7 +44,7 @@ impl Step for FetchAndUnpack {
 
         tokio::task::spawn_blocking(move || provision(&bytes))
             .await
-            .map_err(|e| Error::TaskPanicked(e.to_string()))??;
+            .map_err(|e| CoreError::TaskPanicked(e.to_string()))??;
 
         Ok(())
     }
@@ -51,7 +54,7 @@ fn provision(tarball_bytes: &[u8]) -> Result<()> {
     let scratch = tempfile::Builder::new()
         .prefix("temp-install-dir-")
         .tempdir_in("/nix")
-        .map_err(|e| Error::Io {
+        .map_err(|e| CoreError::Io {
             path: "/nix".into(),
             source: e,
         })?;
@@ -78,14 +81,14 @@ fn provision(tarball_bytes: &[u8]) -> Result<()> {
 }
 
 fn find_single_child(dir: &Path, pred: impl Fn(&str) -> bool) -> Result<PathBuf> {
-    let entries = std::fs::read_dir(dir).map_err(|e| Error::Io {
+    let entries = std::fs::read_dir(dir).map_err(|e| CoreError::Io {
         path: dir.to_path_buf(),
         source: e,
     })?;
 
     let mut matches = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|e| Error::Io {
+        let entry = entry.map_err(|e| CoreError::Io {
             path: dir.to_path_buf(),
             source: e,
         })?;
@@ -105,10 +108,10 @@ fn find_single_child(dir: &Path, pred: impl Fn(&str) -> bool) -> Result<PathBuf>
 
 fn resolve_backlink(unpacked_root: &Path, pred: impl Fn(&str) -> bool) -> Result<PathBuf> {
     let link = find_single_child(&unpacked_root.join("store"), pred)?;
-    std::fs::read_link(&link).map_err(|e| Error::Io {
+    Ok(std::fs::read_link(&link).map_err(|e| CoreError::Io {
         path: link,
         source: e,
-    })
+    })?)
 }
 
 fn move_store_into_place(unpacked_root: &Path) -> Result<()> {
@@ -116,18 +119,18 @@ fn move_store_into_place(unpacked_root: &Path) -> Result<()> {
 }
 
 fn move_entries_into(src_store: &Path, dest_store: &Path) -> Result<()> {
-    std::fs::create_dir_all(dest_store).map_err(|e| Error::Io {
+    std::fs::create_dir_all(dest_store).map_err(|e| CoreError::Io {
         path: dest_store.to_path_buf(),
         source: e,
     })?;
 
     let entries: Vec<_> = std::fs::read_dir(src_store)
-        .map_err(|e| Error::Io {
+        .map_err(|e| CoreError::Io {
             path: src_store.to_path_buf(),
             source: e,
         })?
         .collect::<std::io::Result<Vec<_>>>()
-        .map_err(|e| Error::Io {
+        .map_err(|e| CoreError::Io {
             path: src_store.to_path_buf(),
             source: e,
         })?;
@@ -142,19 +145,19 @@ fn move_entries_into(src_store: &Path, dest_store: &Path) -> Result<()> {
             } else {
                 std::fs::remove_file(&dest_path)
             };
-            remove.map_err(|e| Error::Io {
+            remove.map_err(|e| CoreError::Io {
                 path: dest_path.clone(),
                 source: e,
             })?;
         }
 
-        std::fs::rename(&src_path, &dest_path).map_err(|e| Error::Io {
+        std::fs::rename(&src_path, &dest_path).map_err(|e| CoreError::Io {
             path: dest_path.clone(),
             source: e,
         })?;
         make_read_only(&dest_path)?;
 
-        std::os::unix::fs::symlink(&dest_path, &src_path).map_err(|e| Error::Io {
+        std::os::unix::fs::symlink(&dest_path, &src_path).map_err(|e| CoreError::Io {
             path: src_path,
             source: e,
         })?;
@@ -166,7 +169,7 @@ fn move_entries_into(src_store: &Path, dest_store: &Path) -> Result<()> {
 fn make_read_only(root: &Path) -> Result<()> {
     let mut stack = vec![root.to_path_buf()];
     while let Some(path) = stack.pop() {
-        let meta = std::fs::symlink_metadata(&path).map_err(|e| Error::Io {
+        let meta = std::fs::symlink_metadata(&path).map_err(|e| CoreError::Io {
             path: path.clone(),
             source: e,
         })?;
@@ -174,12 +177,12 @@ fn make_read_only(root: &Path) -> Result<()> {
             continue;
         }
         if meta.is_dir() {
-            let entries = std::fs::read_dir(&path).map_err(|e| Error::Io {
+            let entries = std::fs::read_dir(&path).map_err(|e| CoreError::Io {
                 path: path.clone(),
                 source: e,
             })?;
             for entry in entries {
-                let entry = entry.map_err(|e| Error::Io {
+                let entry = entry.map_err(|e| CoreError::Io {
                     path: path.clone(),
                     source: e,
                 })?;
@@ -188,7 +191,7 @@ fn make_read_only(root: &Path) -> Result<()> {
         }
         let mut perms = meta.permissions();
         perms.set_mode(perms.mode() & !0o222);
-        std::fs::set_permissions(&path, perms).map_err(|e| Error::Io { path, source: e })?;
+        std::fs::set_permissions(&path, perms).map_err(|e| CoreError::Io { path, source: e })?;
     }
     Ok(())
 }
@@ -204,7 +207,7 @@ fn ensure_store_ownership() -> Result<()> {
 fn ensure_ownership_under(root: &Path, uid: Uid, gid: Gid) -> Result<()> {
     let mut stack = vec![root.to_path_buf()];
     while let Some(path) = stack.pop() {
-        let meta = std::fs::symlink_metadata(&path).map_err(|e| Error::Io {
+        let meta = std::fs::symlink_metadata(&path).map_err(|e| CoreError::Io {
             path: path.clone(),
             source: e,
         })?;
@@ -212,12 +215,12 @@ fn ensure_ownership_under(root: &Path, uid: Uid, gid: Gid) -> Result<()> {
             continue;
         }
         if meta.is_dir() {
-            let entries = std::fs::read_dir(&path).map_err(|e| Error::Io {
+            let entries = std::fs::read_dir(&path).map_err(|e| CoreError::Io {
                 path: path.clone(),
                 source: e,
             })?;
             for entry in entries {
-                let entry = entry.map_err(|e| Error::Io {
+                let entry = entry.map_err(|e| CoreError::Io {
                     path: path.clone(),
                     source: e,
                 })?;
@@ -233,7 +236,7 @@ fn ensure_ownership_under(root: &Path, uid: Uid, gid: Gid) -> Result<()> {
                 Some(gid),
                 AtFlags::AT_SYMLINK_NOFOLLOW,
             )
-            .map_err(|e| Error::Io {
+            .map_err(|e| CoreError::Io {
                 path: path.clone(),
                 source: std::io::Error::from(e),
             })?;
@@ -243,7 +246,7 @@ fn ensure_ownership_under(root: &Path, uid: Uid, gid: Gid) -> Result<()> {
 }
 
 fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
-    let reginfo = std::fs::read(reginfo_path).map_err(|e| Error::Io {
+    let reginfo = std::fs::read(reginfo_path).map_err(|e| CoreError::Io {
         path: reginfo_path.to_path_buf(),
         source: e,
     })?;
@@ -259,7 +262,7 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|e| Error::Command {
+        .map_err(|e| CoreError::Command {
             command: "nix-store --load-db".into(),
             detail: e.to_string(),
         })?;
@@ -269,12 +272,12 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
         .take()
         .expect("stdin was piped")
         .write_all(&reginfo)
-        .map_err(|e| Error::Command {
+        .map_err(|e| CoreError::Command {
             command: "nix-store --load-db".into(),
             detail: e.to_string(),
         })?;
 
-    let output = child.wait_with_output().map_err(|e| Error::Command {
+    let output = child.wait_with_output().map_err(|e| CoreError::Command {
         command: "nix-store --load-db".into(),
         detail: e.to_string(),
     })?;
@@ -286,7 +289,10 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
     );
 
     if !output.status.success() {
-        return Err(crate::util::command_error("nix-store --load-db", &output));
+        return Err(Error::Core(crate::util::command_error(
+            "nix-store --load-db",
+            &output,
+        )));
     }
 
     Ok(())
@@ -312,7 +318,7 @@ fn activate_default_profile(nix_pkg: &Path, nss_cacert_pkg: &Path) -> Result<()>
         .env("HOME", root_home())
         .env_remove("NIX_REMOTE")
         .output()
-        .map_err(|e| Error::Command {
+        .map_err(|e| CoreError::Command {
             command: "nix-env --install".into(),
             detail: e.to_string(),
         })?;
@@ -324,7 +330,10 @@ fn activate_default_profile(nix_pkg: &Path, nss_cacert_pkg: &Path) -> Result<()>
     );
 
     if !output.status.success() {
-        return Err(crate::util::command_error("nix-env --install", &output));
+        return Err(Error::Core(crate::util::command_error(
+            "nix-env --install",
+            &output,
+        )));
     }
 
     Ok(())

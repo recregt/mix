@@ -1,15 +1,18 @@
 use async_trait::async_trait;
-use mix_core::{Result, Step};
+use mix_core::Step;
 
 use crate::constants::{
     NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC,
 };
+use crate::error::{Error, Result};
 use crate::util::{copy_file, files_match, run, systemd_unit_is_active};
 
 pub struct ConfigureSystemdService;
 
 #[async_trait]
 impl Step for ConfigureSystemdService {
+    type Error = Error;
+
     fn name(&self) -> &'static str {
         "configure the managed background service"
     }

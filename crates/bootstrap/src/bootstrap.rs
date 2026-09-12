@@ -17,42 +17,7 @@ pub async fn bootstrap(mirror: Option<&str>) -> Result<Environment> {
 }
 
 pub(crate) async fn run_steps(mirror: Option<&str>) -> Result<Environment> {
-    Plan::new(planner::bootstrap_steps(mirror))
-        .run()
-        .await
-        .map_err(enrich_network_error)?;
+    Plan::new(planner::bootstrap_steps(mirror)).run().await?;
 
-    Ok(Environment::open().await?)
-}
-
-fn enrich_network_error(e: mix_core::Error) -> Error {
-    match e {
-        mix_core::Error::Network(source) => Error::Network(source),
-        other => Error::Core(other),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn enrich_network_error_adds_the_mirror_hint() {
-        let boxed: Box<dyn std::error::Error + Send + Sync> = "timed out".into();
-        let err = enrich_network_error(mix_core::Error::Network(boxed));
-
-        assert!(matches!(err, Error::Network(_)));
-        assert!(err.to_string().contains("--mirror"));
-        assert!(std::error::Error::source(&err).is_some());
-    }
-
-    #[test]
-    fn enrich_network_error_passes_other_variants_through_as_core() {
-        let err = enrich_network_error(mix_core::Error::Decompression("bad xz".into()));
-
-        assert!(matches!(
-            err,
-            Error::Core(mix_core::Error::Decompression(_))
-        ));
-    }
+    Environment::open().await
 }

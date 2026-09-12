@@ -21,7 +21,7 @@ pub use error::{Error, Result};
 pub struct Environment(());
 
 impl Environment {
-    pub async fn open() -> mix_core::Result<Self> {
+    pub async fn open() -> Result<Self> {
         manifest::verify().await?;
         Ok(Self(()))
     }

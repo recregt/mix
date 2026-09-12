@@ -11,6 +11,8 @@ struct NoopStep {
 
 #[async_trait]
 impl Step for NoopStep {
+    type Error = mix_core::Error;
+
     fn name(&self) -> &'static str {
         "noop"
     }
@@ -24,10 +26,10 @@ impl Step for NoopStep {
     }
 }
 
-fn plan(steps: usize, satisfied: bool) -> Plan {
+fn plan(steps: usize, satisfied: bool) -> Plan<mix_core::Error> {
     Plan::new(
         (0..steps)
-            .map(|_| Box::new(NoopStep { satisfied }) as Box<dyn Step>)
+            .map(|_| Box::new(NoopStep { satisfied }) as Box<dyn Step<Error = mix_core::Error>>)
             .collect(),
     )
 }

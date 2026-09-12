@@ -2,9 +2,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use async_trait::async_trait;
-use mix_core::{Result, Step};
+use mix_core::Step;
 
 use crate::constants::NIX_OWNERSHIP_MARKER;
+use crate::error::{Error, Result};
 use crate::util::{create_dir_all, set_permissions, write_file};
 
 const MODE: u32 = 0o755;
@@ -13,6 +14,8 @@ pub struct CreateNixDir;
 
 #[async_trait]
 impl Step for CreateNixDir {
+    type Error = Error;
+
     fn name(&self) -> &'static str {
         "create /nix"
     }

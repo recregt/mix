@@ -1,13 +1,16 @@
 use async_trait::async_trait;
-use mix_core::{Result, Step};
+use mix_core::Step;
 
 use crate::constants::{NIXBLD_GID, NIXBLD_GROUP, NIXBLD_UID_BASE, NIXBLD_USER_COUNT};
+use crate::error::{Error, Result};
 use crate::util::run;
 
 pub struct CreateUsersAndGroups;
 
 #[async_trait]
 impl Step for CreateUsersAndGroups {
+    type Error = Error;
+
     fn name(&self) -> &'static str {
         "create nixbld group and build users"
     }

@@ -1,13 +1,16 @@
 use async_trait::async_trait;
-use mix_core::{Result, Step};
+use mix_core::Step;
 
 use crate::constants::{NIX_CONF, NIX_CONF_DEST, PROFILE_SNIPPET, PROFILE_SNIPPET_DEST};
+use crate::error::{Error, Result};
 use crate::util::{create_dir_all, write_file};
 
 pub struct ConfigureNixConf;
 
 #[async_trait]
 impl Step for ConfigureNixConf {
+    type Error = Error;
+
     fn name(&self) -> &'static str {
         "write runtime configuration"
     }
@@ -35,5 +38,6 @@ async fn write(path: &str, contents: &str) -> Result<()> {
     if let Some(dir) = std::path::Path::new(path).parent() {
         create_dir_all(dir).await?;
     }
-    write_file(path, contents).await
+    write_file(path, contents).await?;
+    Ok(())
 }
