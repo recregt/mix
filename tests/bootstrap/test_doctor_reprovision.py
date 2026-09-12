@@ -229,3 +229,28 @@ def test_doctor_fix_repairs_injected_drift(container, mock_nix_server):
     assert container.exec("cat", "/etc/nix/nix.conf").stdout == NIX_CONF_CONTENT
     assert container.exec("getent", "passwd", "nixbld1").returncode == 0
     assert container.exec("systemctl", "is-active", "nix-daemon.socket").stdout.strip() == "active"
+
+
+def test_doctor_fix_preserves_the_store_db_when_a_later_step_fails(container, mock_nix_server):
+    _bootstrap(container, mock_nix_server)
+
+    assert container.exec("test", "-s", "/nix/var/nix/db/db.sqlite").returncode == 0
+
+    container.exec("chmod", "700", "/nix/var/nix/userpool")
+    container.exec("userdel", "nixbld1")
+    container.exec("bash", "-c", "mv /usr/sbin/useradd /usr/sbin/useradd.disabled")
+
+    fix = container.exec("mix", "doctor", "--fix")
+    assert fix.returncode != 0, "expected the disabled useradd to abort the repair"
+
+    assert container.exec("test", "-s", "/nix/var/nix/db/db.sqlite").returncode == 0, (
+        "rollback of the unrelated userpool repair must not delete the real store database"
+    )
+    assert container.path_exists("/nix/var/nix/profiles/default/bin/nix-env")
+
+    container.exec("bash", "-c", "mv /usr/sbin/useradd.disabled /usr/sbin/useradd")
+    fix = container.exec("mix", "doctor", "--fix")
+    assert fix.returncode == 0, fix.stderr
+
+    assert container.exec("stat", "-c", "%a", "/nix/var/nix/userpool").stdout.strip() == "755"
+    assert container.exec("getent", "passwd", "nixbld1").returncode == 0
