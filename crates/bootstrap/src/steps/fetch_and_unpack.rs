@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use mix_core::{Error, Result, Step};
 use nix::fcntl::{AT_FDCWD, AtFlags};
-use nix::unistd::{Gid, Uid, fchownat};
+use nix::unistd::{Gid, Uid, User, fchownat};
 
 use crate::constants::NIXBLD_GID;
 use crate::pins::NIX_VERSION;
@@ -253,7 +253,7 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
 
     let mut child = std::process::Command::new(&nix_store)
         .arg("--load-db")
-        .env("HOME", root_home()?)
+        .env("HOME", root_home())
         .env_remove("NIX_REMOTE")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -309,7 +309,7 @@ fn activate_default_profile(nix_pkg: &Path, nss_cacert_pkg: &Path) -> Result<()>
         .arg(nss_cacert_pkg)
         .args(["--option", "substitute", "false"])
         .args(["--option", "post-build-hook", ""])
-        .env("HOME", root_home()?)
+        .env("HOME", root_home())
         .env_remove("NIX_REMOTE")
         .output()
         .map_err(|e| Error::Command {
@@ -330,13 +330,62 @@ fn activate_default_profile(nix_pkg: &Path, nss_cacert_pkg: &Path) -> Result<()>
     Ok(())
 }
 
-fn root_home() -> Result<String> {
-    std::env::var("HOME").map_err(|_| Error::MissingEnv("HOME"))
+fn root_home() -> String {
+    root_home_with(std::env::var("HOME").ok(), || {
+        User::from_uid(Uid::from_raw(0))
+            .ok()
+            .flatten()
+            .map(|u| u.dir)
+    })
+}
+
+fn root_home_with(
+    home_env: Option<String>,
+    passwd_dir: impl FnOnce() -> Option<PathBuf>,
+) -> String {
+    if let Some(home) = home_env.filter(|home| !home.is_empty()) {
+        return home;
+    }
+
+    passwd_dir()
+        .and_then(|dir| dir.to_str().map(str::to_string))
+        .unwrap_or_else(|| "/root".to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn root_home_with_prefers_non_empty_home_env() {
+        assert_eq!(
+            root_home_with(Some("/home/nix".to_string()), || Some(PathBuf::from(
+                "/should-not-be-used"
+            ))),
+            "/home/nix"
+        );
+    }
+
+    #[test]
+    fn root_home_with_falls_back_to_passwd_dir_when_home_is_missing() {
+        assert_eq!(
+            root_home_with(None, || Some(PathBuf::from("/var/lib/root"))),
+            "/var/lib/root"
+        );
+    }
+
+    #[test]
+    fn root_home_with_falls_back_to_passwd_dir_when_home_is_empty() {
+        assert_eq!(
+            root_home_with(Some(String::new()), || Some(PathBuf::from("/root"))),
+            "/root"
+        );
+    }
+
+    #[test]
+    fn root_home_with_falls_back_to_slash_root_when_passwd_lookup_fails() {
+        assert_eq!(root_home_with(None, || None), "/root");
+    }
 
     #[test]
     fn find_single_child_matches_exactly_one() {

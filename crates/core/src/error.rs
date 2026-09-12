@@ -55,9 +55,6 @@ pub enum Error {
     #[error("`mix` does not support this platform ({0})")]
     UnsupportedTarget(String),
 
-    #[error("required environment variable `{0}` is not set")]
-    MissingEnv(&'static str),
-
     #[error("decompressing archive: {0}")]
     Decompression(String),
 
