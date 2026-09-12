@@ -1,4 +1,8 @@
+use std::future::Future;
+use std::pin::pin;
+
 use async_trait::async_trait;
+use futures_util::future::{Either, select};
 
 #[async_trait]
 pub trait Step: Send + Sync {
@@ -18,6 +22,16 @@ pub struct Plan<E> {
     failed_rollbacks: Vec<String>,
 }
 
+pub enum Outcome<E> {
+    Completed(Result<(), E>),
+    Interrupted,
+}
+
+enum StopReason<E> {
+    Failed(E),
+    Interrupted,
+}
+
 impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
     pub fn new(steps: Vec<Box<dyn Step<Error = E>>>) -> Self {
         Self {
@@ -31,11 +45,24 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
     }
 
     pub async fn run(&mut self) -> Result<(), E> {
+        match self.run_cancellable(std::future::pending()).await {
+            Outcome::Completed(result) => result,
+            Outcome::Interrupted => unreachable!("cancel future never resolves"),
+        }
+    }
+
+    pub async fn run_cancellable(&mut self, cancel: impl Future<Output = ()>) -> Outcome<E> {
+        let mut cancel = pin!(cancel);
         let mut attempted = Attempted::default();
 
-        let failure = 'run: {
+        let stop = 'run: {
             for (idx, step) in self.steps.iter_mut().enumerate() {
-                match step.check().await {
+                let check = match select(cancel.as_mut(), step.check()).await {
+                    Either::Left(((), _)) => break 'run Some(StopReason::Interrupted),
+                    Either::Right((result, _)) => result,
+                };
+
+                match check {
                     Ok(true) => {
                         tracing::debug!("skipping (already satisfied): {}", step.name());
                         continue;
@@ -43,27 +70,36 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
                     Ok(false) => {}
                     Err(e) => {
                         tracing::debug!("check failed: {} ({e})", step.name());
-                        break 'run Some(e);
+                        break 'run Some(StopReason::Failed(e));
                     }
                 }
 
                 tracing::info!("running: {}", step.name());
                 attempted.insert(idx);
-                if let Err(e) = step.execute().await {
+                let executed = match select(cancel.as_mut(), step.execute()).await {
+                    Either::Left(((), _)) => break 'run Some(StopReason::Interrupted),
+                    Either::Right((result, _)) => result,
+                };
+                if let Err(e) = executed {
                     tracing::debug!("step failed: {} ({e})", step.name());
-                    break 'run Some(e);
+                    break 'run Some(StopReason::Failed(e));
                 }
             }
 
             None
         };
 
-        match failure {
-            Some(e) => {
+        match stop {
+            Some(StopReason::Failed(e)) => {
                 Box::pin(self.unwind(&attempted)).await;
-                Err(e)
+                Outcome::Completed(Err(e))
             }
-            None => Ok(()),
+            Some(StopReason::Interrupted) => {
+                tracing::info!("interrupted, rolling back");
+                Box::pin(self.unwind(&attempted)).await;
+                Outcome::Interrupted
+            }
+            None => Outcome::Completed(Ok(())),
         }
     }
 
@@ -414,5 +450,83 @@ mod tests {
         assert!(matches!(plan.run().await, Err(ProbeError)));
 
         assert_eq!(*log.lock().unwrap(), vec![2, 1, 0]);
+    }
+
+    #[tokio::test]
+    async fn interrupting_before_any_step_runs_executes_nothing() {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let steps: Vec<Box<dyn Step<Error = ProbeError>>> = vec![Box::new(Recorder {
+            name: "a",
+            fail_execute: false,
+            fail_rollback: false,
+            log: log.clone(),
+        })];
+        let mut plan = Plan::new(steps);
+
+        let outcome = plan.run_cancellable(std::future::ready(())).await;
+
+        assert!(matches!(outcome, Outcome::Interrupted));
+        assert!(log.lock().unwrap().is_empty());
+    }
+
+    struct SetFlagOnExecute {
+        flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl Step for SetFlagOnExecute {
+        type Error = ProbeError;
+
+        fn name(&self) -> &'static str {
+            "a"
+        }
+
+        async fn check(&self) -> Result<bool, ProbeError> {
+            Ok(false)
+        }
+
+        async fn execute(&mut self) -> Result<(), ProbeError> {
+            self.log.lock().unwrap().push("execute:a".to_string());
+            self.flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn rollback(&mut self) -> Result<(), ProbeError> {
+            self.log.lock().unwrap().push("rollback:a".to_string());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn interrupting_after_a_step_rolls_back_only_that_step() {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let steps: Vec<Box<dyn Step<Error = ProbeError>>> = vec![
+            Box::new(SetFlagOnExecute {
+                flag: flag.clone(),
+                log: log.clone(),
+            }),
+            Box::new(Recorder {
+                name: "b",
+                fail_execute: false,
+                fail_rollback: false,
+                log: log.clone(),
+            }),
+        ];
+        let mut plan = Plan::new(steps);
+        let cancel = std::future::poll_fn(move |cx| {
+            if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                std::task::Poll::Ready(())
+            } else {
+                cx.waker().wake_by_ref();
+                std::task::Poll::Pending
+            }
+        });
+
+        let outcome = plan.run_cancellable(cancel).await;
+
+        assert!(matches!(outcome, Outcome::Interrupted));
+        assert_eq!(*log.lock().unwrap(), vec!["execute:a", "rollback:a"]);
     }
 }
