@@ -371,15 +371,8 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
             source: e,
         })?;
 
-    child
-        .stdin
-        .take()
-        .expect("stdin was piped")
-        .write_all(&reginfo)
-        .map_err(|e| CoreError::Exec {
-            command: command_line.clone(),
-            source: e,
-        })?;
+    let mut stdin = child.stdin.take().expect("stdin was piped");
+    let writer = std::thread::spawn(move || stdin.write_all(&reginfo));
 
     let output = child.wait_with_output().map_err(|e| CoreError::Exec {
         command: command_line.clone(),
@@ -398,6 +391,14 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
             &output,
         )));
     }
+
+    writer
+        .join()
+        .map_err(|e| CoreError::TaskPanicked(format!("{e:?}")))?
+        .map_err(|e| CoreError::Exec {
+            command: command_line,
+            source: e,
+        })?;
 
     Ok(())
 }
