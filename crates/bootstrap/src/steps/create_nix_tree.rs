@@ -1,10 +1,8 @@
-use std::os::unix::fs::PermissionsExt;
-
 use async_trait::async_trait;
 use mix_core::Step;
 
 use crate::error::{Error, Result};
-use crate::util::{create_dir_all, remove_dir_all, set_permissions, warn_on_failure};
+use crate::util::{create_dir_all, dir_has_mode, remove_dir_all, set_permissions, warn_on_failure};
 
 #[derive(Debug, Clone, Copy)]
 pub struct DirectorySpec {
@@ -122,14 +120,13 @@ async fn path_exists(path: &str) -> bool {
 }
 
 async fn dir_matches(dir: &DirectorySpec) -> bool {
-    match tokio::fs::metadata(dir.path).await {
-        Ok(meta) => meta.is_dir() && meta.permissions().mode() & 0o7777 == dir.mode,
-        Err(_) => false,
-    }
+    dir_has_mode(dir.path, dir.mode).await
 }
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use super::*;
 
     fn leak(path: std::path::PathBuf) -> &'static str {

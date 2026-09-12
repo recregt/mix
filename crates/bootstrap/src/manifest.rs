@@ -9,6 +9,7 @@ use crate::constants::{
 use crate::error::{Error, Result};
 use crate::steps::create_nix_tree::{DirectorySpec, NIX_TREE};
 use crate::steps::create_users_and_groups::{all_users_valid, group_has_gid};
+use crate::util::DIR_MODE_MASK;
 
 #[derive(Debug, Clone, Copy)]
 pub enum ManagedArtifact {
@@ -53,7 +54,7 @@ impl ManagedArtifact {
                 if !meta.is_dir() {
                     return Err(integrity(path, "exists but is not a directory"));
                 }
-                let actual_mode = meta.permissions().mode() & 0o7777;
+                let actual_mode = meta.permissions().mode() & DIR_MODE_MASK;
                 if actual_mode != mode {
                     return Err(integrity(
                         path,

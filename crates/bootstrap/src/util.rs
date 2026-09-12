@@ -63,6 +63,15 @@ pub async fn set_permissions(path: impl AsRef<Path>, mode: u32) -> Result<()> {
         })
 }
 
+pub const DIR_MODE_MASK: u32 = 0o7777;
+
+pub async fn dir_has_mode(path: impl AsRef<Path>, mode: u32) -> bool {
+    match tokio::fs::metadata(path.as_ref()).await {
+        Ok(meta) => meta.is_dir() && meta.permissions().mode() & DIR_MODE_MASK == mode,
+        Err(_) => false,
+    }
+}
+
 pub async fn remove_dir_all(path: impl AsRef<Path>) -> Result<()> {
     let path = path.as_ref();
     tracing::debug!("removing directory: {}", path.display());
@@ -157,6 +166,32 @@ pub async fn files_match(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn dir_has_mode_true_when_mode_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(dir_has_mode(dir.path(), 0o755).await);
+    }
+
+    #[tokio::test]
+    async fn dir_has_mode_true_for_a_sticky_world_writable_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o1777)).unwrap();
+        assert!(dir_has_mode(dir.path(), 0o1777).await);
+    }
+
+    #[tokio::test]
+    async fn dir_has_mode_false_on_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(!dir_has_mode(dir.path(), 0o755).await);
+    }
+
+    #[tokio::test]
+    async fn dir_has_mode_false_when_missing() {
+        assert!(!dir_has_mode(Path::new("/does/not/exist/mix-test"), 0o755).await);
+    }
 
     fn output_with(stdout: &str, stderr: &str, exit_code: i32) -> std::process::Output {
         use std::os::unix::process::ExitStatusExt;
