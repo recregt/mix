@@ -1,4 +1,4 @@
-use std::io::Cursor;
+use std::io::Write as _;
 
 use mix_bootstrap::tarball::{sha256_hex, unpack};
 
@@ -36,9 +36,9 @@ fn xz_tar(files: usize, size: usize) -> Vec<u8> {
     }
     let archive = builder.into_inner().expect("finishing the tar archive");
 
-    let mut compressed = Vec::new();
-    lzma_rs::xz_compress(&mut Cursor::new(archive), &mut compressed).expect("compressing with xz");
-    compressed
+    let mut writer = liblzma::write::XzEncoder::new(Vec::new(), 6);
+    writer.write_all(&archive).expect("compressing with xz");
+    writer.finish().expect("finishing the xz stream")
 }
 
 #[divan::bench(args = [64 * KIB, 1024 * KIB, 4096 * KIB])]

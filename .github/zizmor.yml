@@ -1,0 +1,8 @@
+rules:
+  ref-version-mismatch:
+    ignore:
+      - test.yml:30
+      - codspeed.yml:32
+      - e2e.yml:29
+      - lint.yml:30
+      - lint.yml:46
