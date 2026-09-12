@@ -31,7 +31,11 @@ fn detect_at(
                 detected
             }
         }
-        Err(_) => detect_from_env(has_distro_name, has_interop),
+        Err(_) => detect_from_env(
+            has_distro_name,
+            has_interop,
+            has_real_cgroup2_at(cgroup_controllers_path),
+        ),
     }
 }
 
@@ -52,12 +56,11 @@ fn detect_from_kernel_release(release: &str) -> Wsl {
     }
 }
 
-fn detect_from_env(has_distro_name: bool, has_interop: bool) -> Wsl {
-    match (has_distro_name, has_interop) {
-        (true, true) => Wsl::V2,
-        (true, false) => Wsl::V1,
-        (false, _) => Wsl::No,
+fn detect_from_env(has_distro_name: bool, has_interop: bool, has_real_cgroup2: bool) -> Wsl {
+    if !has_distro_name && !has_interop {
+        return Wsl::No;
     }
+    if has_real_cgroup2 { Wsl::V2 } else { Wsl::V1 }
 }
 
 pub fn systemd_active() -> bool {
@@ -76,19 +79,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn detect_from_env_distro_name_and_interop_is_v2() {
-        assert_eq!(detect_from_env(true, true), Wsl::V2);
+    fn detect_from_env_no_wsl_signal_is_no_regardless_of_cgroup2() {
+        assert_eq!(detect_from_env(false, false, true), Wsl::No);
+        assert_eq!(detect_from_env(false, false, false), Wsl::No);
     }
 
     #[test]
-    fn detect_from_env_distro_name_without_interop_is_v1() {
-        assert_eq!(detect_from_env(true, false), Wsl::V1);
+    fn detect_from_env_wsl_signal_with_real_cgroup2_is_v2() {
+        assert_eq!(detect_from_env(true, false, true), Wsl::V2);
+        assert_eq!(detect_from_env(false, true, true), Wsl::V2);
     }
 
     #[test]
-    fn detect_from_env_no_distro_name_is_no() {
-        assert_eq!(detect_from_env(false, true), Wsl::No);
-        assert_eq!(detect_from_env(false, false), Wsl::No);
+    fn detect_from_env_wsl_signal_without_real_cgroup2_is_v1() {
+        assert_eq!(detect_from_env(true, false, false), Wsl::V1);
+        assert_eq!(detect_from_env(true, true, false), Wsl::V1);
     }
 
     #[test]
@@ -128,6 +133,15 @@ mod tests {
         let cgroup = dir.path().join("missing-cgroup");
         assert_eq!(detect_at(&missing, &cgroup, true, false), Wsl::V1);
         assert_eq!(detect_at(&missing, &cgroup, false, false), Wsl::No);
+    }
+
+    #[test]
+    fn detect_at_fallback_trusts_cgroup2_over_stripped_interop_var() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        let cgroup = dir.path().join("cgroup.controllers");
+        std::fs::write(&cgroup, "cpuset cpu io memory hugetlb pids rdma\n").unwrap();
+        assert_eq!(detect_at(&missing, &cgroup, true, false), Wsl::V2);
     }
 
     #[test]
