@@ -4,6 +4,7 @@
   "enabledManagers": ["cargo", "github-actions"],
   "dependencyDashboard": true,
   "minimumReleaseAge": "3 days",
+  "semanticCommitScope": "",
   "lockFileMaintenance": {
     "enabled": true,
     "schedule": ["before 6am on monday"]
@@ -12,7 +13,8 @@
     {
       "matchManagers": ["github-actions"],
       "groupName": "github actions",
-      "pinDigests": true
+      "pinDigests": true,
+      "commitMessageTopic": "{{depName}}"
     },
     {
       "matchManagers": ["cargo"],
