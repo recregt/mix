@@ -1,13 +1,21 @@
+use std::path::{Path, PathBuf};
+
 use async_trait::async_trait;
 use mix_core::Step;
 
 use crate::constants::{NIX_CONF, NIX_CONF_DEST, PROFILE_SNIPPET, PROFILE_SNIPPET_DEST};
 use crate::error::{Error, Result};
-use crate::util::{create_dir_all, remove_file, write_file};
+use crate::util::{create_dir_all, remove_dir_all, remove_file, write_file};
 
 #[derive(Default)]
 pub struct ConfigureNixConf {
-    written: Vec<(&'static str, Option<Vec<u8>>)>,
+    written: Vec<WrittenFile>,
+}
+
+struct WrittenFile {
+    path: &'static str,
+    previous: Option<Vec<u8>>,
+    created_dir: Option<PathBuf>,
 }
 
 #[async_trait]
@@ -24,24 +32,33 @@ impl Step for ConfigureNixConf {
     }
 
     async fn execute(&mut self) -> Result<()> {
-        self.written
-            .push((NIX_CONF_DEST, previous_contents(NIX_CONF_DEST).await));
-        write(NIX_CONF_DEST, NIX_CONF).await?;
+        let previous = previous_contents(NIX_CONF_DEST).await;
+        let created_dir = write(NIX_CONF_DEST, NIX_CONF).await?;
+        self.written.push(WrittenFile {
+            path: NIX_CONF_DEST,
+            previous,
+            created_dir,
+        });
 
-        self.written.push((
-            PROFILE_SNIPPET_DEST,
-            previous_contents(PROFILE_SNIPPET_DEST).await,
-        ));
-        write(PROFILE_SNIPPET_DEST, PROFILE_SNIPPET).await?;
+        let previous = previous_contents(PROFILE_SNIPPET_DEST).await;
+        let created_dir = write(PROFILE_SNIPPET_DEST, PROFILE_SNIPPET).await?;
+        self.written.push(WrittenFile {
+            path: PROFILE_SNIPPET_DEST,
+            previous,
+            created_dir,
+        });
 
         Ok(())
     }
 
     async fn rollback(&mut self) -> Result<()> {
-        for (path, previous) in self.written.drain(..).rev() {
-            match previous {
-                Some(contents) => write_file(path, contents).await?,
-                None => remove_file(path).await?,
+        for written in self.written.drain(..).rev() {
+            match written.previous {
+                Some(contents) => write_file(written.path, contents).await?,
+                None => remove_file(written.path).await?,
+            }
+            if let Some(dir) = written.created_dir {
+                remove_dir_all(dir).await?;
             }
         }
         Ok(())
@@ -59,10 +76,85 @@ async fn previous_contents(path: &str) -> Option<Vec<u8>> {
     tokio::fs::read(path).await.ok()
 }
 
-async fn write(path: &str, contents: &str) -> Result<()> {
-    if let Some(dir) = std::path::Path::new(path).parent() {
-        create_dir_all(dir).await?;
-    }
+async fn write(path: &str, contents: &str) -> Result<Option<PathBuf>> {
+    let created_dir = match Path::new(path).parent() {
+        Some(dir) => {
+            let created_dir = first_missing_ancestor(dir);
+            create_dir_all(dir).await?;
+            created_dir
+        }
+        None => None,
+    };
     write_file(path, contents).await?;
-    Ok(())
+    Ok(created_dir)
+}
+
+fn first_missing_ancestor(dir: &Path) -> Option<PathBuf> {
+    let mut missing = None;
+    let mut candidate = dir;
+    while !candidate.exists() {
+        missing = Some(candidate.to_path_buf());
+        match candidate.parent() {
+            Some(parent) => candidate = parent,
+            None => break,
+        }
+    }
+    missing
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_missing_ancestor_is_none_when_the_directory_already_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(first_missing_ancestor(dir.path()), None);
+    }
+
+    #[test]
+    fn first_missing_ancestor_finds_the_topmost_missing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("a").join("b").join("c");
+        assert_eq!(first_missing_ancestor(&target), Some(dir.path().join("a")));
+    }
+
+    #[tokio::test]
+    async fn write_creates_missing_parents_and_reports_the_topmost_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a").join("b").join("nix.conf");
+
+        let created_dir = write(file.to_str().unwrap(), "content").await.unwrap();
+
+        assert_eq!(created_dir, Some(dir.path().join("a")));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "content");
+    }
+
+    #[tokio::test]
+    async fn write_reports_no_created_dir_when_the_parent_already_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("nix.conf");
+
+        let created_dir = write(file.to_str().unwrap(), "content").await.unwrap();
+
+        assert_eq!(created_dir, None);
+    }
+
+    #[tokio::test]
+    async fn rollback_removes_a_directory_it_created_for_a_new_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a").join("nix.conf");
+        let created_dir = write(file.to_str().unwrap(), "content").await.unwrap();
+
+        let mut step = ConfigureNixConf {
+            written: vec![WrittenFile {
+                path: Box::leak(file.to_str().unwrap().to_string().into_boxed_str()),
+                previous: None,
+                created_dir,
+            }],
+        };
+        step.rollback().await.unwrap();
+
+        assert!(!dir.path().join("a").exists());
+    }
 }

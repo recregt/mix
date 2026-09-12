@@ -22,6 +22,7 @@ pub struct FetchAndUnpack {
 }
 
 struct Installed {
+    store_dir_created: bool,
     store_paths: Vec<PathBuf>,
     profile_created: bool,
 }
@@ -84,6 +85,7 @@ fn provision(tarball_bytes: &[u8]) -> Result<Installed> {
 
     let unpacked_root = find_single_child(scratch.path(), |name| name.starts_with("nix-"))?;
     tracing::debug!("moving Nix store into place");
+    let store_dir_created = !Path::new(NIX_STORE).exists();
     let store_paths = move_store_into_place(&unpacked_root)?;
     tracing::debug!("fixing Nix store ownership");
     ensure_store_ownership()?;
@@ -101,6 +103,7 @@ fn provision(tarball_bytes: &[u8]) -> Result<Installed> {
     activate_default_profile(&nix_pkg, &nss_cacert_pkg)?;
 
     Ok(Installed {
+        store_dir_created,
         store_paths,
         profile_created,
     })
@@ -112,9 +115,14 @@ fn teardown(installed: Installed) -> Result<()> {
         remove_profile_default()?;
     }
 
-    tracing::debug!("removing Nix store paths added by this run");
-    for path in installed.store_paths.iter().rev() {
-        remove_path(path)?;
+    if installed.store_dir_created {
+        tracing::debug!("removing Nix store directory created by this run");
+        remove_path(Path::new(NIX_STORE))?;
+    } else {
+        tracing::debug!("removing Nix store paths added by this run");
+        for path in installed.store_paths.iter().rev() {
+            remove_path(path)?;
+        }
     }
 
     Ok(())
