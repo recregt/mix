@@ -87,7 +87,7 @@ impl Step for CreateUsersAndGroups {
 
     async fn rollback(&mut self) -> Result<()> {
         for name in self.created_users.drain(..).rev() {
-            warn_on_failure("delete build user", run("userdel", &[&name]).await);
+            delete_user(&name).await;
         }
 
         if self.created_group {
@@ -104,6 +104,25 @@ impl Step for CreateUsersAndGroups {
 
 pub fn user_name(n: u32) -> String {
     format!("{NIXBLD_GROUP}{n}")
+}
+
+pub(crate) async fn delete_user(name: &str) {
+    terminate_processes(name).await;
+    warn_on_failure("delete build user", run("userdel", &[name]).await);
+}
+
+async fn terminate_processes(name: &str) {
+    match tokio::process::Command::new("pkill")
+        .args(["-u", name])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+    {
+        Ok(status) if status.success() || status.code() == Some(1) => {}
+        Ok(status) => tracing::warn!("pkill -u {name} exited with {status}, continuing"),
+        Err(e) => tracing::warn!("pkill -u {name} failed to run: {e}, continuing"),
+    }
 }
 
 pub fn group_exists(name: &str) -> bool {
