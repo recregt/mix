@@ -62,6 +62,32 @@ pub async fn set_permissions(path: impl AsRef<Path>, mode: u32) -> Result<()> {
         })
 }
 
+pub async fn remove_dir_all(path: impl AsRef<Path>) -> Result<()> {
+    let path = path.as_ref();
+    tracing::debug!("removing directory: {}", path.display());
+    match tokio::fs::remove_dir_all(path).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::Io {
+            path: path.to_path_buf(),
+            source: e,
+        }),
+    }
+}
+
+pub async fn remove_file(path: impl AsRef<Path>) -> Result<()> {
+    let path = path.as_ref();
+    tracing::debug!("removing file: {}", path.display());
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::Io {
+            path: path.to_path_buf(),
+            source: e,
+        }),
+    }
+}
+
 pub async fn copy_file(src: impl AsRef<Path>, dest: impl AsRef<Path>) -> Result<()> {
     let src = src.as_ref();
     let dest = dest.as_ref();

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use mix_core::Step;
 
 use crate::error::{Error, Result};
-use crate::util::{create_dir_all, set_permissions};
+use crate::util::{create_dir_all, remove_dir_all, set_permissions};
 
 const PATHS: &[&str] = &[
     "/nix/var",
@@ -40,6 +40,13 @@ impl Step for CreateNixTree {
         for path in PATHS {
             create_dir_all(*path).await?;
             set_permissions(*path, 0o755).await?;
+        }
+        Ok(())
+    }
+
+    async fn rollback(&mut self) -> Result<()> {
+        for path in PATHS.iter().rev() {
+            remove_dir_all(*path).await?;
         }
         Ok(())
     }

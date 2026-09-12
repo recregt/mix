@@ -7,6 +7,10 @@ pub trait Step: Send + Sync {
     fn name(&self) -> &'static str;
     async fn check(&self) -> Result<bool, Self::Error>;
     async fn execute(&mut self) -> Result<(), Self::Error>;
+
+    async fn rollback(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
 }
 
 pub struct Plan<E> {
@@ -19,20 +23,49 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
     }
 
     pub async fn run(&mut self) -> Result<(), E> {
-        for step in &mut self.steps {
-            if step.check().await? {
-                tracing::debug!("skipping (already satisfied): {}", step.name());
+        let mut executed = Vec::new();
+
+        for idx in 0..self.steps.len() {
+            let step = &mut self.steps[idx];
+            let name = step.name();
+
+            let satisfied = match step.check().await {
+                Ok(satisfied) => satisfied,
+                Err(e) => {
+                    tracing::debug!("check failed: {name} ({e})");
+                    Self::unwind(&mut self.steps, &executed).await;
+                    return Err(e);
+                }
+            };
+
+            if satisfied {
+                tracing::debug!("skipping (already satisfied): {name}");
                 continue;
             }
 
-            tracing::info!("running: {}", step.name());
+            tracing::info!("running: {name}");
             if let Err(e) = step.execute().await {
-                tracing::debug!("step failed: {} ({e})", step.name());
+                tracing::debug!("step failed: {name} ({e})");
+                Self::unwind(&mut self.steps, &executed).await;
                 return Err(e);
             }
+
+            executed.push(idx);
         }
 
         Ok(())
+    }
+
+    async fn unwind(steps: &mut [Box<dyn Step<Error = E>>], executed: &[usize]) {
+        for &idx in executed.iter().rev() {
+            let step = &mut steps[idx];
+            let name = step.name();
+
+            tracing::info!("rolling back: {name}");
+            if let Err(e) = step.rollback().await {
+                tracing::error!("rollback failed: {name} ({e})");
+            }
+        }
     }
 }
 
@@ -84,5 +117,154 @@ mod tests {
         })];
         let mut plan = Plan::new(steps);
         assert!(matches!(plan.run().await, Err(ProbeError)));
+    }
+
+    #[tokio::test]
+    async fn default_rollback_is_a_noop() {
+        let mut step = Noop {
+            satisfied: false,
+            fail: false,
+        };
+        assert!(step.rollback().await.is_ok());
+    }
+
+    struct Recorder {
+        name: &'static str,
+        fail_execute: bool,
+        fail_rollback: bool,
+        log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl Step for Recorder {
+        type Error = ProbeError;
+
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        async fn check(&self) -> Result<bool, ProbeError> {
+            Ok(false)
+        }
+
+        async fn execute(&mut self) -> Result<(), ProbeError> {
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("execute:{}", self.name));
+            if self.fail_execute {
+                Err(ProbeError)
+            } else {
+                Ok(())
+            }
+        }
+
+        async fn rollback(&mut self) -> Result<(), ProbeError> {
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("rollback:{}", self.name));
+            if self.fail_rollback {
+                Err(ProbeError)
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_step_rolls_back_prior_successes_in_reverse_order() {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let steps: Vec<Box<dyn Step<Error = ProbeError>>> = vec![
+            Box::new(Recorder {
+                name: "a",
+                fail_execute: false,
+                fail_rollback: false,
+                log: log.clone(),
+            }),
+            Box::new(Recorder {
+                name: "b",
+                fail_execute: false,
+                fail_rollback: false,
+                log: log.clone(),
+            }),
+            Box::new(Recorder {
+                name: "c",
+                fail_execute: true,
+                fail_rollback: false,
+                log: log.clone(),
+            }),
+        ];
+        let mut plan = Plan::new(steps);
+        assert!(matches!(plan.run().await, Err(ProbeError)));
+
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![
+                "execute:a",
+                "execute:b",
+                "execute:c",
+                "rollback:b",
+                "rollback:a",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rollback_failure_is_reported_but_does_not_stop_remaining_rollbacks() {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let steps: Vec<Box<dyn Step<Error = ProbeError>>> = vec![
+            Box::new(Recorder {
+                name: "a",
+                fail_execute: false,
+                fail_rollback: false,
+                log: log.clone(),
+            }),
+            Box::new(Recorder {
+                name: "b",
+                fail_execute: false,
+                fail_rollback: true,
+                log: log.clone(),
+            }),
+            Box::new(Recorder {
+                name: "c",
+                fail_execute: true,
+                fail_rollback: false,
+                log: log.clone(),
+            }),
+        ];
+        let mut plan = Plan::new(steps);
+        assert!(matches!(plan.run().await, Err(ProbeError)));
+
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![
+                "execute:a",
+                "execute:b",
+                "execute:c",
+                "rollback:b",
+                "rollback:a",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_skipped_step_is_not_rolled_back() {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let steps: Vec<Box<dyn Step<Error = ProbeError>>> = vec![
+            Box::new(Noop {
+                satisfied: true,
+                fail: false,
+            }),
+            Box::new(Recorder {
+                name: "b",
+                fail_execute: true,
+                fail_rollback: false,
+                log: log.clone(),
+            }),
+        ];
+        let mut plan = Plan::new(steps);
+        assert!(matches!(plan.run().await, Err(ProbeError)));
+        assert_eq!(*log.lock().unwrap(), vec!["execute:b"]);
     }
 }

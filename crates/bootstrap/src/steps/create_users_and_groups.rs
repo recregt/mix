@@ -5,7 +5,11 @@ use crate::constants::{NIXBLD_GID, NIXBLD_GROUP, NIXBLD_UID_BASE, NIXBLD_USER_CO
 use crate::error::{Error, Result};
 use crate::util::run;
 
-pub struct CreateUsersAndGroups;
+#[derive(Default)]
+pub struct CreateUsersAndGroups {
+    created_group: bool,
+    created_users: Vec<String>,
+}
 
 #[async_trait]
 impl Step for CreateUsersAndGroups {
@@ -26,6 +30,7 @@ impl Step for CreateUsersAndGroups {
         } else if !group_exists(NIXBLD_GROUP) {
             let gid = NIXBLD_GID.to_string();
             run("groupadd", &["--system", "--gid", &gid, NIXBLD_GROUP]).await?;
+            self.created_group = true;
         }
 
         for n in 1..=NIXBLD_USER_COUNT {
@@ -67,6 +72,20 @@ impl Step for CreateUsersAndGroups {
                 ],
             )
             .await?;
+            self.created_users.push(name);
+        }
+
+        Ok(())
+    }
+
+    async fn rollback(&mut self) -> Result<()> {
+        for name in self.created_users.drain(..).rev() {
+            run("userdel", &[&name]).await?;
+        }
+
+        if self.created_group {
+            run("groupdel", &[NIXBLD_GROUP]).await?;
+            self.created_group = false;
         }
 
         Ok(())
