@@ -5,25 +5,26 @@ use mix_core::{Error, Result};
 use tokio::process::Command;
 
 pub async fn run(command: &str, args: &[&str]) -> Result<()> {
-    tracing::debug!("running command: {}", format_command(command, args));
+    let command_line = format_command(command, args);
+    tracing::debug!("running command: {command_line}");
 
     let output = Command::new(command)
         .args(args)
         .output()
         .await
-        .map_err(|e| Error::Command {
-            command: command.into(),
-            detail: e.to_string(),
+        .map_err(|e| Error::Exec {
+            command: command_line.clone(),
+            source: e,
         })?;
 
     tracing::trace!(
-        "command output: {command}\nstdout: {}\nstderr: {}",
+        "command output: {command_line}\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 
     if !output.status.success() {
-        return Err(command_error(command, &output));
+        return Err(command_error(command_line, &output));
     }
 
     Ok(())
@@ -62,6 +63,32 @@ pub async fn set_permissions(path: impl AsRef<Path>, mode: u32) -> Result<()> {
         })
 }
 
+pub async fn remove_dir_all(path: impl AsRef<Path>) -> Result<()> {
+    let path = path.as_ref();
+    tracing::debug!("removing directory: {}", path.display());
+    match tokio::fs::remove_dir_all(path).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::Io {
+            path: path.to_path_buf(),
+            source: e,
+        }),
+    }
+}
+
+pub async fn remove_file(path: impl AsRef<Path>) -> Result<()> {
+    let path = path.as_ref();
+    tracing::debug!("removing file: {}", path.display());
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::Io {
+            path: path.to_path_buf(),
+            source: e,
+        }),
+    }
+}
+
 pub async fn copy_file(src: impl AsRef<Path>, dest: impl AsRef<Path>) -> Result<()> {
     let src = src.as_ref();
     let dest = dest.as_ref();
@@ -75,7 +102,7 @@ pub async fn copy_file(src: impl AsRef<Path>, dest: impl AsRef<Path>) -> Result<
         })
 }
 
-fn format_command(command: &str, args: &[&str]) -> String {
+pub(crate) fn format_command(command: &str, args: &[&str]) -> String {
     let mut rendered = command.to_string();
     for arg in args {
         rendered.push(' ');
@@ -99,6 +126,15 @@ pub fn command_error(command: impl Into<String>, output: &std::process::Output) 
     Error::Command {
         command: command.into(),
         detail,
+    }
+}
+
+pub(crate) fn warn_on_failure<T, E: std::fmt::Display>(
+    action: &'static str,
+    result: std::result::Result<T, E>,
+) {
+    if let Err(error) = result {
+        tracing::warn!("{action} failed: {error}, continuing");
     }
 }
 
@@ -187,6 +223,27 @@ mod tests {
         match command_error("mycmd", &output) {
             Error::Command { detail, .. } => assert!(detail.contains("exited with status")),
             other => panic!("expected Command error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_reports_the_full_command_line_on_failure() {
+        match run("false", &["--gid", "30000", "nixbld1"]).await {
+            Err(Error::Command { command, .. }) => {
+                assert_eq!(command, "false --gid 30000 nixbld1");
+            }
+            other => panic!("expected Command error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_preserves_the_source_error_when_the_command_cannot_be_spawned() {
+        match run("mix-test-nonexistent-binary-xyz", &["--gid", "30000"]).await {
+            Err(Error::Exec { command, source }) => {
+                assert_eq!(command, "mix-test-nonexistent-binary-xyz --gid 30000");
+                assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+            }
+            other => panic!("expected Exec error, got {other:?}"),
         }
     }
 

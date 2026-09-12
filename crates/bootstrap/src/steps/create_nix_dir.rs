@@ -2,17 +2,23 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use async_trait::async_trait;
-use mix_core::{Result, Step};
+use mix_core::Step;
 
 use crate::constants::NIX_OWNERSHIP_MARKER;
-use crate::util::{create_dir_all, set_permissions, write_file};
+use crate::error::{Error, Result};
+use crate::util::{create_dir_all, remove_dir_all, remove_file, set_permissions, write_file};
 
 const MODE: u32 = 0o755;
 
-pub struct CreateNixDir;
+#[derive(Default)]
+pub struct CreateNixDir {
+    created_dir: bool,
+}
 
 #[async_trait]
 impl Step for CreateNixDir {
+    type Error = Error;
+
     fn name(&self) -> &'static str {
         "create /nix"
     }
@@ -25,9 +31,19 @@ impl Step for CreateNixDir {
     }
 
     async fn execute(&mut self) -> Result<()> {
+        self.created_dir = !Path::new("/nix").exists();
         create_dir_all("/nix").await?;
         set_permissions("/nix", MODE).await?;
         write_file(NIX_OWNERSHIP_MARKER, b"").await?;
+        Ok(())
+    }
+
+    async fn rollback(&mut self) -> Result<()> {
+        if self.created_dir {
+            remove_dir_all("/nix").await?;
+        } else {
+            remove_file(NIX_OWNERSHIP_MARKER).await?;
+        }
         Ok(())
     }
 }

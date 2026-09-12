@@ -1,5 +1,7 @@
 use std::process::ExitCode;
 
+use mix_bootstrap::HealthReport;
+
 use super::RootStatus;
 use crate::ui;
 
@@ -9,7 +11,7 @@ pub async fn run(fix: bool, mirror: Option<String>) -> anyhow::Result<ExitCode> 
             return Ok(code);
         }
 
-        mix_bootstrap::doctor(mirror.as_deref()).await?;
+        mix_bootstrap::reset(mirror.as_deref()).await?;
         ui::ok("System state successfully restored to pristine condition.");
         return Ok(ExitCode::SUCCESS);
     }
@@ -22,14 +24,31 @@ pub async fn run(fix: bool, mirror: Option<String>) -> anyhow::Result<ExitCode> 
 }
 
 pub async fn check() -> anyhow::Result<ExitCode> {
-    match mix_bootstrap::Environment::open().await {
-        Ok(_) => {
-            ui::ok("System health is intact.");
-            Ok(ExitCode::SUCCESS)
+    let reports = mix_bootstrap::audit().await;
+    render(&reports);
+
+    if reports.iter().all(|report| report.healthy) {
+        ui::ok("System health is intact.");
+        Ok(ExitCode::SUCCESS)
+    } else {
+        ui::fail(
+            "System health check failed.\n\nRun `mix doctor --fix` to reconcile configuration drift.",
+        );
+        Ok(ExitCode::FAILURE)
+    }
+}
+
+fn render(reports: &[HealthReport]) {
+    for report in reports {
+        if report.healthy {
+            ui::ok(&report.name);
+            continue;
         }
-        Err(e) => {
-            ui::fail(check_failed_message(e));
-            Ok(ExitCode::FAILURE)
+
+        let detail = report.detail.as_deref().unwrap_or("unhealthy");
+        ui::fail(format!("{}: {detail}", report.name));
+        if let Some(hint) = report.hint {
+            ui::info(format!("  {hint}"));
         }
     }
 }

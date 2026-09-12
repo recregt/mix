@@ -1,9 +1,10 @@
 use std::path::Path;
 
 use async_trait::async_trait;
-use mix_core::{Result, Step};
+use mix_core::Step;
 
-use crate::util::{create_dir_all, set_permissions};
+use crate::error::{Error, Result};
+use crate::util::{create_dir_all, remove_dir_all, set_permissions, warn_on_failure};
 
 const PATHS: &[&str] = &[
     "/nix/var",
@@ -25,6 +26,8 @@ pub struct CreateNixTree;
 
 #[async_trait]
 impl Step for CreateNixTree {
+    type Error = Error;
+
     fn name(&self) -> &'static str {
         "create managed runtime directory tree"
     }
@@ -37,6 +40,13 @@ impl Step for CreateNixTree {
         for path in PATHS {
             create_dir_all(*path).await?;
             set_permissions(*path, 0o755).await?;
+        }
+        Ok(())
+    }
+
+    async fn rollback(&mut self) -> Result<()> {
+        for path in PATHS.iter().rev() {
+            warn_on_failure("remove managed directory", remove_dir_all(*path).await);
         }
         Ok(())
     }

@@ -5,7 +5,7 @@ use crate::constants::{
     NIXBLD_USER_COUNT, PROFILE_SNIPPET_DEST,
 };
 use crate::steps::create_users_and_groups::{group_exists, user_exists, user_name};
-use crate::util::run;
+use crate::util::{run, warn_on_failure};
 
 pub async fn teardown() -> Result<()> {
     warn_on_failure(
@@ -55,14 +55,5 @@ async fn remove_file_if_present(path: &str) -> std::io::Result<()> {
     match tokio::fs::remove_file(path).await {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         other => other,
-    }
-}
-
-fn warn_on_failure<T, E: std::fmt::Display>(
-    action: &'static str,
-    result: std::result::Result<T, E>,
-) {
-    if let Err(error) = result {
-        tracing::warn!("teardown step failed ({action}): {error}, continuing");
     }
 }

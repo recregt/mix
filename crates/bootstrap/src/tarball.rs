@@ -1,10 +1,16 @@
 use std::io::{Cursor, Read};
 use std::path::Path;
+use std::time::Duration;
 
-use mix_core::{Error, Result};
+use mix_core::Error as CoreError;
 use sha2::{Digest, Sha256};
 
+use crate::error::{Error, Result};
 use crate::pins::{TarballPin, pin_for};
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[cfg(feature = "embed-tarball")]
 pub fn embedded() -> Option<&'static [u8]> {
@@ -51,20 +57,46 @@ fn mirror_url(base: &str, filename: &str) -> String {
     format!("{}/{filename}", base.trim().trim_end_matches('/'))
 }
 
+fn network_error(e: reqwest::Error) -> Error {
+    Error::Network(Box::new(e))
+}
+
 async fn fetch_and_verify(url: &str, expected_sha256: &str) -> Result<Vec<u8>> {
     tracing::info!(
         "fetching runtime archive: {url} (nix {})",
         crate::pins::NIX_VERSION
     );
-    let response = reqwest::get(url)
+    fetch_and_verify_with_timeouts(
+        url,
+        expected_sha256,
+        CONNECT_TIMEOUT,
+        READ_TIMEOUT,
+        REQUEST_TIMEOUT,
+    )
+    .await
+}
+
+async fn fetch_and_verify_with_timeouts(
+    url: &str,
+    expected_sha256: &str,
+    connect_timeout: Duration,
+    read_timeout: Duration,
+    request_timeout: Duration,
+) -> Result<Vec<u8>> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(connect_timeout)
+        .read_timeout(read_timeout)
+        .timeout(request_timeout)
+        .build()
+        .map_err(network_error)?;
+
+    let response = client
+        .get(url)
+        .send()
         .await
         .and_then(reqwest::Response::error_for_status)
-        .map_err(|e| Error::Network(e.to_string()))?;
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| Error::Network(e.to_string()))?
-        .to_vec();
+        .map_err(network_error)?;
+    let bytes = response.bytes().await.map_err(network_error)?.to_vec();
 
     let digest = sha256_hex(&bytes);
     if digest != expected_sha256 {
@@ -128,7 +160,7 @@ pub fn unpack(tarball: &[u8], dest: &Path) -> Result<()> {
         return Err(Error::Decompression(detail));
     }
 
-    unpacked.map_err(|e| Error::Io {
+    unpacked.map_err(|e| CoreError::Io {
         path: dest.to_path_buf(),
         source: e,
     })?;
@@ -246,6 +278,56 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Network(_)));
+    }
+
+    #[tokio::test]
+    async fn fetch_and_verify_times_out_instead_of_hanging_on_a_silent_server() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let _conn = listener.accept();
+            std::thread::sleep(Duration::from_secs(5));
+        });
+
+        let err = fetch_and_verify_with_timeouts(
+            &format!("http://{addr}/"),
+            &"0".repeat(64),
+            Duration::from_millis(500),
+            Duration::from_millis(200),
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, Error::Network(_)));
+    }
+
+    #[tokio::test]
+    async fn fetch_and_verify_read_timeout_catches_a_drip_fed_stall() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            use std::io::Write as _;
+            if let Ok((mut conn, _)) = listener.accept() {
+                let _ = conn.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nx");
+                std::thread::sleep(Duration::from_secs(5));
+            }
+        });
+
+        let started = std::time::Instant::now();
+        let err = fetch_and_verify_with_timeouts(
+            &format!("http://{addr}/"),
+            &"0".repeat(64),
+            Duration::from_secs(1),
+            Duration::from_millis(200),
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, Error::Network(_)));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "read_timeout should catch the stall long before the request timeout"
+        );
     }
 
     #[tokio::test]
@@ -372,7 +454,7 @@ mod tests {
         let compressed = xz_compress(b"this is not a tar archive");
         let dest = tempfile::tempdir().unwrap();
         let err = unpack(&compressed, dest.path()).unwrap_err();
-        assert!(matches!(err, Error::Io { .. }));
+        assert!(matches!(err, Error::Core(mix_core::Error::Io { .. })));
     }
 
     #[test]

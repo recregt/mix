@@ -1,14 +1,111 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use mix_core::{Error, ManagedArtifact, Manifest, Result};
-
 use crate::constants::{
     DEFAULT_PROFILE_NIX_ENV, NIX_CONF, NIX_CONF_DEST, NIX_DAEMON_SERVICE_DEST,
     NIX_DAEMON_SOCKET_DEST, NIX_OWNERSHIP_MARKER, NIXBLD_GID, NIXBLD_GROUP, NIXBLD_USER_COUNT,
     PROFILE_SNIPPET, PROFILE_SNIPPET_DEST,
 };
-use crate::steps::create_users_and_groups::{all_uids_valid, all_users_valid, group_has_gid};
+use crate::error::{Error, Result};
+use crate::steps::create_users_and_groups::{all_users_valid, group_has_gid};
+
+#[derive(Debug, Clone, Copy)]
+pub enum ManagedArtifact {
+    File {
+        path: &'static str,
+        expected: &'static str,
+    },
+    Directory {
+        path: &'static str,
+        mode: u32,
+    },
+    Group {
+        name: &'static str,
+        gid: u32,
+    },
+    SystemdUnit {
+        name: &'static str,
+        dest: &'static str,
+        must_be_active: bool,
+    },
+    PathExists {
+        name: &'static str,
+        path: &'static str,
+    },
+}
+
+impl ManagedArtifact {
+    pub(crate) fn label(&self) -> &'static str {
+        match *self {
+            ManagedArtifact::Directory { path, .. } => path,
+            ManagedArtifact::File { path, .. } => path,
+            ManagedArtifact::Group { name, .. } => name,
+            ManagedArtifact::SystemdUnit { name, .. } => name,
+            ManagedArtifact::PathExists { name, .. } => name,
+        }
+    }
+
+    pub(crate) async fn check(&self) -> Result<()> {
+        match *self {
+            ManagedArtifact::Directory { path, mode } => {
+                tracing::debug!("checking directory: {path}");
+                let meta = tokio::fs::metadata(path)
+                    .await
+                    .map_err(|e| integrity(path, &e.to_string()))?;
+                if !meta.is_dir() {
+                    return Err(integrity(path, "exists but is not a directory"));
+                }
+                let actual_mode = meta.permissions().mode() & 0o777;
+                if actual_mode != mode {
+                    return Err(integrity(
+                        path,
+                        &format!("mode is {actual_mode:o}, expected {mode:o}"),
+                    ));
+                }
+            }
+            ManagedArtifact::File { path, expected } => {
+                tracing::debug!("checking file: {path}");
+                let contents = tokio::fs::read_to_string(path)
+                    .await
+                    .map_err(|e| integrity(path, &e.to_string()))?;
+                if contents != expected {
+                    return Err(integrity(
+                        path,
+                        "configuration drift detected (contents modified)",
+                    ));
+                }
+            }
+            ManagedArtifact::Group { name, gid } => {
+                tracing::debug!("checking group: {name}");
+                if !group_has_gid(name, gid) {
+                    return Err(integrity(name, "group is missing or has the wrong gid"));
+                }
+            }
+            ManagedArtifact::SystemdUnit {
+                name,
+                dest,
+                must_be_active,
+            } => {
+                tracing::debug!("checking systemd unit: {name}");
+                if !Path::new(dest).exists() {
+                    return Err(integrity(name, "unit file missing"));
+                }
+                if must_be_active && !crate::util::systemd_unit_is_active(name).await {
+                    return Err(integrity(name, "unit is not active"));
+                }
+            }
+            ManagedArtifact::PathExists { name, path } => {
+                tracing::debug!("checking path: {path} ({name})");
+                if !Path::new(path).exists() {
+                    return Err(integrity(name, "missing"));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+pub type Manifest = &'static [ManagedArtifact];
 
 pub const MANIFEST: Manifest = &[
     ManagedArtifact::Directory {
@@ -50,74 +147,15 @@ pub const MANIFEST: Manifest = &[
 pub async fn verify() -> Result<()> {
     tracing::info!("verifying managed environment");
     for artifact in MANIFEST {
-        check_one(artifact).await?;
+        artifact.check().await?;
     }
     check_build_users()?;
     Ok(())
 }
 
-async fn check_one(artifact: &ManagedArtifact) -> Result<()> {
-    match *artifact {
-        ManagedArtifact::Directory { path, mode } => {
-            tracing::debug!("checking directory: {path}");
-            let meta = tokio::fs::metadata(path)
-                .await
-                .map_err(|_| integrity(path, "missing"))?;
-            if !meta.is_dir() {
-                return Err(integrity(path, "exists but is not a directory"));
-            }
-            let actual_mode = meta.permissions().mode() & 0o777;
-            if actual_mode != mode {
-                return Err(integrity(
-                    path,
-                    &format!("mode is {actual_mode:o}, expected {mode:o}"),
-                ));
-            }
-        }
-        ManagedArtifact::File { path, expected } => {
-            tracing::debug!("checking file: {path}");
-            let contents = tokio::fs::read_to_string(path)
-                .await
-                .map_err(|_| integrity(path, "missing"))?;
-            if contents != expected {
-                return Err(integrity(
-                    path,
-                    "configuration drift detected (contents modified)",
-                ));
-            }
-        }
-        ManagedArtifact::Group { name, gid } => {
-            tracing::debug!("checking group: {name}");
-            if !group_has_gid(name, gid) {
-                return Err(integrity(name, "group is missing or has the wrong gid"));
-            }
-        }
-        ManagedArtifact::SystemdUnit {
-            name,
-            dest,
-            must_be_active,
-        } => {
-            tracing::debug!("checking systemd unit: {name}");
-            if !Path::new(dest).exists() {
-                return Err(integrity(name, "unit file missing"));
-            }
-            if must_be_active && !crate::util::systemd_unit_is_active(name).await {
-                return Err(integrity(name, "unit is not active"));
-            }
-        }
-        ManagedArtifact::PathExists { name, path } => {
-            tracing::debug!("checking path: {path} ({name})");
-            if !Path::new(path).exists() {
-                return Err(integrity(name, "missing"));
-            }
-        }
-    }
-    Ok(())
-}
-
 fn check_build_users() -> Result<()> {
     tracing::debug!("checking build users: nixbld1..{NIXBLD_USER_COUNT}");
-    check_build_users_with(all_users_valid() && all_uids_valid())
+    check_build_users_with(all_users_valid())
 }
 
 fn check_build_users_with(all_valid: bool) -> Result<()> {
@@ -146,6 +184,24 @@ mod tests {
         Box::leak(path.to_str().unwrap().to_string().into_boxed_str())
     }
 
+    #[test]
+    fn label_uses_the_path_for_path_based_artifacts() {
+        let artifact = ManagedArtifact::Directory {
+            path: "/nix",
+            mode: 0o755,
+        };
+        assert_eq!(artifact.label(), "/nix");
+    }
+
+    #[test]
+    fn label_uses_the_name_for_name_based_artifacts() {
+        let artifact = ManagedArtifact::Group {
+            name: "nixbld",
+            gid: 30_000,
+        };
+        assert_eq!(artifact.label(), "nixbld");
+    }
+
     #[tokio::test]
     async fn directory_check_passes_when_mode_matches() {
         let dir = tempfile::tempdir().unwrap();
@@ -154,7 +210,7 @@ mod tests {
             path: leak(dir.path().to_path_buf()),
             mode: 0o755,
         };
-        assert!(check_one(&artifact).await.is_ok());
+        assert!(artifact.check().await.is_ok());
     }
 
     #[tokio::test]
@@ -166,7 +222,7 @@ mod tests {
             mode: 0o755,
         };
         assert!(matches!(
-            check_one(&artifact).await,
+            artifact.check().await,
             Err(Error::Integrity { .. })
         ));
     }
@@ -177,7 +233,21 @@ mod tests {
             path: "/does/not/exist/mix-test",
             mode: 0o755,
         };
-        assert!(check_one(&artifact).await.is_err());
+        assert!(artifact.check().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn directory_check_reports_the_real_io_error_when_missing() {
+        let artifact = ManagedArtifact::Directory {
+            path: "/does/not/exist/mix-test",
+            mode: 0o755,
+        };
+        match artifact.check().await {
+            Err(Error::Integrity { detail, .. }) => {
+                assert!(detail.contains("os error 2"), "detail was: {detail}");
+            }
+            other => panic!("expected Integrity error, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -190,7 +260,7 @@ mod tests {
             mode: 0o755,
         };
         assert!(matches!(
-            check_one(&artifact).await,
+            artifact.check().await,
             Err(Error::Integrity { .. })
         ));
     }
@@ -201,7 +271,7 @@ mod tests {
             name: "root",
             gid: 0,
         };
-        assert!(check_one(&artifact).await.is_ok());
+        assert!(artifact.check().await.is_ok());
     }
 
     #[tokio::test]
@@ -211,7 +281,7 @@ mod tests {
             gid: 9999,
         };
         assert!(matches!(
-            check_one(&artifact).await,
+            artifact.check().await,
             Err(Error::Integrity { .. })
         ));
     }
@@ -222,7 +292,7 @@ mod tests {
             name: "mix-test-nonexistent-group-xyz",
             gid: 0,
         };
-        assert!(check_one(&artifact).await.is_err());
+        assert!(artifact.check().await.is_err());
     }
 
     #[test]
@@ -239,6 +309,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn file_check_reports_the_real_io_error_when_missing() {
+        let artifact = ManagedArtifact::File {
+            path: "/does/not/exist/mix-test-nix.conf",
+            expected: "content",
+        };
+        match artifact.check().await {
+            Err(Error::Integrity { detail, .. }) => {
+                assert!(detail.contains("os error 2"), "detail was: {detail}");
+            }
+            other => panic!("expected Integrity error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn file_check_passes_when_content_matches() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("f");
@@ -247,7 +331,7 @@ mod tests {
             path: leak(file),
             expected: "expected content",
         };
-        assert!(check_one(&artifact).await.is_ok());
+        assert!(artifact.check().await.is_ok());
     }
 
     #[tokio::test]
@@ -260,7 +344,7 @@ mod tests {
             expected: "expected content",
         };
         assert!(matches!(
-            check_one(&artifact).await,
+            artifact.check().await,
             Err(Error::Integrity { .. })
         ));
     }
@@ -274,7 +358,7 @@ mod tests {
             name: "default profile",
             path: leak(file),
         };
-        assert!(check_one(&artifact).await.is_ok());
+        assert!(artifact.check().await.is_ok());
     }
 
     #[tokio::test]
@@ -284,7 +368,7 @@ mod tests {
             path: "/does/not/exist/nix-env",
         };
         assert!(matches!(
-            check_one(&artifact).await,
+            artifact.check().await,
             Err(Error::Integrity { .. })
         ));
     }
@@ -296,7 +380,7 @@ mod tests {
             dest: "/does/not/exist/fake.service",
             must_be_active: false,
         };
-        assert!(check_one(&artifact).await.is_err());
+        assert!(artifact.check().await.is_err());
     }
 
     #[tokio::test]
@@ -309,7 +393,7 @@ mod tests {
             dest: leak(unit),
             must_be_active: false,
         };
-        assert!(check_one(&artifact).await.is_ok());
+        assert!(artifact.check().await.is_ok());
     }
 
     #[tokio::test]
@@ -323,7 +407,7 @@ mod tests {
             must_be_active: true,
         };
         assert!(matches!(
-            check_one(&artifact).await,
+            artifact.check().await,
             Err(Error::Integrity { .. })
         ));
     }

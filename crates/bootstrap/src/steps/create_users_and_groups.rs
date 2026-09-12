@@ -1,19 +1,26 @@
 use async_trait::async_trait;
-use mix_core::{Result, Step};
+use mix_core::Step;
 
 use crate::constants::{NIXBLD_GID, NIXBLD_GROUP, NIXBLD_UID_BASE, NIXBLD_USER_COUNT};
-use crate::util::run;
+use crate::error::{Error, Result};
+use crate::util::{run, warn_on_failure};
 
-pub struct CreateUsersAndGroups;
+#[derive(Default)]
+pub struct CreateUsersAndGroups {
+    created_group: bool,
+    created_users: Vec<String>,
+}
 
 #[async_trait]
 impl Step for CreateUsersAndGroups {
+    type Error = Error;
+
     fn name(&self) -> &'static str {
         "create nixbld group and build users"
     }
 
     async fn check(&self) -> Result<bool> {
-        Ok(group_has_gid(NIXBLD_GROUP, NIXBLD_GID) && all_users_valid() && all_uids_valid())
+        Ok(group_has_gid(NIXBLD_GROUP, NIXBLD_GID) && all_users_valid())
     }
 
     async fn execute(&mut self) -> Result<()> {
@@ -23,6 +30,7 @@ impl Step for CreateUsersAndGroups {
         } else if !group_exists(NIXBLD_GROUP) {
             let gid = NIXBLD_GID.to_string();
             run("groupadd", &["--system", "--gid", &gid, NIXBLD_GROUP]).await?;
+            self.created_group = true;
         }
 
         for n in 1..=NIXBLD_USER_COUNT {
@@ -64,6 +72,23 @@ impl Step for CreateUsersAndGroups {
                 ],
             )
             .await?;
+            self.created_users.push(name);
+        }
+
+        Ok(())
+    }
+
+    async fn rollback(&mut self) -> Result<()> {
+        for name in self.created_users.drain(..).rev() {
+            warn_on_failure("delete build user", run("userdel", &[&name]).await);
+        }
+
+        if self.created_group {
+            warn_on_failure(
+                "delete nixbld group",
+                run("groupdel", &[NIXBLD_GROUP]).await,
+            );
+            self.created_group = false;
         }
 
         Ok(())
@@ -103,10 +128,38 @@ pub fn user_has_uid(name: &str, uid: u32) -> bool {
         .is_some_and(|user| user.uid.as_raw() == uid)
 }
 
-pub fn all_users_valid() -> bool {
-    (1..=NIXBLD_USER_COUNT).all(|n| user_has_gid(&user_name(n), NIXBLD_GID))
+pub fn user_matches(name: &str, uid: u32, gid: u32) -> bool {
+    nix::unistd::User::from_name(name)
+        .ok()
+        .flatten()
+        .is_some_and(|user| user.uid.as_raw() == uid && user.gid.as_raw() == gid)
 }
 
-pub fn all_uids_valid() -> bool {
-    (1..=NIXBLD_USER_COUNT).all(|n| user_has_uid(&user_name(n), NIXBLD_UID_BASE + n))
+pub fn all_users_valid() -> bool {
+    (1..=NIXBLD_USER_COUNT).all(|n| user_matches(&user_name(n), NIXBLD_UID_BASE + n, NIXBLD_GID))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_matches_true_for_a_known_system_user() {
+        assert!(user_matches("root", 0, 0));
+    }
+
+    #[test]
+    fn user_matches_false_for_the_wrong_uid() {
+        assert!(!user_matches("root", 1, 0));
+    }
+
+    #[test]
+    fn user_matches_false_for_the_wrong_gid() {
+        assert!(!user_matches("root", 0, 1));
+    }
+
+    #[test]
+    fn user_matches_false_for_a_nonexistent_user() {
+        assert!(!user_matches("mix-test-nonexistent-user-xyz", 0, 0));
+    }
 }

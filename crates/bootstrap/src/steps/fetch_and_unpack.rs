@@ -3,31 +3,44 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use mix_core::{Error, Result, Step};
+use mix_core::{Error as CoreError, Step};
 use nix::fcntl::{AT_FDCWD, AtFlags};
-use nix::unistd::{Gid, Uid, fchownat};
+use nix::unistd::{Gid, Uid, User, fchownat};
 
 use crate::constants::NIXBLD_GID;
+use crate::error::{Error, Result};
 use crate::pins::NIX_VERSION;
 use crate::tarball;
 
 const NIX_STORE: &str = "/nix/store";
 const DEFAULT_PROFILE: &str = "/nix/var/nix/profiles/default";
 
+#[derive(Default)]
 pub struct FetchAndUnpack {
     mirror: Option<String>,
+    installed: Option<Installed>,
+}
+
+#[derive(Default)]
+struct Installed {
+    store_dir_created: bool,
+    store_paths: Vec<PathBuf>,
+    profile_created: bool,
 }
 
 impl FetchAndUnpack {
     pub fn new(mirror: Option<&str>) -> Self {
         Self {
             mirror: mirror.map(String::from),
+            installed: None,
         }
     }
 }
 
 #[async_trait]
 impl Step for FetchAndUnpack {
+    type Error = Error;
+
     fn name(&self) -> &'static str {
         "fetch and activate the managed runtime"
     }
@@ -39,19 +52,36 @@ impl Step for FetchAndUnpack {
     async fn execute(&mut self) -> Result<()> {
         let bytes = tarball::bytes(self.mirror.as_deref()).await?;
 
-        tokio::task::spawn_blocking(move || provision(&bytes))
+        let (installed, result) = tokio::task::spawn_blocking(move || {
+            let mut installed = Installed::default();
+            let result = provision(&bytes, &mut installed);
+            (installed, result)
+        })
+        .await
+        .map_err(|e| CoreError::TaskPanicked(e.to_string()))?;
+
+        self.installed = Some(installed);
+        result
+    }
+
+    async fn rollback(&mut self) -> Result<()> {
+        let Some(installed) = self.installed.take() else {
+            return Ok(());
+        };
+
+        tokio::task::spawn_blocking(move || teardown(installed))
             .await
-            .map_err(|e| Error::TaskPanicked(e.to_string()))??;
+            .map_err(|e| CoreError::TaskPanicked(e.to_string()))??;
 
         Ok(())
     }
 }
 
-fn provision(tarball_bytes: &[u8]) -> Result<()> {
+fn provision(tarball_bytes: &[u8], installed: &mut Installed) -> Result<()> {
     let scratch = tempfile::Builder::new()
         .prefix("temp-install-dir-")
         .tempdir_in("/nix")
-        .map_err(|e| Error::Io {
+        .map_err(|e| CoreError::Io {
             path: "/nix".into(),
             source: e,
         })?;
@@ -60,7 +90,8 @@ fn provision(tarball_bytes: &[u8]) -> Result<()> {
 
     let unpacked_root = find_single_child(scratch.path(), |name| name.starts_with("nix-"))?;
     tracing::debug!("moving Nix store into place");
-    move_store_into_place(&unpacked_root)?;
+    installed.store_dir_created = !Path::new(NIX_STORE).exists();
+    move_store_into_place(&unpacked_root, &mut installed.store_paths)?;
     tracing::debug!("fixing Nix store ownership");
     ensure_store_ownership()?;
 
@@ -71,21 +102,85 @@ fn provision(tarball_bytes: &[u8]) -> Result<()> {
 
     tracing::debug!("loading Nix database");
     load_db(&nix_pkg, &unpacked_root.join(".reginfo"))?;
+
+    installed.profile_created = !Path::new(DEFAULT_PROFILE).exists();
     tracing::debug!("activating default profile");
     activate_default_profile(&nix_pkg, &nss_cacert_pkg)?;
 
     Ok(())
 }
 
+fn teardown(installed: Installed) -> Result<()> {
+    if installed.profile_created {
+        tracing::debug!("removing default profile");
+        remove_profile_default()?;
+    }
+
+    if installed.store_dir_created {
+        tracing::debug!("removing Nix store directory created by this run");
+        remove_path(Path::new(NIX_STORE))?;
+    } else {
+        tracing::debug!("removing Nix store paths added by this run");
+        for path in installed.store_paths.iter().rev() {
+            remove_path(path)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn remove_profile_default() -> Result<()> {
+    if let Ok(target) = std::fs::read_link(DEFAULT_PROFILE) {
+        let target = if target.is_absolute() {
+            target
+        } else {
+            Path::new(DEFAULT_PROFILE)
+                .parent()
+                .expect("DEFAULT_PROFILE has a parent directory")
+                .join(target)
+        };
+        remove_path(&target)?;
+    }
+    remove_path(Path::new(DEFAULT_PROFILE))
+}
+
+fn remove_path(path: &Path) -> Result<()> {
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => {
+            return Err(CoreError::Io {
+                path: path.to_path_buf(),
+                source: e,
+            }
+            .into());
+        }
+    };
+
+    let result = if meta.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    };
+
+    result.map_err(|e| {
+        CoreError::Io {
+            path: path.to_path_buf(),
+            source: e,
+        }
+        .into()
+    })
+}
+
 fn find_single_child(dir: &Path, pred: impl Fn(&str) -> bool) -> Result<PathBuf> {
-    let entries = std::fs::read_dir(dir).map_err(|e| Error::Io {
+    let entries = std::fs::read_dir(dir).map_err(|e| CoreError::Io {
         path: dir.to_path_buf(),
         source: e,
     })?;
 
     let mut matches = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|e| Error::Io {
+        let entry = entry.map_err(|e| CoreError::Io {
             path: dir.to_path_buf(),
             source: e,
         })?;
@@ -105,29 +200,33 @@ fn find_single_child(dir: &Path, pred: impl Fn(&str) -> bool) -> Result<PathBuf>
 
 fn resolve_backlink(unpacked_root: &Path, pred: impl Fn(&str) -> bool) -> Result<PathBuf> {
     let link = find_single_child(&unpacked_root.join("store"), pred)?;
-    std::fs::read_link(&link).map_err(|e| Error::Io {
+    Ok(std::fs::read_link(&link).map_err(|e| CoreError::Io {
         path: link,
         source: e,
-    })
+    })?)
 }
 
-fn move_store_into_place(unpacked_root: &Path) -> Result<()> {
-    move_entries_into(&unpacked_root.join("store"), Path::new(NIX_STORE))
+fn move_store_into_place(unpacked_root: &Path, created: &mut Vec<PathBuf>) -> Result<()> {
+    move_entries_into(&unpacked_root.join("store"), Path::new(NIX_STORE), created)
 }
 
-fn move_entries_into(src_store: &Path, dest_store: &Path) -> Result<()> {
-    std::fs::create_dir_all(dest_store).map_err(|e| Error::Io {
+fn move_entries_into(
+    src_store: &Path,
+    dest_store: &Path,
+    created: &mut Vec<PathBuf>,
+) -> Result<()> {
+    std::fs::create_dir_all(dest_store).map_err(|e| CoreError::Io {
         path: dest_store.to_path_buf(),
         source: e,
     })?;
 
     let entries: Vec<_> = std::fs::read_dir(src_store)
-        .map_err(|e| Error::Io {
+        .map_err(|e| CoreError::Io {
             path: src_store.to_path_buf(),
             source: e,
         })?
         .collect::<std::io::Result<Vec<_>>>()
-        .map_err(|e| Error::Io {
+        .map_err(|e| CoreError::Io {
             path: src_store.to_path_buf(),
             source: e,
         })?;
@@ -135,26 +234,32 @@ fn move_entries_into(src_store: &Path, dest_store: &Path) -> Result<()> {
     for entry in entries {
         let src_path = entry.path();
         let dest_path = dest_store.join(entry.file_name());
+        let is_new = !dest_path.exists();
 
-        if dest_path.exists() {
+        if !is_new {
             let remove = if dest_path.is_dir() {
                 std::fs::remove_dir_all(&dest_path)
             } else {
                 std::fs::remove_file(&dest_path)
             };
-            remove.map_err(|e| Error::Io {
+            remove.map_err(|e| CoreError::Io {
                 path: dest_path.clone(),
                 source: e,
             })?;
         }
 
-        std::fs::rename(&src_path, &dest_path).map_err(|e| Error::Io {
+        std::fs::rename(&src_path, &dest_path).map_err(|e| CoreError::Io {
             path: dest_path.clone(),
             source: e,
         })?;
+
+        if is_new {
+            created.push(dest_path.clone());
+        }
+
         make_read_only(&dest_path)?;
 
-        std::os::unix::fs::symlink(&dest_path, &src_path).map_err(|e| Error::Io {
+        std::os::unix::fs::symlink(&dest_path, &src_path).map_err(|e| CoreError::Io {
             path: src_path,
             source: e,
         })?;
@@ -166,7 +271,7 @@ fn move_entries_into(src_store: &Path, dest_store: &Path) -> Result<()> {
 fn make_read_only(root: &Path) -> Result<()> {
     let mut stack = vec![root.to_path_buf()];
     while let Some(path) = stack.pop() {
-        let meta = std::fs::symlink_metadata(&path).map_err(|e| Error::Io {
+        let meta = std::fs::symlink_metadata(&path).map_err(|e| CoreError::Io {
             path: path.clone(),
             source: e,
         })?;
@@ -174,12 +279,12 @@ fn make_read_only(root: &Path) -> Result<()> {
             continue;
         }
         if meta.is_dir() {
-            let entries = std::fs::read_dir(&path).map_err(|e| Error::Io {
+            let entries = std::fs::read_dir(&path).map_err(|e| CoreError::Io {
                 path: path.clone(),
                 source: e,
             })?;
             for entry in entries {
-                let entry = entry.map_err(|e| Error::Io {
+                let entry = entry.map_err(|e| CoreError::Io {
                     path: path.clone(),
                     source: e,
                 })?;
@@ -188,7 +293,7 @@ fn make_read_only(root: &Path) -> Result<()> {
         }
         let mut perms = meta.permissions();
         perms.set_mode(perms.mode() & !0o222);
-        std::fs::set_permissions(&path, perms).map_err(|e| Error::Io { path, source: e })?;
+        std::fs::set_permissions(&path, perms).map_err(|e| CoreError::Io { path, source: e })?;
     }
     Ok(())
 }
@@ -204,7 +309,7 @@ fn ensure_store_ownership() -> Result<()> {
 fn ensure_ownership_under(root: &Path, uid: Uid, gid: Gid) -> Result<()> {
     let mut stack = vec![root.to_path_buf()];
     while let Some(path) = stack.pop() {
-        let meta = std::fs::symlink_metadata(&path).map_err(|e| Error::Io {
+        let meta = std::fs::symlink_metadata(&path).map_err(|e| CoreError::Io {
             path: path.clone(),
             source: e,
         })?;
@@ -212,12 +317,12 @@ fn ensure_ownership_under(root: &Path, uid: Uid, gid: Gid) -> Result<()> {
             continue;
         }
         if meta.is_dir() {
-            let entries = std::fs::read_dir(&path).map_err(|e| Error::Io {
+            let entries = std::fs::read_dir(&path).map_err(|e| CoreError::Io {
                 path: path.clone(),
                 source: e,
             })?;
             for entry in entries {
-                let entry = entry.map_err(|e| Error::Io {
+                let entry = entry.map_err(|e| CoreError::Io {
                     path: path.clone(),
                     source: e,
                 })?;
@@ -233,7 +338,7 @@ fn ensure_ownership_under(root: &Path, uid: Uid, gid: Gid) -> Result<()> {
                 Some(gid),
                 AtFlags::AT_SYMLINK_NOFOLLOW,
             )
-            .map_err(|e| Error::Io {
+            .map_err(|e| CoreError::Io {
                 path: path.clone(),
                 source: std::io::Error::from(e),
             })?;
@@ -243,25 +348,26 @@ fn ensure_ownership_under(root: &Path, uid: Uid, gid: Gid) -> Result<()> {
 }
 
 fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
-    let reginfo = std::fs::read(reginfo_path).map_err(|e| Error::Io {
+    let reginfo = std::fs::read(reginfo_path).map_err(|e| CoreError::Io {
         path: reginfo_path.to_path_buf(),
         source: e,
     })?;
 
     let nix_store = nix_pkg.join("bin/nix-store");
-    tracing::debug!("running command: {} --load-db", nix_store.display());
+    let command_line = crate::util::format_command(&nix_store.to_string_lossy(), &["--load-db"]);
+    tracing::debug!("running command: {command_line}");
 
     let mut child = std::process::Command::new(&nix_store)
         .arg("--load-db")
-        .env("HOME", root_home()?)
+        .env("HOME", root_home())
         .env_remove("NIX_REMOTE")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|e| Error::Command {
-            command: "nix-store --load-db".into(),
-            detail: e.to_string(),
+        .map_err(|e| CoreError::Exec {
+            command: command_line.clone(),
+            source: e,
         })?;
 
     child
@@ -269,24 +375,27 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
         .take()
         .expect("stdin was piped")
         .write_all(&reginfo)
-        .map_err(|e| Error::Command {
-            command: "nix-store --load-db".into(),
-            detail: e.to_string(),
+        .map_err(|e| CoreError::Exec {
+            command: command_line.clone(),
+            source: e,
         })?;
 
-    let output = child.wait_with_output().map_err(|e| Error::Command {
-        command: "nix-store --load-db".into(),
-        detail: e.to_string(),
+    let output = child.wait_with_output().map_err(|e| CoreError::Exec {
+        command: command_line.clone(),
+        source: e,
     })?;
 
     tracing::trace!(
-        "command output: nix-store --load-db\nstdout: {}\nstderr: {}",
+        "command output: {command_line}\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 
     if !output.status.success() {
-        return Err(crate::util::command_error("nix-store --load-db", &output));
+        return Err(Error::Core(crate::util::command_error(
+            command_line,
+            &output,
+        )));
     }
 
     Ok(())
@@ -294,12 +403,23 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
 
 fn activate_default_profile(nix_pkg: &Path, nss_cacert_pkg: &Path) -> Result<()> {
     let nix_env = nix_pkg.join("bin/nix-env");
-    tracing::debug!(
-        "running command: {} --profile {DEFAULT_PROFILE} --install {} {}",
-        nix_env.display(),
-        nix_pkg.display(),
-        nss_cacert_pkg.display()
+    let command_line = crate::util::format_command(
+        &nix_env.to_string_lossy(),
+        &[
+            "--profile",
+            DEFAULT_PROFILE,
+            "--install",
+            &nix_pkg.to_string_lossy(),
+            &nss_cacert_pkg.to_string_lossy(),
+            "--option",
+            "substitute",
+            "false",
+            "--option",
+            "post-build-hook",
+            "",
+        ],
     );
+    tracing::debug!("running command: {command_line}");
 
     let output = std::process::Command::new(&nix_env)
         .arg("--profile")
@@ -309,34 +429,86 @@ fn activate_default_profile(nix_pkg: &Path, nss_cacert_pkg: &Path) -> Result<()>
         .arg(nss_cacert_pkg)
         .args(["--option", "substitute", "false"])
         .args(["--option", "post-build-hook", ""])
-        .env("HOME", root_home()?)
+        .env("HOME", root_home())
         .env_remove("NIX_REMOTE")
         .output()
-        .map_err(|e| Error::Command {
-            command: "nix-env --install".into(),
-            detail: e.to_string(),
+        .map_err(|e| CoreError::Exec {
+            command: command_line.clone(),
+            source: e,
         })?;
 
     tracing::trace!(
-        "command output: nix-env --install\nstdout: {}\nstderr: {}",
+        "command output: {command_line}\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 
     if !output.status.success() {
-        return Err(crate::util::command_error("nix-env --install", &output));
+        return Err(Error::Core(crate::util::command_error(
+            command_line,
+            &output,
+        )));
     }
 
     Ok(())
 }
 
-fn root_home() -> Result<String> {
-    std::env::var("HOME").map_err(|_| Error::MissingEnv("HOME"))
+fn root_home() -> String {
+    root_home_with(std::env::var("HOME").ok(), || {
+        User::from_uid(Uid::from_raw(0))
+            .ok()
+            .flatten()
+            .map(|u| u.dir)
+    })
+}
+
+fn root_home_with(
+    home_env: Option<String>,
+    passwd_dir: impl FnOnce() -> Option<PathBuf>,
+) -> String {
+    if let Some(home) = home_env.filter(|home| !home.is_empty()) {
+        return home;
+    }
+
+    passwd_dir()
+        .and_then(|dir| dir.to_str().map(str::to_string))
+        .unwrap_or_else(|| "/root".to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn root_home_with_prefers_non_empty_home_env() {
+        assert_eq!(
+            root_home_with(Some("/home/nix".to_string()), || Some(PathBuf::from(
+                "/should-not-be-used"
+            ))),
+            "/home/nix"
+        );
+    }
+
+    #[test]
+    fn root_home_with_falls_back_to_passwd_dir_when_home_is_missing() {
+        assert_eq!(
+            root_home_with(None, || Some(PathBuf::from("/var/lib/root"))),
+            "/var/lib/root"
+        );
+    }
+
+    #[test]
+    fn root_home_with_falls_back_to_passwd_dir_when_home_is_empty() {
+        assert_eq!(
+            root_home_with(Some(String::new()), || Some(PathBuf::from("/root"))),
+            "/root"
+        );
+    }
+
+    #[test]
+    fn root_home_with_falls_back_to_slash_root_when_passwd_lookup_fails() {
+        assert_eq!(root_home_with(None, || None), "/root");
+    }
 
     #[test]
     fn find_single_child_matches_exactly_one() {
@@ -387,7 +559,7 @@ mod tests {
         let dest = tempfile::tempdir().unwrap();
         let dest_store = dest.path().join("store");
 
-        move_entries_into(src.path(), &dest_store).unwrap();
+        move_entries_into(src.path(), &dest_store, &mut Vec::new()).unwrap();
 
         let moved = dest_store.join("pkg-a");
         assert!(moved.is_file());
@@ -406,7 +578,7 @@ mod tests {
         let dest = tempfile::tempdir().unwrap();
         let dest_store = dest.path().join("store");
 
-        move_entries_into(src.path(), &dest_store).unwrap();
+        move_entries_into(src.path(), &dest_store, &mut Vec::new()).unwrap();
 
         let mode = std::fs::metadata(dest_store.join("pkg-a"))
             .unwrap()
@@ -425,12 +597,75 @@ mod tests {
         std::fs::create_dir_all(&dest_store).unwrap();
         std::fs::write(dest_store.join("pkg-a"), "stale content").unwrap();
 
-        move_entries_into(src.path(), &dest_store).unwrap();
+        move_entries_into(src.path(), &dest_store, &mut Vec::new()).unwrap();
 
         assert_eq!(
             std::fs::read_to_string(dest_store.join("pkg-a")).unwrap(),
             "new content"
         );
+    }
+
+    #[test]
+    fn move_entries_into_reports_only_newly_created_destinations() {
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("pkg-a"), "new").unwrap();
+        std::fs::write(src.path().join("pkg-b"), "new").unwrap();
+
+        let dest = tempfile::tempdir().unwrap();
+        let dest_store = dest.path().join("store");
+        std::fs::create_dir_all(&dest_store).unwrap();
+        std::fs::write(dest_store.join("pkg-a"), "stale").unwrap();
+
+        let mut created = Vec::new();
+        move_entries_into(src.path(), &dest_store, &mut created).unwrap();
+
+        assert_eq!(created, vec![dest_store.join("pkg-b")]);
+    }
+
+    #[test]
+    fn move_entries_into_preserves_already_recorded_entries_when_a_later_call_fails() {
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("pkg-a"), "content").unwrap();
+
+        let dest = tempfile::tempdir().unwrap();
+        let dest_store = dest.path().join("store");
+
+        let mut created = Vec::new();
+        move_entries_into(src.path(), &dest_store, &mut created).unwrap();
+        assert_eq!(created, vec![dest_store.join("pkg-a")]);
+
+        let missing_src = dest.path().join("does-not-exist");
+        assert!(move_entries_into(&missing_src, &dest_store, &mut created).is_err());
+
+        assert_eq!(created, vec![dest_store.join("pkg-a")]);
+    }
+
+    #[test]
+    fn remove_path_removes_a_directory_recursively() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::write(nested.join("file"), "x").unwrap();
+
+        remove_path(dir.path()).unwrap();
+
+        assert!(!dir.path().exists());
+    }
+
+    #[test]
+    fn remove_path_removes_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("f");
+        std::fs::write(&file, "x").unwrap();
+
+        remove_path(&file).unwrap();
+
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn remove_path_is_a_noop_when_missing() {
+        assert!(remove_path(Path::new("/does/not/exist/mix-test")).is_ok());
     }
 
     #[test]
