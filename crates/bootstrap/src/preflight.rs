@@ -14,6 +14,7 @@ pub fn is_root() -> bool {
 }
 
 const ENV_ALLOWLIST: &[&str] = &[
+    "PATH",
     "NO_COLOR",
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -172,6 +173,22 @@ mod tests {
     #[test]
     fn allowed_env_vars_empty_when_nothing_set() {
         assert!(allowed_env_vars(|_| None).is_empty());
+    }
+
+    #[test]
+    fn allowed_env_vars_preserves_path_for_sudo_command_lookup() {
+        let mut env = std::collections::HashMap::new();
+        env.insert(
+            "PATH".to_string(),
+            "/usr/local/sbin:/usr/sbin:/usr/bin".to_string(),
+        );
+
+        let result = allowed_env_vars(|key| env.get(key).cloned());
+
+        assert_eq!(
+            result,
+            vec![("PATH", "/usr/local/sbin:/usr/sbin:/usr/bin".to_string())]
+        );
     }
 
     #[test]
