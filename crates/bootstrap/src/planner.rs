@@ -9,7 +9,7 @@ use crate::steps::{
 pub fn bootstrap_steps(mirror: Option<&str>) -> Vec<Box<dyn Step<Error = Error>>> {
     vec![
         Box::new(CreateNixDir::default()),
-        Box::new(CreateNixTree),
+        Box::new(CreateNixTree::default()),
         Box::new(CreateUsersAndGroups::default()),
         Box::new(FetchAndUnpack::new(mirror)),
         Box::new(ConfigureNixConf::default()),

@@ -63,6 +63,31 @@ pub async fn set_permissions(path: impl AsRef<Path>, mode: u32) -> Result<()> {
         })
 }
 
+pub async fn path_exists(path: impl AsRef<Path>) -> bool {
+    tokio::fs::try_exists(path.as_ref()).await.unwrap_or(false)
+}
+
+pub async fn is_file(path: impl AsRef<Path>) -> bool {
+    tokio::fs::metadata(path.as_ref())
+        .await
+        .is_ok_and(|meta| meta.is_file())
+}
+
+pub async fn is_dir(path: impl AsRef<Path>) -> bool {
+    tokio::fs::metadata(path.as_ref())
+        .await
+        .is_ok_and(|meta| meta.is_dir())
+}
+
+pub const DIR_MODE_MASK: u32 = 0o7777;
+
+pub async fn dir_has_mode(path: impl AsRef<Path>, mode: u32) -> bool {
+    match tokio::fs::metadata(path.as_ref()).await {
+        Ok(meta) => meta.is_dir() && meta.permissions().mode() & DIR_MODE_MASK == mode,
+        Err(_) => false,
+    }
+}
+
 pub async fn remove_dir_all(path: impl AsRef<Path>) -> Result<()> {
     let path = path.as_ref();
     tracing::debug!("removing directory: {}", path.display());
@@ -157,6 +182,81 @@ pub async fn files_match(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn path_exists_true_for_a_real_path() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(path_exists(dir.path()).await);
+    }
+
+    #[tokio::test]
+    async fn path_exists_false_when_missing() {
+        assert!(!path_exists("/does/not/exist/mix-test").await);
+    }
+
+    #[tokio::test]
+    async fn is_file_true_for_a_regular_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("f");
+        std::fs::write(&file, "x").unwrap();
+        assert!(is_file(&file).await);
+    }
+
+    #[tokio::test]
+    async fn is_file_false_for_a_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_file(dir.path()).await);
+    }
+
+    #[tokio::test]
+    async fn is_file_false_when_missing() {
+        assert!(!is_file("/does/not/exist/mix-test").await);
+    }
+
+    #[tokio::test]
+    async fn is_dir_true_for_a_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(is_dir(dir.path()).await);
+    }
+
+    #[tokio::test]
+    async fn is_dir_false_for_a_regular_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("f");
+        std::fs::write(&file, "x").unwrap();
+        assert!(!is_dir(&file).await);
+    }
+
+    #[tokio::test]
+    async fn is_dir_false_when_missing() {
+        assert!(!is_dir("/does/not/exist/mix-test").await);
+    }
+
+    #[tokio::test]
+    async fn dir_has_mode_true_when_mode_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(dir_has_mode(dir.path(), 0o755).await);
+    }
+
+    #[tokio::test]
+    async fn dir_has_mode_true_for_a_sticky_world_writable_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o1777)).unwrap();
+        assert!(dir_has_mode(dir.path(), 0o1777).await);
+    }
+
+    #[tokio::test]
+    async fn dir_has_mode_false_on_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(!dir_has_mode(dir.path(), 0o755).await);
+    }
+
+    #[tokio::test]
+    async fn dir_has_mode_false_when_missing() {
+        assert!(!dir_has_mode(Path::new("/does/not/exist/mix-test"), 0o755).await);
+    }
 
     fn output_with(stdout: &str, stderr: &str, exit_code: i32) -> std::process::Output {
         use std::os::unix::process::ExitStatusExt;

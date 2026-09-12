@@ -5,7 +5,9 @@ use mix_core::Step;
 
 use crate::constants::{NIX_CONF, NIX_CONF_DEST, PROFILE_SNIPPET, PROFILE_SNIPPET_DEST};
 use crate::error::{Error, Result};
-use crate::util::{create_dir_all, remove_dir_all, remove_file, warn_on_failure, write_file};
+use crate::util::{
+    create_dir_all, path_exists, remove_dir_all, remove_file, warn_on_failure, write_file,
+};
 
 #[derive(Default)]
 pub struct ConfigureNixConf {
@@ -82,7 +84,7 @@ async fn previous_contents(path: &str) -> Option<Vec<u8>> {
 async fn write(path: &str, contents: &str) -> Result<Option<PathBuf>> {
     let created_dir = match Path::new(path).parent() {
         Some(dir) => {
-            let created_dir = first_missing_ancestor(dir);
+            let created_dir = first_missing_ancestor(dir).await;
             create_dir_all(dir).await?;
             created_dir
         }
@@ -92,10 +94,10 @@ async fn write(path: &str, contents: &str) -> Result<Option<PathBuf>> {
     Ok(created_dir)
 }
 
-fn first_missing_ancestor(dir: &Path) -> Option<PathBuf> {
+async fn first_missing_ancestor(dir: &Path) -> Option<PathBuf> {
     let mut missing = None;
     let mut candidate = dir;
-    while !candidate.exists() {
+    while !path_exists(candidate).await {
         missing = Some(candidate.to_path_buf());
         match candidate.parent() {
             Some(parent) => candidate = parent,
@@ -109,17 +111,20 @@ fn first_missing_ancestor(dir: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn first_missing_ancestor_is_none_when_the_directory_already_exists() {
+    #[tokio::test]
+    async fn first_missing_ancestor_is_none_when_the_directory_already_exists() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(first_missing_ancestor(dir.path()), None);
+        assert_eq!(first_missing_ancestor(dir.path()).await, None);
     }
 
-    #[test]
-    fn first_missing_ancestor_finds_the_topmost_missing_directory() {
+    #[tokio::test]
+    async fn first_missing_ancestor_finds_the_topmost_missing_directory() {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("a").join("b").join("c");
-        assert_eq!(first_missing_ancestor(&target), Some(dir.path().join("a")));
+        assert_eq!(
+            first_missing_ancestor(&target).await,
+            Some(dir.path().join("a"))
+        );
     }
 
     #[tokio::test]

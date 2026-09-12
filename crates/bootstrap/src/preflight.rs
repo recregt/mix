@@ -3,6 +3,7 @@ use std::path::Path;
 use crate::constants::NIX_OWNERSHIP_MARKER;
 use crate::detect::{self, Wsl};
 use crate::error::{Error, Result};
+use crate::util::{is_dir, is_file, path_exists};
 
 pub enum EscalationOutcome {
     ReExecuted { exit_code: i32 },
@@ -13,6 +14,7 @@ pub fn is_root() -> bool {
 }
 
 const ENV_ALLOWLIST: &[&str] = &[
+    "PATH",
     "NO_COLOR",
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -56,13 +58,13 @@ pub fn escalate() -> Result<EscalationOutcome> {
     })
 }
 
-pub fn check_not_nixos() -> Result<()> {
+pub async fn check_not_nixos() -> Result<()> {
     tracing::debug!("checking host is not NixOS");
-    check_not_nixos_at(Path::new("/etc/NIXOS"))
+    check_not_nixos_at(Path::new("/etc/NIXOS")).await
 }
 
-fn check_not_nixos_at(marker: &Path) -> Result<()> {
-    if marker.exists() {
+async fn check_not_nixos_at(marker: &Path) -> Result<()> {
+    if path_exists(marker).await {
         return Err(Error::UnsupportedHost);
     }
     Ok(())
@@ -70,7 +72,7 @@ fn check_not_nixos_at(marker: &Path) -> Result<()> {
 
 pub async fn check_nix_not_installed() -> Result<()> {
     tracing::debug!("checking for a pre-existing, unmanaged Nix installation");
-    if Path::new(NIX_OWNERSHIP_MARKER).is_file() {
+    if is_file(NIX_OWNERSHIP_MARKER).await {
         return Ok(());
     }
 
@@ -83,27 +85,27 @@ pub async fn check_nix_not_installed() -> Result<()> {
         .await
         .is_ok();
 
-    if on_path || Path::new("/nix/store").is_dir() {
+    if on_path || is_dir("/nix/store").await {
         return Err(Error::AlreadyManaged);
     }
     Ok(())
 }
 
-pub fn check_not_wsl1() -> Result<()> {
+pub async fn check_not_wsl1() -> Result<()> {
     tracing::debug!("checking WSL version");
-    if detect::wsl::detect() == Wsl::V1 {
+    if detect::wsl::detect().await == Wsl::V1 {
         return Err(Error::UnsupportedKernel);
     }
     Ok(())
 }
 
-pub fn check_systemd_ready() -> Result<()> {
+pub async fn check_systemd_ready() -> Result<()> {
     tracing::debug!("checking systemd is ready");
-    if detect::wsl::systemd_active() {
+    if detect::wsl::systemd_active().await {
         return Ok(());
     }
 
-    let hint = if detect::wsl::detect() != Wsl::No {
+    let hint = if detect::wsl::detect().await != Wsl::No {
         "On WSL2, systemd isn't enabled by default. Add `[boot]\\nsystemd=true` to \
          `/etc/wsl.conf`, then run `wsl.exe --shutdown` from Windows and reopen the \
          distro."
@@ -121,19 +123,19 @@ pub fn check_systemd_ready() -> Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn check_not_nixos_ok_when_marker_absent() {
+    #[tokio::test]
+    async fn check_not_nixos_ok_when_marker_absent() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(check_not_nixos_at(&dir.path().join("NIXOS")).is_ok());
+        assert!(check_not_nixos_at(&dir.path().join("NIXOS")).await.is_ok());
     }
 
-    #[test]
-    fn check_not_nixos_fails_when_marker_present() {
+    #[tokio::test]
+    async fn check_not_nixos_fails_when_marker_present() {
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("NIXOS");
         std::fs::write(&marker, "").unwrap();
         assert!(matches!(
-            check_not_nixos_at(&marker),
+            check_not_nixos_at(&marker).await,
             Err(Error::UnsupportedHost)
         ));
     }
@@ -171,6 +173,22 @@ mod tests {
     #[test]
     fn allowed_env_vars_empty_when_nothing_set() {
         assert!(allowed_env_vars(|_| None).is_empty());
+    }
+
+    #[test]
+    fn allowed_env_vars_preserves_path_for_sudo_command_lookup() {
+        let mut env = std::collections::HashMap::new();
+        env.insert(
+            "PATH".to_string(),
+            "/usr/local/sbin:/usr/sbin:/usr/bin".to_string(),
+        );
+
+        let result = allowed_env_vars(|key| env.get(key).cloned());
+
+        assert_eq!(
+            result,
+            vec![("PATH", "/usr/local/sbin:/usr/sbin:/usr/bin".to_string())]
+        );
     }
 
     #[test]

@@ -1,5 +1,4 @@
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
 
 use crate::constants::{
     DEFAULT_PROFILE_NIX_ENV, NIX_CONF, NIX_CONF_DEST, NIX_DAEMON_SERVICE_DEST,
@@ -7,7 +6,9 @@ use crate::constants::{
     PROFILE_SNIPPET, PROFILE_SNIPPET_DEST,
 };
 use crate::error::{Error, Result};
+use crate::steps::create_nix_tree::{DirectorySpec, NIX_TREE};
 use crate::steps::create_users_and_groups::{all_users_valid, group_has_gid};
+use crate::util::{DIR_MODE_MASK, path_exists};
 
 #[derive(Debug, Clone, Copy)]
 pub enum ManagedArtifact {
@@ -15,10 +16,7 @@ pub enum ManagedArtifact {
         path: &'static str,
         expected: &'static str,
     },
-    Directory {
-        path: &'static str,
-        mode: u32,
-    },
+    Directory(DirectorySpec),
     Group {
         name: &'static str,
         gid: u32,
@@ -37,7 +35,7 @@ pub enum ManagedArtifact {
 impl ManagedArtifact {
     pub(crate) fn label(&self) -> &'static str {
         match *self {
-            ManagedArtifact::Directory { path, .. } => path,
+            ManagedArtifact::Directory(DirectorySpec { path, .. }) => path,
             ManagedArtifact::File { path, .. } => path,
             ManagedArtifact::Group { name, .. } => name,
             ManagedArtifact::SystemdUnit { name, .. } => name,
@@ -47,7 +45,7 @@ impl ManagedArtifact {
 
     pub(crate) async fn check(&self) -> Result<()> {
         match *self {
-            ManagedArtifact::Directory { path, mode } => {
+            ManagedArtifact::Directory(DirectorySpec { path, mode }) => {
                 tracing::debug!("checking directory: {path}");
                 let meta = tokio::fs::metadata(path)
                     .await
@@ -55,7 +53,7 @@ impl ManagedArtifact {
                 if !meta.is_dir() {
                     return Err(integrity(path, "exists but is not a directory"));
                 }
-                let actual_mode = meta.permissions().mode() & 0o777;
+                let actual_mode = meta.permissions().mode() & DIR_MODE_MASK;
                 if actual_mode != mode {
                     return Err(integrity(
                         path,
@@ -87,7 +85,7 @@ impl ManagedArtifact {
                 must_be_active,
             } => {
                 tracing::debug!("checking systemd unit: {name}");
-                if !Path::new(dest).exists() {
+                if !path_exists(dest).await {
                     return Err(integrity(name, "unit file missing"));
                 }
                 if must_be_active && !crate::util::systemd_unit_is_active(name).await {
@@ -96,7 +94,7 @@ impl ManagedArtifact {
             }
             ManagedArtifact::PathExists { name, path } => {
                 tracing::debug!("checking path: {path} ({name})");
-                if !Path::new(path).exists() {
+                if !path_exists(path).await {
                     return Err(integrity(name, "missing"));
                 }
             }
@@ -105,48 +103,50 @@ impl ManagedArtifact {
     }
 }
 
-pub type Manifest = &'static [ManagedArtifact];
-
-pub const MANIFEST: Manifest = &[
-    ManagedArtifact::Directory {
+pub fn manifest() -> Vec<ManagedArtifact> {
+    let mut items = vec![ManagedArtifact::Directory(DirectorySpec {
         path: "/nix",
         mode: 0o755,
-    },
-    ManagedArtifact::PathExists {
-        name: "ownership marker",
-        path: NIX_OWNERSHIP_MARKER,
-    },
-    ManagedArtifact::File {
-        path: NIX_CONF_DEST,
-        expected: NIX_CONF,
-    },
-    ManagedArtifact::File {
-        path: PROFILE_SNIPPET_DEST,
-        expected: PROFILE_SNIPPET,
-    },
-    ManagedArtifact::Group {
-        name: NIXBLD_GROUP,
-        gid: NIXBLD_GID,
-    },
-    ManagedArtifact::SystemdUnit {
-        name: "nix-daemon.service",
-        dest: NIX_DAEMON_SERVICE_DEST,
-        must_be_active: false,
-    },
-    ManagedArtifact::SystemdUnit {
-        name: "nix-daemon.socket",
-        dest: NIX_DAEMON_SOCKET_DEST,
-        must_be_active: true,
-    },
-    ManagedArtifact::PathExists {
-        name: "default profile",
-        path: DEFAULT_PROFILE_NIX_ENV,
-    },
-];
+    })];
+    items.extend(NIX_TREE.iter().copied().map(ManagedArtifact::Directory));
+    items.extend([
+        ManagedArtifact::PathExists {
+            name: "ownership marker",
+            path: NIX_OWNERSHIP_MARKER,
+        },
+        ManagedArtifact::File {
+            path: NIX_CONF_DEST,
+            expected: NIX_CONF,
+        },
+        ManagedArtifact::File {
+            path: PROFILE_SNIPPET_DEST,
+            expected: PROFILE_SNIPPET,
+        },
+        ManagedArtifact::Group {
+            name: NIXBLD_GROUP,
+            gid: NIXBLD_GID,
+        },
+        ManagedArtifact::SystemdUnit {
+            name: "nix-daemon.service",
+            dest: NIX_DAEMON_SERVICE_DEST,
+            must_be_active: false,
+        },
+        ManagedArtifact::SystemdUnit {
+            name: "nix-daemon.socket",
+            dest: NIX_DAEMON_SOCKET_DEST,
+            must_be_active: true,
+        },
+        ManagedArtifact::PathExists {
+            name: "default profile",
+            path: DEFAULT_PROFILE_NIX_ENV,
+        },
+    ]);
+    items
+}
 
 pub async fn verify() -> Result<()> {
     tracing::info!("verifying managed environment");
-    for artifact in MANIFEST {
+    for artifact in manifest() {
         artifact.check().await?;
     }
     check_build_users()?;
@@ -186,10 +186,10 @@ mod tests {
 
     #[test]
     fn label_uses_the_path_for_path_based_artifacts() {
-        let artifact = ManagedArtifact::Directory {
+        let artifact = ManagedArtifact::Directory(DirectorySpec {
             path: "/nix",
             mode: 0o755,
-        };
+        });
         assert_eq!(artifact.label(), "/nix");
     }
 
@@ -206,10 +206,10 @@ mod tests {
     async fn directory_check_passes_when_mode_matches() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-        let artifact = ManagedArtifact::Directory {
+        let artifact = ManagedArtifact::Directory(DirectorySpec {
             path: leak(dir.path().to_path_buf()),
             mode: 0o755,
-        };
+        });
         assert!(artifact.check().await.is_ok());
     }
 
@@ -217,10 +217,35 @@ mod tests {
     async fn directory_check_fails_on_mode_drift() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        let artifact = ManagedArtifact::Directory {
+        let artifact = ManagedArtifact::Directory(DirectorySpec {
             path: leak(dir.path().to_path_buf()),
             mode: 0o755,
-        };
+        });
+        assert!(matches!(
+            artifact.check().await,
+            Err(Error::Integrity { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn directory_check_passes_for_a_sticky_world_writable_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o1777)).unwrap();
+        let artifact = ManagedArtifact::Directory(DirectorySpec {
+            path: leak(dir.path().to_path_buf()),
+            mode: 0o1777,
+        });
+        assert!(artifact.check().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn directory_check_flags_a_missing_sticky_bit_as_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let artifact = ManagedArtifact::Directory(DirectorySpec {
+            path: leak(dir.path().to_path_buf()),
+            mode: 0o1777,
+        });
         assert!(matches!(
             artifact.check().await,
             Err(Error::Integrity { .. })
@@ -229,19 +254,19 @@ mod tests {
 
     #[tokio::test]
     async fn directory_check_fails_when_missing() {
-        let artifact = ManagedArtifact::Directory {
+        let artifact = ManagedArtifact::Directory(DirectorySpec {
             path: "/does/not/exist/mix-test",
             mode: 0o755,
-        };
+        });
         assert!(artifact.check().await.is_err());
     }
 
     #[tokio::test]
     async fn directory_check_reports_the_real_io_error_when_missing() {
-        let artifact = ManagedArtifact::Directory {
+        let artifact = ManagedArtifact::Directory(DirectorySpec {
             path: "/does/not/exist/mix-test",
             mode: 0o755,
-        };
+        });
         match artifact.check().await {
             Err(Error::Integrity { detail, .. }) => {
                 assert!(detail.contains("os error 2"), "detail was: {detail}");
@@ -255,10 +280,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("not-a-dir");
         std::fs::write(&file, "x").unwrap();
-        let artifact = ManagedArtifact::Directory {
+        let artifact = ManagedArtifact::Directory(DirectorySpec {
             path: leak(file),
             mode: 0o755,
-        };
+        });
         assert!(matches!(
             artifact.check().await,
             Err(Error::Integrity { .. })
@@ -410,5 +435,22 @@ mod tests {
             artifact.check().await,
             Err(Error::Integrity { .. })
         ));
+    }
+
+    #[test]
+    fn manifest_audits_every_directory_in_the_managed_nix_tree() {
+        let items = manifest();
+        for dir in NIX_TREE {
+            assert!(
+                items.iter().any(|artifact| matches!(
+                    artifact,
+                    ManagedArtifact::Directory(spec)
+                        if spec.path == dir.path && spec.mode == dir.mode
+                )),
+                "manifest is missing an entry for {} (mode {:o})",
+                dir.path,
+                dir.mode
+            );
+        }
     }
 }

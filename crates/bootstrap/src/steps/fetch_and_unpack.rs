@@ -11,6 +11,7 @@ use crate::constants::NIXBLD_GID;
 use crate::error::{Error, Result};
 use crate::pins::NIX_VERSION;
 use crate::tarball;
+use crate::util::is_file;
 
 const NIX_STORE: &str = "/nix/store";
 const DEFAULT_PROFILE: &str = "/nix/var/nix/profiles/default";
@@ -46,7 +47,7 @@ impl Step for FetchAndUnpack {
     }
 
     async fn check(&self) -> Result<bool> {
-        Ok(Path::new(DEFAULT_PROFILE).join("bin/nix-env").is_file())
+        Ok(is_file(Path::new(DEFAULT_PROFILE).join("bin/nix-env")).await)
     }
 
     async fn execute(&mut self) -> Result<()> {
@@ -370,15 +371,8 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
             source: e,
         })?;
 
-    child
-        .stdin
-        .take()
-        .expect("stdin was piped")
-        .write_all(&reginfo)
-        .map_err(|e| CoreError::Exec {
-            command: command_line.clone(),
-            source: e,
-        })?;
+    let mut stdin = child.stdin.take().expect("stdin was piped");
+    let writer = std::thread::spawn(move || stdin.write_all(&reginfo));
 
     let output = child.wait_with_output().map_err(|e| CoreError::Exec {
         command: command_line.clone(),
@@ -397,6 +391,14 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
             &output,
         )));
     }
+
+    writer
+        .join()
+        .map_err(|e| CoreError::TaskPanicked(format!("{e:?}")))?
+        .map_err(|e| CoreError::Exec {
+            command: command_line,
+            source: e,
+        })?;
 
     Ok(())
 }
