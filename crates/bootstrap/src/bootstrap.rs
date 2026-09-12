@@ -8,9 +8,9 @@ pub async fn bootstrap(mirror: Option<&str>) -> Result<Environment> {
         return Err(Error::NotRoot("bootstrap the managed environment"));
     }
 
-    preflight::check_not_nixos()?;
-    preflight::check_not_wsl1()?;
-    preflight::check_systemd_ready()?;
+    preflight::check_not_nixos().await?;
+    preflight::check_not_wsl1().await?;
+    preflight::check_systemd_ready().await?;
     preflight::check_nix_not_installed().await?;
 
     run_steps(mirror).await
@@ -21,9 +21,9 @@ pub async fn reset(mirror: Option<&str>) -> Result<Environment> {
         return Err(Error::NotRoot("reset the managed environment"));
     }
 
-    preflight::check_not_nixos()?;
-    preflight::check_not_wsl1()?;
-    preflight::check_systemd_ready()?;
+    preflight::check_not_nixos().await?;
+    preflight::check_not_wsl1().await?;
+    preflight::check_systemd_ready().await?;
     preflight::check_nix_not_installed().await?;
 
     teardown::teardown().await?;

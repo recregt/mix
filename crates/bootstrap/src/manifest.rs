@@ -1,5 +1,4 @@
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
 
 use crate::constants::{
     DEFAULT_PROFILE_NIX_ENV, NIX_CONF, NIX_CONF_DEST, NIX_DAEMON_SERVICE_DEST,
@@ -9,7 +8,7 @@ use crate::constants::{
 use crate::error::{Error, Result};
 use crate::steps::create_nix_tree::{DirectorySpec, NIX_TREE};
 use crate::steps::create_users_and_groups::{all_users_valid, group_has_gid};
-use crate::util::DIR_MODE_MASK;
+use crate::util::{DIR_MODE_MASK, path_exists};
 
 #[derive(Debug, Clone, Copy)]
 pub enum ManagedArtifact {
@@ -86,7 +85,7 @@ impl ManagedArtifact {
                 must_be_active,
             } => {
                 tracing::debug!("checking systemd unit: {name}");
-                if !Path::new(dest).exists() {
+                if !path_exists(dest).await {
                     return Err(integrity(name, "unit file missing"));
                 }
                 if must_be_active && !crate::util::systemd_unit_is_active(name).await {
@@ -95,7 +94,7 @@ impl ManagedArtifact {
             }
             ManagedArtifact::PathExists { name, path } => {
                 tracing::debug!("checking path: {path} ({name})");
-                if !Path::new(path).exists() {
+                if !path_exists(path).await {
                     return Err(integrity(name, "missing"));
                 }
             }

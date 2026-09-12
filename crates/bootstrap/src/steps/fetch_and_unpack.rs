@@ -11,6 +11,7 @@ use crate::constants::NIXBLD_GID;
 use crate::error::{Error, Result};
 use crate::pins::NIX_VERSION;
 use crate::tarball;
+use crate::util::is_file;
 
 const NIX_STORE: &str = "/nix/store";
 const DEFAULT_PROFILE: &str = "/nix/var/nix/profiles/default";
@@ -46,7 +47,7 @@ impl Step for FetchAndUnpack {
     }
 
     async fn check(&self) -> Result<bool> {
-        Ok(Path::new(DEFAULT_PROFILE).join("bin/nix-env").is_file())
+        Ok(is_file(Path::new(DEFAULT_PROFILE).join("bin/nix-env")).await)
     }
 
     async fn execute(&mut self) -> Result<()> {
