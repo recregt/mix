@@ -1,5 +1,4 @@
-use std::fmt::Write as _;
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 use std::path::Path;
 
 use mix_core::{Error, Result};
@@ -79,24 +78,57 @@ async fn fetch_and_verify(url: &str, expected_sha256: &str) -> Result<Vec<u8>> {
 }
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
+    const HEX: [u8; 16] = *b"0123456789abcdef";
+
     let digest = Sha256::digest(bytes);
-    let mut out = String::with_capacity(digest.len() * 2);
+    let mut out = Vec::with_capacity(digest.len() * 2);
     for byte in digest {
-        write!(out, "{byte:02x}").expect("writing to a String never fails");
+        out.push(HEX[usize::from(byte >> 4)]);
+        out.push(HEX[usize::from(byte & 0x0f)]);
     }
-    out
+    String::from_utf8(out).expect("hex digits are always valid UTF-8")
+}
+
+struct XzSource<'a> {
+    reader: liblzma::bufread::XzDecoder<Cursor<&'a [u8]>>,
+    error: Option<String>,
+}
+
+impl Read for XzSource<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self.reader.read(buf) {
+            Ok(read) => Ok(read),
+            Err(e) => {
+                self.error = Some(e.to_string());
+                Err(e)
+            }
+        }
+    }
 }
 
 pub fn unpack(tarball: &[u8], dest: &Path) -> Result<()> {
     tracing::debug!("unpacking archive into {}", dest.display());
-    let mut decompressed = Vec::new();
-    lzma_rs::xz_decompress(&mut Cursor::new(tarball), &mut decompressed)
-        .map_err(|e| Error::Decompression(e.to_string()))?;
+    let source = XzSource {
+        reader: liblzma::bufread::XzDecoder::new_multi_decoder(Cursor::new(tarball)),
+        error: None,
+    };
 
-    let mut archive = tar::Archive::new(Cursor::new(decompressed));
+    let mut archive = tar::Archive::new(source);
     archive.set_preserve_permissions(true);
     archive.set_preserve_mtime(true);
-    archive.unpack(dest).map_err(|e| Error::Io {
+    archive.set_unpack_xattrs(true);
+    let unpacked = archive.unpack(dest);
+
+    let mut source = archive.into_inner();
+    if unpacked.is_ok() {
+        let _ = std::io::copy(&mut source, &mut std::io::sink());
+    }
+
+    if let Some(detail) = source.error {
+        return Err(Error::Decompression(detail));
+    }
+
+    unpacked.map_err(|e| Error::Io {
         path: dest.to_path_buf(),
         source: e,
     })?;
@@ -107,8 +139,7 @@ pub fn unpack(tarball: &[u8], dest: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::method;
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use mockito::Server;
 
     fn make_xz_tarball(files: &[(&str, &[u8])]) -> Vec<u8> {
         let src = tempfile::tempdir().unwrap();
@@ -151,6 +182,17 @@ mod tests {
     }
 
     #[test]
+    fn unpack_rejects_a_corrupt_xz_stream_tail() {
+        let mut tarball = make_xz_tarball(&[("hello.txt", b"world")]);
+        let last = tarball.len() - 1;
+        tarball[last] ^= 0xff;
+        let dest = tempfile::tempdir().unwrap();
+
+        let err = unpack(&tarball, dest.path()).unwrap_err();
+        assert!(matches!(err, Error::Decompression(_)));
+    }
+
+    #[test]
     fn sha256_hex_matches_a_known_digest() {
         assert_eq!(
             sha256_hex(b""),
@@ -160,27 +202,31 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_and_verify_succeeds_when_digest_matches() {
-        let server = MockServer::start().await;
+        let mut server = Server::new_async().await;
         let body = b"hello world".to_vec();
         let digest = sha256_hex(&body);
-        Mock::given(method("GET"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(body.clone()))
-            .mount(&server)
+        let _mock = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_body(body.clone())
+            .create_async()
             .await;
 
-        let bytes = fetch_and_verify(&server.uri(), &digest).await.unwrap();
+        let bytes = fetch_and_verify(&server.url(), &digest).await.unwrap();
         assert_eq!(bytes, body);
     }
 
     #[tokio::test]
     async fn fetch_and_verify_rejects_a_sha256_mismatch() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"corrupted".to_vec()))
-            .mount(&server)
+        let mut server = Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_body(b"corrupted")
+            .create_async()
             .await;
 
-        let err = fetch_and_verify(&server.uri(), &"0".repeat(64))
+        let err = fetch_and_verify(&server.url(), &"0".repeat(64))
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Integrity { .. }));
@@ -188,13 +234,15 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_and_verify_rejects_a_404_instead_of_hashing_the_body() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .respond_with(ResponseTemplate::new(404).set_body_bytes(b"<html>404</html>".to_vec()))
-            .mount(&server)
+        let mut server = Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/")
+            .with_status(404)
+            .with_body(b"<html>404</html>")
+            .create_async()
             .await;
 
-        let err = fetch_and_verify(&server.uri(), &"0".repeat(64))
+        let err = fetch_and_verify(&server.url(), &"0".repeat(64))
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Network(_)));
