@@ -1,10 +1,14 @@
 use std::io::{Cursor, Read};
 use std::path::Path;
+use std::time::Duration;
 
 use mix_core::{Error, Result};
 use sha2::{Digest, Sha256};
 
 use crate::pins::{TarballPin, pin_for};
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[cfg(feature = "embed-tarball")]
 pub fn embedded() -> Option<&'static [u8]> {
@@ -56,7 +60,24 @@ async fn fetch_and_verify(url: &str, expected_sha256: &str) -> Result<Vec<u8>> {
         "fetching runtime archive: {url} (nix {})",
         crate::pins::NIX_VERSION
     );
-    let response = reqwest::get(url)
+    fetch_and_verify_with_timeouts(url, expected_sha256, CONNECT_TIMEOUT, REQUEST_TIMEOUT).await
+}
+
+async fn fetch_and_verify_with_timeouts(
+    url: &str,
+    expected_sha256: &str,
+    connect_timeout: Duration,
+    request_timeout: Duration,
+) -> Result<Vec<u8>> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(connect_timeout)
+        .timeout(request_timeout)
+        .build()
+        .map_err(|e| Error::Network(e.to_string()))?;
+
+    let response = client
+        .get(url)
+        .send()
         .await
         .and_then(reqwest::Response::error_for_status)
         .map_err(|e| Error::Network(e.to_string()))?;
@@ -245,6 +266,26 @@ mod tests {
         let err = fetch_and_verify(&server.url(), &"0".repeat(64))
             .await
             .unwrap_err();
+        assert!(matches!(err, Error::Network(_)));
+    }
+
+    #[tokio::test]
+    async fn fetch_and_verify_times_out_instead_of_hanging_on_a_silent_server() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let _conn = listener.accept();
+            std::thread::sleep(Duration::from_secs(5));
+        });
+
+        let err = fetch_and_verify_with_timeouts(
+            &format!("http://{addr}/"),
+            &"0".repeat(64),
+            Duration::from_millis(500),
+            Duration::from_millis(200),
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, Error::Network(_)));
     }
 
