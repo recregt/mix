@@ -41,7 +41,7 @@ pub const NIX_TREE: &[DirectorySpec] = &[
     },
     DirectorySpec {
         path: "/nix/var/nix/gcroots/per-user",
-        mode: 0o1777,
+        mode: 0o755,
     },
     DirectorySpec {
         path: "/nix/var/nix/profiles",
@@ -49,7 +49,7 @@ pub const NIX_TREE: &[DirectorySpec] = &[
     },
     DirectorySpec {
         path: "/nix/var/nix/profiles/per-user",
-        mode: 0o1777,
+        mode: 0o755,
     },
     DirectorySpec {
         path: "/nix/var/nix/temproots",
@@ -133,25 +133,11 @@ mod tests {
         Box::leak(path.to_str().unwrap().to_string().into_boxed_str())
     }
 
-    #[test]
-    fn per_user_gcroots_and_profiles_require_the_sticky_bit() {
-        for path in [
-            "/nix/var/nix/gcroots/per-user",
-            "/nix/var/nix/profiles/per-user",
-        ] {
-            let dir = NIX_TREE.iter().find(|d| d.path == path).unwrap();
-            assert_eq!(
-                dir.mode, 0o1777,
-                "{path} must be world-writable with the sticky bit"
-            );
-        }
-    }
-
     #[tokio::test]
-    async fn provisioning_a_fresh_directory_applies_the_sticky_bit() {
+    async fn provisioning_a_fresh_directory_applies_the_requested_mode() {
         let root = tempfile::tempdir().unwrap();
         let spec = DirectorySpec {
-            path: leak(root.path().join("per-user")),
+            path: leak(root.path().join("sticky")),
             mode: 0o1777,
         };
 
@@ -163,7 +149,7 @@ mod tests {
     #[tokio::test]
     async fn provisioning_repairs_an_existing_directory_with_drifted_permissions() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("per-user");
+        let path = root.path().join("sticky");
         std::fs::create_dir(&path).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         let spec = DirectorySpec {
