@@ -4,7 +4,7 @@ use mix_core::{Result, Step};
 use crate::constants::{
     NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC,
 };
-use crate::util::{copy_file, files_match, run};
+use crate::util::{copy_file, files_match, run, systemd_unit_is_active};
 
 pub struct ConfigureSystemdService;
 
@@ -17,7 +17,8 @@ impl Step for ConfigureSystemdService {
     async fn check(&self) -> Result<bool> {
         Ok(
             files_match(NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SERVICE_DEST).await
-                && files_match(NIX_DAEMON_SOCKET_SRC, NIX_DAEMON_SOCKET_DEST).await,
+                && files_match(NIX_DAEMON_SOCKET_SRC, NIX_DAEMON_SOCKET_DEST).await
+                && systemd_unit_is_active("nix-daemon.socket").await,
         )
     }
 
