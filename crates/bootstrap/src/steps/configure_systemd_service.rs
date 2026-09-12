@@ -10,6 +10,7 @@ use crate::util::{copy_file, files_match, remove_file, run, systemd_unit_is_acti
 #[derive(Default)]
 pub struct ConfigureSystemdService {
     written: Vec<(&'static str, Option<Vec<u8>>)>,
+    started_socket: bool,
 }
 
 #[async_trait]
@@ -43,11 +44,15 @@ impl Step for ConfigureSystemdService {
 
         run("systemctl", &["daemon-reload"]).await?;
         run("systemctl", &["enable", "--now", "nix-daemon.socket"]).await?;
+        self.started_socket = true;
         Ok(())
     }
 
     async fn rollback(&mut self) -> Result<()> {
-        run("systemctl", &["disable", "--now", "nix-daemon.socket"]).await?;
+        if self.started_socket {
+            run("systemctl", &["disable", "--now", "nix-daemon.socket"]).await?;
+            self.started_socket = false;
+        }
 
         for (path, previous) in self.written.drain(..).rev() {
             match previous {

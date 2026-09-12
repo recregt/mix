@@ -46,6 +46,7 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
             tracing::info!("running: {name}");
             if let Err(e) = step.execute().await {
                 tracing::debug!("step failed: {name} ({e})");
+                Self::rollback_one(&mut self.steps, idx).await;
                 Self::unwind(&mut self.steps, &executed).await;
                 return Err(e);
             }
@@ -56,15 +57,19 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
         Ok(())
     }
 
+    async fn rollback_one(steps: &mut [Box<dyn Step<Error = E>>], idx: usize) {
+        let step = &mut steps[idx];
+        let name = step.name();
+
+        tracing::info!("rolling back: {name}");
+        if let Err(e) = step.rollback().await {
+            tracing::error!("rollback failed: {name} ({e})");
+        }
+    }
+
     async fn unwind(steps: &mut [Box<dyn Step<Error = E>>], executed: &[usize]) {
         for &idx in executed.iter().rev() {
-            let step = &mut steps[idx];
-            let name = step.name();
-
-            tracing::info!("rolling back: {name}");
-            if let Err(e) = step.rollback().await {
-                tracing::error!("rollback failed: {name} ({e})");
-            }
+            Self::rollback_one(steps, idx).await;
         }
     }
 }
@@ -204,6 +209,7 @@ mod tests {
                 "execute:a",
                 "execute:b",
                 "execute:c",
+                "rollback:c",
                 "rollback:b",
                 "rollback:a",
             ]
@@ -242,6 +248,7 @@ mod tests {
                 "execute:a",
                 "execute:b",
                 "execute:c",
+                "rollback:c",
                 "rollback:b",
                 "rollback:a",
             ]
@@ -265,6 +272,54 @@ mod tests {
         ];
         let mut plan = Plan::new(steps);
         assert!(matches!(plan.run().await, Err(ProbeError)));
-        assert_eq!(*log.lock().unwrap(), vec!["execute:b"]);
+        assert_eq!(*log.lock().unwrap(), vec!["execute:b", "rollback:b"]);
+    }
+
+    struct PartiallyMutatingStep {
+        progress: u32,
+        fail_at: u32,
+        log: std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
+    }
+
+    #[async_trait]
+    impl Step for PartiallyMutatingStep {
+        type Error = ProbeError;
+
+        fn name(&self) -> &'static str {
+            "partially-mutating"
+        }
+
+        async fn check(&self) -> Result<bool, ProbeError> {
+            Ok(false)
+        }
+
+        async fn execute(&mut self) -> Result<(), ProbeError> {
+            while self.progress < self.fail_at {
+                self.progress += 1;
+            }
+            Err(ProbeError)
+        }
+
+        async fn rollback(&mut self) -> Result<(), ProbeError> {
+            while self.progress > 0 {
+                self.progress -= 1;
+                self.log.lock().unwrap().push(self.progress);
+            }
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_step_that_fails_partway_through_execute_still_rolls_back_its_own_partial_work() {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let steps: Vec<Box<dyn Step<Error = ProbeError>>> = vec![Box::new(PartiallyMutatingStep {
+            progress: 0,
+            fail_at: 3,
+            log: log.clone(),
+        })];
+        let mut plan = Plan::new(steps);
+        assert!(matches!(plan.run().await, Err(ProbeError)));
+
+        assert_eq!(*log.lock().unwrap(), vec![2, 1, 0]);
     }
 }
