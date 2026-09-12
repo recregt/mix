@@ -1,5 +1,5 @@
 use crate::constants::NIXBLD_GROUP;
-use crate::manifest::{MANIFEST, ManagedArtifact};
+use crate::manifest::{ManagedArtifact, manifest};
 use crate::steps::create_users_and_groups::all_users_valid;
 
 const REINSTALL_HINT: &str = "reinstall the managed runtime to restore this";
@@ -32,9 +32,10 @@ impl HealthReport {
 }
 
 pub async fn audit() -> Vec<HealthReport> {
-    let mut reports = Vec::with_capacity(MANIFEST.len() + 1);
+    let items = manifest();
+    let mut reports = Vec::with_capacity(items.len() + 1);
 
-    for artifact in MANIFEST {
+    for artifact in &items {
         reports.push(audit_artifact(artifact).await);
     }
 
