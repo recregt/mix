@@ -51,7 +51,7 @@ impl ManagedArtifact {
                 tracing::debug!("checking directory: {path}");
                 let meta = tokio::fs::metadata(path)
                     .await
-                    .map_err(|_| integrity(path, "missing"))?;
+                    .map_err(|e| integrity(path, &e.to_string()))?;
                 if !meta.is_dir() {
                     return Err(integrity(path, "exists but is not a directory"));
                 }
@@ -67,7 +67,7 @@ impl ManagedArtifact {
                 tracing::debug!("checking file: {path}");
                 let contents = tokio::fs::read_to_string(path)
                     .await
-                    .map_err(|_| integrity(path, "missing"))?;
+                    .map_err(|e| integrity(path, &e.to_string()))?;
                 if contents != expected {
                     return Err(integrity(
                         path,
@@ -237,6 +237,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn directory_check_reports_the_real_io_error_when_missing() {
+        let artifact = ManagedArtifact::Directory {
+            path: "/does/not/exist/mix-test",
+            mode: 0o755,
+        };
+        match artifact.check().await {
+            Err(Error::Integrity { detail, .. }) => {
+                assert!(detail.contains("os error 2"), "detail was: {detail}");
+            }
+            other => panic!("expected Integrity error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn directory_check_fails_when_path_is_a_regular_file() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("not-a-dir");
@@ -292,6 +306,20 @@ mod tests {
             check_build_users_with(false),
             Err(Error::Integrity { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn file_check_reports_the_real_io_error_when_missing() {
+        let artifact = ManagedArtifact::File {
+            path: "/does/not/exist/mix-test-nix.conf",
+            expected: "content",
+        };
+        match artifact.check().await {
+            Err(Error::Integrity { detail, .. }) => {
+                assert!(detail.contains("os error 2"), "detail was: {detail}");
+            }
+            other => panic!("expected Integrity error, got {other:?}"),
+        }
     }
 
     #[tokio::test]

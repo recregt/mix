@@ -46,9 +46,9 @@ pub fn escalate() -> Result<EscalationOutcome> {
         command.env(key, value);
     }
 
-    let status = command.status().map_err(|e| mix_core::Error::Command {
+    let status = command.status().map_err(|e| mix_core::Error::Exec {
         command: "sudo".into(),
-        detail: e.to_string(),
+        source: e,
     })?;
 
     Ok(EscalationOutcome::ReExecuted {

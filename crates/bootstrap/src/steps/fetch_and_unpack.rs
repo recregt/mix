@@ -347,7 +347,8 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
     })?;
 
     let nix_store = nix_pkg.join("bin/nix-store");
-    tracing::debug!("running command: {} --load-db", nix_store.display());
+    let command_line = crate::util::format_command(&nix_store.to_string_lossy(), &["--load-db"]);
+    tracing::debug!("running command: {command_line}");
 
     let mut child = std::process::Command::new(&nix_store)
         .arg("--load-db")
@@ -357,9 +358,9 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|e| CoreError::Command {
-            command: "nix-store --load-db".into(),
-            detail: e.to_string(),
+        .map_err(|e| CoreError::Exec {
+            command: command_line.clone(),
+            source: e,
         })?;
 
     child
@@ -367,25 +368,25 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
         .take()
         .expect("stdin was piped")
         .write_all(&reginfo)
-        .map_err(|e| CoreError::Command {
-            command: "nix-store --load-db".into(),
-            detail: e.to_string(),
+        .map_err(|e| CoreError::Exec {
+            command: command_line.clone(),
+            source: e,
         })?;
 
-    let output = child.wait_with_output().map_err(|e| CoreError::Command {
-        command: "nix-store --load-db".into(),
-        detail: e.to_string(),
+    let output = child.wait_with_output().map_err(|e| CoreError::Exec {
+        command: command_line.clone(),
+        source: e,
     })?;
 
     tracing::trace!(
-        "command output: nix-store --load-db\nstdout: {}\nstderr: {}",
+        "command output: {command_line}\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 
     if !output.status.success() {
         return Err(Error::Core(crate::util::command_error(
-            "nix-store --load-db",
+            command_line,
             &output,
         )));
     }
@@ -395,12 +396,23 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
 
 fn activate_default_profile(nix_pkg: &Path, nss_cacert_pkg: &Path) -> Result<()> {
     let nix_env = nix_pkg.join("bin/nix-env");
-    tracing::debug!(
-        "running command: {} --profile {DEFAULT_PROFILE} --install {} {}",
-        nix_env.display(),
-        nix_pkg.display(),
-        nss_cacert_pkg.display()
+    let command_line = crate::util::format_command(
+        &nix_env.to_string_lossy(),
+        &[
+            "--profile",
+            DEFAULT_PROFILE,
+            "--install",
+            &nix_pkg.to_string_lossy(),
+            &nss_cacert_pkg.to_string_lossy(),
+            "--option",
+            "substitute",
+            "false",
+            "--option",
+            "post-build-hook",
+            "",
+        ],
     );
+    tracing::debug!("running command: {command_line}");
 
     let output = std::process::Command::new(&nix_env)
         .arg("--profile")
@@ -413,20 +425,20 @@ fn activate_default_profile(nix_pkg: &Path, nss_cacert_pkg: &Path) -> Result<()>
         .env("HOME", root_home())
         .env_remove("NIX_REMOTE")
         .output()
-        .map_err(|e| CoreError::Command {
-            command: "nix-env --install".into(),
-            detail: e.to_string(),
+        .map_err(|e| CoreError::Exec {
+            command: command_line.clone(),
+            source: e,
         })?;
 
     tracing::trace!(
-        "command output: nix-env --install\nstdout: {}\nstderr: {}",
+        "command output: {command_line}\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 
     if !output.status.success() {
         return Err(Error::Core(crate::util::command_error(
-            "nix-env --install",
+            command_line,
             &output,
         )));
     }
