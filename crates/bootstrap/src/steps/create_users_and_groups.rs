@@ -1,9 +1,11 @@
 use async_trait::async_trait;
 use mix_core::Step;
 
-use crate::constants::{NIXBLD_GID, NIXBLD_GROUP, NIXBLD_UID_BASE, NIXBLD_USER_COUNT};
+use crate::constants::{
+    NIXBLD_GID, NIXBLD_GROUP, NIXBLD_HOME, NIXBLD_SHELL, NIXBLD_UID_BASE, NIXBLD_USER_COUNT,
+};
 use crate::error::{Error, Result};
-use crate::util::{run, warn_on_failure};
+use crate::util::{create_dir_all, is_dir, run, set_permissions, warn_on_failure};
 
 #[derive(Default)]
 pub struct CreateUsersAndGroups {
@@ -24,6 +26,11 @@ impl Step for CreateUsersAndGroups {
     }
 
     async fn execute(&mut self) -> Result<()> {
+        if !is_dir(NIXBLD_HOME).await {
+            create_dir_all(NIXBLD_HOME).await?;
+            set_permissions(NIXBLD_HOME, 0o555).await?;
+        }
+
         if group_exists(NIXBLD_GROUP) && !group_has_gid(NIXBLD_GROUP, NIXBLD_GID) {
             let gid = NIXBLD_GID.to_string();
             run("groupmod", &["--gid", &gid, NIXBLD_GROUP]).await?;
@@ -57,9 +64,9 @@ impl Step for CreateUsersAndGroups {
                     "--no-create-home",
                     "--no-user-group",
                     "--home-dir",
-                    "/var/empty",
+                    NIXBLD_HOME,
                     "--shell",
-                    "/usr/sbin/nologin",
+                    NIXBLD_SHELL,
                     "--uid",
                     &uid,
                     "--gid",
