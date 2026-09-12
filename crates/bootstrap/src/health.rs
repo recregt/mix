@@ -1,6 +1,6 @@
 use crate::constants::NIXBLD_GROUP;
 use crate::manifest::{MANIFEST, ManagedArtifact};
-use crate::steps::create_users_and_groups::{all_uids_valid, all_users_valid};
+use crate::steps::create_users_and_groups::all_users_valid;
 
 const REINSTALL_HINT: &str = "reinstall the managed runtime to restore this";
 
@@ -51,7 +51,7 @@ async fn audit_artifact(artifact: &ManagedArtifact) -> HealthReport {
 }
 
 fn audit_build_users() -> HealthReport {
-    if all_users_valid() && all_uids_valid() {
+    if all_users_valid() {
         HealthReport::healthy(NIXBLD_GROUP)
     } else {
         HealthReport::unhealthy(

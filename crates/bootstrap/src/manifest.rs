@@ -7,7 +7,7 @@ use crate::constants::{
     PROFILE_SNIPPET, PROFILE_SNIPPET_DEST,
 };
 use crate::error::{Error, Result};
-use crate::steps::create_users_and_groups::{all_uids_valid, all_users_valid, group_has_gid};
+use crate::steps::create_users_and_groups::{all_users_valid, group_has_gid};
 
 #[derive(Debug, Clone, Copy)]
 pub enum ManagedArtifact {
@@ -155,7 +155,7 @@ pub async fn verify() -> Result<()> {
 
 fn check_build_users() -> Result<()> {
     tracing::debug!("checking build users: nixbld1..{NIXBLD_USER_COUNT}");
-    check_build_users_with(all_users_valid() && all_uids_valid())
+    check_build_users_with(all_users_valid())
 }
 
 fn check_build_users_with(all_valid: bool) -> Result<()> {

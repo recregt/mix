@@ -20,7 +20,7 @@ impl Step for CreateUsersAndGroups {
     }
 
     async fn check(&self) -> Result<bool> {
-        Ok(group_has_gid(NIXBLD_GROUP, NIXBLD_GID) && all_users_valid() && all_uids_valid())
+        Ok(group_has_gid(NIXBLD_GROUP, NIXBLD_GID) && all_users_valid())
     }
 
     async fn execute(&mut self) -> Result<()> {
@@ -125,10 +125,38 @@ pub fn user_has_uid(name: &str, uid: u32) -> bool {
         .is_some_and(|user| user.uid.as_raw() == uid)
 }
 
-pub fn all_users_valid() -> bool {
-    (1..=NIXBLD_USER_COUNT).all(|n| user_has_gid(&user_name(n), NIXBLD_GID))
+pub fn user_matches(name: &str, uid: u32, gid: u32) -> bool {
+    nix::unistd::User::from_name(name)
+        .ok()
+        .flatten()
+        .is_some_and(|user| user.uid.as_raw() == uid && user.gid.as_raw() == gid)
 }
 
-pub fn all_uids_valid() -> bool {
-    (1..=NIXBLD_USER_COUNT).all(|n| user_has_uid(&user_name(n), NIXBLD_UID_BASE + n))
+pub fn all_users_valid() -> bool {
+    (1..=NIXBLD_USER_COUNT).all(|n| user_matches(&user_name(n), NIXBLD_UID_BASE + n, NIXBLD_GID))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_matches_true_for_a_known_system_user() {
+        assert!(user_matches("root", 0, 0));
+    }
+
+    #[test]
+    fn user_matches_false_for_the_wrong_uid() {
+        assert!(!user_matches("root", 1, 0));
+    }
+
+    #[test]
+    fn user_matches_false_for_the_wrong_gid() {
+        assert!(!user_matches("root", 0, 1));
+    }
+
+    #[test]
+    fn user_matches_false_for_a_nonexistent_user() {
+        assert!(!user_matches("mix-test-nonexistent-user-xyz", 0, 0));
+    }
 }
