@@ -1,5 +1,6 @@
 import os
 import pathlib
+import re
 import subprocess
 import time
 
@@ -8,6 +9,26 @@ import pytest
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 CONTAINERFILE = REPO_ROOT / "tests/bootstrap/Containerfile"
 IMAGE_TAG = "mix-live-smoke:latest"
+
+
+def _pinned_nix_url(target: str) -> str:
+    pins_src = (REPO_ROOT / "crates/bootstrap/src/pins.rs").read_text()
+    block_match = re.search(
+        rf'target:\s*"{re.escape(target)}"\s*,(.*?)\n\s*\}},',
+        pins_src,
+        re.S,
+    )
+    if not block_match:
+        raise RuntimeError(f"no pin found for {target} in pins.rs")
+    url_match = re.search(r'url:\s*"([^"]+)"', block_match.group(1))
+    if not url_match:
+        raise RuntimeError(f"could not parse url for {target} in pins.rs")
+    return url_match.group(1)
+
+
+@pytest.fixture(scope="session")
+def nix_mirror_base():
+    return _pinned_nix_url("x86_64-linux").rsplit("/", 1)[0]
 
 
 @pytest.fixture(scope="session")
@@ -90,6 +111,17 @@ def bootstrapped_container(container_image, mix_binary):
         assert result.returncode == 0, (
             f"mix bootstrap failed against the real internet:\n{result.stdout}\n{result.stderr}"
         )
+        yield container
+    finally:
+        subprocess.run(["podman", "rm", "-f", name], capture_output=True)
+
+
+@pytest.fixture(scope="module")
+def fresh_container(container_image, mix_binary):
+    name = _start_container(container_image)
+    container = Container(name)
+    try:
+        subprocess.run(["podman", "cp", str(mix_binary), f"{name}:/usr/local/bin/mix"], check=True)
         yield container
     finally:
         subprocess.run(["podman", "rm", "-f", name], capture_output=True)
