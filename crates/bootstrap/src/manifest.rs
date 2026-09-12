@@ -111,7 +111,7 @@ pub fn manifest() -> Vec<ManagedArtifact> {
         }),
         ManagedArtifact::Directory(DirectorySpec {
             path: NIX_STORE,
-            mode: 0o755,
+            mode: 0o1775,
         }),
     ];
     items.extend(NIX_TREE.iter().copied().map(ManagedArtifact::Directory));
@@ -466,7 +466,7 @@ mod tests {
         assert!(
             items.iter().any(|artifact| matches!(
                 artifact,
-                ManagedArtifact::Directory(spec) if spec.path == NIX_STORE && spec.mode == 0o755
+                ManagedArtifact::Directory(spec) if spec.path == NIX_STORE && spec.mode == 0o1775
             )),
             "manifest is missing an entry for {NIX_STORE}"
         );
