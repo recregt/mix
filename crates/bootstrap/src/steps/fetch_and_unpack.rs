@@ -7,13 +7,12 @@ use mix_core::{Error as CoreError, Step};
 use nix::fcntl::{AT_FDCWD, AtFlags};
 use nix::unistd::{Gid, Uid, User, fchownat};
 
-use crate::constants::NIXBLD_GID;
+use crate::constants::{NIX_STORE, NIXBLD_GID};
 use crate::error::{Error, Result};
 use crate::pins::NIX_VERSION;
 use crate::tarball;
 use crate::util::is_file;
 
-const NIX_STORE: &str = "/nix/store";
 const DEFAULT_PROFILE: &str = "/nix/var/nix/profiles/default";
 
 #[derive(Default)]
@@ -208,7 +207,15 @@ fn resolve_backlink(unpacked_root: &Path, pred: impl Fn(&str) -> bool) -> Result
 }
 
 fn move_store_into_place(unpacked_root: &Path, created: &mut Vec<PathBuf>) -> Result<()> {
-    move_entries_into(&unpacked_root.join("store"), Path::new(NIX_STORE), created)
+    let dest_store = Path::new(NIX_STORE);
+    move_entries_into(&unpacked_root.join("store"), dest_store, created)?;
+    std::fs::set_permissions(dest_store, std::fs::Permissions::from_mode(0o755)).map_err(|e| {
+        CoreError::Io {
+            path: dest_store.to_path_buf(),
+            source: e,
+        }
+    })?;
+    Ok(())
 }
 
 fn move_entries_into(
