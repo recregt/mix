@@ -1,7 +1,7 @@
 mod bootstrap;
 mod constants;
-mod doctor;
 mod error;
+mod health;
 mod manifest;
 mod pins;
 mod planner;
@@ -14,9 +14,9 @@ pub mod preflight;
 #[doc(hidden)]
 pub mod tarball;
 
-pub use bootstrap::bootstrap;
-pub use doctor::doctor;
+pub use bootstrap::{bootstrap, reset};
 pub use error::{Error, Result};
+pub use health::{HealthReport, audit};
 
 pub struct Environment(());
 

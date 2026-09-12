@@ -1,7 +1,7 @@
 use mix_core::Plan;
 
 use crate::error::{Error, Result};
-use crate::{Environment, planner, preflight};
+use crate::{Environment, planner, preflight, teardown};
 
 pub async fn bootstrap(mirror: Option<&str>) -> Result<Environment> {
     if !preflight::is_root() {
@@ -13,6 +13,20 @@ pub async fn bootstrap(mirror: Option<&str>) -> Result<Environment> {
     preflight::check_systemd_ready()?;
     preflight::check_nix_not_installed().await?;
 
+    run_steps(mirror).await
+}
+
+pub async fn reset(mirror: Option<&str>) -> Result<Environment> {
+    if !preflight::is_root() {
+        return Err(Error::NotRoot("reset the managed environment"));
+    }
+
+    preflight::check_not_nixos()?;
+    preflight::check_not_wsl1()?;
+    preflight::check_systemd_ready()?;
+    preflight::check_nix_not_installed().await?;
+
+    teardown::teardown().await?;
     run_steps(mirror).await
 }
 

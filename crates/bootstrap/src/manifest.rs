@@ -35,7 +35,17 @@ pub enum ManagedArtifact {
 }
 
 impl ManagedArtifact {
-    async fn check(&self) -> Result<()> {
+    pub(crate) fn label(&self) -> &'static str {
+        match *self {
+            ManagedArtifact::Directory { path, .. } => path,
+            ManagedArtifact::File { path, .. } => path,
+            ManagedArtifact::Group { name, .. } => name,
+            ManagedArtifact::SystemdUnit { name, .. } => name,
+            ManagedArtifact::PathExists { name, .. } => name,
+        }
+    }
+
+    pub(crate) async fn check(&self) -> Result<()> {
         match *self {
             ManagedArtifact::Directory { path, mode } => {
                 tracing::debug!("checking directory: {path}");
@@ -172,6 +182,24 @@ mod tests {
 
     fn leak(path: std::path::PathBuf) -> &'static str {
         Box::leak(path.to_str().unwrap().to_string().into_boxed_str())
+    }
+
+    #[test]
+    fn label_uses_the_path_for_path_based_artifacts() {
+        let artifact = ManagedArtifact::Directory {
+            path: "/nix",
+            mode: 0o755,
+        };
+        assert_eq!(artifact.label(), "/nix");
+    }
+
+    #[test]
+    fn label_uses_the_name_for_name_based_artifacts() {
+        let artifact = ManagedArtifact::Group {
+            name: "nixbld",
+            gid: 30_000,
+        };
+        assert_eq!(artifact.label(), "nixbld");
     }
 
     #[tokio::test]
