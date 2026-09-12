@@ -1,5 +1,4 @@
-use mix_core::{Error, Result};
-
+use crate::error::{Error, Result};
 use crate::{Environment, bootstrap, preflight, teardown};
 
 pub async fn doctor(mirror: Option<&str>) -> Result<Environment> {

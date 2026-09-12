@@ -1,5 +1,6 @@
-use mix_core::{Error, Plan, Result};
+use mix_core::Plan;
 
+use crate::error::{Error, Result};
 use crate::{Environment, planner, preflight};
 
 pub async fn bootstrap(mirror: Option<&str>) -> Result<Environment> {
@@ -18,5 +19,5 @@ pub async fn bootstrap(mirror: Option<&str>) -> Result<Environment> {
 pub(crate) async fn run_steps(mirror: Option<&str>) -> Result<Environment> {
     Plan::new(planner::bootstrap_steps(mirror)).run().await?;
 
-    Environment::open().await
+    Ok(Environment::open().await?)
 }

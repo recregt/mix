@@ -1,6 +1,7 @@
 mod bootstrap;
 mod constants;
 mod doctor;
+mod error;
 mod manifest;
 mod pins;
 mod planner;
@@ -15,6 +16,7 @@ pub mod tarball;
 
 pub use bootstrap::bootstrap;
 pub use doctor::doctor;
+pub use error::{Error, Result};
 
 pub struct Environment(());
 

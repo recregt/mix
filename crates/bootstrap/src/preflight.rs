@@ -1,9 +1,8 @@
 use std::path::Path;
 
-use mix_core::{Error, Result};
-
 use crate::constants::NIX_OWNERSHIP_MARKER;
 use crate::detect::{self, Wsl};
+use crate::error::{Error, Result};
 
 pub enum EscalationOutcome {
     ReExecuted { exit_code: i32 },
@@ -34,7 +33,7 @@ fn allowed_env_vars(get: impl Fn(&str) -> Option<String>) -> Vec<(&'static str, 
 }
 
 pub fn escalate() -> Result<EscalationOutcome> {
-    let current_exe = std::env::current_exe().map_err(|e| Error::Io {
+    let current_exe = std::env::current_exe().map_err(|e| mix_core::Error::Io {
         path: "/proc/self/exe".into(),
         source: e,
     })?;
@@ -47,7 +46,7 @@ pub fn escalate() -> Result<EscalationOutcome> {
         command.env(key, value);
     }
 
-    let status = command.status().map_err(|e| Error::Command {
+    let status = command.status().map_err(|e| mix_core::Error::Command {
         command: "sudo".into(),
         detail: e.to_string(),
     })?;
