@@ -10,16 +10,35 @@ pub enum Wsl {
 pub fn detect() -> Wsl {
     detect_at(
         Path::new("/proc/sys/kernel/osrelease"),
+        Path::new("/sys/fs/cgroup/cgroup.controllers"),
         std::env::var_os("WSL_DISTRO_NAME").is_some(),
         std::env::var_os("WSL_INTEROP").is_some(),
     )
 }
 
-fn detect_at(osrelease_path: &Path, has_distro_name: bool, has_interop: bool) -> Wsl {
+fn detect_at(
+    osrelease_path: &Path,
+    cgroup_controllers_path: &Path,
+    has_distro_name: bool,
+    has_interop: bool,
+) -> Wsl {
     match std::fs::read_to_string(osrelease_path) {
-        Ok(release) => detect_from_kernel_release(&release),
+        Ok(release) => {
+            let detected = detect_from_kernel_release(&release);
+            if detected == Wsl::V1 && has_real_cgroup2_at(cgroup_controllers_path) {
+                Wsl::V2
+            } else {
+                detected
+            }
+        }
         Err(_) => detect_from_env(has_distro_name, has_interop),
     }
+}
+
+fn has_real_cgroup2_at(controllers_path: &Path) -> bool {
+    std::fs::read_to_string(controllers_path)
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
 }
 
 fn detect_from_kernel_release(release: &str) -> Wsl {
@@ -98,15 +117,53 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let osrelease = dir.path().join("osrelease");
         std::fs::write(&osrelease, "5.15.167.4-microsoft-standard-WSL2\n").unwrap();
-        assert_eq!(detect_at(&osrelease, false, false), Wsl::V2);
+        let cgroup = dir.path().join("missing-cgroup");
+        assert_eq!(detect_at(&osrelease, &cgroup, false, false), Wsl::V2);
     }
 
     #[test]
     fn detect_at_falls_back_to_env_when_kernel_release_is_unreadable() {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("missing");
-        assert_eq!(detect_at(&missing, true, false), Wsl::V1);
-        assert_eq!(detect_at(&missing, false, false), Wsl::No);
+        let cgroup = dir.path().join("missing-cgroup");
+        assert_eq!(detect_at(&missing, &cgroup, true, false), Wsl::V1);
+        assert_eq!(detect_at(&missing, &cgroup, false, false), Wsl::No);
+    }
+
+    #[test]
+    fn detect_at_stays_v1_when_no_real_cgroup2_is_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let osrelease = dir.path().join("osrelease");
+        std::fs::write(&osrelease, "4.4.0-19041-Microsoft\n").unwrap();
+        let cgroup = dir.path().join("missing-cgroup");
+        assert_eq!(detect_at(&osrelease, &cgroup, false, false), Wsl::V1);
+    }
+
+    #[test]
+    fn detect_at_overrides_v1_to_v2_when_real_cgroup2_is_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let osrelease = dir.path().join("osrelease");
+        std::fs::write(&osrelease, "6.6.0-custom-Microsoft\n").unwrap();
+        let cgroup = dir.path().join("cgroup.controllers");
+        std::fs::write(&cgroup, "cpuset cpu io memory hugetlb pids rdma\n").unwrap();
+        assert_eq!(detect_at(&osrelease, &cgroup, false, false), Wsl::V2);
+    }
+
+    #[test]
+    fn has_real_cgroup2_at_false_when_empty_or_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty = dir.path().join("empty");
+        std::fs::write(&empty, "  \n").unwrap();
+        assert!(!has_real_cgroup2_at(&empty));
+        assert!(!has_real_cgroup2_at(&dir.path().join("missing")));
+    }
+
+    #[test]
+    fn has_real_cgroup2_at_true_when_controllers_listed() {
+        let dir = tempfile::tempdir().unwrap();
+        let controllers = dir.path().join("cgroup.controllers");
+        std::fs::write(&controllers, "cpuset cpu io memory\n").unwrap();
+        assert!(has_real_cgroup2_at(&controllers));
     }
 
     #[test]
