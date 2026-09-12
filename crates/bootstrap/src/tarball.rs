@@ -56,10 +56,8 @@ fn mirror_url(base: &str, filename: &str) -> String {
     format!("{}/{filename}", base.trim().trim_end_matches('/'))
 }
 
-fn network_error(e: impl std::fmt::Display) -> Error {
-    Error::Network(format!(
-        "{e}\nPlease check your network connection, proxy settings, or --mirror URL."
-    ))
+fn network_error(e: reqwest::Error) -> Error {
+    Error::Network(Box::new(e))
 }
 
 async fn fetch_and_verify(url: &str, expected_sha256: &str) -> Result<Vec<u8>> {

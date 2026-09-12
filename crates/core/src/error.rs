@@ -13,7 +13,7 @@ pub enum Error {
     Command { command: String, detail: String },
 
     #[error("network request failed: {0}")]
-    Network(String),
+    Network(#[source] Box<dyn std::error::Error + Send + Sync>),
 
     #[error("{artifact}: {detail}")]
     Integrity { artifact: String, detail: String },
@@ -32,3 +32,17 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn network_error_preserves_the_source_chain() {
+        let boxed: Box<dyn std::error::Error + Send + Sync> = "connection reset".into();
+        let err = Error::Network(boxed);
+
+        let source = std::error::Error::source(&err).expect("source should be preserved");
+        assert_eq!(source.to_string(), "connection reset");
+    }
+}

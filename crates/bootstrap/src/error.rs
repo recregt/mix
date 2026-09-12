@@ -4,6 +4,12 @@ pub enum Error {
     Core(#[from] mix_core::Error),
 
     #[error(
+        "network request failed: {0}\n\
+         Please check your network connection, proxy settings, or --mirror URL."
+    )]
+    Network(#[source] Box<dyn std::error::Error + Send + Sync>),
+
+    #[error(
         "root privileges required to {0}.\n\
          Please re-run this command with sudo:\n\
          \x20 sudo mix ..."
