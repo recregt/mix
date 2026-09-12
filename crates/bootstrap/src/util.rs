@@ -129,6 +129,15 @@ pub fn command_error(command: impl Into<String>, output: &std::process::Output) 
     }
 }
 
+pub(crate) fn warn_on_failure<T, E: std::fmt::Display>(
+    action: &'static str,
+    result: std::result::Result<T, E>,
+) {
+    if let Err(error) = result {
+        tracing::warn!("{action} failed: {error}, continuing");
+    }
+}
+
 pub async fn systemd_unit_is_active(name: &str) -> bool {
     tracing::debug!("checking systemd unit is-active: {name}");
     Command::new("systemctl")

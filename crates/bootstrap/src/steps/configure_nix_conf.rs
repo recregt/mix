@@ -5,7 +5,7 @@ use mix_core::Step;
 
 use crate::constants::{NIX_CONF, NIX_CONF_DEST, PROFILE_SNIPPET, PROFILE_SNIPPET_DEST};
 use crate::error::{Error, Result};
-use crate::util::{create_dir_all, remove_dir_all, remove_file, write_file};
+use crate::util::{create_dir_all, remove_dir_all, remove_file, warn_on_failure, write_file};
 
 #[derive(Default)]
 pub struct ConfigureNixConf {
@@ -53,12 +53,15 @@ impl Step for ConfigureNixConf {
 
     async fn rollback(&mut self) -> Result<()> {
         for written in self.written.drain(..).rev() {
-            match written.previous {
-                Some(contents) => write_file(written.path, contents).await?,
-                None => remove_file(written.path).await?,
-            }
+            warn_on_failure(
+                "restore runtime configuration file",
+                match written.previous {
+                    Some(contents) => write_file(written.path, contents).await,
+                    None => remove_file(written.path).await,
+                },
+            );
             if let Some(dir) = written.created_dir {
-                remove_dir_all(dir).await?;
+                warn_on_failure("remove created directory", remove_dir_all(dir).await);
             }
         }
         Ok(())

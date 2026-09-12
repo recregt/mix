@@ -5,7 +5,9 @@ use crate::constants::{
     NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC,
 };
 use crate::error::{Error, Result};
-use crate::util::{copy_file, files_match, remove_file, run, systemd_unit_is_active, write_file};
+use crate::util::{
+    copy_file, files_match, remove_file, run, systemd_unit_is_active, warn_on_failure, write_file,
+};
 
 #[derive(Default)]
 pub struct ConfigureSystemdService {
@@ -50,18 +52,24 @@ impl Step for ConfigureSystemdService {
 
     async fn rollback(&mut self) -> Result<()> {
         if self.started_socket {
-            run("systemctl", &["disable", "--now", "nix-daemon.socket"]).await?;
+            warn_on_failure(
+                "disable nix-daemon.socket",
+                run("systemctl", &["disable", "--now", "nix-daemon.socket"]).await,
+            );
             self.started_socket = false;
         }
 
         for (path, previous) in self.written.drain(..).rev() {
-            match previous {
-                Some(contents) => write_file(path, contents).await?,
-                None => remove_file(path).await?,
-            }
+            warn_on_failure(
+                "restore systemd unit file",
+                match previous {
+                    Some(contents) => write_file(path, contents).await,
+                    None => remove_file(path).await,
+                },
+            );
         }
 
-        run("systemctl", &["daemon-reload"]).await?;
+        warn_on_failure("reload systemd", run("systemctl", &["daemon-reload"]).await);
         Ok(())
     }
 }

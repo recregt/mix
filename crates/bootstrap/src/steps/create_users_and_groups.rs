@@ -3,7 +3,7 @@ use mix_core::Step;
 
 use crate::constants::{NIXBLD_GID, NIXBLD_GROUP, NIXBLD_UID_BASE, NIXBLD_USER_COUNT};
 use crate::error::{Error, Result};
-use crate::util::run;
+use crate::util::{run, warn_on_failure};
 
 #[derive(Default)]
 pub struct CreateUsersAndGroups {
@@ -80,11 +80,14 @@ impl Step for CreateUsersAndGroups {
 
     async fn rollback(&mut self) -> Result<()> {
         for name in self.created_users.drain(..).rev() {
-            run("userdel", &[&name]).await?;
+            warn_on_failure("delete build user", run("userdel", &[&name]).await);
         }
 
         if self.created_group {
-            run("groupdel", &[NIXBLD_GROUP]).await?;
+            warn_on_failure(
+                "delete nixbld group",
+                run("groupdel", &[NIXBLD_GROUP]).await,
+            );
             self.created_group = false;
         }
 
