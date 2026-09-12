@@ -56,6 +56,12 @@ fn mirror_url(base: &str, filename: &str) -> String {
     format!("{}/{filename}", base.trim().trim_end_matches('/'))
 }
 
+fn network_error(e: impl std::fmt::Display) -> Error {
+    Error::Network(format!(
+        "{e}\nPlease check your network connection, proxy settings, or --mirror URL."
+    ))
+}
+
 async fn fetch_and_verify(url: &str, expected_sha256: &str) -> Result<Vec<u8>> {
     tracing::info!(
         "fetching runtime archive: {url} (nix {})",
@@ -83,19 +89,15 @@ async fn fetch_and_verify_with_timeouts(
         .read_timeout(read_timeout)
         .timeout(request_timeout)
         .build()
-        .map_err(|e| Error::Network(e.to_string()))?;
+        .map_err(network_error)?;
 
     let response = client
         .get(url)
         .send()
         .await
         .and_then(reqwest::Response::error_for_status)
-        .map_err(|e| Error::Network(e.to_string()))?;
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| Error::Network(e.to_string()))?
-        .to_vec();
+        .map_err(network_error)?;
+    let bytes = response.bytes().await.map_err(network_error)?.to_vec();
 
     let digest = sha256_hex(&bytes);
     if digest != expected_sha256 {

@@ -12,22 +12,19 @@ pub enum Error {
     #[error("command `{command}` failed: {detail}")]
     Command { command: String, detail: String },
 
-    #[error(
-        "network request failed: {0}\n\
-         Please check your network connection, proxy settings, or --mirror URL."
-    )]
+    #[error("network request failed: {0}")]
     Network(String),
 
     #[error("{artifact}: {detail}")]
     Integrity { artifact: String, detail: String },
 
-    #[error("`mix` does not support this platform ({0})")]
+    #[error("unsupported platform: {0}")]
     UnsupportedTarget(String),
 
     #[error("decompressing archive: {0}")]
     Decompression(String),
 
-    #[error("archive layout was not what `mix` expected: {0}")]
+    #[error("unexpected archive layout: {0}")]
     MalformedArchive(String),
 
     #[error("background task panicked: {0}")]
