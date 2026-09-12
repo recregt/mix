@@ -8,9 +8,13 @@ fn styled(code: &str, symbol: &str, message: &str, is_terminal: bool) -> String 
     }
 }
 
+fn looks_like_an_identifier(message: &str) -> bool {
+    message.starts_with('/') || message.ends_with(".service") || message.ends_with(".socket")
+}
+
 fn sentence_case(message: &str) -> String {
     let capitalized = match message.chars().next() {
-        Some(c) if c.is_ascii_lowercase() => {
+        Some(c) if c.is_ascii_lowercase() && !looks_like_an_identifier(message) => {
             c.to_ascii_uppercase().to_string() + &message[c.len_utf8()..]
         }
         _ => message.to_string(),
@@ -81,5 +85,15 @@ mod tests {
             sentence_case("remove it:\n  sudo rm -rf /nix"),
             "Remove it:\n  sudo rm -rf /nix"
         );
+    }
+
+    #[test]
+    fn sentence_case_preserves_the_case_of_a_socket_unit_name() {
+        assert_eq!(sentence_case("nix-daemon.socket"), "nix-daemon.socket.");
+    }
+
+    #[test]
+    fn sentence_case_preserves_the_case_of_a_service_unit_name() {
+        assert_eq!(sentence_case("nix-daemon.service"), "nix-daemon.service.");
     }
 }
