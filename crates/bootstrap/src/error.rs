@@ -51,6 +51,13 @@ pub enum Error {
          \x20 sudo rm -rf /nix"
     )]
     AlreadyManaged,
+
+    #[error("{cause}\n{summary}")]
+    Rollback {
+        #[source]
+        cause: Box<Error>,
+        summary: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -67,5 +74,19 @@ mod tests {
         assert!(err.to_string().contains("--mirror"));
         let source = std::error::Error::source(&err).expect("source should be preserved");
         assert_eq!(source.to_string(), "connection reset");
+    }
+
+    #[test]
+    fn rollback_error_reports_the_original_cause_and_the_cleanup_summary() {
+        let err = Error::Rollback {
+            cause: Box::new(Error::UnsupportedHost),
+            summary: "1 rollback step(s) failed, the system may need manual cleanup: nixbld group: exit 1".to_string(),
+        };
+
+        let message = err.to_string();
+        assert!(message.contains("not needed on NixOS"));
+        assert!(message.contains("manual cleanup"));
+        let source = std::error::Error::source(&err).expect("cause should be preserved");
+        assert!(source.to_string().contains("not needed on NixOS"));
     }
 }

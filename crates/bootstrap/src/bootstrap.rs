@@ -31,7 +31,21 @@ pub async fn reset(mirror: Option<&str>) -> Result<Environment> {
 }
 
 pub(crate) async fn run_steps(mirror: Option<&str>) -> Result<Environment> {
-    Plan::new(planner::bootstrap_steps(mirror)).run().await?;
+    let mut plan = Plan::new(planner::bootstrap_steps(mirror));
+    if let Err(cause) = plan.run().await {
+        let failed_rollbacks = plan.failed_rollbacks();
+        if failed_rollbacks.is_empty() {
+            return Err(cause);
+        }
+        return Err(Error::Rollback {
+            cause: Box::new(cause),
+            summary: format!(
+                "{} rollback step(s) failed, the system may need manual cleanup: {}",
+                failed_rollbacks.len(),
+                failed_rollbacks.join("; ")
+            ),
+        });
+    }
 
     Environment::open().await
 }

@@ -15,11 +15,19 @@ pub trait Step: Send + Sync {
 
 pub struct Plan<E> {
     steps: Vec<Box<dyn Step<Error = E>>>,
+    failed_rollbacks: Vec<String>,
 }
 
 impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
     pub fn new(steps: Vec<Box<dyn Step<Error = E>>>) -> Self {
-        Self { steps }
+        Self {
+            steps,
+            failed_rollbacks: Vec::new(),
+        }
+    }
+
+    pub fn failed_rollbacks(&self) -> &[String] {
+        &self.failed_rollbacks
     }
 
     pub async fn run(&mut self) -> Result<(), E> {
@@ -33,7 +41,7 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
                 Ok(satisfied) => satisfied,
                 Err(e) => {
                     tracing::debug!("check failed: {name} ({e})");
-                    Self::unwind(&mut self.steps, &executed).await;
+                    Self::unwind(&mut self.steps, &executed, &mut self.failed_rollbacks).await;
                     return Err(e);
                 }
             };
@@ -46,8 +54,8 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
             tracing::info!("running: {name}");
             if let Err(e) = step.execute().await {
                 tracing::debug!("step failed: {name} ({e})");
-                Self::rollback_one(&mut self.steps, idx).await;
-                Self::unwind(&mut self.steps, &executed).await;
+                Self::rollback_one(&mut self.steps, idx, &mut self.failed_rollbacks).await;
+                Self::unwind(&mut self.steps, &executed, &mut self.failed_rollbacks).await;
                 return Err(e);
             }
 
@@ -57,19 +65,28 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
         Ok(())
     }
 
-    async fn rollback_one(steps: &mut [Box<dyn Step<Error = E>>], idx: usize) {
+    async fn rollback_one(
+        steps: &mut [Box<dyn Step<Error = E>>],
+        idx: usize,
+        failed_rollbacks: &mut Vec<String>,
+    ) {
         let step = &mut steps[idx];
         let name = step.name();
 
         tracing::info!("rolling back: {name}");
         if let Err(e) = step.rollback().await {
             tracing::error!("rollback failed: {name} ({e})");
+            failed_rollbacks.push(format!("{name}: {e}"));
         }
     }
 
-    async fn unwind(steps: &mut [Box<dyn Step<Error = E>>], executed: &[usize]) {
+    async fn unwind(
+        steps: &mut [Box<dyn Step<Error = E>>],
+        executed: &[usize],
+        failed_rollbacks: &mut Vec<String>,
+    ) {
         for &idx in executed.iter().rev() {
-            Self::rollback_one(steps, idx).await;
+            Self::rollback_one(steps, idx, failed_rollbacks).await;
         }
     }
 }
@@ -253,6 +270,7 @@ mod tests {
                 "rollback:a",
             ]
         );
+        assert_eq!(plan.failed_rollbacks(), ["b: probe error"]);
     }
 
     #[tokio::test]
