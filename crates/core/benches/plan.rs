@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use mix_core::{Plan, Result, Step};
+use mix_core::{CancellationToken, Plan, Result, Step};
 
 fn main() {
     divan::main();
@@ -21,7 +21,7 @@ impl Step for NoopStep {
         Ok(self.satisfied)
     }
 
-    async fn execute(&mut self) -> Result<()> {
+    async fn execute(&mut self, _token: CancellationToken) -> Result<()> {
         Ok(())
     }
 }

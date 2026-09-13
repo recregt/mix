@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use mix_core::Step;
+use mix_core::{CancellationToken, Step};
 
 use crate::constants::NIX_OWNERSHIP_MARKER;
 use crate::error::{Error, Result};
@@ -30,7 +30,7 @@ impl Step for CreateNixDir {
         Ok(dir_has_mode("/nix", MODE).await)
     }
 
-    async fn execute(&mut self) -> Result<()> {
+    async fn execute(&mut self, _token: CancellationToken) -> Result<()> {
         self.created_dir = !path_exists("/nix").await;
         create_dir_all("/nix").await?;
         set_permissions("/nix", MODE).await?;

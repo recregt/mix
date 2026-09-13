@@ -1040,6 +1040,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
@@ -1052,6 +1053,7 @@ dependencies = [
  "futures-util",
  "thiserror",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 

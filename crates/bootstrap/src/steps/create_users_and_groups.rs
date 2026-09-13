@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use mix_core::Step;
+use mix_core::{CancellationToken, Step};
 
 use crate::constants::{
     NIXBLD_GID, NIXBLD_GROUP, NIXBLD_HOME, NIXBLD_SHELL, NIXBLD_UID_BASE, NIXBLD_USER_COUNT,
@@ -25,7 +25,7 @@ impl Step for CreateUsersAndGroups {
         Ok(group_has_gid(NIXBLD_GROUP, NIXBLD_GID) && all_users_valid())
     }
 
-    async fn execute(&mut self) -> Result<()> {
+    async fn execute(&mut self, _token: CancellationToken) -> Result<()> {
         if !is_dir(NIXBLD_HOME).await {
             create_dir_all(NIXBLD_HOME).await?;
             set_permissions(NIXBLD_HOME, 0o555).await?;

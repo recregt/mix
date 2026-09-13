@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use mix_core::Step;
+use mix_core::{CancellationToken, Step};
 
 use crate::constants::{
     NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC,
@@ -31,7 +31,7 @@ impl Step for ConfigureSystemdService {
         )
     }
 
-    async fn execute(&mut self) -> Result<()> {
+    async fn execute(&mut self, _token: CancellationToken) -> Result<()> {
         self.written.push((
             NIX_DAEMON_SERVICE_DEST,
             previous_contents(NIX_DAEMON_SERVICE_DEST).await,

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use mix_core::Step;
+use mix_core::{CancellationToken, Step};
 
 use crate::constants::{NIX_CONF, NIX_CONF_DEST, PROFILE_SNIPPET, PROFILE_SNIPPET_DEST};
 use crate::error::{Error, Result};
@@ -33,7 +33,7 @@ impl Step for ConfigureNixConf {
             && matches_expected(PROFILE_SNIPPET_DEST, PROFILE_SNIPPET).await)
     }
 
-    async fn execute(&mut self) -> Result<()> {
+    async fn execute(&mut self, _token: CancellationToken) -> Result<()> {
         let previous = previous_contents(NIX_CONF_DEST).await;
         let created_dir = write(NIX_CONF_DEST, NIX_CONF).await?;
         self.written.push(WrittenFile {

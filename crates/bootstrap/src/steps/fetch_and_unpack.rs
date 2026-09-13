@@ -3,7 +3,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use mix_core::{Error as CoreError, Step};
+use mix_core::{CancellationToken, Error as CoreError, Step};
 use nix::fcntl::{AT_FDCWD, AtFlags};
 use nix::unistd::{Gid, Uid, User, fchownat};
 
@@ -49,7 +49,7 @@ impl Step for FetchAndUnpack {
         Ok(is_file(Path::new(DEFAULT_PROFILE).join("bin/nix-env")).await)
     }
 
-    async fn execute(&mut self) -> Result<()> {
+    async fn execute(&mut self, _token: CancellationToken) -> Result<()> {
         let bytes = tarball::bytes(self.mirror.as_deref()).await?;
 
         let (installed, result) = tokio::task::spawn_blocking(move || {

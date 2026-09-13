@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use mix_core::Step;
+use mix_core::{CancellationToken, Step};
 
 use crate::error::{Error, Result};
 use crate::util::{create_dir_all, dir_has_mode, remove_dir_all, set_permissions, warn_on_failure};
@@ -87,7 +87,7 @@ impl Step for CreateNixTree {
         Ok(true)
     }
 
-    async fn execute(&mut self) -> Result<()> {
+    async fn execute(&mut self, _token: CancellationToken) -> Result<()> {
         provision_all(NIX_TREE, &mut self.created).await
     }
 
