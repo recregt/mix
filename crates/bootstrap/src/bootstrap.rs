@@ -11,6 +11,7 @@ async fn interrupted() {
         _ = tokio::signal::ctrl_c() => {}
         _ = terminate.recv() => {}
     }
+    tracing::warn!("Cancelling... (cleaning up)");
 }
 
 pub async fn bootstrap(mirror: Option<&str>) -> Result<Environment> {

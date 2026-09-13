@@ -36,13 +36,14 @@ impl Step for CreateUsersAndGroups {
             run("groupmod", &["--gid", &gid, NIXBLD_GROUP], token).await?;
         } else if !group_exists(NIXBLD_GROUP) {
             let gid = NIXBLD_GID.to_string();
-            run(
+            let result = run(
                 "groupadd",
                 &["--system", "--gid", &gid, NIXBLD_GROUP],
                 token,
             )
-            .await?;
-            self.created_group = true;
+            .await;
+            self.created_group = group_exists(NIXBLD_GROUP);
+            result?;
         }
 
         for n in 1..=NIXBLD_USER_COUNT {
@@ -62,7 +63,7 @@ impl Step for CreateUsersAndGroups {
 
             let uid = uid.to_string();
             let comment = format!("mix build user {n}");
-            run(
+            let result = run(
                 "useradd",
                 &[
                     "--system",
@@ -84,8 +85,11 @@ impl Step for CreateUsersAndGroups {
                 ],
                 token,
             )
-            .await?;
-            self.created_users.push(name);
+            .await;
+            if user_exists(&name) {
+                self.created_users.push(name);
+            }
+            result?;
         }
 
         Ok(())

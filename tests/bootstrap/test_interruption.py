@@ -5,6 +5,7 @@ PROVISIONING_MANIFEST = "/nix/.mix-provisioning-manifest"
 DEFAULT_PROFILE_NIX_ENV = "/nix/var/nix/profiles/default/bin/nix-env"
 RUNNING_CREATE_USERS_AND_GROUPS = "running: create nixbld group and build users"
 RUNNING_FETCH_AND_UNPACK = "running: fetch and activate the managed runtime"
+WINDING_DOWN_NOTICE = "Cancelling... (cleaning up)"
 
 
 def _nixbld_users(container) -> list[str]:
@@ -29,6 +30,7 @@ def test_sigint_during_a_fast_step_exits_promptly_and_rolls_back_cleanly(contain
     result = proc.wait(timeout=15.0)
 
     assert result.returncode != 0, result.stdout
+    assert WINDING_DOWN_NOTICE in result.stdout
     assert not container.path_exists(MIX_MANAGED_MARKER)
     assert container.exec("getent", "group", "nixbld").returncode != 0
     assert _nixbld_users(container) == []
@@ -47,6 +49,7 @@ def test_sigint_during_fetch_and_unpack_exits_promptly_and_rolls_back(container,
 
     assert result.returncode != 0, result.stdout
     assert elapsed < 10.0
+    assert WINDING_DOWN_NOTICE in result.stdout
     assert not container.path_exists(PROVISIONING_MANIFEST)
     assert _store_entry_count(container) == 0
     assert not container.path_exists(DEFAULT_PROFILE_NIX_ENV)
@@ -65,6 +68,7 @@ def test_sigterm_during_fetch_and_unpack_exits_promptly_and_rolls_back(container
 
     assert result.returncode != 0, result.stdout
     assert elapsed < 10.0
+    assert WINDING_DOWN_NOTICE in result.stdout
     assert not container.path_exists(PROVISIONING_MANIFEST)
     assert _store_entry_count(container) == 0
     assert not container.path_exists(DEFAULT_PROFILE_NIX_ENV)
@@ -84,6 +88,7 @@ def test_a_second_sigint_during_fetch_and_unpack_has_no_additional_effect(contai
 
     assert result.returncode != 0, result.stdout
     assert elapsed < 10.0
+    assert result.stdout.count(WINDING_DOWN_NOTICE) == 1
     assert not container.path_exists(PROVISIONING_MANIFEST)
     assert _store_entry_count(container) == 0
 
