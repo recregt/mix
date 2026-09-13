@@ -101,6 +101,72 @@ def mock_nix_server(nix_tarball):
         server.shutdown()
 
 
+class BackgroundProcess:
+    def __init__(self, container: "Container", proc: subprocess.Popen, pattern: str):
+        self.container = container
+        self.proc = proc
+        self.pattern = pattern
+        self.output = ""
+
+    def pid(self, timeout: float = 10.0) -> str:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            result = self.container.exec("pgrep", "-f", self.pattern)
+            pids = [p for p in result.stdout.split() if p.isdigit()]
+            if pids:
+                return pids[0]
+            if self.proc.poll() is not None:
+                raise AssertionError(
+                    f"process matching {self.pattern!r} exited before it could be found "
+                    f"(returncode={self.proc.returncode})"
+                )
+            time.sleep(0.05)
+        raise TimeoutError(f"process matching {self.pattern!r} never appeared in the container")
+
+    def wait_for_output(self, substring: str, timeout: float = 15.0) -> None:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            remaining = max(0.01, deadline - time.time())
+            line = _readline_with_timeout(self.proc.stdout, remaining)
+            if line is None:
+                raise AssertionError(
+                    f"process exited before printing output containing {substring!r}: "
+                    f"{self.output!r}"
+                )
+            self.output += line
+            if substring in line:
+                return
+        raise TimeoutError(f"{substring!r} never appeared in output: {self.output!r}")
+
+    def signal(self, sig_name: str, timeout: float = 10.0) -> None:
+        pid = self.pid(timeout=timeout)
+        self.container.exec("kill", f"-{sig_name}", pid, check=True)
+
+    def wait(self, timeout: float = 30.0) -> subprocess.CompletedProcess:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            line = _readline_with_timeout(self.proc.stdout, max(0.01, deadline - time.time()))
+            if line is None:
+                break
+            self.output += line
+        self.proc.wait(timeout=max(0.01, deadline - time.time()))
+        return subprocess.CompletedProcess(self.proc.args, self.proc.returncode, self.output, "")
+
+
+def _readline_with_timeout(stream, timeout: float):
+    import selectors
+
+    sel = selectors.DefaultSelector()
+    sel.register(stream, selectors.EVENT_READ)
+    try:
+        if not sel.select(timeout=timeout):
+            return None
+    finally:
+        sel.close()
+    line = stream.readline()
+    return line if line else None
+
+
 class Container:
     def __init__(self, name: str):
         self.name = name
@@ -116,6 +182,22 @@ class Container:
         if check and result.returncode != 0:
             raise AssertionError(f"{args} failed ({result.returncode}): {result.stderr}")
         return result
+
+    def start_background(self, *args, env=None, user=None) -> BackgroundProcess:
+        cmd = ["podman", "exec"]
+        for key, value in (env or {}).items():
+            cmd += ["-e", f"{key}={value}"]
+        if user:
+            cmd += ["-u", user]
+        cmd += [self.name, *args]
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        return BackgroundProcess(self, proc, pattern=" ".join(args))
 
     def path_exists(self, path: str) -> bool:
         return self.exec("test", "-e", path).returncode == 0
