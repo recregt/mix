@@ -76,14 +76,18 @@ pub async fn create_dir_with_mode(path: impl AsRef<Path>, mode: u32) -> Result<(
         path.display()
     );
 
-    let previous_umask = nix::sys::stat::umask(nix::sys::stat::Mode::empty());
-    let result = tokio::fs::DirBuilder::new().mode(mode).create(path).await;
-    nix::sys::stat::umask(previous_umask);
+    tokio::fs::DirBuilder::new()
+        .mode(mode)
+        .create(path)
+        .await
+        .map_err(|e| Error::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
 
-    result.map_err(|e| Error::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
+    if !dir_has_mode(path, mode).await {
+        set_permissions(path, mode).await?;
+    }
 
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         sync_dir_best_effort(parent).await;
