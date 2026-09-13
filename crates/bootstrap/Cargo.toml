@@ -21,7 +21,6 @@ tar = "0.4.46"
 tempfile = "3.27.0"
 thiserror = "2.0.20"
 tokio = { workspace = true, features = ["signal"] }
-tokio-util = { workspace = true }
 tracing = { workspace = true }
 
 [build-dependencies]
