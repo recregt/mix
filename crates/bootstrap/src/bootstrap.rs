@@ -11,6 +11,7 @@ async fn interrupted() {
         _ = tokio::signal::ctrl_c() => {}
         _ = terminate.recv() => {}
     }
+    tracing::warn!("interrupted; winding down the current step safely, please wait");
 }
 
 pub async fn bootstrap(mirror: Option<&str>) -> Result<Environment> {

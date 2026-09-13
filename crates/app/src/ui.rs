@@ -96,4 +96,35 @@ mod tests {
     fn sentence_case_preserves_the_case_of_a_service_unit_name() {
         assert_eq!(sentence_case("nix-daemon.service"), "nix-daemon.service.");
     }
+
+    #[test]
+    fn sentence_case_capitalizes_a_cancelled_command_message() {
+        assert_eq!(
+            sentence_case("command `useradd nixbld1` was interrupted"),
+            "Command `useradd nixbld1` was interrupted."
+        );
+    }
+
+    #[test]
+    fn sentence_case_capitalizes_the_interrupted_message() {
+        assert_eq!(
+            sentence_case("interrupted; rolled back any partially applied changes"),
+            "Interrupted; rolled back any partially applied changes."
+        );
+    }
+
+    #[test]
+    fn sentence_case_capitalizes_a_cross_device_store_message_without_touching_the_embedded_path() {
+        let message = "cannot move /nix/store/pkg-a into place: it is on a different \
+                        filesystem than /nix.\n\
+                        `mix` stages packages under /nix and moves them into /nix/store with an \
+                        atomic rename, which requires both to be on the same filesystem. Remove \
+                        any separate mount at /nix/store (e.g. a custom fstab entry) and retry.";
+
+        let result = sentence_case(message);
+
+        assert!(result.starts_with("Cannot move /nix/store/pkg-a into place"));
+        assert!(result.ends_with("and retry."));
+        assert!(!result.ends_with("retry.."));
+    }
 }
