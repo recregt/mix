@@ -49,12 +49,13 @@ impl Step for FetchAndUnpack {
         Ok(is_file(Path::new(DEFAULT_PROFILE).join("bin/nix-env")).await)
     }
 
-    async fn execute(&mut self, _token: &CancellationToken) -> Result<()> {
+    async fn execute(&mut self, token: &CancellationToken) -> Result<()> {
         let bytes = tarball::bytes(self.mirror.as_deref()).await?;
 
+        let token = token.clone();
         let (installed, result) = tokio::task::spawn_blocking(move || {
             let mut installed = Installed::default();
-            let result = provision(&bytes, &mut installed);
+            let result = provision(&bytes, &mut installed, &token);
             (installed, result)
         })
         .await
@@ -77,7 +78,11 @@ impl Step for FetchAndUnpack {
     }
 }
 
-fn provision(tarball_bytes: &[u8], installed: &mut Installed) -> Result<()> {
+fn provision(
+    tarball_bytes: &[u8],
+    installed: &mut Installed,
+    token: &CancellationToken,
+) -> Result<()> {
     let scratch = tempfile::Builder::new()
         .prefix("temp-install-dir-")
         .tempdir_in("/nix")
@@ -100,9 +105,15 @@ fn provision(tarball_bytes: &[u8], installed: &mut Installed) -> Result<()> {
     })?;
     let nss_cacert_pkg = resolve_backlink(&unpacked_root, |name| name.contains("-nss-cacert-"))?;
 
+    if token.is_cancelled() {
+        return Ok(());
+    }
     tracing::debug!("loading Nix database");
     load_db(&nix_pkg, &unpacked_root.join(".reginfo"))?;
 
+    if token.is_cancelled() {
+        return Ok(());
+    }
     installed.profile_created = !Path::new(DEFAULT_PROFILE).exists();
     tracing::debug!("activating default profile");
     activate_default_profile(&nix_pkg, &nss_cacert_pkg)?;

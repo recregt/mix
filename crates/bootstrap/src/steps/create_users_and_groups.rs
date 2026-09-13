@@ -25,7 +25,7 @@ impl Step for CreateUsersAndGroups {
         Ok(group_has_gid(NIXBLD_GROUP, NIXBLD_GID) && all_users_valid())
     }
 
-    async fn execute(&mut self, _token: &CancellationToken) -> Result<()> {
+    async fn execute(&mut self, token: &CancellationToken) -> Result<()> {
         if !is_dir(NIXBLD_HOME).await {
             create_dir_all(NIXBLD_HOME).await?;
             set_permissions(NIXBLD_HOME, 0o555).await?;
@@ -33,10 +33,15 @@ impl Step for CreateUsersAndGroups {
 
         if group_exists(NIXBLD_GROUP) && !group_has_gid(NIXBLD_GROUP, NIXBLD_GID) {
             let gid = NIXBLD_GID.to_string();
-            run("groupmod", &["--gid", &gid, NIXBLD_GROUP]).await?;
+            run("groupmod", &["--gid", &gid, NIXBLD_GROUP], token).await?;
         } else if !group_exists(NIXBLD_GROUP) {
             let gid = NIXBLD_GID.to_string();
-            run("groupadd", &["--system", "--gid", &gid, NIXBLD_GROUP]).await?;
+            run(
+                "groupadd",
+                &["--system", "--gid", &gid, NIXBLD_GROUP],
+                token,
+            )
+            .await?;
             self.created_group = true;
         }
 
@@ -46,11 +51,11 @@ impl Step for CreateUsersAndGroups {
             if user_exists(&name) {
                 if !user_has_gid(&name, NIXBLD_GID) {
                     let gid = NIXBLD_GID.to_string();
-                    run("usermod", &["--gid", &gid, &name]).await?;
+                    run("usermod", &["--gid", &gid, &name], token).await?;
                 }
                 if !user_has_uid(&name, uid) {
                     let uid = uid.to_string();
-                    run("usermod", &["--uid", &uid, &name]).await?;
+                    run("usermod", &["--uid", &uid, &name], token).await?;
                 }
                 continue;
             }
@@ -77,6 +82,7 @@ impl Step for CreateUsersAndGroups {
                     &comment,
                     &name,
                 ],
+                token,
             )
             .await?;
             self.created_users.push(name);
@@ -86,6 +92,8 @@ impl Step for CreateUsersAndGroups {
     }
 
     async fn rollback(&mut self) -> Result<()> {
+        let token = CancellationToken::new();
+
         for name in self.created_users.drain(..).rev() {
             delete_user(&name).await;
         }
@@ -93,7 +101,7 @@ impl Step for CreateUsersAndGroups {
         if self.created_group {
             warn_on_failure(
                 "delete nixbld group",
-                run("groupdel", &[NIXBLD_GROUP]).await,
+                run("groupdel", &[NIXBLD_GROUP], &token).await,
             );
             self.created_group = false;
         }
@@ -108,7 +116,8 @@ pub fn user_name(n: u32) -> String {
 
 pub(crate) async fn delete_user(name: &str) {
     terminate_processes(name).await;
-    warn_on_failure("delete build user", run("userdel", &[name]).await);
+    let token = CancellationToken::new();
+    warn_on_failure("delete build user", run("userdel", &[name], &token).await);
 }
 
 async fn terminate_processes(name: &str) {
