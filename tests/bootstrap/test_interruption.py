@@ -5,7 +5,7 @@ PROVISIONING_MANIFEST = "/nix/.mix-provisioning-manifest"
 DEFAULT_PROFILE_NIX_ENV = "/nix/var/nix/profiles/default/bin/nix-env"
 RUNNING_CREATE_USERS_AND_GROUPS = "running: create nixbld group and build users"
 RUNNING_FETCH_AND_UNPACK = "running: fetch and activate the managed runtime"
-WINDING_DOWN_NOTICE = "winding down the current step safely"
+WINDING_DOWN_NOTICE = "Cancelling... (cleaning up)"
 
 
 def _nixbld_users(container) -> list[str]:
