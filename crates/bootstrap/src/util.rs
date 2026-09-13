@@ -19,6 +19,19 @@ pub async fn run(command: &str, args: &[&str], token: &CancellationToken) -> Res
             source: e,
         })?;
 
+    let mut stdout_pipe = child.stdout.take().expect("stdout was piped");
+    let mut stderr_pipe = child.stderr.take().expect("stderr was piped");
+    let stdout_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        let _ = stdout_pipe.read_to_end(&mut buf).await;
+        buf
+    });
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        let _ = stderr_pipe.read_to_end(&mut buf).await;
+        buf
+    });
+
     let status = tokio::select! {
         status = child.wait() => status.map_err(|e| Error::Exec {
             command: command_line.clone(),
@@ -29,18 +42,14 @@ pub async fn run(command: &str, args: &[&str], token: &CancellationToken) -> Res
                 command: command_line.clone(),
                 source: e,
             })?;
+            stdout_task.abort();
+            stderr_task.abort();
             return Err(Error::Cancelled { command: command_line });
         }
     };
 
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    if let Some(mut pipe) = child.stdout.take() {
-        let _ = pipe.read_to_end(&mut stdout).await;
-    }
-    if let Some(mut pipe) = child.stderr.take() {
-        let _ = pipe.read_to_end(&mut stderr).await;
-    }
+    let stdout = stdout_task.await.unwrap_or_default();
+    let stderr = stderr_task.await.unwrap_or_default();
 
     tracing::trace!(
         "command output: {command_line}\nstdout: {}\nstderr: {}",
@@ -74,7 +83,12 @@ pub async fn create_dir_with_mode(path: impl AsRef<Path>, mode: u32) -> Result<(
     result.map_err(|e| Error::Io {
         path: path.to_path_buf(),
         source: e,
-    })
+    })?;
+
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        sync_dir_best_effort(parent).await;
+    }
+    Ok(())
 }
 
 pub async fn create_dir_all(path: impl AsRef<Path>) -> Result<()> {
@@ -95,19 +109,59 @@ pub async fn write_file_atomic(path: impl AsRef<Path>, contents: impl AsRef<[u8]
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
     let dir = dir.unwrap_or_else(|| Path::new("."));
     let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-    let temp_path = dir.join(format!(".{file_name}.mix-tmp-{}", std::process::id()));
+    let temp_path = dir.join(format!(
+        ".{file_name}.mix-tmp-{}-{}",
+        std::process::id(),
+        next_temp_nonce()
+    ));
 
-    if let Err(e) = write_and_sync(&temp_path, contents.as_ref()).await {
-        let _ = tokio::fs::remove_file(&temp_path).await;
-        return Err(e);
-    }
+    let guard = TempFileGuard::new(temp_path.clone());
+    write_and_sync(&temp_path, contents.as_ref()).await?;
 
     tokio::fs::rename(&temp_path, path)
         .await
         .map_err(|e| Error::Io {
             path: path.to_path_buf(),
             source: e,
-        })
+        })?;
+    guard.disarm();
+
+    sync_dir_best_effort(dir).await;
+    Ok(())
+}
+
+fn next_temp_nonce() -> u64 {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+struct TempFileGuard {
+    path: std::path::PathBuf,
+    armed: bool,
+}
+
+impl TempFileGuard {
+    fn new(path: std::path::PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+async fn sync_dir_best_effort(dir: &Path) {
+    if let Ok(handle) = tokio::fs::File::open(dir).await {
+        let _ = handle.sync_all().await;
+    }
 }
 
 pub async fn copy_file_atomic(src: impl AsRef<Path>, dest: impl AsRef<Path>) -> Result<()> {
@@ -457,6 +511,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_does_not_deadlock_on_output_larger_than_a_pipe_buffer() {
+        let token = CancellationToken::new();
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            run("sh", &["-c", "head -c 200000 /dev/zero"], &token),
+        )
+        .await;
+
+        match result {
+            Ok(run_result) => run_result.unwrap(),
+            Err(_) => panic!("run() did not return within the timeout, likely deadlocked"),
+        }
+    }
+
+    #[tokio::test]
     async fn write_file_atomic_writes_the_full_contents() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nix.conf");
@@ -499,6 +569,57 @@ mod tests {
         assert!(write_file_atomic(&path, b"hello").await.is_err());
 
         assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn write_file_atomic_temp_names_do_not_collide_under_concurrency() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nix.conf");
+
+        let tasks: Vec<_> = (0..20)
+            .map(|i| {
+                let path = path.clone();
+                tokio::spawn(async move {
+                    write_file_atomic(&path, format!("content-{i}").into_bytes()).await
+                })
+            })
+            .collect();
+        for task in tasks {
+            task.await.unwrap().unwrap();
+        }
+
+        assert!(path.exists());
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            entries,
+            vec![std::ffi::OsString::from("nix.conf")],
+            "no orphaned or colliding temp file should remain"
+        );
+    }
+
+    #[test]
+    fn temp_file_guard_removes_the_file_when_dropped_while_armed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("leftover");
+        std::fs::write(&path, b"x").unwrap();
+
+        drop(TempFileGuard::new(path.clone()));
+
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn temp_file_guard_leaves_the_file_when_disarmed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kept");
+        std::fs::write(&path, b"x").unwrap();
+
+        TempFileGuard::new(path.clone()).disarm();
+
+        assert!(path.exists());
     }
 
     #[tokio::test]
