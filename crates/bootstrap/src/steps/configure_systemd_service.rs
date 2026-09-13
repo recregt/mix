@@ -31,7 +31,7 @@ impl Step for ConfigureSystemdService {
         )
     }
 
-    async fn execute(&mut self, _token: CancellationToken) -> Result<()> {
+    async fn execute(&mut self, _token: &CancellationToken) -> Result<()> {
         self.written.push((
             NIX_DAEMON_SERVICE_DEST,
             previous_contents(NIX_DAEMON_SERVICE_DEST).await,

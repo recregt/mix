@@ -30,7 +30,7 @@ impl Step for CreateNixDir {
         Ok(dir_has_mode("/nix", MODE).await)
     }
 
-    async fn execute(&mut self, _token: CancellationToken) -> Result<()> {
+    async fn execute(&mut self, _token: &CancellationToken) -> Result<()> {
         self.created_dir = !path_exists("/nix").await;
         create_dir_all("/nix").await?;
         set_permissions("/nix", MODE).await?;

@@ -49,7 +49,7 @@ impl Step for FetchAndUnpack {
         Ok(is_file(Path::new(DEFAULT_PROFILE).join("bin/nix-env")).await)
     }
 
-    async fn execute(&mut self, _token: CancellationToken) -> Result<()> {
+    async fn execute(&mut self, _token: &CancellationToken) -> Result<()> {
         let bytes = tarball::bytes(self.mirror.as_deref()).await?;
 
         let (installed, result) = tokio::task::spawn_blocking(move || {

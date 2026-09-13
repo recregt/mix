@@ -21,7 +21,7 @@ impl Step for NoopStep {
         Ok(self.satisfied)
     }
 
-    async fn execute(&mut self, _token: CancellationToken) -> Result<()> {
+    async fn execute(&mut self, _token: &CancellationToken) -> Result<()> {
         Ok(())
     }
 }

@@ -11,7 +11,7 @@ pub trait Step: Send + Sync {
 
     fn name(&self) -> &'static str;
     async fn check(&self) -> Result<bool, Self::Error>;
-    async fn execute(&mut self, token: CancellationToken) -> Result<(), Self::Error>;
+    async fn execute(&mut self, token: &CancellationToken) -> Result<(), Self::Error>;
 
     async fn rollback(&mut self) -> Result<(), Self::Error> {
         Ok(())
@@ -55,13 +55,15 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
     pub async fn run_cancellable(&mut self, cancel: impl Future<Output = ()>) -> Outcome<E> {
         let mut cancel = pin!(cancel);
         let mut attempted = Attempted::default();
-        let token = CancellationToken::new();
+        let mut token: Option<CancellationToken> = None;
 
         let stop = 'run: {
             for (idx, step) in self.steps.iter_mut().enumerate() {
                 let check = match select(cancel.as_mut(), step.check()).await {
                     Either::Left(((), _)) => {
-                        token.cancel();
+                        if let Some(token) = &token {
+                            token.cancel();
+                        }
                         break 'run Some(StopReason::Interrupted);
                     }
                     Either::Right((result, _)) => result,
@@ -83,19 +85,20 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
                 tracing::info!("running: {name}");
                 attempted.insert(idx);
 
-                let mut exec = pin!(step.execute(token.clone()));
-                let executed = match select(cancel.as_mut(), exec.as_mut()).await {
-                    Either::Left(((), _)) => {
-                        token.cancel();
-                        exec.as_mut().await
-                    }
-                    Either::Right((result, _)) => result,
-                };
+                let token = token.get_or_insert_with(CancellationToken::new);
+                let (executed, interrupted) =
+                    match select(cancel.as_mut(), step.execute(token)).await {
+                        Either::Left(((), executing)) => {
+                            token.cancel();
+                            (executing.await, true)
+                        }
+                        Either::Right((result, _)) => (result, false),
+                    };
                 if let Err(e) = executed {
                     tracing::debug!("step failed: {name} ({e})");
                     break 'run Some(StopReason::Failed(e));
                 }
-                if token.is_cancelled() {
+                if interrupted {
                     break 'run Some(StopReason::Interrupted);
                 }
             }
@@ -207,7 +210,7 @@ mod tests {
             Ok(self.satisfied)
         }
 
-        async fn execute(&mut self, _token: CancellationToken) -> Result<(), ProbeError> {
+        async fn execute(&mut self, _token: &CancellationToken) -> Result<(), ProbeError> {
             if self.fail { Err(ProbeError) } else { Ok(()) }
         }
     }
@@ -260,7 +263,7 @@ mod tests {
             Ok(false)
         }
 
-        async fn execute(&mut self, _token: CancellationToken) -> Result<(), ProbeError> {
+        async fn execute(&mut self, _token: &CancellationToken) -> Result<(), ProbeError> {
             self.log
                 .lock()
                 .unwrap()
@@ -436,7 +439,7 @@ mod tests {
             Ok(false)
         }
 
-        async fn execute(&mut self, _token: CancellationToken) -> Result<(), ProbeError> {
+        async fn execute(&mut self, _token: &CancellationToken) -> Result<(), ProbeError> {
             while self.progress < self.fail_at {
                 self.progress += 1;
             }
@@ -500,7 +503,7 @@ mod tests {
             Ok(false)
         }
 
-        async fn execute(&mut self, _token: CancellationToken) -> Result<(), ProbeError> {
+        async fn execute(&mut self, _token: &CancellationToken) -> Result<(), ProbeError> {
             self.log.lock().unwrap().push("execute:a".to_string());
             self.flag.store(true, std::sync::atomic::Ordering::SeqCst);
             Ok(())
@@ -561,7 +564,7 @@ mod tests {
             Ok(false)
         }
 
-        async fn execute(&mut self, token: CancellationToken) -> Result<(), ProbeError> {
+        async fn execute(&mut self, token: &CancellationToken) -> Result<(), ProbeError> {
             for i in 0..self.total_iterations {
                 if token.is_cancelled() {
                     self.log.lock().unwrap().push(format!("cancelled-at:{i}"));

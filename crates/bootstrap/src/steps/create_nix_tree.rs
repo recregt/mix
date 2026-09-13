@@ -87,7 +87,7 @@ impl Step for CreateNixTree {
         Ok(true)
     }
 
-    async fn execute(&mut self, _token: CancellationToken) -> Result<()> {
+    async fn execute(&mut self, _token: &CancellationToken) -> Result<()> {
         provision_all(NIX_TREE, &mut self.created).await
     }
 
