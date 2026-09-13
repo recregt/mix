@@ -14,6 +14,7 @@ pub const NIX_DAEMON_SOCKET_DEST: &str = "/etc/systemd/system/nix-daemon.socket"
 
 pub const NIX_OWNERSHIP_MARKER: &str = "/nix/.mix-managed";
 pub const NIX_STORE: &str = "/nix/store";
+pub const NIX_PROVISIONING_MANIFEST: &str = "/nix/.mix-provisioning-manifest";
 
 pub const DEFAULT_PROFILE_NIX_ENV: &str = "/nix/var/nix/profiles/default/bin/nix-env";
 

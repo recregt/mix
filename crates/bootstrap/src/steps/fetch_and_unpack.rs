@@ -7,7 +7,7 @@ use mix_core::{CancellationToken, Error as CoreError, Step};
 use nix::fcntl::{AT_FDCWD, AtFlags};
 use nix::unistd::{Gid, Uid, User, fchownat};
 
-use crate::constants::{NIX_STORE, NIXBLD_GID};
+use crate::constants::{NIX_PROVISIONING_MANIFEST, NIX_STORE, NIXBLD_GID};
 use crate::error::{Error, Result};
 use crate::pins::NIX_VERSION;
 use crate::tarball;
@@ -83,23 +83,31 @@ fn provision(
     installed: &mut Installed,
     token: &CancellationToken,
 ) -> Result<()> {
-    let scratch = tempfile::Builder::new()
-        .prefix("temp-install-dir-")
-        .tempdir_in("/nix")
-        .map_err(|e| CoreError::Io {
-            path: "/nix".into(),
-            source: e,
-        })?;
+    let scratch_root = match recover_scratch() {
+        Some(path) => path,
+        None => {
+            let scratch = tempfile::Builder::new()
+                .prefix("temp-install-dir-")
+                .tempdir_in("/nix")
+                .map_err(|e| CoreError::Io {
+                    path: "/nix".into(),
+                    source: e,
+                })?;
+            tarball::unpack(tarball_bytes, scratch.path())?;
+            let path = scratch.keep();
+            write_manifest(&path)?;
+            path
+        }
+    };
 
-    tarball::unpack(tarball_bytes, scratch.path())?;
-
-    let unpacked_root = find_single_child(scratch.path(), |name| name.starts_with("nix-"))?;
+    let unpacked_root = find_single_child(&scratch_root, |name| name.starts_with("nix-"))?;
     tracing::debug!("moving Nix store into place");
     installed.store_dir_created = !Path::new(NIX_STORE).exists();
-    move_store_into_place(&unpacked_root, &mut installed.store_paths)?;
-    tracing::debug!("fixing Nix store ownership");
-    ensure_store_ownership()?;
+    move_store_into_place(&unpacked_root, &mut installed.store_paths, token)?;
 
+    if token.is_cancelled() {
+        return Ok(());
+    }
     let nix_pkg = resolve_backlink(&unpacked_root, |name| {
         name.ends_with(&format!("-nix-{NIX_VERSION}"))
     })?;
@@ -117,6 +125,9 @@ fn provision(
     installed.profile_created = !Path::new(DEFAULT_PROFILE).exists();
     tracing::debug!("activating default profile");
     activate_default_profile(&nix_pkg, &nss_cacert_pkg)?;
+
+    remove_manifest();
+    let _ = std::fs::remove_dir_all(&scratch_root);
 
     Ok(())
 }
@@ -137,7 +148,87 @@ fn teardown(installed: Installed) -> Result<()> {
         }
     }
 
+    if let Some(scratch_root) = read_manifest() {
+        remove_path(&scratch_root)?;
+    }
+    remove_manifest();
+
     Ok(())
+}
+
+fn write_manifest(scratch_root: &Path) -> Result<()> {
+    write_manifest_at(Path::new(NIX_PROVISIONING_MANIFEST), scratch_root)
+}
+
+fn read_manifest() -> Option<PathBuf> {
+    read_manifest_at(Path::new(NIX_PROVISIONING_MANIFEST))
+}
+
+fn remove_manifest() {
+    remove_manifest_at(Path::new(NIX_PROVISIONING_MANIFEST));
+}
+
+fn recover_scratch() -> Option<PathBuf> {
+    recover_scratch_at(Path::new(NIX_PROVISIONING_MANIFEST))
+}
+
+fn write_manifest_at(manifest_path: &Path, scratch_root: &Path) -> Result<()> {
+    let dir = manifest_path
+        .parent()
+        .expect("manifest path has a parent directory");
+    let temp_path = dir.join(format!(
+        ".{}.mix-tmp-{}",
+        manifest_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy(),
+        std::process::id()
+    ));
+
+    let write = || -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&temp_path)?;
+        file.write_all(scratch_root.to_string_lossy().as_bytes())?;
+        file.sync_all()
+    };
+    if let Err(e) = write() {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(CoreError::Io {
+            path: temp_path,
+            source: e,
+        }
+        .into());
+    }
+
+    std::fs::rename(&temp_path, manifest_path).map_err(|e| CoreError::Io {
+        path: manifest_path.to_path_buf(),
+        source: e,
+    })?;
+    if let Ok(dir_handle) = std::fs::File::open(dir) {
+        let _ = dir_handle.sync_all();
+    }
+
+    Ok(())
+}
+
+fn read_manifest_at(manifest_path: &Path) -> Option<PathBuf> {
+    std::fs::read_to_string(manifest_path)
+        .ok()
+        .map(PathBuf::from)
+}
+
+fn remove_manifest_at(manifest_path: &Path) {
+    let _ = std::fs::remove_file(manifest_path);
+}
+
+fn recover_scratch_at(manifest_path: &Path) -> Option<PathBuf> {
+    let path = read_manifest_at(manifest_path)?;
+    if find_single_child(&path, |name| name.starts_with("nix-")).is_ok() {
+        tracing::info!("resuming interrupted provisioning from {}", path.display());
+        Some(path)
+    } else {
+        remove_manifest_at(manifest_path);
+        None
+    }
 }
 
 fn remove_profile_default() -> Result<()> {
@@ -217,14 +308,28 @@ fn resolve_backlink(unpacked_root: &Path, pred: impl Fn(&str) -> bool) -> Result
     })?)
 }
 
-fn move_store_into_place(unpacked_root: &Path, created: &mut Vec<PathBuf>) -> Result<()> {
-    move_entries_into(&unpacked_root.join("store"), Path::new(NIX_STORE), created)
+fn move_store_into_place(
+    unpacked_root: &Path,
+    created: &mut Vec<PathBuf>,
+    token: &CancellationToken,
+) -> Result<()> {
+    move_entries_into(
+        &unpacked_root.join("store"),
+        Path::new(NIX_STORE),
+        created,
+        Uid::from_raw(0),
+        Gid::from_raw(NIXBLD_GID),
+        token,
+    )
 }
 
 fn move_entries_into(
     src_store: &Path,
     dest_store: &Path,
     created: &mut Vec<PathBuf>,
+    uid: Uid,
+    gid: Gid,
+    token: &CancellationToken,
 ) -> Result<()> {
     std::fs::create_dir_all(dest_store).map_err(|e| CoreError::Io {
         path: dest_store.to_path_buf(),
@@ -243,9 +348,26 @@ fn move_entries_into(
         })?;
 
     for entry in entries {
+        if token.is_cancelled() {
+            break;
+        }
+
+        let already_moved = entry.file_type().is_ok_and(|t| t.is_symlink());
+        if already_moved {
+            continue;
+        }
+
         let src_path = entry.path();
         let dest_path = dest_store.join(entry.file_name());
         let is_new = dest_path.symlink_metadata().is_err();
+        let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
+
+        ensure_ownership_under(&src_path, uid, gid)?;
+        if is_dir {
+            make_contents_read_only(&src_path)?;
+        } else {
+            make_read_only(&src_path)?;
+        }
 
         if !is_new {
             let remove = if dest_path.is_dir() {
@@ -264,11 +386,13 @@ fn move_entries_into(
             source: e,
         })?;
 
+        if is_dir {
+            strip_write_bit(&dest_path)?;
+        }
+
         if is_new {
             created.push(dest_path.clone());
         }
-
-        make_read_only(&dest_path)?;
 
         std::os::unix::fs::symlink(&dest_path, &src_path).map_err(|e| CoreError::Io {
             path: src_path,
@@ -309,12 +433,33 @@ fn make_read_only(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn ensure_store_ownership() -> Result<()> {
-    ensure_ownership_under(
-        Path::new(NIX_STORE),
-        Uid::from_raw(0),
-        Gid::from_raw(NIXBLD_GID),
-    )
+fn make_contents_read_only(root: &Path) -> Result<()> {
+    let entries = std::fs::read_dir(root).map_err(|e| CoreError::Io {
+        path: root.to_path_buf(),
+        source: e,
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|e| CoreError::Io {
+            path: root.to_path_buf(),
+            source: e,
+        })?;
+        make_read_only(&entry.path())?;
+    }
+    Ok(())
+}
+
+fn strip_write_bit(path: &Path) -> Result<()> {
+    let meta = std::fs::symlink_metadata(path).map_err(|e| CoreError::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    let mut perms = meta.permissions();
+    perms.set_mode(perms.mode() & !0o222);
+    std::fs::set_permissions(path, perms).map_err(|e| CoreError::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    Ok(())
 }
 
 fn ensure_ownership_under(root: &Path, uid: Uid, gid: Gid) -> Result<()> {
@@ -491,6 +636,21 @@ fn root_home_with(
 mod tests {
     use super::*;
 
+    fn move_entries_into_unprivileged(
+        src_store: &Path,
+        dest_store: &Path,
+        created: &mut Vec<PathBuf>,
+    ) -> Result<()> {
+        move_entries_into(
+            src_store,
+            dest_store,
+            created,
+            Uid::current(),
+            Gid::current(),
+            &CancellationToken::new(),
+        )
+    }
+
     #[test]
     fn root_home_with_prefers_non_empty_home_env() {
         assert_eq!(
@@ -571,7 +731,7 @@ mod tests {
         let dest = tempfile::tempdir().unwrap();
         let dest_store = dest.path().join("store");
 
-        move_entries_into(src.path(), &dest_store, &mut Vec::new()).unwrap();
+        move_entries_into_unprivileged(src.path(), &dest_store, &mut Vec::new()).unwrap();
 
         let moved = dest_store.join("pkg-a");
         assert!(moved.is_file());
@@ -590,7 +750,7 @@ mod tests {
         let dest = tempfile::tempdir().unwrap();
         let dest_store = dest.path().join("store");
 
-        move_entries_into(src.path(), &dest_store, &mut Vec::new()).unwrap();
+        move_entries_into_unprivileged(src.path(), &dest_store, &mut Vec::new()).unwrap();
 
         let mode = std::fs::metadata(dest_store.join("pkg-a"))
             .unwrap()
@@ -609,7 +769,7 @@ mod tests {
         std::fs::create_dir_all(&dest_store).unwrap();
         std::fs::write(dest_store.join("pkg-a"), "stale content").unwrap();
 
-        move_entries_into(src.path(), &dest_store, &mut Vec::new()).unwrap();
+        move_entries_into_unprivileged(src.path(), &dest_store, &mut Vec::new()).unwrap();
 
         assert_eq!(
             std::fs::read_to_string(dest_store.join("pkg-a")).unwrap(),
@@ -629,7 +789,7 @@ mod tests {
         std::fs::write(dest_store.join("pkg-a"), "stale").unwrap();
 
         let mut created = Vec::new();
-        move_entries_into(src.path(), &dest_store, &mut created).unwrap();
+        move_entries_into_unprivileged(src.path(), &dest_store, &mut created).unwrap();
 
         assert_eq!(created, vec![dest_store.join("pkg-b")]);
     }
@@ -643,11 +803,11 @@ mod tests {
         let dest_store = dest.path().join("store");
 
         let mut created = Vec::new();
-        move_entries_into(src.path(), &dest_store, &mut created).unwrap();
+        move_entries_into_unprivileged(src.path(), &dest_store, &mut created).unwrap();
         assert_eq!(created, vec![dest_store.join("pkg-a")]);
 
         let missing_src = dest.path().join("does-not-exist");
-        assert!(move_entries_into(&missing_src, &dest_store, &mut created).is_err());
+        assert!(move_entries_into_unprivileged(&missing_src, &dest_store, &mut created).is_err());
 
         assert_eq!(created, vec![dest_store.join("pkg-a")]);
     }
@@ -663,13 +823,114 @@ mod tests {
         std::os::unix::fs::symlink("/does/not/exist", dest_store.join("pkg-a")).unwrap();
 
         let mut created = Vec::new();
-        move_entries_into(src.path(), &dest_store, &mut created).unwrap();
+        move_entries_into_unprivileged(src.path(), &dest_store, &mut created).unwrap();
 
         assert!(created.is_empty());
         assert_eq!(
             std::fs::read_to_string(dest_store.join("pkg-a")).unwrap(),
             "new content"
         );
+    }
+
+    #[test]
+    fn move_entries_into_skips_source_entries_already_converted_to_symlinks() {
+        let src = tempfile::tempdir().unwrap();
+        std::fs::create_dir(src.path().join("pkg-real")).unwrap();
+        std::fs::write(src.path().join("pkg-real").join("file"), "content").unwrap();
+        std::os::unix::fs::symlink("/nix/store/pkg-done", src.path().join("pkg-done")).unwrap();
+
+        let dest = tempfile::tempdir().unwrap();
+        let dest_store = dest.path().join("store");
+
+        let mut created = Vec::new();
+        move_entries_into_unprivileged(src.path(), &dest_store, &mut created).unwrap();
+
+        assert_eq!(created, vec![dest_store.join("pkg-real")]);
+        assert!(dest_store.join("pkg-done").symlink_metadata().is_err());
+        assert!(src.path().join("pkg-done").is_symlink());
+    }
+
+    #[test]
+    fn move_entries_into_does_nothing_when_the_token_is_already_cancelled() {
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("pkg-a"), "content").unwrap();
+
+        let dest = tempfile::tempdir().unwrap();
+        let dest_store = dest.path().join("store");
+
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let mut created = Vec::new();
+        move_entries_into(
+            src.path(),
+            &dest_store,
+            &mut created,
+            Uid::current(),
+            Gid::current(),
+            &token,
+        )
+        .unwrap();
+
+        assert!(created.is_empty());
+        assert!(src.path().join("pkg-a").exists());
+        assert!(dest_store.join("pkg-a").symlink_metadata().is_err());
+    }
+
+    #[test]
+    fn write_manifest_at_then_read_manifest_at_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("manifest");
+        let scratch = tempfile::tempdir().unwrap();
+
+        write_manifest_at(&manifest_path, scratch.path()).unwrap();
+
+        assert_eq!(read_manifest_at(&manifest_path).unwrap(), scratch.path());
+    }
+
+    #[test]
+    fn write_manifest_at_leaves_no_temp_file_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("manifest");
+        let scratch = tempfile::tempdir().unwrap();
+
+        write_manifest_at(&manifest_path, scratch.path()).unwrap();
+
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(leftovers, vec![std::ffi::OsString::from("manifest")]);
+    }
+
+    #[test]
+    fn recover_scratch_at_returns_none_when_no_manifest_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("manifest");
+
+        assert!(recover_scratch_at(&manifest_path).is_none());
+    }
+
+    #[test]
+    fn recover_scratch_at_discards_a_manifest_pointing_at_a_missing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("manifest");
+        write_manifest_at(&manifest_path, Path::new("/does/not/exist/mix-test")).unwrap();
+
+        assert!(recover_scratch_at(&manifest_path).is_none());
+        assert!(!manifest_path.exists());
+    }
+
+    #[test]
+    fn recover_scratch_at_returns_the_scratch_root_when_it_still_holds_an_unpacked_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("manifest");
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::create_dir(scratch.path().join("nix-2.35.2-x86_64-linux")).unwrap();
+        write_manifest_at(&manifest_path, scratch.path()).unwrap();
+
+        assert_eq!(recover_scratch_at(&manifest_path).unwrap(), scratch.path());
+        assert!(manifest_path.exists());
     }
 
     #[test]
