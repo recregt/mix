@@ -2,7 +2,10 @@ use async_trait::async_trait;
 use mix_core::{CancellationToken, Step};
 
 use crate::error::{Error, Result};
-use crate::util::{create_dir_all, dir_has_mode, remove_dir_all, set_permissions, warn_on_failure};
+use crate::util::{
+    create_dir_with_mode, dir_has_mode, path_exists, remove_dir_all, set_permissions,
+    warn_on_failure,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct DirectorySpec {
@@ -101,22 +104,22 @@ impl Step for CreateNixTree {
 
 async fn provision_all(dirs: &[DirectorySpec], created: &mut Vec<&'static str>) -> Result<()> {
     for dir in dirs {
-        if !path_exists(dir.path).await {
+        let is_new = !path_exists(dir.path).await;
+        if is_new {
             created.push(dir.path);
         }
-        provision(dir).await?;
+        provision(dir, is_new).await?;
     }
     Ok(())
 }
 
-async fn provision(dir: &DirectorySpec) -> Result<()> {
-    create_dir_all(dir.path).await?;
-    set_permissions(dir.path, dir.mode).await?;
+async fn provision(dir: &DirectorySpec, is_new: bool) -> Result<()> {
+    if is_new {
+        create_dir_with_mode(dir.path, dir.mode).await?;
+    } else {
+        set_permissions(dir.path, dir.mode).await?;
+    }
     Ok(())
-}
-
-async fn path_exists(path: &str) -> bool {
-    tokio::fs::metadata(path).await.is_ok()
 }
 
 async fn dir_matches(dir: &DirectorySpec) -> bool {
@@ -141,7 +144,7 @@ mod tests {
             mode: 0o1777,
         };
 
-        provision(&spec).await.unwrap();
+        provision(&spec, true).await.unwrap();
 
         assert!(dir_matches(&spec).await);
     }
@@ -158,7 +161,7 @@ mod tests {
         };
 
         assert!(!dir_matches(&spec).await);
-        provision(&spec).await.unwrap();
+        provision(&spec, false).await.unwrap();
         assert!(dir_matches(&spec).await);
     }
 

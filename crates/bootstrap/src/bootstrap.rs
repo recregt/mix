@@ -4,7 +4,13 @@ use crate::error::{Error, Result};
 use crate::{Environment, planner, preflight, teardown};
 
 async fn interrupted() {
-    let _ = tokio::signal::ctrl_c().await;
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("registering a SIGTERM handler");
+
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = terminate.recv() => {}
+    }
 }
 
 pub async fn bootstrap(mirror: Option<&str>) -> Result<Environment> {

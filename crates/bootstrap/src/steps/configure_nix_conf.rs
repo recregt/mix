@@ -6,7 +6,7 @@ use mix_core::{CancellationToken, Step};
 use crate::constants::{NIX_CONF, NIX_CONF_DEST, PROFILE_SNIPPET, PROFILE_SNIPPET_DEST};
 use crate::error::{Error, Result};
 use crate::util::{
-    create_dir_all, path_exists, remove_dir_all, remove_file, warn_on_failure, write_file,
+    create_dir_all, path_exists, remove_dir_all, remove_file, warn_on_failure, write_file_atomic,
 };
 
 #[derive(Default)]
@@ -58,7 +58,7 @@ impl Step for ConfigureNixConf {
             warn_on_failure(
                 "restore runtime configuration file",
                 match written.previous {
-                    Some(contents) => write_file(written.path, contents).await,
+                    Some(contents) => write_file_atomic(written.path, contents).await,
                     None => remove_file(written.path).await,
                 },
             );
@@ -90,7 +90,7 @@ async fn write(path: &str, contents: &str) -> Result<Option<PathBuf>> {
         }
         None => None,
     };
-    write_file(path, contents).await?;
+    write_file_atomic(path, contents).await?;
     Ok(created_dir)
 }
 

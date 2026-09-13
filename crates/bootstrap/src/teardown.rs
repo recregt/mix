@@ -1,4 +1,4 @@
-use mix_core::Result;
+use mix_core::{CancellationToken, Result};
 
 use crate::constants::{
     NIX_CONF_DEST, NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SOCKET_DEST, NIXBLD_GROUP,
@@ -8,13 +8,25 @@ use crate::steps::create_users_and_groups::{delete_user, group_exists, user_exis
 use crate::util::{run, warn_on_failure};
 
 pub async fn teardown() -> Result<()> {
+    let token = CancellationToken::new();
+
     warn_on_failure(
         "disable nix-daemon.socket",
-        run("systemctl", &["disable", "--now", "nix-daemon.socket"]).await,
+        run(
+            "systemctl",
+            &["disable", "--now", "nix-daemon.socket"],
+            &token,
+        )
+        .await,
     );
     warn_on_failure(
         "disable nix-daemon.service",
-        run("systemctl", &["disable", "--now", "nix-daemon.service"]).await,
+        run(
+            "systemctl",
+            &["disable", "--now", "nix-daemon.service"],
+            &token,
+        )
+        .await,
     );
     warn_on_failure(
         "remove nix-daemon.socket unit",
@@ -24,7 +36,10 @@ pub async fn teardown() -> Result<()> {
         "remove nix-daemon.service unit",
         remove_file_if_present(NIX_DAEMON_SERVICE_DEST).await,
     );
-    warn_on_failure("reload systemd", run("systemctl", &["daemon-reload"]).await);
+    warn_on_failure(
+        "reload systemd",
+        run("systemctl", &["daemon-reload"], &token).await,
+    );
 
     for n in 1..=NIXBLD_USER_COUNT {
         let name = user_name(n);
@@ -35,7 +50,7 @@ pub async fn teardown() -> Result<()> {
     if group_exists(NIXBLD_GROUP) {
         warn_on_failure(
             "delete nixbld group",
-            run("groupdel", &[NIXBLD_GROUP]).await,
+            run("groupdel", &[NIXBLD_GROUP], &token).await,
         );
     }
 

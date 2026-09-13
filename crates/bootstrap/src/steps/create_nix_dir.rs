@@ -4,8 +4,8 @@ use mix_core::{CancellationToken, Step};
 use crate::constants::NIX_OWNERSHIP_MARKER;
 use crate::error::{Error, Result};
 use crate::util::{
-    create_dir_all, dir_has_mode, is_file, path_exists, remove_dir_all, remove_file,
-    set_permissions, write_file,
+    create_dir_with_mode, dir_has_mode, is_file, path_exists, remove_dir_all, remove_file,
+    set_permissions, write_file_atomic,
 };
 
 const MODE: u32 = 0o755;
@@ -32,9 +32,12 @@ impl Step for CreateNixDir {
 
     async fn execute(&mut self, _token: &CancellationToken) -> Result<()> {
         self.created_dir = !path_exists("/nix").await;
-        create_dir_all("/nix").await?;
-        set_permissions("/nix", MODE).await?;
-        write_file(NIX_OWNERSHIP_MARKER, b"").await?;
+        if self.created_dir {
+            create_dir_with_mode("/nix", MODE).await?;
+        } else {
+            set_permissions("/nix", MODE).await?;
+        }
+        write_file_atomic(NIX_OWNERSHIP_MARKER, b"").await?;
         Ok(())
     }
 

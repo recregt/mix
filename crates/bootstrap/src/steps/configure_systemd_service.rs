@@ -6,7 +6,8 @@ use crate::constants::{
 };
 use crate::error::{Error, Result};
 use crate::util::{
-    copy_file, files_match, remove_file, run, systemd_unit_is_active, warn_on_failure, write_file,
+    copy_file_atomic, files_match, remove_file, run, systemd_unit_is_active, warn_on_failure,
+    write_file_atomic,
 };
 
 #[derive(Default)]
@@ -31,26 +32,33 @@ impl Step for ConfigureSystemdService {
         )
     }
 
-    async fn execute(&mut self, _token: &CancellationToken) -> Result<()> {
+    async fn execute(&mut self, token: &CancellationToken) -> Result<()> {
         self.written.push((
             NIX_DAEMON_SERVICE_DEST,
             previous_contents(NIX_DAEMON_SERVICE_DEST).await,
         ));
-        copy_file(NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SERVICE_DEST).await?;
+        copy_file_atomic(NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SERVICE_DEST).await?;
 
         self.written.push((
             NIX_DAEMON_SOCKET_DEST,
             previous_contents(NIX_DAEMON_SOCKET_DEST).await,
         ));
-        copy_file(NIX_DAEMON_SOCKET_SRC, NIX_DAEMON_SOCKET_DEST).await?;
+        copy_file_atomic(NIX_DAEMON_SOCKET_SRC, NIX_DAEMON_SOCKET_DEST).await?;
 
-        run("systemctl", &["daemon-reload"]).await?;
-        run("systemctl", &["enable", "--now", "nix-daemon.socket"]).await?;
+        run("systemctl", &["daemon-reload"], token).await?;
+        run(
+            "systemctl",
+            &["enable", "--now", "nix-daemon.socket"],
+            token,
+        )
+        .await?;
         self.started_socket = true;
         Ok(())
     }
 
     async fn rollback(&mut self) -> Result<()> {
+        let token = CancellationToken::new();
+
         if self.started_socket {
             warn_on_failure(
                 "disable nix-daemon.socket",
@@ -62,6 +70,7 @@ impl Step for ConfigureSystemdService {
                         "nix-daemon.socket",
                         "nix-daemon.service",
                     ],
+                    &token,
                 )
                 .await,
             );
@@ -72,13 +81,16 @@ impl Step for ConfigureSystemdService {
             warn_on_failure(
                 "restore systemd unit file",
                 match previous {
-                    Some(contents) => write_file(path, contents).await,
+                    Some(contents) => write_file_atomic(path, contents).await,
                     None => remove_file(path).await,
                 },
             );
         }
 
-        warn_on_failure("reload systemd", run("systemctl", &["daemon-reload"]).await);
+        warn_on_failure(
+            "reload systemd",
+            run("systemctl", &["daemon-reload"], &token).await,
+        );
         Ok(())
     }
 }

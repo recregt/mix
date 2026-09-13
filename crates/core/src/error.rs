@@ -21,6 +21,9 @@ pub enum Error {
 
     #[error("background task panicked: {0}")]
     TaskPanicked(String),
+
+    #[error("command `{command}` was interrupted")]
+    Cancelled { command: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
