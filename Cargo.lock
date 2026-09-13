@@ -1052,6 +1052,7 @@ dependencies = [
  "futures-util",
  "thiserror",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 

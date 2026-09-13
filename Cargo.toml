@@ -8,5 +8,6 @@ members = [
 
 [workspace.dependencies]
 async-trait = "0.1.92"
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "process", "fs", "io-util"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "process", "fs", "io-util", "sync"] }
+tokio-util = { version = "0.7", default-features = false }
 tracing = "0.1.44"
