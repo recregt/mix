@@ -46,13 +46,13 @@ impl Step for ConfigureSystemdService {
         copy_file_atomic(NIX_DAEMON_SOCKET_SRC, NIX_DAEMON_SOCKET_DEST).await?;
 
         run("systemctl", &["daemon-reload"], token).await?;
+        self.started_socket = true;
         run(
             "systemctl",
             &["enable", "--now", "nix-daemon.socket"],
             token,
         )
         .await?;
-        self.started_socket = true;
         Ok(())
     }
 

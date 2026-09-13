@@ -381,10 +381,7 @@ fn move_entries_into(
             })?;
         }
 
-        std::fs::rename(&src_path, &dest_path).map_err(|e| CoreError::Io {
-            path: dest_path.clone(),
-            source: e,
-        })?;
+        std::fs::rename(&src_path, &dest_path).map_err(|e| rename_error(e, &dest_path))?;
 
         if is_dir {
             strip_write_bit(&dest_path)?;
@@ -446,6 +443,19 @@ fn make_contents_read_only(root: &Path) -> Result<()> {
         make_read_only(&entry.path())?;
     }
     Ok(())
+}
+
+fn rename_error(e: std::io::Error, dest_path: &Path) -> Error {
+    if e.kind() == std::io::ErrorKind::CrossesDevices {
+        return Error::CrossDeviceStore {
+            path: dest_path.to_path_buf(),
+        };
+    }
+    CoreError::Io {
+        path: dest_path.to_path_buf(),
+        source: e,
+    }
+    .into()
 }
 
 fn strip_write_bit(path: &Path) -> Result<()> {
@@ -991,6 +1001,25 @@ mod tests {
             .permissions()
             .mode();
         assert_ne!(mode & 0o222, 0);
+    }
+
+    #[test]
+    fn rename_error_reports_cross_device_store_for_exdev() {
+        let dest = Path::new("/nix/store/pkg-a");
+        let err = rename_error(std::io::Error::from_raw_os_error(18), dest);
+
+        assert!(matches!(err, Error::CrossDeviceStore { path } if path == dest));
+    }
+
+    #[test]
+    fn rename_error_falls_back_to_a_plain_io_error_otherwise() {
+        let dest = Path::new("/nix/store/pkg-a");
+        let err = rename_error(
+            std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+            dest,
+        );
+
+        assert!(!matches!(err, Error::CrossDeviceStore { .. }));
     }
 
     #[test]

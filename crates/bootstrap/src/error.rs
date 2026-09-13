@@ -52,6 +52,14 @@ pub enum Error {
     )]
     AlreadyManaged,
 
+    #[error(
+        "cannot move {path} into place: it is on a different filesystem than /nix.\n\
+         `mix` stages packages under /nix and moves them into /nix/store with an atomic \
+         rename, which requires both to be on the same filesystem. Remove any separate \
+         mount at /nix/store (e.g. a custom fstab entry) and retry."
+    )]
+    CrossDeviceStore { path: std::path::PathBuf },
+
     #[error("{cause}\n{summary}")]
     Rollback {
         #[source]
@@ -77,6 +85,17 @@ mod tests {
         assert!(err.to_string().contains("--mirror"));
         let source = std::error::Error::source(&err).expect("source should be preserved");
         assert_eq!(source.to_string(), "connection reset");
+    }
+
+    #[test]
+    fn cross_device_store_names_the_offending_path_and_the_fix() {
+        let err = Error::CrossDeviceStore {
+            path: "/nix/store/pkg-a".into(),
+        };
+
+        let message = err.to_string();
+        assert!(message.contains("/nix/store/pkg-a"));
+        assert!(message.contains("fstab"));
     }
 
     #[test]
