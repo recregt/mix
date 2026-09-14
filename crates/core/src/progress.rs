@@ -15,9 +15,3 @@ impl DownloadProgress for NoopProgress {
 pub trait StepObserver: Send + Sync {
     fn on_step_span(&self, span: &tracing::Span);
 }
-
-pub struct NoopStepObserver;
-
-impl StepObserver for NoopStepObserver {
-    fn on_step_span(&self, _span: &tracing::Span) {}
-}

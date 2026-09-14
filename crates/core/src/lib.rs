@@ -9,5 +9,5 @@ pub mod step;
 pub use constants::{identity, paths};
 pub use error::{Error, Result};
 pub use models::{Category, Target};
-pub use progress::{DownloadProgress, NoopProgress, NoopStepObserver, StepObserver};
+pub use progress::{DownloadProgress, NoopProgress, StepObserver};
 pub use step::{CancellationToken, Outcome, Plan, Step};
