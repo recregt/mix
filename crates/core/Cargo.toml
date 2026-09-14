@@ -15,7 +15,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 divan = { version = "=5.0.1", package = "codspeed-divan-compat" }
-tempfile = "3.27.0"
+tempfile = "=3.27.0"
 tokio = { workspace = true }
 
 [[bench]]
