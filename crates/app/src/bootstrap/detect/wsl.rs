@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::bootstrap::util::path_exists;
+use crate::os::path_exists;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Wsl {

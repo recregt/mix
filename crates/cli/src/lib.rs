@@ -1,8 +1,6 @@
 mod cli;
 mod commands;
 
-use mix_ui as ui;
-
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -38,7 +36,7 @@ pub async fn run() -> ExitCode {
         .find(|r| !r.healthy)
     {
         let detail = report.detail.as_deref().unwrap_or("unhealthy");
-        ui::fail(commands::doctor::check_failed_message(format!(
+        mix_ui::fail(commands::doctor::check_failed_message(format!(
             "{}: {detail}",
             report.name
         )));
@@ -54,7 +52,7 @@ pub async fn run() -> ExitCode {
     match result {
         Ok(code) => code,
         Err(e) => {
-            ui::fail(e);
+            mix_ui::fail(e);
             ExitCode::FAILURE
         }
     }

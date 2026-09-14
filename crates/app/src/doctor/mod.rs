@@ -1,8 +1,9 @@
 use std::os::unix::fs::PermissionsExt;
 
+use mix_core::identity;
 use mix_core::models::Target;
 
-use crate::util::{files_match, group_has_gid, path_exists, systemd_unit_is_active};
+use crate::os::{files_match, path_exists, systemd_unit_is_active};
 
 const DIR_MODE_MASK: u32 = 0o7777;
 
@@ -88,7 +89,7 @@ async fn inspect_file(path: &str, expected: &str) -> Option<String> {
 }
 
 fn inspect_group(name: &str, gid: u32) -> Option<String> {
-    if group_has_gid(name, gid) {
+    if identity::group_has_gid(name, gid) {
         None
     } else {
         Some("group is missing or has the wrong gid".to_string())
@@ -96,8 +97,8 @@ fn inspect_group(name: &str, gid: u32) -> Option<String> {
 }
 
 fn inspect_user(n: u32, uid: u32, gid: u32) -> Option<String> {
-    let name = mix_core::identity::user_name(n);
-    if user_matches(&name, uid, gid) {
+    let name = identity::user_name(n);
+    if identity::user_matches(&name, uid, gid) {
         None
     } else {
         Some("user is missing or has the wrong uid/gid".to_string())
@@ -128,13 +129,6 @@ async fn inspect_path_exists(path: &str) -> Option<String> {
     } else {
         Some("missing".to_string())
     }
-}
-
-fn user_matches(name: &str, uid: u32, gid: u32) -> bool {
-    nix::unistd::User::from_name(name)
-        .ok()
-        .flatten()
-        .is_some_and(|user| user.uid.as_raw() == uid && user.gid.as_raw() == gid)
 }
 
 #[cfg(test)]
@@ -204,15 +198,5 @@ mod tests {
     async fn inspect_path_exists_reports_a_missing_path() {
         let detail = inspect_path_exists("/does/not/exist/nix-env").await;
         assert_eq!(detail.as_deref(), Some("missing"));
-    }
-
-    #[test]
-    fn user_matches_true_for_a_known_system_user() {
-        assert!(user_matches("root", 0, 0));
-    }
-
-    #[test]
-    fn user_matches_false_for_a_nonexistent_user() {
-        assert!(!user_matches("mix-test-nonexistent-user-xyz", 0, 0));
     }
 }

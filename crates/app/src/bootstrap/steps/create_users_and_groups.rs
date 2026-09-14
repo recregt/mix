@@ -1,12 +1,13 @@
 use async_trait::async_trait;
 use mix_core::identity::{
-    NIXBLD_GID, NIXBLD_GROUP, NIXBLD_HOME, NIXBLD_SHELL, NIXBLD_UID_BASE, NIXBLD_USER_COUNT,
+    self, NIXBLD_GID, NIXBLD_GROUP, NIXBLD_HOME, NIXBLD_SHELL, NIXBLD_UID_BASE, NIXBLD_USER_COUNT,
     user_name,
 };
 use mix_core::{CancellationToken, Step};
 
 use crate::bootstrap::error::{Error, Result};
-use crate::bootstrap::util::{create_dir_all, is_dir, run, set_permissions, warn_on_failure};
+use crate::bootstrap::util::{create_dir_all, is_dir, set_permissions, warn_on_failure};
+use crate::os::run;
 
 #[derive(Default)]
 pub struct CreateUsersAndGroups {
@@ -23,7 +24,7 @@ impl Step for CreateUsersAndGroups {
     }
 
     async fn check(&self) -> Result<bool> {
-        Ok(group_has_gid(NIXBLD_GROUP, NIXBLD_GID) && all_users_valid())
+        Ok(identity::group_has_gid(NIXBLD_GROUP, NIXBLD_GID) && all_users_valid())
     }
 
     async fn execute(&mut self, token: &CancellationToken) -> Result<()> {
@@ -32,10 +33,12 @@ impl Step for CreateUsersAndGroups {
             set_permissions(NIXBLD_HOME, 0o555).await?;
         }
 
-        if group_exists(NIXBLD_GROUP) && !group_has_gid(NIXBLD_GROUP, NIXBLD_GID) {
+        if identity::group_exists(NIXBLD_GROUP)
+            && !identity::group_has_gid(NIXBLD_GROUP, NIXBLD_GID)
+        {
             let gid = NIXBLD_GID.to_string();
             run("groupmod", &["--gid", &gid, NIXBLD_GROUP], token).await?;
-        } else if !group_exists(NIXBLD_GROUP) {
+        } else if !identity::group_exists(NIXBLD_GROUP) {
             let gid = NIXBLD_GID.to_string();
             let result = run(
                 "groupadd",
@@ -43,19 +46,19 @@ impl Step for CreateUsersAndGroups {
                 token,
             )
             .await;
-            self.created_group = group_exists(NIXBLD_GROUP);
+            self.created_group = identity::group_exists(NIXBLD_GROUP);
             result?;
         }
 
         for n in 1..=NIXBLD_USER_COUNT {
             let name = user_name(n);
             let uid = NIXBLD_UID_BASE + n;
-            if user_exists(&name) {
-                if !user_has_gid(&name, NIXBLD_GID) {
+            if identity::user_exists(&name) {
+                if !identity::user_has_gid(&name, NIXBLD_GID) {
                     let gid = NIXBLD_GID.to_string();
                     run("usermod", &["--gid", &gid, &name], token).await?;
                 }
-                if !user_has_uid(&name, uid) {
+                if !identity::user_has_uid(&name, uid) {
                     let uid = uid.to_string();
                     run("usermod", &["--uid", &uid, &name], token).await?;
                 }
@@ -87,7 +90,7 @@ impl Step for CreateUsersAndGroups {
                 token,
             )
             .await;
-            if user_exists(&name) {
+            if identity::user_exists(&name) {
                 self.created_users.push(name);
             }
             result?;
@@ -135,67 +138,7 @@ async fn terminate_processes(name: &str) {
     }
 }
 
-fn group_exists(name: &str) -> bool {
-    nix::unistd::Group::from_name(name).ok().flatten().is_some()
-}
-
-fn group_has_gid(name: &str, gid: u32) -> bool {
-    nix::unistd::Group::from_name(name)
-        .ok()
-        .flatten()
-        .is_some_and(|group| group.gid.as_raw() == gid)
-}
-
-fn user_exists(name: &str) -> bool {
-    nix::unistd::User::from_name(name).ok().flatten().is_some()
-}
-
-fn user_has_gid(name: &str, gid: u32) -> bool {
-    nix::unistd::User::from_name(name)
-        .ok()
-        .flatten()
-        .is_some_and(|user| user.gid.as_raw() == gid)
-}
-
-fn user_has_uid(name: &str, uid: u32) -> bool {
-    nix::unistd::User::from_name(name)
-        .ok()
-        .flatten()
-        .is_some_and(|user| user.uid.as_raw() == uid)
-}
-
-fn user_matches(name: &str, uid: u32, gid: u32) -> bool {
-    nix::unistd::User::from_name(name)
-        .ok()
-        .flatten()
-        .is_some_and(|user| user.uid.as_raw() == uid && user.gid.as_raw() == gid)
-}
-
 fn all_users_valid() -> bool {
-    (1..=NIXBLD_USER_COUNT).all(|n| user_matches(&user_name(n), NIXBLD_UID_BASE + n, NIXBLD_GID))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn user_matches_true_for_a_known_system_user() {
-        assert!(user_matches("root", 0, 0));
-    }
-
-    #[test]
-    fn user_matches_false_for_the_wrong_uid() {
-        assert!(!user_matches("root", 1, 0));
-    }
-
-    #[test]
-    fn user_matches_false_for_the_wrong_gid() {
-        assert!(!user_matches("root", 0, 1));
-    }
-
-    #[test]
-    fn user_matches_false_for_a_nonexistent_user() {
-        assert!(!user_matches("mix-test-nonexistent-user-xyz", 0, 0));
-    }
+    (1..=NIXBLD_USER_COUNT)
+        .all(|n| identity::user_matches(&user_name(n), NIXBLD_UID_BASE + n, NIXBLD_GID))
 }

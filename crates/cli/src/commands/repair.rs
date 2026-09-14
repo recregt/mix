@@ -3,27 +3,27 @@ use std::process::ExitCode;
 use mix_app::repair::RepairReport;
 
 use super::RootStatus;
-use crate::ui;
 
 pub async fn run() -> anyhow::Result<ExitCode> {
     if let RootStatus::ReExecuted(code) = super::ensure_root()? {
         return Ok(code);
     }
+    let _lock = super::acquire_lock()?;
 
     let reports = mix_app::repair::repair().await;
 
     if reports.is_empty() {
-        ui::ok("Nothing to repair, system health is intact.");
+        mix_ui::ok("Nothing to repair, system health is intact.");
         return Ok(ExitCode::SUCCESS);
     }
 
     render(&reports);
 
     if reports.iter().all(|report| report.fixed) {
-        ui::ok("System state repaired.");
+        mix_ui::ok("System state repaired.");
         Ok(ExitCode::SUCCESS)
     } else {
-        ui::fail("Some issues could not be repaired automatically.");
+        mix_ui::fail("Some issues could not be repaired automatically.");
         Ok(ExitCode::FAILURE)
     }
 }
@@ -31,11 +31,11 @@ pub async fn run() -> anyhow::Result<ExitCode> {
 fn render(reports: &[RepairReport]) {
     for report in reports {
         if report.fixed {
-            ui::ok(format!("repaired: {}", report.name));
+            mix_ui::ok(format!("repaired: {}", report.name));
             continue;
         }
 
         let detail = report.detail.as_deref().unwrap_or("could not repair");
-        ui::fail(format!("{}: {detail}", report.name));
+        mix_ui::fail(format!("{}: {detail}", report.name));
     }
 }

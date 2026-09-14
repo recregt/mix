@@ -6,10 +6,8 @@ use mix_core::paths::{
 };
 
 use crate::bootstrap::error::{Error, Result};
-use crate::bootstrap::util::{
-    copy_file_atomic, files_match, remove_file, run, systemd_unit_is_active, warn_on_failure,
-    write_file_atomic,
-};
+use crate::bootstrap::util::{copy_file_atomic, remove_file, warn_on_failure, write_file_atomic};
+use crate::os::{files_match, run, systemd_unit_is_active};
 
 #[derive(Default)]
 pub struct ConfigureSystemdService {

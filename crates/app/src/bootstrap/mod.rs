@@ -11,7 +11,7 @@ pub mod tarball;
 
 pub use error::{Error, Result};
 
-use mix_core::{Outcome, Plan};
+use mix_core::{Outcome, Plan, privilege};
 
 pub struct Environment(());
 
@@ -33,7 +33,7 @@ async fn interrupted() {
 }
 
 pub async fn bootstrap(mirror: Option<&str>) -> Result<Environment> {
-    if !preflight::is_root() {
+    if !privilege::is_root() {
         return Err(Error::NotRoot("bootstrap the managed environment"));
     }
 

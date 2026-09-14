@@ -1047,6 +1047,7 @@ dependencies = [
  "anyhow",
  "clap",
  "mix-app",
+ "mix-core",
  "mix-ui",
  "tracing-subscriber",
 ]
@@ -1058,6 +1059,8 @@ dependencies = [
  "async-trait",
  "codspeed-divan-compat",
  "futures-util",
+ "nix",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-util",
