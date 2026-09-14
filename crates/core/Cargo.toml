@@ -8,12 +8,14 @@ license = "MPL-2.0"
 [dependencies]
 async-trait = { workspace = true }
 futures-util = { version = "0.3.34", default-features = false }
+nix = { version = "0.31.3", features = ["user", "fs"] }
 thiserror = "2.0.20"
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
 divan = { version = "=5.0.1", package = "codspeed-divan-compat" }
+tempfile = "3.27.0"
 tokio = { workspace = true }
 
 [[bench]]

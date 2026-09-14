@@ -3,7 +3,7 @@ use clap::{ArgAction, Parser, Subcommand};
 #[derive(Parser)]
 #[command(name = "mix", version, about = "Reproducible systems, made effortless")]
 pub struct Cli {
-    /// Increase log verbosity (-v steps, -vv commands, -vvv command output)
+    /// Verbosity: -v steps, -vv commands, -vvv output
     #[arg(short, long, action = ArgAction::Count, global = true)]
     pub verbose: u8,
 
@@ -15,7 +15,7 @@ pub struct Cli {
 pub enum Command {
     /// Initialize runtime and system dependencies
     Bootstrap {
-        /// Alternate base URL to fetch the pinned Nix archive from (e.g. an internal mirror)
+        /// Alternate URL to fetch the pinned Nix archive from
         #[arg(long, env = "MIX_NIX_MIRROR")]
         mirror: Option<String>,
     },
@@ -25,4 +25,45 @@ pub enum Command {
 
     /// Repair configuration drift
     Repair,
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    use super::Cli;
+
+    const MAX_HELP_LEN: usize = 80;
+
+    fn check_help(command: &clap::Command, path: &str) {
+        if let Some(about) = command.get_about() {
+            let text = about.to_string();
+            assert!(
+                text.chars().count() <= MAX_HELP_LEN,
+                "{path}: help text is {} chars (max {MAX_HELP_LEN}): {text:?}",
+                text.chars().count()
+            );
+        }
+
+        for arg in command.get_arguments() {
+            if let Some(help) = arg.get_help() {
+                let text = help.to_string();
+                assert!(
+                    text.chars().count() <= MAX_HELP_LEN,
+                    "{path} --{}: help text is {} chars (max {MAX_HELP_LEN}): {text:?}",
+                    arg.get_id(),
+                    text.chars().count()
+                );
+            }
+        }
+
+        for subcommand in command.get_subcommands() {
+            check_help(subcommand, &format!("{path} {}", subcommand.get_name()));
+        }
+    }
+
+    #[test]
+    fn help_text_stays_within_the_length_budget() {
+        check_help(&Cli::command(), "mix");
+    }
 }

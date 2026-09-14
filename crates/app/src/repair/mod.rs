@@ -1,10 +1,11 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
-use mix_core::Error as CoreError;
+use mix_core::identity;
 use mix_core::models::{Target, targets};
+use mix_core::{CancellationToken, Error as CoreError};
 
-use crate::util::{files_match, group_has_gid, path_exists, systemd_unit_is_active};
+use crate::os::{files_match, path_exists, run, systemd_unit_is_active};
 
 const DIR_MODE_MASK: u32 = 0o7777;
 
@@ -33,11 +34,12 @@ pub struct RepairReport {
 
 pub async fn repair() -> Vec<RepairReport> {
     tracing::info!("repairing managed environment");
+    let token = CancellationToken::new();
     let mut reports = Vec::new();
     for target in targets() {
         let name = target.label();
         tracing::debug!("checking: {name}");
-        match fix(&target).await {
+        match fix(&target, &token).await {
             Ok(Outcome::Healthy) => {}
             Ok(Outcome::Repaired) => {
                 tracing::debug!("repaired: {name}");
@@ -60,18 +62,18 @@ pub async fn repair() -> Vec<RepairReport> {
     reports
 }
 
-async fn fix(target: &Target) -> Result<Outcome, Error> {
+async fn fix(target: &Target, token: &CancellationToken) -> Result<Outcome, Error> {
     match *target {
         Target::Directory { path, mode } => fix_directory(path, mode).await,
         Target::File { path, expected } => fix_file(path, expected).await,
-        Target::Group { name, gid } => fix_group(name, gid).await,
-        Target::User { n, uid, gid } => fix_user(n, uid, gid).await,
+        Target::Group { name, gid } => fix_group(name, gid, token).await,
+        Target::User { n, uid, gid } => fix_user(n, uid, gid, token).await,
         Target::SystemdUnit {
             name,
             src,
             dest,
             must_be_active,
-        } => fix_systemd_unit(name, src, dest, must_be_active).await,
+        } => fix_systemd_unit(name, src, dest, must_be_active, token).await,
         Target::PathExists { name, path } => fix_path_exists(name, path).await,
     }
 }
@@ -126,30 +128,35 @@ async fn fix_file(path: &str, expected: &str) -> Result<Outcome, Error> {
     Ok(Outcome::Repaired)
 }
 
-async fn fix_group(name: &str, gid: u32) -> Result<Outcome, Error> {
-    if group_exists(name) {
-        if group_has_gid(name, gid) {
+async fn fix_group(name: &str, gid: u32, token: &CancellationToken) -> Result<Outcome, Error> {
+    if identity::group_exists(name) {
+        if identity::group_has_gid(name, gid) {
             return Ok(Outcome::Healthy);
         }
-        run("groupmod", &["--gid", &gid.to_string(), name]).await?;
+        run("groupmod", &["--gid", &gid.to_string(), name], token).await?;
         return Ok(Outcome::Repaired);
     }
-    run("groupadd", &["--system", "--gid", &gid.to_string(), name]).await?;
+    run(
+        "groupadd",
+        &["--system", "--gid", &gid.to_string(), name],
+        token,
+    )
+    .await?;
     Ok(Outcome::Repaired)
 }
 
-async fn fix_user(n: u32, uid: u32, gid: u32) -> Result<Outcome, Error> {
-    let name = mix_core::identity::user_name(n);
+async fn fix_user(n: u32, uid: u32, gid: u32, token: &CancellationToken) -> Result<Outcome, Error> {
+    let name = identity::user_name(n);
 
-    if user_exists(&name) {
-        if user_has_uid(&name, uid) && user_has_gid(&name, gid) {
+    if identity::user_exists(&name) {
+        if identity::user_has_uid(&name, uid) && identity::user_has_gid(&name, gid) {
             return Ok(Outcome::Healthy);
         }
-        if !user_has_gid(&name, gid) {
-            run("usermod", &["--gid", &gid.to_string(), &name]).await?;
+        if !identity::user_has_gid(&name, gid) {
+            run("usermod", &["--gid", &gid.to_string(), &name], token).await?;
         }
-        if !user_has_uid(&name, uid) {
-            run("usermod", &["--uid", &uid.to_string(), &name]).await?;
+        if !identity::user_has_uid(&name, uid) {
+            run("usermod", &["--uid", &uid.to_string(), &name], token).await?;
         }
         return Ok(Outcome::Repaired);
     }
@@ -161,19 +168,20 @@ async fn fix_user(n: u32, uid: u32, gid: u32) -> Result<Outcome, Error> {
             "--no-create-home",
             "--no-user-group",
             "--home-dir",
-            mix_core::identity::NIXBLD_HOME,
+            identity::NIXBLD_HOME,
             "--shell",
-            mix_core::identity::NIXBLD_SHELL,
+            identity::NIXBLD_SHELL,
             "--uid",
             &uid.to_string(),
             "--gid",
-            mix_core::identity::NIXBLD_GROUP,
+            identity::NIXBLD_GROUP,
             "--groups",
-            mix_core::identity::NIXBLD_GROUP,
+            identity::NIXBLD_GROUP,
             "--comment",
             &format!("mix build user {n}"),
             &name,
         ],
+        token,
     )
     .await?;
     Ok(Outcome::Repaired)
@@ -184,6 +192,7 @@ async fn fix_systemd_unit(
     src: &str,
     dest: &str,
     must_be_active: bool,
+    token: &CancellationToken,
 ) -> Result<Outcome, Error> {
     let mut changed = false;
 
@@ -195,12 +204,12 @@ async fn fix_systemd_unit(
         tokio::fs::write(dest, contents)
             .await
             .map_err(|source| io_error(dest, source))?;
-        run("systemctl", &["daemon-reload"]).await?;
+        run("systemctl", &["daemon-reload"], token).await?;
         changed = true;
     }
 
     if must_be_active && !systemd_unit_is_active(name).await {
-        run("systemctl", &["enable", "--now", name]).await?;
+        run("systemctl", &["enable", "--now", name], token).await?;
         changed = true;
     }
 
@@ -222,68 +231,11 @@ async fn fix_path_exists(name: &str, path: &str) -> Result<Outcome, Error> {
     }
 }
 
-async fn run(command: &str, args: &[&str]) -> Result<(), Error> {
-    let command_line = format!("{command} {}", args.join(" "));
-    tracing::debug!("running command: {command_line}");
-
-    let output = tokio::process::Command::new(command)
-        .args(args)
-        .output()
-        .await
-        .map_err(|source| CoreError::Exec {
-            command: command_line.clone(),
-            source,
-        })?;
-
-    tracing::trace!(
-        "command output: {command_line}\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    if output.status.success() {
-        return Ok(());
-    }
-
-    let detail = if !output.stderr.is_empty() {
-        String::from_utf8_lossy(&output.stderr).trim().to_string()
-    } else {
-        format!("exited with status {}", output.status)
-    };
-    Err(CoreError::Command {
-        command: command_line,
-        detail,
-    }
-    .into())
-}
-
 fn io_error(path: &str, source: std::io::Error) -> CoreError {
     CoreError::Io {
         path: PathBuf::from(path),
         source,
     }
-}
-
-fn group_exists(name: &str) -> bool {
-    nix::unistd::Group::from_name(name).ok().flatten().is_some()
-}
-
-fn user_exists(name: &str) -> bool {
-    nix::unistd::User::from_name(name).ok().flatten().is_some()
-}
-
-fn user_has_gid(name: &str, gid: u32) -> bool {
-    nix::unistd::User::from_name(name)
-        .ok()
-        .flatten()
-        .is_some_and(|user| user.gid.as_raw() == gid)
-}
-
-fn user_has_uid(name: &str, uid: u32) -> bool {
-    nix::unistd::User::from_name(name)
-        .ok()
-        .flatten()
-        .is_some_and(|user| user.uid.as_raw() == uid)
 }
 
 #[cfg(test)]

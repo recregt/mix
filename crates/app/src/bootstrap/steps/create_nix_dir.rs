@@ -4,9 +4,10 @@ use mix_core::{CancellationToken, Step};
 
 use crate::bootstrap::error::{Error, Result};
 use crate::bootstrap::util::{
-    create_dir_with_mode, dir_has_mode, is_file, path_exists, remove_dir_all, remove_file,
-    set_permissions, write_file_atomic,
+    create_dir_with_mode, dir_has_mode, is_file, remove_dir_all, remove_file, set_permissions,
+    write_file_atomic,
 };
+use crate::os::path_exists;
 
 const MODE: u32 = 0o755;
 

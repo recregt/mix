@@ -8,8 +8,9 @@ use mix_core::paths::{NIX_CONF_DEST, PROFILE_SNIPPET_DEST};
 
 use crate::bootstrap::error::{Error, Result};
 use crate::bootstrap::util::{
-    create_dir_all, path_exists, remove_dir_all, remove_file, warn_on_failure, write_file_atomic,
+    create_dir_all, remove_dir_all, remove_file, warn_on_failure, write_file_atomic,
 };
+use crate::os::path_exists;
 
 #[derive(Default)]
 pub struct ConfigureNixConf {

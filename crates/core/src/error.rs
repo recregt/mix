@@ -24,6 +24,9 @@ pub enum Error {
 
     #[error("command `{command}` was interrupted")]
     Cancelled { command: String },
+
+    #[error("already locked: {}", path.display())]
+    Locked { path: PathBuf },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
