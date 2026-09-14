@@ -1,0 +1,14 @@
+[package]
+name = "mix-bin"
+version = "0.1.0"
+edition = "2024"
+authors = ["Ömer Tekin"]
+license = "MPL-2.0"
+
+[[bin]]
+name = "mix"
+path = "src/main.rs"
+
+[dependencies]
+mix-cli = { path = "../cli" }
+tokio = { workspace = true }

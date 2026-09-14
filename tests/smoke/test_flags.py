@@ -7,8 +7,8 @@ def test_bootstrap_is_idempotent_at_every_verbosity_level(bootstrapped_container
     assert result.returncode == 0, result.stderr
 
 
-def test_doctor_fix_is_a_clean_no_op_on_a_healthy_system(bootstrapped_container):
-    result = bootstrapped_container.exec("mix", "doctor", "--fix")
+def test_repair_is_a_clean_no_op_on_a_healthy_system(bootstrapped_container):
+    result = bootstrapped_container.exec("mix", "repair")
     assert result.returncode == 0, result.stderr
 
 
