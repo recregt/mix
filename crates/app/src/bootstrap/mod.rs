@@ -11,7 +11,9 @@ pub mod tarball;
 
 pub use error::{Error, Result};
 
-use mix_core::{Outcome, Plan, privilege};
+use std::sync::Arc;
+
+use mix_core::{DownloadProgress, Outcome, Plan, StepObserver, privilege};
 
 pub struct Environment(());
 
@@ -32,7 +34,12 @@ async fn interrupted() {
     tracing::warn!("Cancelling... (cleaning up)");
 }
 
-pub async fn bootstrap(mirror: Option<&str>) -> Result<Environment> {
+pub async fn bootstrap(
+    mirror: Option<&str>,
+    force: bool,
+    progress: Arc<dyn DownloadProgress>,
+    step_observer: Arc<dyn StepObserver>,
+) -> Result<Environment> {
     if !privilege::is_root() {
         return Err(Error::NotRoot("bootstrap the managed environment"));
     }
@@ -40,13 +47,21 @@ pub async fn bootstrap(mirror: Option<&str>) -> Result<Environment> {
     preflight::check_not_nixos().await?;
     preflight::check_not_wsl1().await?;
     preflight::check_systemd_ready().await?;
-    preflight::check_nix_not_installed().await?;
+    if !force {
+        preflight::check_nix_not_installed().await?;
+    }
 
-    run_steps(mirror).await
+    run_steps(mirror, force, progress, step_observer).await
 }
 
-async fn run_steps(mirror: Option<&str>) -> Result<Environment> {
-    let mut plan = Plan::new(planner::bootstrap_steps(mirror));
+async fn run_steps(
+    mirror: Option<&str>,
+    force: bool,
+    progress: Arc<dyn DownloadProgress>,
+    step_observer: Arc<dyn StepObserver>,
+) -> Result<Environment> {
+    let mut plan = Plan::new(planner::bootstrap_steps(mirror, force, progress))
+        .with_step_observer(step_observer);
     let cause = match plan.run_cancellable(interrupted()).await {
         Outcome::Completed(Ok(())) => return Ok(Environment::new()),
         Outcome::Completed(Err(cause)) => cause,

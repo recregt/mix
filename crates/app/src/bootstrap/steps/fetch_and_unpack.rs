@@ -1,9 +1,10 @@
 use std::io::Write as _;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use mix_core::{CancellationToken, Error as CoreError, Step};
+use mix_core::{CancellationToken, DownloadProgress, Error as CoreError, Step};
 use nix::fcntl::{AT_FDCWD, AtFlags};
 use nix::unistd::{Gid, Uid, User, fchownat};
 
@@ -17,9 +18,9 @@ use crate::bootstrap::util::is_file;
 
 const DEFAULT_PROFILE: &str = "/nix/var/nix/profiles/default";
 
-#[derive(Default)]
 pub struct FetchAndUnpack {
     mirror: Option<String>,
+    progress: Arc<dyn DownloadProgress>,
     installed: Option<Installed>,
 }
 
@@ -31,9 +32,10 @@ struct Installed {
 }
 
 impl FetchAndUnpack {
-    pub fn new(mirror: Option<&str>) -> Self {
+    pub fn new(mirror: Option<&str>, progress: Arc<dyn DownloadProgress>) -> Self {
         Self {
             mirror: mirror.map(String::from),
+            progress,
             installed: None,
         }
     }
@@ -52,7 +54,7 @@ impl Step for FetchAndUnpack {
     }
 
     async fn execute(&mut self, token: &CancellationToken) -> Result<()> {
-        let bytes = tarball::bytes(self.mirror.as_deref()).await?;
+        let bytes = tarball::bytes(self.mirror.as_deref(), self.progress.as_ref()).await?;
 
         let token = token.clone();
         let (installed, result) = tokio::task::spawn_blocking(move || {

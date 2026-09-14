@@ -10,6 +10,9 @@ members = [
 
 [workspace.dependencies]
 async-trait = "0.1.92"
+divan = { version = "=5.0.1", package = "codspeed-divan-compat" }
+nix = { version = "0.31.3", features = ["user", "fs"] }
+tempfile = "3.27.0"
+thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "process", "fs", "io-util", "sync", "time"] }
-tokio-util = { version = "0.7", default-features = false }
 tracing = "0.1.44"

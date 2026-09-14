@@ -1,9 +1,13 @@
 use std::future::Future;
 use std::pin::pin;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures_util::future::{Either, select};
 pub use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
+
+use crate::progress::{NoopStepObserver, StepObserver};
 
 #[async_trait]
 pub trait Step: Send + Sync {
@@ -21,6 +25,7 @@ pub trait Step: Send + Sync {
 pub struct Plan<E> {
     steps: Vec<Box<dyn Step<Error = E>>>,
     failed_rollbacks: Vec<String>,
+    step_observer: Arc<dyn StepObserver>,
 }
 
 pub enum Outcome<E> {
@@ -38,7 +43,13 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
         Self {
             steps,
             failed_rollbacks: Vec::new(),
+            step_observer: Arc::new(NoopStepObserver),
         }
+    }
+
+    pub fn with_step_observer(mut self, step_observer: Arc<dyn StepObserver>) -> Self {
+        self.step_observer = step_observer;
+        self
     }
 
     pub fn failed_rollbacks(&self) -> &[String] {
@@ -85,9 +96,12 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
                 tracing::info!("running: {name}");
                 attempted.insert(idx);
 
+                let span = tracing::info_span!("step", name);
+                self.step_observer.on_step_span(&span);
+
                 let token = token.get_or_insert_with(CancellationToken::new);
                 let (executed, interrupted) =
-                    match select(cancel.as_mut(), step.execute(token)).await {
+                    match select(cancel.as_mut(), step.execute(token).instrument(span)).await {
                         Either::Left(((), executing)) => {
                             token.cancel();
                             (executing.await, true)
@@ -130,7 +144,9 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
             let name = step.name();
 
             tracing::info!("rolling back: {name}");
-            if let Err(e) = step.rollback().await {
+            let span = tracing::info_span!("rollback", name);
+            self.step_observer.on_step_span(&span);
+            if let Err(e) = step.rollback().instrument(span).await {
                 tracing::error!("rollback failed: {name} ({e})");
                 self.failed_rollbacks.push(format!("{name}: {e}"));
             }

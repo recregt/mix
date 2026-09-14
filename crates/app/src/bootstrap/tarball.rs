@@ -1,8 +1,9 @@
+use std::borrow::Cow;
 use std::io::{Cursor, Read};
 use std::path::Path;
 use std::time::Duration;
 
-use mix_core::Error as CoreError;
+use mix_core::{DownloadProgress, Error as CoreError};
 use sha2::{Digest, Sha256};
 
 use crate::bootstrap::error::{Error, Result};
@@ -36,9 +37,12 @@ fn host_target_key() -> String {
     format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
 }
 
-pub async fn bytes(mirror: Option<&str>) -> Result<Vec<u8>> {
+pub async fn bytes(
+    mirror: Option<&str>,
+    progress: &dyn DownloadProgress,
+) -> Result<Cow<'static, [u8]>> {
     if let Some(bytes) = embedded() {
-        return Ok(bytes.to_vec());
+        return Ok(Cow::Borrowed(bytes));
     }
 
     let pin = host_pin()?;
@@ -47,7 +51,9 @@ pub async fn bytes(mirror: Option<&str>) -> Result<Vec<u8>> {
         None => pin.url.to_string(),
     };
 
-    fetch_and_verify(&url, pin.sha256).await
+    fetch_and_verify(&url, pin.sha256, progress)
+        .await
+        .map(Cow::Owned)
 }
 
 fn filter_mirror(value: Option<&str>) -> Option<&str> {
@@ -62,7 +68,11 @@ fn network_error(e: reqwest::Error) -> Error {
     Error::Network(Box::new(e))
 }
 
-async fn fetch_and_verify(url: &str, expected_sha256: &str) -> Result<Vec<u8>> {
+async fn fetch_and_verify(
+    url: &str,
+    expected_sha256: &str,
+    progress: &dyn DownloadProgress,
+) -> Result<Vec<u8>> {
     tracing::info!(
         "fetching runtime archive: {url} (nix {})",
         crate::bootstrap::pins::NIX_VERSION
@@ -74,10 +84,17 @@ async fn fetch_and_verify(url: &str, expected_sha256: &str) -> Result<Vec<u8>> {
         READ_TIMEOUT,
         REQUEST_TIMEOUT,
         MAX_DOWNLOAD_BYTES,
+        progress,
     )
     .await
 }
 
+#[tracing::instrument(
+    level = "info",
+    name = "download",
+    skip_all,
+    fields(name = "fetch the Nix runtime archive")
+)]
 async fn fetch_and_verify_with_limits(
     url: &str,
     expected_sha256: &str,
@@ -85,6 +102,7 @@ async fn fetch_and_verify_with_limits(
     read_timeout: Duration,
     request_timeout: Duration,
     max_bytes: usize,
+    progress: &dyn DownloadProgress,
 ) -> Result<Vec<u8>> {
     let client = reqwest::Client::builder()
         .connect_timeout(connect_timeout)
@@ -100,6 +118,10 @@ async fn fetch_and_verify_with_limits(
         .and_then(reqwest::Response::error_for_status)
         .map_err(network_error)?;
 
+    if let Some(len) = response.content_length() {
+        progress.set_total(len);
+    }
+
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(network_error)? {
         if bytes.len() + chunk.len() > max_bytes {
@@ -109,6 +131,7 @@ async fn fetch_and_verify_with_limits(
             });
         }
         bytes.extend_from_slice(&chunk);
+        progress.add(chunk.len() as u64);
     }
 
     let digest = sha256_hex(&bytes);
@@ -257,7 +280,9 @@ mod tests {
             .create_async()
             .await;
 
-        let bytes = fetch_and_verify(&server.url(), &digest).await.unwrap();
+        let bytes = fetch_and_verify(&server.url(), &digest, &mix_core::NoopProgress)
+            .await
+            .unwrap();
         assert_eq!(bytes, body);
     }
 
@@ -271,7 +296,7 @@ mod tests {
             .create_async()
             .await;
 
-        let err = fetch_and_verify(&server.url(), &"0".repeat(64))
+        let err = fetch_and_verify(&server.url(), &"0".repeat(64), &mix_core::NoopProgress)
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Integrity { .. }));
@@ -295,6 +320,7 @@ mod tests {
             READ_TIMEOUT,
             REQUEST_TIMEOUT,
             8,
+            &mix_core::NoopProgress,
         )
         .await
         .unwrap_err();
@@ -311,7 +337,7 @@ mod tests {
             .create_async()
             .await;
 
-        let err = fetch_and_verify(&server.url(), &"0".repeat(64))
+        let err = fetch_and_verify(&server.url(), &"0".repeat(64), &mix_core::NoopProgress)
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Network(_)));
@@ -333,6 +359,7 @@ mod tests {
             Duration::from_millis(200),
             Duration::from_secs(10),
             MAX_DOWNLOAD_BYTES,
+            &mix_core::NoopProgress,
         )
         .await
         .unwrap_err();
@@ -359,6 +386,7 @@ mod tests {
             Duration::from_millis(200),
             Duration::from_secs(10),
             MAX_DOWNLOAD_BYTES,
+            &mix_core::NoopProgress,
         )
         .await
         .unwrap_err();
@@ -375,9 +403,13 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         drop(listener);
 
-        let err = fetch_and_verify(&format!("http://{addr}/"), &"0".repeat(64))
-            .await
-            .unwrap_err();
+        let err = fetch_and_verify(
+            &format!("http://{addr}/"),
+            &"0".repeat(64),
+            &mix_core::NoopProgress,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, Error::Network(_)));
     }
 

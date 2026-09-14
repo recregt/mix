@@ -1,11 +1,14 @@
 use std::io::IsTerminal;
 
-fn styled(code: &str, symbol: &str, message: &str, is_terminal: bool) -> String {
-    if is_terminal && std::env::var_os("NO_COLOR").is_none() {
-        format!("\x1b[{code}m{symbol}\x1b[0m {message}")
-    } else {
-        format!("{symbol} {message}")
-    }
+use owo_colors::OwoColorize;
+use owo_colors::colors::{Green, Red};
+
+mod progress;
+
+pub use progress::{download_reporter, init_tracing, step_observer};
+
+fn colors_enabled(is_terminal: bool) -> bool {
+    is_terminal && std::env::var_os("NO_COLOR").is_none()
 }
 
 fn looks_like_an_identifier(message: &str) -> bool {
@@ -28,22 +31,28 @@ fn sentence_case(message: &str) -> String {
 
 pub fn ok(message: impl std::fmt::Display) {
     let message = sentence_case(&message.to_string());
-    println!(
-        "{}",
-        styled("32", "✓", &message, std::io::stdout().is_terminal())
-    );
+    if colors_enabled(std::io::stdout().is_terminal()) {
+        println!("{} {message}", "✓".fg::<Green>());
+    } else {
+        println!("✓ {message}");
+    }
 }
 
 pub fn fail(message: impl std::fmt::Display) {
     let message = sentence_case(&message.to_string());
-    eprintln!(
-        "{}",
-        styled("31", "✗", &message, std::io::stderr().is_terminal())
-    );
+    if colors_enabled(std::io::stderr().is_terminal()) {
+        eprintln!("{} {message}", "✗".fg::<Red>());
+    } else {
+        eprintln!("✗ {message}");
+    }
 }
 
 pub fn info(message: impl std::fmt::Display) {
     eprintln!("{}", sentence_case(&message.to_string()));
+}
+
+pub fn header(message: impl std::fmt::Display) {
+    eprintln!("{message}:");
 }
 
 #[cfg(test)]

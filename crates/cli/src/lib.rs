@@ -4,28 +4,13 @@ mod commands;
 use std::process::ExitCode;
 
 use clap::Parser;
-use tracing_subscriber::filter::LevelFilter;
 
 use cli::{Cli, Command};
-
-fn level_filter(verbosity: u8) -> LevelFilter {
-    match verbosity {
-        0 => LevelFilter::WARN,
-        1 => LevelFilter::INFO,
-        2 => LevelFilter::DEBUG,
-        _ => LevelFilter::TRACE,
-    }
-}
 
 pub async fn run() -> ExitCode {
     let cli = Cli::parse();
 
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_max_level(level_filter(cli.verbose))
-        .without_time()
-        .with_target(false)
-        .init();
+    mix_ui::init_tracing(cli.verbose);
 
     if !matches!(
         cli.command,
@@ -44,8 +29,8 @@ pub async fn run() -> ExitCode {
     }
 
     let result = match cli.command {
-        Command::Bootstrap { mirror } => commands::bootstrap::run(mirror).await,
-        Command::Doctor => commands::doctor::run().await,
+        Command::Bootstrap { mirror, force } => commands::bootstrap::run(mirror, force).await,
+        Command::Doctor => commands::doctor::run(cli.verbose).await,
         Command::Repair => commands::repair::run().await,
     };
 

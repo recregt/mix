@@ -9,6 +9,9 @@ license = "MPL-2.0"
 name = "mix"
 path = "src/main.rs"
 
+[features]
+embed-tarball = ["mix-cli/embed-tarball"]
+
 [dependencies]
 mix-cli = { path = "../cli" }
 tokio = { workspace = true }

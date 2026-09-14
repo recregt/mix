@@ -1,10 +1,11 @@
 use std::process::ExitCode;
 
 use mix_app::doctor::HealthReport;
+use mix_core::Category;
 
-pub async fn run() -> anyhow::Result<ExitCode> {
+pub async fn run(verbose: u8) -> anyhow::Result<ExitCode> {
     let reports = mix_app::doctor::audit().await;
-    render(&reports);
+    render(&reports, verbose > 0);
 
     if reports.iter().all(|report| report.healthy) {
         mix_ui::ok("System health is intact.");
@@ -17,15 +18,32 @@ pub async fn run() -> anyhow::Result<ExitCode> {
     }
 }
 
-fn render(reports: &[HealthReport]) {
-    for report in reports {
-        if report.healthy {
-            mix_ui::ok(&report.name);
+fn render(reports: &[HealthReport], verbose: bool) {
+    for category in Category::ALL {
+        let members: Vec<&HealthReport> = reports
+            .iter()
+            .filter(|report| report.category == category)
+            .collect();
+        if members.is_empty() {
             continue;
         }
 
-        let detail = report.detail.as_deref().unwrap_or("unhealthy");
-        mix_ui::fail(format!("{}: {detail}", report.name));
+        let all_healthy = members.iter().all(|report| report.healthy);
+        if all_healthy && !verbose {
+            mix_ui::ok(format!("{} ({} checks)", category.label(), members.len()));
+            continue;
+        }
+
+        mix_ui::header(category.label());
+        for report in members {
+            if report.healthy {
+                mix_ui::ok(&report.name);
+                continue;
+            }
+
+            let detail = report.detail.as_deref().unwrap_or("unhealthy");
+            mix_ui::fail(format!("{}: {detail}", report.name));
+        }
     }
 }
 
