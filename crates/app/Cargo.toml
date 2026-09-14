@@ -2,16 +2,34 @@
 name = "mix-app"
 version = "0.1.0"
 edition = "2024"
+build = "build.rs"
 authors = ["Ömer Tekin"]
 license = "MPL-2.0"
 
-[[bin]]
-name = "mix"
-path = "src/main.rs"
+[features]
+default = []
+embed-tarball = []
 
 [dependencies]
-mix-bootstrap = { path = "../bootstrap" }
-anyhow = "1.0.104"
-clap = { version = "4.6.6", features = ["derive", "env"] }
-tokio = { workspace = true }
-tracing-subscriber = "0.3.23"
+mix-core = { path = "../core" }
+async-trait = { workspace = true }
+liblzma = { version = "0.4.8", default-features = false, features = ["static"] }
+nix = { version = "0.31.3", features = ["user", "fs"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "http2"] }
+sha2 = "0.11.0"
+tar = "0.4.46"
+tempfile = "3.27.0"
+thiserror = "2.0.20"
+tokio = { workspace = true, features = ["signal"] }
+tracing = { workspace = true }
+
+[build-dependencies]
+sha2 = "0.11.0"
+
+[dev-dependencies]
+divan = { version = "=5.0.1", package = "codspeed-divan-compat" }
+mockito = "=1.7.2"
+
+[[bench]]
+name = "tarball"
+harness = false

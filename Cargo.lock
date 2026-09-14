@@ -1017,17 +1017,6 @@ dependencies = [
 name = "mix-app"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "clap",
- "mix-bootstrap",
- "tokio",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "mix-bootstrap"
-version = "0.1.0"
-dependencies = [
  "async-trait",
  "codspeed-divan-compat",
  "liblzma",
@@ -1044,6 +1033,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "mix-bin"
+version = "0.1.0"
+dependencies = [
+ "mix-cli",
+ "tokio",
+]
+
+[[package]]
+name = "mix-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "mix-app",
+ "mix-ui",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "mix-core"
 version = "0.1.0"
 dependencies = [
@@ -1055,6 +1064,10 @@ dependencies = [
  "tokio-util",
  "tracing",
 ]
+
+[[package]]
+name = "mix-ui"
+version = "0.1.0"
 
 [[package]]
 name = "mockito"

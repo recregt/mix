@@ -93,7 +93,7 @@ def test_a_second_sigint_during_fetch_and_unpack_has_no_additional_effect(contai
     assert _store_entry_count(container) == 0
 
 
-def test_hard_kill_during_fetch_and_unpack_then_doctor_fix_converges(container, mock_nix_server):
+def test_hard_kill_during_fetch_and_unpack_then_bootstrap_converges(container, mock_nix_server):
     proc = container.start_background(
         "mix", "-v", "bootstrap", env={"MIX_NIX_MIRROR": mock_nix_server["url"]}
     )
@@ -104,7 +104,7 @@ def test_hard_kill_during_fetch_and_unpack_then_doctor_fix_converges(container, 
     assert result.returncode == 137
 
     fix = container.exec(
-        "mix", "doctor", "--fix", env={"MIX_NIX_MIRROR": mock_nix_server["url"]}
+        "mix", "bootstrap", env={"MIX_NIX_MIRROR": mock_nix_server["url"]}
     )
     assert fix.returncode == 0, fix.stderr
 

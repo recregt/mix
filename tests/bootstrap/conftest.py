@@ -17,7 +17,7 @@ REMOTE_IMAGE = os.environ.get("MIX_TEST_IMAGE")
 
 
 def _pin(target: str) -> tuple[str, str]:
-    pins_src = (REPO_ROOT / "crates/bootstrap/src/pins.rs").read_text()
+    pins_src = (REPO_ROOT / "crates/app/src/bootstrap/pins.rs").read_text()
     block_match = re.search(
         rf'target:\s*"{re.escape(target)}"\s*,(.*?)\n\s*\}},',
         pins_src,
@@ -41,7 +41,7 @@ NIX_FILENAME = NIX_URL.rsplit("/", 1)[-1]
 @pytest.fixture(scope="session")
 def mix_binary():
     subprocess.run(
-        ["cargo", "build", "--release", "-p", "mix-app"],
+        ["cargo", "build", "--release", "-p", "mix-bin"],
         cwd=REPO_ROOT,
         check=True,
     )
