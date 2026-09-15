@@ -1,6 +1,6 @@
 mod support;
 
-use mix_nixgen::HomeManagerConfig;
+use mix_nixgen::{FlakeConfig, HomeManagerConfig};
 use proptest::collection::vec;
 use proptest::prelude::*;
 
@@ -15,6 +15,19 @@ fn a_realistic_config_is_syntactically_valid_nix() {
         .unwrap();
 
     let output = support::parse_with_nix(&cfg.render());
+    assert!(
+        output.status.success(),
+        "nix-instantiate --parse failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+#[ignore = "requires nix-instantiate on PATH"]
+fn a_realistic_flake_is_syntactically_valid_nix() {
+    let rendered = FlakeConfig::new("x86_64-linux", "mix").unwrap().render();
+
+    let output = support::parse_with_nix(&rendered);
     assert!(
         output.status.success(),
         "nix-instantiate --parse failed:\n{}",
