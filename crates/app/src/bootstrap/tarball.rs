@@ -166,20 +166,88 @@ fn hex(digest: &[u8]) -> String {
     String::from_utf8(out).expect("hex digits are always valid UTF-8")
 }
 
+const SKIP_BUF_BYTES: usize = 32 * 1024;
+
 struct XzSource<'a> {
     reader: liblzma::bufread::XzDecoder<Cursor<&'a [u8]>>,
     error: Option<String>,
+    pos: u64,
+    skip_buf: Vec<u8>,
+}
+
+impl<'a> XzSource<'a> {
+    fn new(tarball: &'a [u8]) -> Self {
+        Self {
+            reader: liblzma::bufread::XzDecoder::new_stream(Cursor::new(tarball), decoder_stream()),
+            error: None,
+            pos: 0,
+            skip_buf: Vec::new(),
+        }
+    }
+
+    fn discard(&mut self, mut amt: u64) -> std::io::Result<()> {
+        if amt == 0 {
+            return Ok(());
+        }
+        if self.skip_buf.is_empty() {
+            self.skip_buf = vec![0; SKIP_BUF_BYTES];
+        }
+        while amt > 0 {
+            let want = amt.min(self.skip_buf.len() as u64) as usize;
+            let read = match self.reader.read(&mut self.skip_buf[..want]) {
+                Ok(0) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "unexpected end of archive while skipping entry padding",
+                    ));
+                }
+                Ok(read) => read,
+                Err(e) => {
+                    self.error = Some(e.to_string());
+                    return Err(e);
+                }
+            };
+            self.pos += read as u64;
+            amt -= read as u64;
+        }
+        Ok(())
+    }
 }
 
 impl Read for XzSource<'_> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self.reader.read(buf) {
-            Ok(read) => Ok(read),
+            Ok(read) => {
+                self.pos += read as u64;
+                Ok(read)
+            }
             Err(e) => {
                 self.error = Some(e.to_string());
                 Err(e)
             }
         }
+    }
+}
+
+// `tar` only skips forward, and only ever to the start of the next header. Implementing that as a
+// `Seek` lets `entries_with_seek` take over the skipping: `tar`'s read-based path zeroes a fresh
+// 32 KiB stack buffer for every entry, whether or not there is anything to skip.
+impl std::io::Seek for XzSource<'_> {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        let target = match pos {
+            std::io::SeekFrom::Current(delta) => self.pos.checked_add_signed(delta),
+            std::io::SeekFrom::Start(offset) => Some(offset),
+            std::io::SeekFrom::End(_) => None,
+        };
+        let target = target.filter(|target| *target >= self.pos).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "the archive stream can only be advanced forward",
+            )
+        })?;
+
+        self.discard(target - self.pos)?;
+        Ok(self.pos)
     }
 }
 
@@ -194,18 +262,41 @@ fn decoder_stream() -> liblzma::stream::Stream {
     .expect("the xz decoder flags are valid")
 }
 
+// `tar::Archive::unpack`, except that it iterates with `entries_with_seek` so that entry padding is
+// skipped through `XzSource`'s `Seek` rather than through `tar`'s zero-a-32-KiB-buffer path.
+fn unpack_entries(archive: &mut tar::Archive<XzSource<'_>>, dest: &Path) -> std::io::Result<()> {
+    if dest.symlink_metadata().is_err() {
+        std::fs::create_dir_all(dest)?;
+    }
+    let dest = dest.canonicalize().unwrap_or_else(|_| dest.to_path_buf());
+
+    // Directories are applied last, deepest first, so that restrictive permissions on a directory
+    // cannot stop its own descendants from being created.
+    let mut directories = Vec::new();
+    for entry in archive.entries_with_seek()? {
+        let mut entry = entry?;
+        if entry.header().entry_type() == tar::EntryType::Directory {
+            directories.push(entry);
+        } else {
+            entry.unpack_in(&dest)?;
+        }
+    }
+
+    directories.sort_by(|a, b| b.path_bytes().cmp(&a.path_bytes()));
+    for mut directory in directories {
+        directory.unpack_in(&dest)?;
+    }
+
+    Ok(())
+}
+
 pub fn unpack(tarball: &[u8], dest: &Path) -> Result<()> {
     tracing::debug!("unpacking archive into {}", dest.display());
-    let source = XzSource {
-        reader: liblzma::bufread::XzDecoder::new_stream(Cursor::new(tarball), decoder_stream()),
-        error: None,
-    };
-
-    let mut archive = tar::Archive::new(source);
+    let mut archive = tar::Archive::new(XzSource::new(tarball));
     archive.set_preserve_permissions(true);
     archive.set_preserve_mtime(true);
     archive.set_unpack_xattrs(true);
-    let unpacked = archive.unpack(dest);
+    let unpacked = unpack_entries(&mut archive, dest);
 
     let mut source = archive.into_inner();
     if unpacked.is_ok() {
@@ -555,6 +646,51 @@ mod tests {
         let dest = tempfile::tempdir().unwrap();
         let err = unpack(&compressed, dest.path()).unwrap_err();
         assert!(matches!(err, Error::Core(mix_core::Error::Io { .. })));
+    }
+
+    #[test]
+    fn unpack_restores_unaligned_entries_under_a_read_only_directory() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let src = tempfile::tempdir().unwrap();
+        std::fs::create_dir(src.path().join("locked")).unwrap();
+        // Sizes that are not multiples of 512, so every entry is followed by padding that the
+        // extractor has to skip before it can read the next header.
+        std::fs::write(src.path().join("locked/first"), vec![1u8; 700]).unwrap();
+        std::fs::write(src.path().join("locked/second"), vec![2u8; 3]).unwrap();
+        std::fs::set_permissions(
+            src.path().join("locked"),
+            std::fs::Permissions::from_mode(0o500),
+        )
+        .unwrap();
+
+        let output = std::process::Command::new("tar")
+            .args(["cJf", "-", "-C"])
+            .arg(src.path())
+            .arg(".")
+            .output()
+            .expect("tar must be on PATH to build test fixtures");
+        assert!(output.status.success());
+
+        let dest = tempfile::tempdir().unwrap();
+        unpack(&output.stdout, dest.path()).unwrap();
+
+        assert_eq!(
+            std::fs::read(dest.path().join("locked/first")).unwrap(),
+            vec![1u8; 700]
+        );
+        assert_eq!(
+            std::fs::read(dest.path().join("locked/second")).unwrap(),
+            vec![2u8; 3]
+        );
+        assert_eq!(
+            std::fs::metadata(dest.path().join("locked"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o500
+        );
     }
 
     #[test]
