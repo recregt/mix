@@ -14,12 +14,12 @@ embed-tarball = []
 mix-core = { path = "../core" }
 async-trait = { workspace = true }
 liblzma = { version = "0.4.8", default-features = false, features = ["static"] }
-nix = { version = "0.31.3", features = ["user", "fs"] }
+nix = { workspace = true }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "http2"] }
 sha2 = "0.11.0"
 tar = "0.4.46"
-tempfile = "3.27.0"
-thiserror = "2.0.20"
+tempfile = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true, features = ["signal"] }
 tracing = { workspace = true }
 
@@ -27,7 +27,7 @@ tracing = { workspace = true }
 sha2 = "0.11.0"
 
 [dev-dependencies]
-divan = { version = "=5.0.1", package = "codspeed-divan-compat" }
+divan = { workspace = true }
 mockito = "=1.7.2"
 
 [[bench]]

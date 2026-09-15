@@ -9,6 +9,32 @@ pub const NIX_CONF: &str =
     "build-users-group = nixbld\nexperimental-features = nix-command flakes\n";
 pub const PROFILE_SNIPPET: &str = "# Managed by mix -- do not edit, changes are overwritten and will trip `mix doctor`.\nif [ -e '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh' ]; then\n    . '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'\nfi\n";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Category {
+    Filesystem,
+    Identity,
+    Services,
+    Configuration,
+}
+
+impl Category {
+    pub const ALL: [Category; 4] = [
+        Category::Filesystem,
+        Category::Identity,
+        Category::Services,
+        Category::Configuration,
+    ];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Category::Filesystem => "Filesystem",
+            Category::Identity => "Identity/Users",
+            Category::Services => "Services",
+            Category::Configuration => "Configuration",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum Target {
     Directory {
@@ -49,6 +75,19 @@ impl Target {
             Target::User { n, .. } => identity::user_name(n),
             Target::SystemdUnit { name, .. } => name.to_string(),
             Target::PathExists { name, .. } => name.to_string(),
+        }
+    }
+
+    pub fn category(&self) -> Category {
+        match *self {
+            Target::Directory { .. } => Category::Filesystem,
+            Target::File { path, .. } if path == NIX_CONF_DEST || path == PROFILE_SNIPPET_DEST => {
+                Category::Configuration
+            }
+            Target::File { .. } => Category::Filesystem,
+            Target::Group { .. } | Target::User { .. } => Category::Identity,
+            Target::SystemdUnit { .. } => Category::Services,
+            Target::PathExists { .. } => Category::Filesystem,
         }
     }
 }
@@ -129,6 +168,93 @@ mod tests {
             gid: NIXBLD_GID,
         };
         assert_eq!(target.label(), "nixbld3");
+    }
+
+    #[test]
+    fn category_groups_directories_and_the_ownership_marker_as_filesystem() {
+        assert_eq!(
+            Target::Directory {
+                path: "/nix",
+                mode: 0o755,
+            }
+            .category(),
+            Category::Filesystem
+        );
+        assert_eq!(
+            Target::File {
+                path: NIX_OWNERSHIP_MARKER,
+                expected: "",
+            }
+            .category(),
+            Category::Filesystem
+        );
+    }
+
+    #[test]
+    fn category_groups_nix_conf_and_the_profile_snippet_as_configuration() {
+        assert_eq!(
+            Target::File {
+                path: NIX_CONF_DEST,
+                expected: NIX_CONF,
+            }
+            .category(),
+            Category::Configuration
+        );
+        assert_eq!(
+            Target::File {
+                path: PROFILE_SNIPPET_DEST,
+                expected: PROFILE_SNIPPET,
+            }
+            .category(),
+            Category::Configuration
+        );
+    }
+
+    #[test]
+    fn category_groups_the_group_and_user_targets_as_identity() {
+        assert_eq!(
+            Target::Group {
+                name: NIXBLD_GROUP,
+                gid: NIXBLD_GID,
+            }
+            .category(),
+            Category::Identity
+        );
+        assert_eq!(
+            Target::User {
+                n: 1,
+                uid: NIXBLD_UID_BASE + 1,
+                gid: NIXBLD_GID,
+            }
+            .category(),
+            Category::Identity
+        );
+    }
+
+    #[test]
+    fn category_groups_systemd_units_as_services() {
+        assert_eq!(
+            Target::SystemdUnit {
+                name: "nix-daemon.socket",
+                src: NIX_DAEMON_SOCKET_SRC,
+                dest: NIX_DAEMON_SOCKET_DEST,
+                must_be_active: true,
+            }
+            .category(),
+            Category::Services
+        );
+    }
+
+    #[test]
+    fn category_groups_path_exists_as_filesystem() {
+        assert_eq!(
+            Target::PathExists {
+                name: "default profile",
+                path: DEFAULT_PROFILE_NIX_ENV,
+            }
+            .category(),
+            Category::Filesystem
+        );
     }
 
     #[test]

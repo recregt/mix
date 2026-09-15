@@ -1,7 +1,7 @@
 use std::os::unix::fs::PermissionsExt;
 
 use mix_core::identity;
-use mix_core::models::Target;
+use mix_core::models::{Category, Target};
 
 use crate::os::{files_match, path_exists, systemd_unit_is_active};
 
@@ -9,6 +9,7 @@ const DIR_MODE_MASK: u32 = 0o7777;
 
 pub struct HealthReport {
     pub name: String,
+    pub category: Category,
     pub healthy: bool,
     pub detail: Option<String>,
 }
@@ -18,12 +19,14 @@ pub async fn audit() -> Vec<HealthReport> {
     let mut reports = Vec::new();
     for target in mix_core::models::targets() {
         let name = target.label();
+        let category = target.category();
         let detail = inspect(&target).await;
         if let Some(detail) = &detail {
             tracing::debug!("unhealthy: {name}: {detail}");
         }
         reports.push(HealthReport {
             name,
+            category,
             healthy: detail.is_none(),
             detail,
         });

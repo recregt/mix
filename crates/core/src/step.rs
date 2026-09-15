@@ -1,9 +1,13 @@
 use std::future::Future;
 use std::pin::pin;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures_util::future::{Either, select};
 pub use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
+
+use crate::progress::StepObserver;
 
 #[async_trait]
 pub trait Step: Send + Sync {
@@ -21,6 +25,7 @@ pub trait Step: Send + Sync {
 pub struct Plan<E> {
     steps: Vec<Box<dyn Step<Error = E>>>,
     failed_rollbacks: Vec<String>,
+    step_observer: Option<Arc<dyn StepObserver>>,
 }
 
 pub enum Outcome<E> {
@@ -38,7 +43,13 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
         Self {
             steps,
             failed_rollbacks: Vec::new(),
+            step_observer: None,
         }
+    }
+
+    pub fn with_step_observer(mut self, step_observer: Arc<dyn StepObserver>) -> Self {
+        self.step_observer = Some(step_observer);
+        self
     }
 
     pub fn failed_rollbacks(&self) -> &[String] {
@@ -54,6 +65,7 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
 
     pub async fn run_cancellable(&mut self, cancel: impl Future<Output = ()>) -> Outcome<E> {
         let mut cancel = pin!(cancel);
+        let recording = tracing::Level::INFO <= tracing::level_filters::LevelFilter::current();
         let mut attempted = Attempted::default();
         let mut token: Option<CancellationToken> = None;
 
@@ -86,14 +98,24 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
                 attempted.insert(idx);
 
                 let token = token.get_or_insert_with(CancellationToken::new);
-                let (executed, interrupted) =
+                let (executed, interrupted) = if recording {
+                    let span = observed(&self.step_observer, tracing::info_span!("step", name));
+                    match select(cancel.as_mut(), step.execute(token).instrument(span)).await {
+                        Either::Left(((), executing)) => {
+                            token.cancel();
+                            (executing.await, true)
+                        }
+                        Either::Right((result, _)) => (result, false),
+                    }
+                } else {
                     match select(cancel.as_mut(), step.execute(token)).await {
                         Either::Left(((), executing)) => {
                             token.cancel();
                             (executing.await, true)
                         }
                         Either::Right((result, _)) => (result, false),
-                    };
+                    }
+                };
                 if let Err(e) = executed {
                     tracing::debug!("step failed: {name} ({e})");
                     break 'run Some(StopReason::Failed(e));
@@ -108,19 +130,19 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
 
         match stop {
             Some(StopReason::Failed(e)) => {
-                Box::pin(self.unwind(&attempted)).await;
+                Box::pin(self.unwind(&attempted, recording)).await;
                 Outcome::Completed(Err(e))
             }
             Some(StopReason::Interrupted) => {
                 tracing::info!("interrupted, rolling back");
-                Box::pin(self.unwind(&attempted)).await;
+                Box::pin(self.unwind(&attempted, recording)).await;
                 Outcome::Interrupted
             }
             None => Outcome::Completed(Ok(())),
         }
     }
 
-    async fn unwind(&mut self, attempted: &Attempted) {
+    async fn unwind(&mut self, attempted: &Attempted, recording: bool) {
         for idx in (0..self.steps.len()).rev() {
             if !attempted.contains(idx) {
                 continue;
@@ -130,12 +152,26 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
             let name = step.name();
 
             tracing::info!("rolling back: {name}");
-            if let Err(e) = step.rollback().await {
+            let span = recording
+                .then(|| observed(&self.step_observer, tracing::info_span!("rollback", name)));
+            let rolled_back = match span {
+                Some(span) => step.rollback().instrument(span).await,
+                None => step.rollback().await,
+            };
+            if let Err(e) = rolled_back {
                 tracing::error!("rollback failed: {name} ({e})");
                 self.failed_rollbacks.push(format!("{name}: {e}"));
             }
         }
     }
+}
+
+fn observed(step_observer: &Option<Arc<dyn StepObserver>>, span: tracing::Span) -> tracing::Span {
+    if let Some(step_observer) = step_observer {
+        step_observer.on_step_span(&span);
+    }
+
+    span
 }
 
 #[derive(Default)]
@@ -647,6 +683,72 @@ mod tests {
             Ok(()),
             "the second signal must still be sitting unread in the channel: \
              run_cancellable only ever consumes the first"
+        );
+    }
+
+    struct RecordingObserver(std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>);
+
+    impl StepObserver for RecordingObserver {
+        fn on_step_span(&self, span: &tracing::Span) {
+            let name = span
+                .metadata()
+                .map(|metadata| metadata.name())
+                .unwrap_or("");
+            self.0.lock().unwrap().push(name);
+        }
+    }
+
+    struct EnablingSubscriber;
+
+    impl tracing::Subscriber for EnablingSubscriber {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _attributes: &tracing::span::Attributes<'_>) -> tracing::Id {
+            tracing::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &tracing::Id, _values: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _span: &tracing::Id, _follows: &tracing::Id) {}
+        fn event(&self, _event: &tracing::Event<'_>) {}
+        fn enter(&self, _span: &tracing::Id) {}
+        fn exit(&self, _span: &tracing::Id) {}
+    }
+
+    #[test]
+    fn a_step_observer_sees_the_step_and_rollback_spans_while_a_subscriber_is_installed() {
+        let observed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let steps: Vec<Box<dyn Step<Error = ProbeError>>> = vec![
+            Box::new(Recorder {
+                name: "a",
+                fail_execute: false,
+                fail_rollback: false,
+                log: log.clone(),
+            }),
+            Box::new(Recorder {
+                name: "b",
+                fail_execute: true,
+                fail_rollback: false,
+                log: log.clone(),
+            }),
+        ];
+        let mut plan = Plan::new(steps)
+            .with_step_observer(std::sync::Arc::new(RecordingObserver(observed.clone())));
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        // Process-wide rather than scoped: tracing caches callsite interest globally, so a sibling
+        // test reaching the same span callsite without a subscriber can otherwise leave these spans
+        // disabled and strip their metadata.
+        let _ = tracing::subscriber::set_global_default(EnablingSubscriber);
+        assert!(matches!(runtime.block_on(plan.run()), Err(ProbeError)));
+
+        assert_eq!(
+            *observed.lock().unwrap(),
+            ["step", "step", "rollback", "rollback"]
         );
     }
 }

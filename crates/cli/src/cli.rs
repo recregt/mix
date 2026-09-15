@@ -18,6 +18,10 @@ pub enum Command {
         /// Alternate URL to fetch the pinned Nix archive from
         #[arg(long, env = "MIX_NIX_MIRROR")]
         mirror: Option<String>,
+
+        /// Wipe any existing managed installation before bootstrapping
+        #[arg(short, long)]
+        force: bool,
     },
 
     /// Inspect system health

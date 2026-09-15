@@ -56,6 +56,14 @@ fn unpack_many_small_files(bencher: divan::Bencher) {
 }
 
 #[divan::bench]
+fn unpack_many_unaligned_files(bencher: divan::Bencher) {
+    let archive = xz_tar(64, 2 * KIB + 137);
+    bencher
+        .with_inputs(|| tempfile::tempdir().expect("creating a temporary directory"))
+        .bench_local_values(|dest| unpack(divan::black_box(&archive), dest.path()).unwrap());
+}
+
+#[divan::bench]
 fn unpack_one_large_file(bencher: divan::Bencher) {
     let archive = xz_tar(1, 512 * KIB);
     bencher

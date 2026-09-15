@@ -1,18 +1,27 @@
-use mix_core::Step;
+use std::sync::Arc;
+
+use mix_core::{DownloadProgress, Step};
 
 use crate::bootstrap::error::Error;
 use crate::bootstrap::steps::{
     ConfigureNixConf, ConfigureSystemdService, CreateNixDir, CreateNixTree, CreateUsersAndGroups,
-    FetchAndUnpack,
+    FetchAndUnpack, RemoveExistingInstallation,
 };
 
-pub fn bootstrap_steps(mirror: Option<&str>) -> Vec<Box<dyn Step<Error = Error>>> {
-    vec![
-        Box::new(CreateNixDir::default()),
-        Box::new(CreateNixTree::default()),
-        Box::new(CreateUsersAndGroups::default()),
-        Box::new(FetchAndUnpack::new(mirror)),
-        Box::new(ConfigureNixConf::default()),
-        Box::new(ConfigureSystemdService::default()),
-    ]
+pub fn bootstrap_steps(
+    mirror: Option<&str>,
+    force: bool,
+    progress: Arc<dyn DownloadProgress>,
+) -> Vec<Box<dyn Step<Error = Error>>> {
+    let mut steps: Vec<Box<dyn Step<Error = Error>>> = Vec::new();
+    if force {
+        steps.push(Box::new(RemoveExistingInstallation));
+    }
+    steps.push(Box::new(CreateNixDir::default()));
+    steps.push(Box::new(CreateNixTree::default()));
+    steps.push(Box::new(CreateUsersAndGroups::default()));
+    steps.push(Box::new(FetchAndUnpack::new(mirror, progress)));
+    steps.push(Box::new(ConfigureNixConf::default()));
+    steps.push(Box::new(ConfigureSystemdService::default()));
+    steps
 }
