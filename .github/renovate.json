@@ -17,12 +17,9 @@
     },
     {
       "matchManagers": ["cargo"],
-      "minimumReleaseAge": "3 days"
-    },
-    {
-      "matchManagers": ["cargo"],
       "matchUpdateTypes": ["minor", "patch"],
-      "groupName": "cargo non-major"
+      "groupName": "cargo non-major",
+      "minimumReleaseAge": "3 days"
     }
   ]
 }
