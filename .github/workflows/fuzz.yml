@@ -1,0 +1,61 @@
+name: Fuzz
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  nixgen:
+    name: mix-nixgen codegen (3h)
+    runs-on: ubuntu-latest
+    timeout-minutes: 200
+    container:
+      image: ghcr.io/recregt/mix-nix-fuzz:latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: crates/nixgen/fuzz
+
+      - name: Restore the fuzz corpus
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: crates/nixgen/fuzz/corpus/codegen
+          key: nixgen-fuzz-corpus-${{ github.run_id }}
+          restore-keys: |
+            nixgen-fuzz-corpus-
+
+      - name: Fuzz mix-nixgen's codegen for 3 hours
+        working-directory: crates/nixgen
+        run: cargo fuzz run codegen -- -max_total_time=10800 -timeout=10
+
+      - name: Build the corpus verifier
+        if: always()
+        working-directory: crates/nixgen/fuzz
+        run: cargo build --release --bin verify_corpus
+
+      - name: Verify the grown corpus parses and round-trips through real Nix
+        if: always()
+        working-directory: crates/nixgen/fuzz
+        run: ./target/release/verify_corpus corpus/codegen
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nixgen-fuzz-crash-artifacts
+          path: crates/nixgen/fuzz/artifacts/codegen/
