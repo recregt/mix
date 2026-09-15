@@ -3,7 +3,6 @@
   "extends": ["config:best-practices"],
   "enabledManagers": ["cargo", "github-actions"],
   "dependencyDashboard": true,
-  "semanticCommitType": "ci",
   "semanticCommitScope": "",
   "lockFileMaintenance": {
     "enabled": false
@@ -13,7 +12,8 @@
       "matchManagers": ["github-actions"],
       "groupName": "github actions",
       "pinDigests": true,
-      "commitMessageTopic": "{{depName}}"
+      "commitMessageTopic": "{{depName}}",
+      "semanticCommitType": "ci"
     },
     {
       "matchManagers": ["cargo"],
