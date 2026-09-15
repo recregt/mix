@@ -1,6 +1,10 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ident(String);
 
+const RESERVED_WORDS: &[&str] = &[
+    "assert", "else", "if", "in", "inherit", "let", "or", "rec", "then", "with",
+];
+
 impl Ident {
     pub fn new(s: impl Into<String>) -> Result<Self, InvalidIdent> {
         let s = s.into();
@@ -10,7 +14,7 @@ impl Ident {
             .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
         let rest_ok = chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '\'' | '-'));
 
-        if first_ok && rest_ok {
+        if first_ok && rest_ok && !RESERVED_WORDS.contains(&s.as_str()) {
             Ok(Self(s))
         } else {
             Err(InvalidIdent(s))
@@ -64,6 +68,19 @@ mod tests {
         assert!(Ident::new("foo bar").is_err());
         assert!(Ident::new("foo\"bar").is_err());
         assert!(Ident::new("foo;bar").is_err());
+    }
+
+    #[test]
+    fn rejects_nix_reserved_words() {
+        for word in RESERVED_WORDS {
+            assert!(Ident::new(*word).is_err(), "{word} should be rejected");
+        }
+    }
+
+    #[test]
+    fn accepts_identifiers_that_merely_contain_a_reserved_word() {
+        assert!(Ident::new("inherit-x").is_ok());
+        assert!(Ident::new("with_pkgs").is_ok());
     }
 
     proptest! {

@@ -179,6 +179,12 @@ mod tests {
     }
 
     #[test]
+    fn rejects_a_package_name_that_is_a_nix_keyword() {
+        let mut cfg = HomeManagerConfig::new();
+        assert!(cfg.packages(["firefox", "in"]).is_err());
+    }
+
+    #[test]
     fn rejects_a_null_byte_in_a_string_value() {
         let mut cfg = HomeManagerConfig::new();
         assert!(matches!(
