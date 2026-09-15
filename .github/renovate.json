@@ -3,23 +3,23 @@
   "extends": ["config:best-practices"],
   "enabledManagers": ["cargo", "github-actions"],
   "dependencyDashboard": true,
-  "minimumReleaseAge": "3 days",
   "semanticCommitScope": "",
   "lockFileMaintenance": {
-    "enabled": true,
-    "schedule": ["before 6am on monday"]
+    "enabled": false
   },
   "packageRules": [
     {
       "matchManagers": ["github-actions"],
       "groupName": "github actions",
       "pinDigests": true,
-      "commitMessageTopic": "{{depName}}"
+      "commitMessageTopic": "{{depName}}",
+      "semanticCommitType": "ci"
     },
     {
       "matchManagers": ["cargo"],
       "matchUpdateTypes": ["minor", "patch"],
-      "groupName": "cargo non-major"
+      "groupName": "cargo non-major",
+      "minimumReleaseAge": "3 days"
     }
   ]
 }
