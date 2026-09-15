@@ -130,19 +130,19 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
 
         match stop {
             Some(StopReason::Failed(e)) => {
-                Box::pin(self.unwind(&attempted)).await;
+                Box::pin(self.unwind(&attempted, recording)).await;
                 Outcome::Completed(Err(e))
             }
             Some(StopReason::Interrupted) => {
                 tracing::info!("interrupted, rolling back");
-                Box::pin(self.unwind(&attempted)).await;
+                Box::pin(self.unwind(&attempted, recording)).await;
                 Outcome::Interrupted
             }
             None => Outcome::Completed(Ok(())),
         }
     }
 
-    async fn unwind(&mut self, attempted: &Attempted) {
+    async fn unwind(&mut self, attempted: &Attempted, recording: bool) {
         for idx in (0..self.steps.len()).rev() {
             if !attempted.contains(idx) {
                 continue;
@@ -152,8 +152,13 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
             let name = step.name();
 
             tracing::info!("rolling back: {name}");
-            let span = observed(&self.step_observer, tracing::info_span!("rollback", name));
-            if let Err(e) = step.rollback().instrument(span).await {
+            let span = recording
+                .then(|| observed(&self.step_observer, tracing::info_span!("rollback", name)));
+            let rolled_back = match span {
+                Some(span) => step.rollback().instrument(span).await,
+                None => step.rollback().await,
+            };
+            if let Err(e) = rolled_back {
                 tracing::error!("rollback failed: {name} ({e})");
                 self.failed_rollbacks.push(format!("{name}: {e}"));
             }
@@ -735,9 +740,11 @@ mod tests {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
-        tracing::subscriber::with_default(EnablingSubscriber, || {
-            assert!(matches!(runtime.block_on(plan.run()), Err(ProbeError)));
-        });
+        // Process-wide rather than scoped: tracing caches callsite interest globally, so a sibling
+        // test reaching the same span callsite without a subscriber can otherwise leave these spans
+        // disabled and strip their metadata.
+        let _ = tracing::subscriber::set_global_default(EnablingSubscriber);
+        assert!(matches!(runtime.block_on(plan.run()), Err(ProbeError)));
 
         assert_eq!(
             *observed.lock().unwrap(),

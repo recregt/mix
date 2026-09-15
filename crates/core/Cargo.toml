@@ -21,3 +21,7 @@ tokio = { workspace = true }
 [[bench]]
 name = "plan"
 harness = false
+
+[[bench]]
+name = "plan_observed"
+harness = false

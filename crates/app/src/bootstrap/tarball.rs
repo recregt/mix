@@ -118,11 +118,16 @@ async fn fetch_and_verify_with_limits(
         .and_then(reqwest::Response::error_for_status)
         .map_err(network_error)?;
 
-    if let Some(len) = response.content_length() {
+    let content_length = response.content_length();
+    if let Some(len) = content_length {
         progress.set_total(len);
     }
 
-    let mut bytes = Vec::new();
+    let mut bytes = match content_length {
+        Some(len) => Vec::with_capacity(len.min(max_bytes as u64) as usize),
+        None => Vec::new(),
+    };
+    let mut hasher = Sha256::new();
     while let Some(chunk) = response.chunk().await.map_err(network_error)? {
         if bytes.len() + chunk.len() > max_bytes {
             return Err(Error::Integrity {
@@ -130,11 +135,12 @@ async fn fetch_and_verify_with_limits(
                 detail: format!("download exceeded the {max_bytes}-byte limit"),
             });
         }
+        hasher.update(&chunk);
         bytes.extend_from_slice(&chunk);
         progress.add(chunk.len() as u64);
     }
 
-    let digest = sha256_hex(&bytes);
+    let digest = hex(&hasher.finalize());
     if digest != expected_sha256 {
         return Err(Error::Integrity {
             artifact: url.to_string(),
@@ -146,11 +152,14 @@ async fn fetch_and_verify_with_limits(
 }
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
+    hex(&Sha256::digest(bytes))
+}
+
+fn hex(digest: &[u8]) -> String {
     const HEX: [u8; 16] = *b"0123456789abcdef";
 
-    let digest = Sha256::digest(bytes);
     let mut out = Vec::with_capacity(digest.len() * 2);
-    for byte in digest {
+    for &byte in digest {
         out.push(HEX[usize::from(byte >> 4)]);
         out.push(HEX[usize::from(byte & 0x0f)]);
     }
@@ -174,10 +183,21 @@ impl Read for XzSource<'_> {
     }
 }
 
+// Every archive reaching `unpack` is already verified byte for byte: downloads against the pinned
+// sha256, the embedded tarball at build time. `IGNORE_CHECK` drops xz's own per-block integrity
+// check, which would hash the same bytes a second time; stream and index headers are still checked.
+fn decoder_stream() -> liblzma::stream::Stream {
+    liblzma::stream::Stream::new_auto_decoder(
+        u64::MAX,
+        liblzma::stream::CONCATENATED | liblzma::stream::IGNORE_CHECK,
+    )
+    .expect("the xz decoder flags are valid")
+}
+
 pub fn unpack(tarball: &[u8], dest: &Path) -> Result<()> {
     tracing::debug!("unpacking archive into {}", dest.display());
     let source = XzSource {
-        reader: liblzma::bufread::XzDecoder::new_multi_decoder(Cursor::new(tarball)),
+        reader: liblzma::bufread::XzDecoder::new_stream(Cursor::new(tarball), decoder_stream()),
         error: None,
     };
 
@@ -257,6 +277,15 @@ mod tests {
         let dest = tempfile::tempdir().unwrap();
 
         let err = unpack(&tarball, dest.path()).unwrap_err();
+        assert!(matches!(err, Error::Decompression(_)));
+    }
+
+    #[test]
+    fn unpack_rejects_a_truncated_xz_stream() {
+        let tarball = make_xz_tarball(&[("hello.txt", b"world")]);
+        let dest = tempfile::tempdir().unwrap();
+
+        let err = unpack(&tarball[..tarball.len() / 2], dest.path()).unwrap_err();
         assert!(matches!(err, Error::Decompression(_)));
     }
 
