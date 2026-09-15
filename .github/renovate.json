@@ -3,7 +3,7 @@
   "extends": ["config:best-practices"],
   "enabledManagers": ["cargo", "github-actions"],
   "dependencyDashboard": true,
-  "minimumReleaseAge": "3 days",
+  "semanticCommitType": "ci",
   "semanticCommitScope": "",
   "lockFileMaintenance": {
     "enabled": false
@@ -14,6 +14,10 @@
       "groupName": "github actions",
       "pinDigests": true,
       "commitMessageTopic": "{{depName}}"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "minimumReleaseAge": "3 days"
     },
     {
       "matchManagers": ["cargo"],
