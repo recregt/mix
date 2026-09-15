@@ -6,8 +6,7 @@
   "minimumReleaseAge": "3 days",
   "semanticCommitScope": "",
   "lockFileMaintenance": {
-    "enabled": true,
-    "schedule": ["before 6am on monday"]
+    "enabled": false
   },
   "packageRules": [
     {
