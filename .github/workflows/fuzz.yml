@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 200
     container:
-      image: ghcr.io/recregt/mix-nix-fuzz:latest
+      image: ghcr.io/recregt/mix-nix-fuzz@sha256:c81e71c1e17055e7394d8e96bb972d952a96d9dc1b7a92abc0c1ba2df9914191 # latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
