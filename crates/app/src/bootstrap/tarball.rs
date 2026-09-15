@@ -34,7 +34,13 @@ fn pin_filename(pin: &TarballPin) -> &'static str {
 }
 
 fn host_target_key() -> String {
-    format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
+    match (
+        mix_core::system::Arch::current(),
+        mix_core::system::Os::current(),
+    ) {
+        (Some(arch), Some(os)) => format!("{arch}-{os}"),
+        _ => format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
+    }
 }
 
 pub async fn bytes(
@@ -592,6 +598,11 @@ mod tests {
     #[test]
     fn pin_for_finds_a_known_target() {
         assert!(pin_for("x86_64-linux").is_some());
+    }
+
+    #[test]
+    fn host_target_key_matches_a_known_pin_on_this_platform() {
+        assert!(pin_for(&host_target_key()).is_some());
     }
 
     #[test]
