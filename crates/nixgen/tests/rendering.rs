@@ -4,6 +4,9 @@ use mix_nixgen::{FlakeConfig, HomeManagerConfig};
 use proptest::collection::vec;
 use proptest::prelude::*;
 
+const NIXPKGS_REV: &str = "efe6f071ede9d21c37462d2d6682d5e670099684";
+const HOME_MANAGER_REV: &str = "efa3ccb4c3cc90d832eab232976379058fa75aa3";
+
 #[test]
 #[ignore = "requires nix-instantiate on PATH"]
 fn a_realistic_config_is_syntactically_valid_nix() {
@@ -25,7 +28,9 @@ fn a_realistic_config_is_syntactically_valid_nix() {
 #[test]
 #[ignore = "requires nix-instantiate on PATH"]
 fn a_realistic_flake_is_syntactically_valid_nix() {
-    let rendered = FlakeConfig::new("x86_64-linux", "mix").unwrap().render();
+    let rendered = FlakeConfig::new("x86_64-linux", "mix", NIXPKGS_REV, HOME_MANAGER_REV)
+        .unwrap()
+        .render();
 
     let output = support::parse_with_nix(&rendered);
     assert!(
@@ -77,7 +82,9 @@ proptest! {
     fn arbitrary_usernames_always_render_a_parseable_flake(
         username in arbitrary_text()
     ) {
-        let rendered = FlakeConfig::new("x86_64-linux", &username).unwrap().render();
+        let rendered = FlakeConfig::new("x86_64-linux", &username, NIXPKGS_REV, HOME_MANAGER_REV)
+            .unwrap()
+            .render();
 
         let output = support::parse_with_nix(&rendered);
         prop_assert!(

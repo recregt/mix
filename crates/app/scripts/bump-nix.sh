@@ -9,12 +9,27 @@ else
     targets=("$@")
 fi
 
+nixpkgs_rev="${NIXPKGS_REV:-}"
+if [ -z "$nixpkgs_rev" ]; then
+    echo "resolving latest nixos-unstable" >&2
+    nixpkgs_rev="$(git ls-remote https://github.com/NixOS/nixpkgs.git refs/heads/nixos-unstable | cut -f1)"
+fi
+
+home_manager_rev="${HOME_MANAGER_REV:-}"
+if [ -z "$home_manager_rev" ]; then
+    echo "resolving latest home-manager master" >&2
+    home_manager_rev="$(git ls-remote https://github.com/nix-community/home-manager.git refs/heads/master | cut -f1)"
+fi
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pins_file="$script_dir/../src/bootstrap/pins.rs"
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
 echo "pub const NIX_VERSION: &str = \"$version\";" > "$tmp_dir/pins.rs"
+echo "" >> "$tmp_dir/pins.rs"
+echo "pub const NIXPKGS_REV: &str = \"$nixpkgs_rev\";" >> "$tmp_dir/pins.rs"
+echo "pub const HOME_MANAGER_REV: &str = \"$home_manager_rev\";" >> "$tmp_dir/pins.rs"
 echo "" >> "$tmp_dir/pins.rs"
 cat >> "$tmp_dir/pins.rs" <<'EOF'
 pub struct TarballPin {

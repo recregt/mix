@@ -3,6 +3,8 @@ use mix_core::privilege::invoking_user;
 use mix_core::system::{Arch, Os};
 use mix_nixgen::{FlakeConfig, HomeManagerConfig};
 
+use crate::bootstrap::pins::{HOME_MANAGER_REV, NIXPKGS_REV};
+
 const HOME_MANAGER_STATE_VERSION: &str = "24.05";
 
 fn nix_system_double(arch: Arch, os: Os) -> &'static str {
@@ -17,7 +19,7 @@ fn nix_system_double(arch: Arch, os: Os) -> &'static str {
 pub fn resolve_user_config() -> Option<UserConfig> {
     let user = invoking_user()?;
     let system = nix_system_double(Arch::current()?, Os::current()?);
-    let flake = FlakeConfig::new(system, &user.name)
+    let flake = FlakeConfig::new(system, &user.name, NIXPKGS_REV, HOME_MANAGER_REV)
         .expect("system is a hardcoded literal and a real username cannot contain a null byte")
         .render();
     let mut home_cfg = HomeManagerConfig::new();

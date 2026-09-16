@@ -1,5 +1,5 @@
 mod error;
-mod pins;
+pub(crate) mod pins;
 mod planner;
 mod steps;
 mod util;
