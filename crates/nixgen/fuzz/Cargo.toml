@@ -22,4 +22,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "flake"
+path = "fuzz_targets/flake.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
