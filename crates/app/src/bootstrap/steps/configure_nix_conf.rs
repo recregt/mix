@@ -4,13 +4,13 @@ use async_trait::async_trait;
 use mix_core::{CancellationToken, Step};
 
 use mix_core::models::{NIX_CONF, PROFILE_SNIPPET};
-use mix_core::paths::{NIX_CONF_DEST, PROFILE_SNIPPET_DEST};
+use mix_core::paths::{NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT, PROFILE_SNIPPET_DEST};
 
 use crate::bootstrap::error::{Error, Result};
 use crate::bootstrap::util::{
     create_dir_all, remove_dir_all, remove_file, warn_on_failure, write_file_atomic,
 };
-use crate::os::path_exists;
+use crate::shared::os::{path_exists, systemd_restart_if_active};
 
 #[derive(Default)]
 pub struct ConfigureNixConf {
@@ -36,8 +36,9 @@ impl Step for ConfigureNixConf {
             && matches_expected(PROFILE_SNIPPET_DEST, PROFILE_SNIPPET).await)
     }
 
-    async fn execute(&mut self, _token: &CancellationToken) -> Result<()> {
+    async fn execute(&mut self, token: &CancellationToken) -> Result<()> {
         let previous = previous_contents(NIX_CONF_DEST).await;
+        let restart_daemon = daemon_needs_the_new_config(previous.as_deref());
         let created_dir = write(NIX_CONF_DEST, NIX_CONF).await?;
         self.written.push(WrittenFile {
             path: NIX_CONF_DEST,
@@ -52,6 +53,10 @@ impl Step for ConfigureNixConf {
             previous,
             created_dir,
         });
+
+        if restart_daemon {
+            restart_running_daemon(token).await;
+        }
 
         Ok(())
     }
@@ -71,6 +76,19 @@ impl Step for ConfigureNixConf {
         }
         Ok(())
     }
+}
+
+fn daemon_needs_the_new_config(previous: Option<&[u8]>) -> bool {
+    previous != Some(NIX_CONF.as_bytes())
+}
+
+/// nix-daemon reads `trusted-users` once, at startup, so a rewritten nix.conf
+/// only reaches a running daemon if it is restarted.
+async fn restart_running_daemon(token: &CancellationToken) {
+    warn_on_failure(
+        "restart nix-daemon",
+        systemd_restart_if_active(NIX_DAEMON_SERVICE_UNIT, token).await,
+    );
 }
 
 async fn matches_expected(path: &str, expected: &str) -> bool {
@@ -113,6 +131,54 @@ async fn first_missing_ancestor(dir: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_nix_conf_means_the_daemon_needs_the_new_config() {
+        assert!(daemon_needs_the_new_config(None));
+    }
+
+    #[test]
+    fn a_drifted_nix_conf_means_the_daemon_needs_the_new_config() {
+        assert!(daemon_needs_the_new_config(Some(
+            b"trusted-users = root alice\n"
+        )));
+    }
+
+    #[test]
+    fn an_identical_nix_conf_leaves_the_daemon_alone() {
+        assert!(!daemon_needs_the_new_config(Some(NIX_CONF.as_bytes())));
+    }
+
+    #[tokio::test]
+    async fn matches_expected_is_true_for_identical_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("nix.conf");
+        tokio::fs::write(&file, NIX_CONF).await.unwrap();
+
+        assert!(matches_expected(file.to_str().unwrap(), NIX_CONF).await);
+    }
+
+    #[tokio::test]
+    async fn matches_expected_detects_a_dropped_trusted_users_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("nix.conf");
+        let without_trust: String = NIX_CONF
+            .lines()
+            .filter(|line| !line.starts_with("trusted-users"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        tokio::fs::write(&file, &without_trust).await.unwrap();
+
+        assert!(!matches_expected(file.to_str().unwrap(), NIX_CONF).await);
+    }
+
+    #[tokio::test]
+    async fn matches_expected_is_false_when_the_file_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("absent").join("nix.conf");
+
+        assert!(!matches_expected(missing.to_str().unwrap(), NIX_CONF).await);
+    }
 
     #[tokio::test]
     async fn first_missing_ancestor_is_none_when_the_directory_already_exists() {

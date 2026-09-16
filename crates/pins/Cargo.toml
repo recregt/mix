@@ -1,0 +1,8 @@
+[package]
+name = "mix-pins"
+version = "0.1.0"
+edition = "2024"
+authors = ["Ömer Tekin"]
+license = "MPL-2.0"
+
+[dependencies]

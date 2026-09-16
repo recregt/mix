@@ -19,6 +19,10 @@ pub enum Command {
         #[arg(long, env = "MIX_NIX_MIRROR")]
         mirror: Option<String>,
 
+        /// Public key the mirror's binary cache is signed with
+        #[arg(long, env = "MIX_NIX_MIRROR_KEY")]
+        mirror_key: Option<String>,
+
         /// Wipe any existing managed installation before bootstrapping
         #[arg(short, long)]
         force: bool,

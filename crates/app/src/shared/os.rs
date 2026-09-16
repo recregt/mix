@@ -1,15 +1,39 @@
 use std::path::Path;
 
+use mix_core::paths::DEFAULT_PROFILE_BIN;
+use mix_core::privilege::InvokingUser;
 use mix_core::{CancellationToken, Error, Result};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
-pub async fn run(command: &str, args: &[&str], token: &CancellationToken) -> Result<()> {
-    let command_line = format_command(command, args);
+pub(crate) const DIR_MODE_MASK: u32 = 0o7777;
+
+fn path_with_nix_profile() -> String {
+    match std::env::var("PATH") {
+        Ok(path) => format!("{DEFAULT_PROFILE_BIN}:{path}"),
+        Err(_) => DEFAULT_PROFILE_BIN.to_string(),
+    }
+}
+
+fn command_as(user: &InvokingUser, command: &str, args: &[&str]) -> Command {
+    let mut cmd = Command::new(command);
+    cmd.args(args)
+        .uid(user.uid)
+        .gid(user.gid)
+        .env("HOME", &user.home)
+        .env("USER", &user.name)
+        .env("PATH", path_with_nix_profile());
+    cmd
+}
+
+async fn run_command(
+    mut command: Command,
+    command_line: String,
+    token: &CancellationToken,
+) -> Result<std::process::Output> {
     tracing::debug!("running command: {command_line}");
 
-    let mut child = Command::new(command)
-        .args(args)
+    let mut child = command
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -56,16 +80,49 @@ pub async fn run(command: &str, args: &[&str], token: &CancellationToken) -> Res
         String::from_utf8_lossy(&stderr)
     );
 
-    if !status.success() {
-        let output = std::process::Output {
-            status,
-            stdout,
-            stderr,
-        };
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+pub async fn run(command: &str, args: &[&str], token: &CancellationToken) -> Result<()> {
+    let command_line = format_command(command, args);
+    let mut cmd = Command::new(command);
+    cmd.args(args);
+    let output = run_command(cmd, command_line.clone(), token).await?;
+    if !output.status.success() {
         return Err(command_error(command_line, &output));
     }
-
     Ok(())
+}
+
+pub async fn run_as(
+    user: &InvokingUser,
+    command: &str,
+    args: &[&str],
+    token: &CancellationToken,
+) -> Result<String> {
+    let command_line = format_command(command, args);
+    let cmd = command_as(user, command, args);
+    let output = run_command(cmd, command_line.clone(), token).await?;
+    if !output.status.success() {
+        return Err(command_error(command_line, &output));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+pub async fn status_as(
+    user: &InvokingUser,
+    command: &str,
+    args: &[&str],
+    token: &CancellationToken,
+) -> Result<bool> {
+    let command_line = format_command(command, args);
+    let cmd = command_as(user, command, args);
+    let output = run_command(cmd, command_line, token).await?;
+    Ok(output.status.success())
 }
 
 pub fn format_command(command: &str, args: &[&str]) -> String {
@@ -97,6 +154,14 @@ pub fn command_error(command: impl Into<String>, output: &std::process::Output) 
 
 pub async fn path_exists(path: impl AsRef<Path>) -> bool {
     tokio::fs::try_exists(path.as_ref()).await.unwrap_or(false)
+}
+
+pub async fn systemd_restart_if_active(name: &str, token: &CancellationToken) -> Result<bool> {
+    if !systemd_unit_is_active(name).await {
+        return Ok(false);
+    }
+    run("systemctl", &["restart", name], token).await?;
+    Ok(true)
 }
 
 pub async fn systemd_unit_is_active(name: &str) -> bool {

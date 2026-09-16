@@ -1072,8 +1072,11 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "codspeed-divan-compat",
+ "futures-util",
  "liblzma",
  "mix-core",
+ "mix-nixgen",
+ "mix-pins",
  "mockito",
  "nix",
  "reqwest",
@@ -1124,10 +1127,15 @@ name = "mix-nixgen"
 version = "0.1.0"
 dependencies = [
  "codspeed-divan-compat",
+ "mix-pins",
  "proptest",
  "tempfile",
  "thiserror",
 ]
+
+[[package]]
+name = "mix-pins"
+version = "0.1.0"
 
 [[package]]
 name = "mix-ui"

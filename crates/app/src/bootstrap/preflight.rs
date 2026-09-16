@@ -5,7 +5,7 @@ use mix_core::paths::NIX_OWNERSHIP_MARKER;
 use crate::bootstrap::detect::{self, Wsl};
 use crate::bootstrap::error::{Error, Result};
 use crate::bootstrap::util::{is_dir, is_file};
-use crate::os::path_exists;
+use crate::shared::os::path_exists;
 
 pub async fn check_not_nixos() -> Result<()> {
     tracing::debug!("checking host is not NixOS");

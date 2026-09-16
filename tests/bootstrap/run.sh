@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-for tool in podman uv; do
+for tool in podman uv nix; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         if [ -n "${CI:-}" ]; then
             echo "$tool not found; required in CI" >&2

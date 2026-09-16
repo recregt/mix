@@ -1,4 +1,5 @@
-use mix_nixgen::HomeManagerConfig;
+use mix_nixgen::{FlakeConfig, HomeManagerConfig};
+use mix_pins::{HOME_MANAGER_REV, NIXPKGS_REV};
 
 fn main() {
     divan::main();
@@ -17,6 +18,28 @@ fn render_a_package_list(bencher: divan::Bencher, n: usize) {
             cfg
         })
         .bench_values(|cfg| cfg.render());
+}
+
+#[divan::bench]
+fn render_a_flake(bencher: divan::Bencher) {
+    bencher
+        .with_inputs(|| {
+            FlakeConfig::new("x86_64-linux", "mix", NIXPKGS_REV, HOME_MANAGER_REV).unwrap()
+        })
+        .bench_values(|cfg| cfg.render());
+}
+
+#[divan::bench]
+fn build_a_flake_with_an_escape_heavy_username(bencher: divan::Bencher) {
+    bencher.bench(|| {
+        FlakeConfig::new(
+            divan::black_box("x86_64-linux"),
+            divan::black_box("quote \" and interpolation ${x} and \n a newline"),
+            NIXPKGS_REV,
+            HOME_MANAGER_REV,
+        )
+        .unwrap()
+    });
 }
 
 #[divan::bench(args = [1, 8, 64])]

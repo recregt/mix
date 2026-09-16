@@ -6,7 +6,7 @@ use crate::bootstrap::error::{Error, Result};
 use crate::bootstrap::util::{
     create_dir_with_mode, dir_has_mode, remove_dir_all, set_permissions, warn_on_failure,
 };
-use crate::os::path_exists;
+use crate::shared::os::path_exists;
 
 #[derive(Default)]
 pub struct CreateNixTree {

@@ -5,6 +5,7 @@ pub mod models;
 pub mod privilege;
 pub mod progress;
 pub mod step;
+pub mod system;
 
 pub use constants::{identity, paths};
 pub use error::{Error, Result};

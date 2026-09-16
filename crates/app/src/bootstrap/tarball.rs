@@ -7,7 +7,8 @@ use mix_core::{DownloadProgress, Error as CoreError};
 use sha2::{Digest, Sha256};
 
 use crate::bootstrap::error::{Error, Result};
-use crate::bootstrap::pins::{TarballPin, pin_for};
+use crate::bootstrap::mirror::{filter_mirror, mirror_url};
+use mix_pins::{TarballPin, pin_for};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -34,7 +35,13 @@ fn pin_filename(pin: &TarballPin) -> &'static str {
 }
 
 fn host_target_key() -> String {
-    format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
+    match (
+        mix_core::system::Arch::current(),
+        mix_core::system::Os::current(),
+    ) {
+        (Some(arch), Some(os)) => format!("{arch}-{os}"),
+        _ => format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
+    }
 }
 
 pub async fn bytes(
@@ -56,14 +63,6 @@ pub async fn bytes(
         .map(Cow::Owned)
 }
 
-fn filter_mirror(value: Option<&str>) -> Option<&str> {
-    value.map(str::trim).filter(|s| !s.is_empty())
-}
-
-fn mirror_url(base: &str, filename: &str) -> String {
-    format!("{}/{filename}", base.trim().trim_end_matches('/'))
-}
-
 fn network_error(e: reqwest::Error) -> Error {
     Error::Network(Box::new(e))
 }
@@ -75,7 +74,7 @@ async fn fetch_and_verify(
 ) -> Result<Vec<u8>> {
     tracing::info!(
         "fetching runtime archive: {url} (nix {})",
-        crate::bootstrap::pins::NIX_VERSION
+        mix_pins::NIX_VERSION
     );
     fetch_and_verify_with_limits(
         url,
@@ -144,7 +143,7 @@ async fn fetch_and_verify_with_limits(
     if digest != expected_sha256 {
         return Err(Error::Integrity {
             artifact: url.to_string(),
-            detail: format!("sha256 was {digest}, expected {expected_sha256} (pin in src/pins.rs)"),
+            detail: format!("sha256 was {digest}, expected {expected_sha256} (pin in crates/pins)"),
         });
     }
 
@@ -534,56 +533,6 @@ mod tests {
     }
 
     #[test]
-    fn mirror_url_joins_base_and_filename() {
-        assert_eq!(
-            mirror_url("http://mirror.internal", "nix-2.35.2-x86_64-linux.tar.xz"),
-            "http://mirror.internal/nix-2.35.2-x86_64-linux.tar.xz"
-        );
-    }
-
-    #[test]
-    fn mirror_url_trims_a_trailing_slash_on_the_base() {
-        assert_eq!(
-            mirror_url("http://mirror.internal/", "nix-2.35.2-x86_64-linux.tar.xz"),
-            "http://mirror.internal/nix-2.35.2-x86_64-linux.tar.xz"
-        );
-    }
-
-    #[test]
-    fn mirror_url_trims_surrounding_whitespace_on_the_base() {
-        assert_eq!(
-            mirror_url(
-                " http://mirror.internal/ ",
-                "nix-2.35.2-x86_64-linux.tar.xz"
-            ),
-            "http://mirror.internal/nix-2.35.2-x86_64-linux.tar.xz"
-        );
-    }
-
-    #[test]
-    fn filter_mirror_none_when_unset() {
-        assert_eq!(filter_mirror(None), None);
-    }
-
-    #[test]
-    fn filter_mirror_none_when_empty_string() {
-        assert_eq!(filter_mirror(Some("")), None);
-    }
-
-    #[test]
-    fn filter_mirror_none_when_whitespace_only() {
-        assert_eq!(filter_mirror(Some("   ")), None);
-    }
-
-    #[test]
-    fn filter_mirror_some_when_a_real_url_is_set() {
-        assert_eq!(
-            filter_mirror(Some("http://mirror.internal")),
-            Some("http://mirror.internal")
-        );
-    }
-
-    #[test]
     fn pin_filename_extracts_the_last_url_segment() {
         let pin = pin_for("x86_64-linux").unwrap();
         assert_eq!(pin_filename(pin), "nix-2.35.2-x86_64-linux.tar.xz");
@@ -595,35 +544,8 @@ mod tests {
     }
 
     #[test]
-    fn pin_for_returns_none_for_an_unknown_target() {
-        assert!(pin_for("sparc64-solaris").is_none());
-    }
-
-    #[test]
-    fn every_pin_has_a_well_formed_url_and_digest() {
-        for pin in crate::bootstrap::pins::NIX_TARBALLS {
-            assert!(
-                pin.url.starts_with("https://"),
-                "{}: url {:?} is not https",
-                pin.target,
-                pin.url
-            );
-            assert_eq!(
-                pin.sha256.len(),
-                64,
-                "{}: sha256 {:?} is not 64 hex characters",
-                pin.target,
-                pin.sha256
-            );
-            assert!(
-                pin.sha256
-                    .chars()
-                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
-                "{}: sha256 {:?} is not lowercase hex",
-                pin.target,
-                pin.sha256
-            );
-        }
+    fn host_target_key_matches_a_known_pin_on_this_platform() {
+        assert!(pin_for(&host_target_key()).is_some());
     }
 
     fn xz_compress(bytes: &[u8]) -> Vec<u8> {

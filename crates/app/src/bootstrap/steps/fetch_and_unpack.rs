@@ -1,20 +1,19 @@
 use std::io::Write as _;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use mix_core::{CancellationToken, DownloadProgress, Error as CoreError, Step};
-use nix::fcntl::{AT_FDCWD, AtFlags};
-use nix::unistd::{Gid, Uid, User, fchownat};
+use nix::unistd::{Gid, Uid, User};
 
 use mix_core::identity::NIXBLD_GID;
 use mix_core::paths::{NIX_PROVISIONING_MANIFEST, NIX_STORE};
 
 use crate::bootstrap::error::{Error, Result};
-use crate::bootstrap::pins::NIX_VERSION;
 use crate::bootstrap::tarball;
-use crate::bootstrap::util::is_file;
+use crate::bootstrap::util::{ensure_ownership_under, is_file};
+use mix_pins::NIX_VERSION;
 
 const DEFAULT_PROFILE: &str = "/nix/var/nix/profiles/default";
 
@@ -476,47 +475,6 @@ fn strip_write_bit(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn ensure_ownership_under(root: &Path, uid: Uid, gid: Gid) -> Result<()> {
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(path) = stack.pop() {
-        let meta = std::fs::symlink_metadata(&path).map_err(|e| CoreError::Io {
-            path: path.clone(),
-            source: e,
-        })?;
-        if meta.file_type().is_symlink() {
-            continue;
-        }
-        if meta.is_dir() {
-            let entries = std::fs::read_dir(&path).map_err(|e| CoreError::Io {
-                path: path.clone(),
-                source: e,
-            })?;
-            for entry in entries {
-                let entry = entry.map_err(|e| CoreError::Io {
-                    path: path.clone(),
-                    source: e,
-                })?;
-                stack.push(entry.path());
-            }
-        }
-
-        if meta.gid() != gid.as_raw() || meta.uid() != uid.as_raw() {
-            fchownat(
-                AT_FDCWD,
-                &path,
-                Some(uid),
-                Some(gid),
-                AtFlags::AT_SYMLINK_NOFOLLOW,
-            )
-            .map_err(|e| CoreError::Io {
-                path: path.clone(),
-                source: std::io::Error::from(e),
-            })?;
-        }
-    }
-    Ok(())
-}
-
 fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
     let reginfo = std::fs::read(reginfo_path).map_err(|e| CoreError::Io {
         path: reginfo_path.to_path_buf(),
@@ -524,7 +482,8 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
     })?;
 
     let nix_store = nix_pkg.join("bin/nix-store");
-    let command_line = crate::os::format_command(&nix_store.to_string_lossy(), &["--load-db"]);
+    let command_line =
+        crate::shared::os::format_command(&nix_store.to_string_lossy(), &["--load-db"]);
     tracing::debug!("running command: {command_line}");
 
     let mut child = std::process::Command::new(&nix_store)
@@ -555,7 +514,10 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
     );
 
     if !output.status.success() {
-        return Err(Error::Core(crate::os::command_error(command_line, &output)));
+        return Err(Error::Core(crate::shared::os::command_error(
+            command_line,
+            &output,
+        )));
     }
 
     writer
@@ -571,7 +533,7 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
 
 fn activate_default_profile(nix_pkg: &Path, nss_cacert_pkg: &Path) -> Result<()> {
     let nix_env = nix_pkg.join("bin/nix-env");
-    let command_line = crate::os::format_command(
+    let command_line = crate::shared::os::format_command(
         &nix_env.to_string_lossy(),
         &[
             "--profile",
@@ -612,7 +574,10 @@ fn activate_default_profile(nix_pkg: &Path, nss_cacert_pkg: &Path) -> Result<()>
     );
 
     if !output.status.success() {
-        return Err(Error::Core(crate::os::command_error(command_line, &output)));
+        return Err(Error::Core(crate::shared::os::command_error(
+            command_line,
+            &output,
+        )));
     }
 
     Ok(())
@@ -1018,28 +983,5 @@ mod tests {
         );
 
         assert!(!matches!(err, Error::CrossDeviceStore { .. }));
-    }
-
-    #[test]
-    fn ensure_ownership_under_is_a_noop_when_already_matching() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("f"), "x").unwrap();
-
-        let uid = Uid::current();
-        let gid = Gid::current();
-
-        assert!(ensure_ownership_under(dir.path(), uid, gid).is_ok());
-    }
-
-    #[test]
-    fn ensure_ownership_under_skips_symlinks() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = tempfile::tempdir().unwrap();
-        std::os::unix::fs::symlink(target.path(), dir.path().join("link")).unwrap();
-
-        let uid = Uid::current();
-        let gid = Gid::current();
-
-        assert!(ensure_ownership_under(dir.path(), uid, gid).is_ok());
     }
 }

@@ -15,21 +15,28 @@ pub async fn run() -> ExitCode {
     if !matches!(
         cli.command,
         Command::Doctor | Command::Repair | Command::Bootstrap { .. }
-    ) && let Some(report) = mix_app::doctor::audit()
-        .await
-        .into_iter()
-        .find(|r| !r.healthy)
-    {
-        let detail = report.detail.as_deref().unwrap_or("unhealthy");
-        mix_ui::fail(commands::doctor::check_failed_message(format!(
-            "{}: {detail}",
-            report.name
-        )));
-        return ExitCode::FAILURE;
+    ) {
+        let user_config = mix_app::resolve_existing_user_config();
+        if let Some(report) = mix_app::doctor::audit(user_config.as_ref())
+            .await
+            .into_iter()
+            .find(|r| !r.healthy)
+        {
+            let detail = report.detail.as_deref().unwrap_or("unhealthy");
+            mix_ui::fail(commands::doctor::check_failed_message(format!(
+                "{}: {detail}",
+                report.name
+            )));
+            return ExitCode::FAILURE;
+        }
     }
 
     let result = match cli.command {
-        Command::Bootstrap { mirror, force } => commands::bootstrap::run(mirror, force).await,
+        Command::Bootstrap {
+            mirror,
+            mirror_key,
+            force,
+        } => commands::bootstrap::run(mirror, mirror_key, force).await,
         Command::Doctor => commands::doctor::run(cli.verbose).await,
         Command::Repair => commands::repair::run().await,
     };

@@ -1,5 +1,5 @@
 mod error;
-mod pins;
+pub(crate) mod mirror;
 mod planner;
 mod steps;
 mod util;
@@ -36,6 +36,7 @@ async fn interrupted() {
 
 pub async fn bootstrap(
     mirror: Option<&str>,
+    mirror_key: Option<&str>,
     force: bool,
     progress: Arc<dyn DownloadProgress>,
     step_observer: Arc<dyn StepObserver>,
@@ -51,17 +52,20 @@ pub async fn bootstrap(
         preflight::check_nix_not_installed().await?;
     }
 
-    run_steps(mirror, force, progress, step_observer).await
+    run_steps(mirror, mirror_key, force, progress, step_observer).await
 }
 
 async fn run_steps(
     mirror: Option<&str>,
+    mirror_key: Option<&str>,
     force: bool,
     progress: Arc<dyn DownloadProgress>,
     step_observer: Arc<dyn StepObserver>,
 ) -> Result<Environment> {
-    let mut plan = Plan::new(planner::bootstrap_steps(mirror, force, progress))
-        .with_step_observer(step_observer);
+    let mut plan = Plan::new(planner::bootstrap_steps(
+        mirror, mirror_key, force, progress,
+    ))
+    .with_step_observer(step_observer);
     let cause = match plan.run_cancellable(interrupted()).await {
         Outcome::Completed(Ok(())) => return Ok(Environment::new()),
         Outcome::Completed(Err(cause)) => cause,
