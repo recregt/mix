@@ -1072,6 +1072,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "codspeed-divan-compat",
+ "futures-util",
  "liblzma",
  "mix-core",
  "mix-nixgen",

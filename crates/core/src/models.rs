@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use crate::identity::{self, NIXBLD_GID, NIXBLD_GROUP, NIXBLD_UID_BASE, NIXBLD_USER_COUNT};
@@ -82,14 +83,14 @@ pub enum Target {
 }
 
 impl Target {
-    pub fn label(&self) -> String {
+    pub fn label(&self) -> Cow<'_, str> {
         match self {
-            Target::Directory { path, .. } => path.display().to_string(),
-            Target::File { path, .. } => path.display().to_string(),
-            Target::Group { name, .. } => name.to_string(),
+            Target::Directory { path, .. } => path.to_string_lossy(),
+            Target::File { path, .. } => path.to_string_lossy(),
+            Target::Group { name, .. } => Cow::Borrowed(name),
             Target::User { n, .. } => identity::user_name(*n),
-            Target::SystemdUnit { name, .. } => name.to_string(),
-            Target::PathExists { name, .. } => name.to_string(),
+            Target::SystemdUnit { name, .. } => Cow::Borrowed(name),
+            Target::PathExists { name, .. } => Cow::Borrowed(name),
         }
     }
 
@@ -252,6 +253,17 @@ mod tests {
             gid: NIXBLD_GID,
         };
         assert_eq!(target.label(), "nixbld3");
+    }
+
+    #[test]
+    fn label_borrows_instead_of_allocating_for_every_target() {
+        let cfg = sample_user_config();
+        for target in targets(Some(&cfg)) {
+            assert!(
+                matches!(target.label(), Cow::Borrowed(_)),
+                "label() allocated for {target:?}"
+            );
+        }
     }
 
     #[test]

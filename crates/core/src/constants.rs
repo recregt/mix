@@ -90,8 +90,19 @@ pub mod identity {
     pub const NIXBLD_HOME: &str = "/var/empty";
     pub const NIXBLD_SHELL: &str = "/usr/sbin/nologin";
 
-    pub fn user_name(n: u32) -> String {
-        format!("{NIXBLD_GROUP}{n}")
+    const NIXBLD_USER_NAMES: [&str; NIXBLD_USER_COUNT as usize] = [
+        "nixbld1", "nixbld2", "nixbld3", "nixbld4", "nixbld5", "nixbld6", "nixbld7", "nixbld8",
+        "nixbld9", "nixbld10", "nixbld11", "nixbld12", "nixbld13", "nixbld14", "nixbld15",
+        "nixbld16", "nixbld17", "nixbld18", "nixbld19", "nixbld20", "nixbld21", "nixbld22",
+        "nixbld23", "nixbld24", "nixbld25", "nixbld26", "nixbld27", "nixbld28", "nixbld29",
+        "nixbld30", "nixbld31", "nixbld32",
+    ];
+
+    pub fn user_name(n: u32) -> std::borrow::Cow<'static, str> {
+        match NIXBLD_USER_NAMES.get((n as usize).wrapping_sub(1)) {
+            Some(&name) => std::borrow::Cow::Borrowed(name),
+            None => std::borrow::Cow::Owned(format!("{NIXBLD_GROUP}{n}")),
+        }
     }
 
     pub fn group_exists(name: &str) -> bool {
@@ -133,6 +144,22 @@ pub mod identity {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn user_name_borrows_a_static_name_for_every_managed_build_user() {
+            for n in 1..=NIXBLD_USER_COUNT {
+                let name = user_name(n);
+                assert_eq!(name, format!("{NIXBLD_GROUP}{n}"));
+                assert!(matches!(name, std::borrow::Cow::Borrowed(_)));
+            }
+        }
+
+        #[test]
+        fn user_name_falls_back_to_formatting_outside_the_managed_range() {
+            assert_eq!(user_name(0), "nixbld0");
+            assert_eq!(user_name(NIXBLD_USER_COUNT + 1), "nixbld33");
+            assert!(matches!(user_name(0), std::borrow::Cow::Owned(_)));
+        }
 
         #[test]
         fn group_exists_true_for_a_known_system_group() {

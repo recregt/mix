@@ -91,7 +91,7 @@ impl Step for CreateUsersAndGroups {
             )
             .await;
             if identity::user_exists(&name) {
-                self.created_users.push(name);
+                self.created_users.push(name.into_owned());
             }
             result?;
         }

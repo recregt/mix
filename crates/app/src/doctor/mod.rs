@@ -1,6 +1,7 @@
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 
+use futures_util::future::join_all;
 use mix_core::identity;
 use mix_core::models::{Category, Target};
 
@@ -17,22 +18,24 @@ pub struct HealthReport {
 pub async fn audit() -> Vec<HealthReport> {
     tracing::info!("auditing managed environment");
     let user_config = resolve_existing_user_config().await;
-    let mut reports = Vec::new();
-    for target in mix_core::models::targets(user_config.as_ref()) {
-        let name = target.label();
-        let category = target.category();
-        let detail = inspect(&target).await;
-        if let Some(detail) = &detail {
-            tracing::debug!("unhealthy: {name}: {detail}");
-        }
-        reports.push(HealthReport {
-            name,
-            category,
-            healthy: detail.is_none(),
-            detail,
-        });
-    }
-    reports
+    let items = mix_core::models::targets(user_config.as_ref());
+    let details = join_all(items.iter().map(inspect)).await;
+    items
+        .iter()
+        .zip(details)
+        .map(|(target, detail)| {
+            let name = target.label().into_owned();
+            if let Some(detail) = &detail {
+                tracing::debug!("unhealthy: {name}: {detail}");
+            }
+            HealthReport {
+                name,
+                category: target.category(),
+                healthy: detail.is_none(),
+                detail,
+            }
+        })
+        .collect()
 }
 
 async fn inspect(target: &Target) -> Option<String> {

@@ -47,7 +47,7 @@ pub async fn repair() -> Vec<RepairReport> {
             Ok(Outcome::Repaired) => {
                 tracing::debug!("repaired: {name}");
                 reports.push(RepairReport {
-                    name,
+                    name: name.into_owned(),
                     fixed: true,
                     detail: None,
                 })
@@ -55,7 +55,7 @@ pub async fn repair() -> Vec<RepairReport> {
             Err(e) => {
                 tracing::debug!("failed to repair {name}: {e}");
                 reports.push(RepairReport {
-                    name,
+                    name: name.into_owned(),
                     fixed: false,
                     detail: Some(e.to_string()),
                 })
