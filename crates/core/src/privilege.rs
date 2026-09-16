@@ -59,6 +59,7 @@ const ENV_ALLOWLIST: &[&str] = &[
     "https_proxy",
     "no_proxy",
     "MIX_NIX_MIRROR",
+    "MIX_NIX_MIRROR_KEY",
     "WSL_DISTRO_NAME",
     "WSL_INTEROP",
 ];
@@ -125,6 +126,19 @@ mod tests {
         assert_eq!(
             result,
             vec![("MIX_NIX_MIRROR", "http://mirror.internal".to_string())]
+        );
+    }
+
+    #[test]
+    fn allowed_env_vars_includes_the_mirror_key() {
+        let mut env = std::collections::HashMap::new();
+        env.insert("MIX_NIX_MIRROR_KEY".to_string(), "mix-1:AAAA=".to_string());
+
+        let result = allowed_env_vars(|key| env.get(key).cloned());
+
+        assert_eq!(
+            result,
+            vec![("MIX_NIX_MIRROR_KEY", "mix-1:AAAA=".to_string())]
         );
     }
 

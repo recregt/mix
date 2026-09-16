@@ -32,7 +32,11 @@ pub async fn run() -> ExitCode {
     }
 
     let result = match cli.command {
-        Command::Bootstrap { mirror, force } => commands::bootstrap::run(mirror, force).await,
+        Command::Bootstrap {
+            mirror,
+            mirror_key,
+            force,
+        } => commands::bootstrap::run(mirror, mirror_key, force).await,
         Command::Doctor => commands::doctor::run(cli.verbose).await,
         Command::Repair => commands::repair::run().await,
     };

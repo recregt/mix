@@ -13,14 +13,16 @@ use crate::shared::home_manager::resolve_user_config;
 
 pub fn bootstrap_steps(
     mirror: Option<&str>,
+    mirror_key: Option<&str>,
     force: bool,
     progress: Arc<dyn DownloadProgress>,
 ) -> Vec<Box<dyn Step<Error = Error>>> {
-    steps_for(mirror, force, progress, resolve_user_config())
+    steps_for(mirror, mirror_key, force, progress, resolve_user_config())
 }
 
 fn steps_for(
     mirror: Option<&str>,
+    mirror_key: Option<&str>,
     force: bool,
     progress: Arc<dyn DownloadProgress>,
     user_config: Option<UserConfig>,
@@ -39,6 +41,7 @@ fn steps_for(
     steps.push(Box::new(ActivateHomeManagerConfig::new(
         user_config,
         mirror,
+        mirror_key,
     )));
     steps
 }
@@ -71,7 +74,13 @@ mod tests {
 
     #[test]
     fn the_home_manager_steps_run_last_and_in_order() {
-        let steps = steps_for(None, false, Arc::new(NoopProgress), Some(user_config()));
+        let steps = steps_for(
+            None,
+            None,
+            false,
+            Arc::new(NoopProgress),
+            Some(user_config()),
+        );
         let names = step_names(&steps);
         assert_eq!(
             &names[names.len() - 2..],
@@ -81,14 +90,20 @@ mod tests {
 
     #[test]
     fn forcing_prepends_the_removal_step() {
-        let steps = steps_for(None, true, Arc::new(NoopProgress), None);
+        let steps = steps_for(None, None, true, Arc::new(NoopProgress), None);
         assert_eq!(step_names(&steps)[0], "remove the existing installation");
     }
 
     #[test]
     fn the_same_step_list_is_planned_with_or_without_a_user() {
-        let with_user = steps_for(None, false, Arc::new(NoopProgress), Some(user_config()));
-        let without_user = steps_for(None, false, Arc::new(NoopProgress), None);
+        let with_user = steps_for(
+            None,
+            None,
+            false,
+            Arc::new(NoopProgress),
+            Some(user_config()),
+        );
+        let without_user = steps_for(None, None, false, Arc::new(NoopProgress), None);
         assert_eq!(step_names(&with_user), step_names(&without_user));
     }
 }

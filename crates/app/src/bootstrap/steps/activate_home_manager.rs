@@ -14,20 +14,31 @@ use crate::shared::os::{path_exists, run_as};
 pub struct ActivateHomeManagerConfig {
     user_config: Option<UserConfig>,
     mirror: Option<String>,
+    mirror_key: Option<String>,
     created_git_dir: bool,
 }
 
 impl ActivateHomeManagerConfig {
-    pub fn new(user_config: Option<UserConfig>, mirror: Option<&str>) -> Self {
+    pub fn new(
+        user_config: Option<UserConfig>,
+        mirror: Option<&str>,
+        mirror_key: Option<&str>,
+    ) -> Self {
         Self {
             user_config,
             mirror: mirror.map(String::from),
+            mirror_key: mirror_key.map(String::from),
             created_git_dir: false,
         }
     }
 }
 
-async fn nix_build_args(flake_attr: &str, profile_str: &str, mirror: Option<&str>) -> Vec<String> {
+async fn nix_build_args(
+    flake_attr: &str,
+    profile_str: &str,
+    mirror: Option<&str>,
+    mirror_key: Option<&str>,
+) -> Vec<String> {
     let mut args = vec![
         "build".to_string(),
         flake_attr.to_string(),
@@ -49,7 +60,7 @@ async fn nix_build_args(flake_attr: &str, profile_str: &str, mirror: Option<&str
         args.push(mirror::substituter(base));
         args.push("--option".to_string());
         args.push("trusted-public-keys".to_string());
-        args.push(mirror::trusted_public_keys(base).await);
+        args.push(mirror::trusted_public_keys(base, mirror_key).await);
     }
 
     args
@@ -83,7 +94,13 @@ impl Step for ActivateHomeManagerConfig {
         );
         let profile = nix_profiles_dir(&cfg.user.home).join(HOME_MANAGER_PROFILE_NAME);
         let profile_str = profile.to_string_lossy().into_owned();
-        let args = nix_build_args(&flake_attr, &profile_str, self.mirror.as_deref()).await;
+        let args = nix_build_args(
+            &flake_attr,
+            &profile_str,
+            self.mirror.as_deref(),
+            self.mirror_key.as_deref(),
+        )
+        .await;
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let store_path = run_as(&cfg.user, DEFAULT_PROFILE_NIX, &arg_refs, token).await?;
 
@@ -134,7 +151,7 @@ mod tests {
     #[tokio::test]
     async fn check_passes_without_a_user_config() {
         assert!(
-            ActivateHomeManagerConfig::new(None, None)
+            ActivateHomeManagerConfig::new(None, None, None)
                 .check()
                 .await
                 .unwrap()
@@ -144,7 +161,7 @@ mod tests {
     #[tokio::test]
     async fn check_reports_unconfigured_state_when_git_tracking_is_missing() {
         let home = tempfile::tempdir().unwrap();
-        let step = ActivateHomeManagerConfig::new(Some(user_config(home.path())), None);
+        let step = ActivateHomeManagerConfig::new(Some(user_config(home.path())), None, None);
         assert!(!step.check().await.unwrap());
     }
 
@@ -152,20 +169,20 @@ mod tests {
     async fn check_passes_once_the_state_dir_is_git_tracked() {
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(mix_state_dir(home.path()).join(".git")).unwrap();
-        let step = ActivateHomeManagerConfig::new(Some(user_config(home.path())), None);
+        let step = ActivateHomeManagerConfig::new(Some(user_config(home.path())), None, None);
         assert!(step.check().await.unwrap());
     }
 
     #[tokio::test]
     async fn execute_is_a_no_op_without_a_user_config() {
-        let mut step = ActivateHomeManagerConfig::new(None, None);
+        let mut step = ActivateHomeManagerConfig::new(None, None, None);
         step.execute(&CancellationToken::new()).await.unwrap();
         assert!(!step.created_git_dir);
     }
 
     #[tokio::test]
     async fn rollback_is_a_no_op_without_a_user_config() {
-        ActivateHomeManagerConfig::new(None, None)
+        ActivateHomeManagerConfig::new(None, None, None)
             .rollback()
             .await
             .unwrap();
@@ -177,7 +194,7 @@ mod tests {
         let git_dir = mix_state_dir(home.path()).join(".git");
         std::fs::create_dir_all(&git_dir).unwrap();
 
-        let mut step = ActivateHomeManagerConfig::new(Some(user_config(home.path())), None);
+        let mut step = ActivateHomeManagerConfig::new(Some(user_config(home.path())), None, None);
         step.created_git_dir = true;
         step.rollback().await.unwrap();
 
@@ -191,7 +208,7 @@ mod tests {
         let git_dir = mix_state_dir(home.path()).join(".git");
         std::fs::create_dir_all(&git_dir).unwrap();
 
-        let mut step = ActivateHomeManagerConfig::new(Some(user_config(home.path())), None);
+        let mut step = ActivateHomeManagerConfig::new(Some(user_config(home.path())), None, None);
         step.rollback().await.unwrap();
 
         assert!(git_dir.exists());
@@ -201,14 +218,15 @@ mod tests {
 
     #[tokio::test]
     async fn nix_build_args_omits_mirror_flags_when_no_mirror_is_set() {
-        let args = nix_build_args("path:/state#x", "/profile", None).await;
+        let args = nix_build_args("path:/state#x", "/profile", None, None).await;
         assert!(!args.iter().any(|a| a == "--override-input"));
         assert!(!args.iter().any(|a| a == "substituters"));
     }
 
     #[tokio::test]
     async fn nix_build_args_adds_override_inputs_and_a_substituter_when_mirrored() {
-        let args = nix_build_args("path:/state#x", "/profile", Some(UNREACHABLE_MIRROR)).await;
+        let args =
+            nix_build_args("path:/state#x", "/profile", Some(UNREACHABLE_MIRROR), None).await;
         assert!(args.iter().any(|a| a == "nixpkgs"));
         assert!(args.iter().any(|a| a == "home-manager"));
         assert!(
@@ -230,7 +248,7 @@ mod tests {
     #[tokio::test]
     async fn nix_build_args_always_start_with_the_build_invocation() {
         for mirror in [None, Some(UNREACHABLE_MIRROR)] {
-            let args = nix_build_args("path:/state#x", "/profile", mirror).await;
+            let args = nix_build_args("path:/state#x", "/profile", mirror, None).await;
             assert_eq!(
                 args[..6],
                 [
@@ -246,8 +264,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn nix_build_args_trusts_a_key_supplied_out_of_band() {
+        const KEY: &str = "mix-mirror-1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+        let args = nix_build_args(
+            "path:/state#x",
+            "/profile",
+            Some(UNREACHABLE_MIRROR),
+            Some(KEY),
+        )
+        .await;
+
+        let keys = args
+            .iter()
+            .skip_while(|a| *a != "trusted-public-keys")
+            .nth(1)
+            .expect("the trusted-public-keys option is passed");
+        assert!(
+            keys.ends_with(KEY),
+            "{keys:?} should end with the mirror key"
+        );
+    }
+
+    #[tokio::test]
     async fn nix_build_args_ignores_a_blank_mirror() {
-        let args = nix_build_args("path:/state#x", "/profile", Some("   ")).await;
+        let args = nix_build_args("path:/state#x", "/profile", Some("   "), None).await;
         assert!(!args.iter().any(|a| a == "--override-input"));
     }
 }

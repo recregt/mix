@@ -196,8 +196,15 @@ def test_bootstrap_auto_escalates_for_a_sudo_user(container, mock_nix_server, mi
         check=True,
     )
 
+    mirror_key = (mirror_cache / "mix-mirror.pub").read_text().strip()
     result = container.exec(
-        "mix", "bootstrap", "--mirror", mock_nix_server["url"], user="ciuser"
+        "mix",
+        "bootstrap",
+        "--mirror",
+        mock_nix_server["url"],
+        "--mirror-key",
+        mirror_key,
+        user="ciuser",
     )
 
     assert result.returncode == 0, result.stderr

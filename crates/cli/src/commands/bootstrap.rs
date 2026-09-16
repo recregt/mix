@@ -2,7 +2,11 @@ use std::process::ExitCode;
 
 use super::RootStatus;
 
-pub async fn run(mirror: Option<String>, force: bool) -> anyhow::Result<ExitCode> {
+pub async fn run(
+    mirror: Option<String>,
+    mirror_key: Option<String>,
+    force: bool,
+) -> anyhow::Result<ExitCode> {
     if let RootStatus::ReExecuted(code) = super::ensure_root()? {
         return Ok(code);
     }
@@ -10,6 +14,7 @@ pub async fn run(mirror: Option<String>, force: bool) -> anyhow::Result<ExitCode
 
     mix_app::bootstrap::bootstrap(
         mirror.as_deref(),
+        mirror_key.as_deref(),
         force,
         mix_ui::download_reporter(),
         mix_ui::step_observer(),
