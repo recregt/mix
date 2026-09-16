@@ -1,6 +1,8 @@
+import ast
 import fcntl
 import hashlib
 import http.server
+import json
 import os
 import pathlib
 import re
@@ -15,7 +17,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 CACHE_DIR = pathlib.Path(os.environ.get("XDG_CACHE_HOME", pathlib.Path.home() / ".cache")) / "mix-bootstrap-tests"
 IMAGE_TAG = "mix-bootstrap-test:latest"
 REMOTE_IMAGE = os.environ.get("MIX_TEST_IMAGE")
-MIRROR_TEST_USER = "ciuser"
+MIRROR_TEST_USERS = ("ciuser", "ciuser2")
 
 
 def _pin(target: str) -> tuple[str, str]:
@@ -43,6 +45,19 @@ def _source_rev(const_name: str) -> str:
         raise RuntimeError(f"could not find {const_name} in crates/pins")
     return match.group(1)
 
+
+def _nix_conf_content() -> str:
+    models_src = (REPO_ROOT / "crates/core/src/models.rs").read_text()
+    match = re.search(r'NIX_CONF:\s*&str\s*=\s*(".*?");', models_src, re.S)
+    if not match:
+        raise RuntimeError("could not find the NIX_CONF constant in models.rs")
+    return ast.literal_eval(match.group(1))
+
+
+NIX_CONF_CONTENT = _nix_conf_content()
+NIX_CONF_DEST = "/etc/nix/nix.conf"
+NIX_BINARY = "/nix/var/nix/profiles/default/bin/nix"
+MIX_USERS_GROUP = "mix-users"
 
 NIX_URL, NIX_SHA256 = _pin("x86_64-linux")
 NIX_FILENAME = NIX_URL.rsplit("/", 1)[-1]
@@ -136,6 +151,8 @@ _MIRROR_FLAKE_NIX = """
 }
 """
 
+NIX_ARGS = ["--extra-experimental-features", "nix-command flakes"]
+
 _MIRROR_HOME_NIX = """
 { pkgs, ... }:
 {
@@ -150,75 +167,87 @@ _MIRROR_HOME_NIX = """
 @pytest.fixture(scope="session")
 def mirror_cache(mirror_sources):
     cache_dir = CACHE_DIR / "cache"
-    marker = CACHE_DIR / f"cache-{NIXPKGS_REV}-{HOME_MANAGER_REV}.built"
+    users = "-".join(MIRROR_TEST_USERS)
+    marker = CACHE_DIR / f"cache-{NIXPKGS_REV}-{HOME_MANAGER_REV}-{users}.built"
 
     with open(CACHE_DIR / "mirror-cache.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if not marker.exists():
-            with tempfile.TemporaryDirectory() as tmp:
-                tmp_path = pathlib.Path(tmp)
-                flake_nix = (
-                    _MIRROR_FLAKE_NIX.replace("__NIXPKGS_REV__", NIXPKGS_REV)
-                    .replace("__HOME_MANAGER_REV__", HOME_MANAGER_REV)
-                    .replace("__USER__", MIRROR_TEST_USER)
-                )
-                home_nix = _MIRROR_HOME_NIX.replace("__USER__", MIRROR_TEST_USER)
-                (tmp_path / "flake.nix").write_text(flake_nix)
-                (tmp_path / "home.nix").write_text(home_nix)
-
-                nix_args = ["--extra-experimental-features", "nix-command flakes"]
-                store_path = subprocess.run(
-                    [
-                        "nix",
-                        "build",
-                        f'path:{tmp_path}#homeConfigurations."{MIRROR_TEST_USER}".activationPackage',
-                        "--no-link",
-                        "--print-out-paths",
-                        *nix_args,
-                    ],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                ).stdout.strip()
-
-                secret_key = subprocess.run(
-                    ["nix", "key", "generate-secret", "--key-name", "mix-mirror-test", *nix_args],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                ).stdout
-                public_key = subprocess.run(
-                    ["nix", "key", "convert-secret-to-public", *nix_args],
-                    input=secret_key,
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                ).stdout.strip()
-                secret_key_path = tmp_path / "mirror-signing-key"
-                secret_key_path.write_text(secret_key)
-                subprocess.run(
-                    [
-                        "nix",
-                        "store",
-                        "sign",
-                        "--key-file",
-                        str(secret_key_path),
-                        "--recursive",
-                        store_path,
-                        *nix_args,
-                    ],
-                    check=True,
-                )
-
-                cache_dir.mkdir(parents=True, exist_ok=True)
-                subprocess.run(
-                    ["nix", "copy", "--to", f"file://{cache_dir}", store_path, *nix_args],
-                    check=True,
-                )
-                (cache_dir / "mix-mirror.pub").write_text(public_key)
-            marker.write_text(store_path)
+            secret_key, public_key = _signing_key()
+            store_paths = [
+                _seed_activation_package(user, secret_key, cache_dir)
+                for user in MIRROR_TEST_USERS
+            ]
+            (cache_dir / "mix-mirror.pub").write_text(public_key)
+            marker.write_text("\n".join(store_paths))
 
     return cache_dir
+
+
+def _signing_key() -> tuple[str, str]:
+    secret_key = subprocess.run(
+        ["nix", "key", "generate-secret", "--key-name", "mix-mirror-test", *NIX_ARGS],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    public_key = subprocess.run(
+        ["nix", "key", "convert-secret-to-public", *NIX_ARGS],
+        input=secret_key,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return secret_key, public_key
+
+
+def _seed_activation_package(user: str, secret_key: str, cache_dir: pathlib.Path) -> str:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = pathlib.Path(tmp)
+        flake_nix = (
+            _MIRROR_FLAKE_NIX.replace("__NIXPKGS_REV__", NIXPKGS_REV)
+            .replace("__HOME_MANAGER_REV__", HOME_MANAGER_REV)
+            .replace("__USER__", user)
+        )
+        (tmp_path / "flake.nix").write_text(flake_nix)
+        (tmp_path / "home.nix").write_text(_MIRROR_HOME_NIX.replace("__USER__", user))
+
+        store_path = subprocess.run(
+            [
+                "nix",
+                "build",
+                f'path:{tmp_path}#homeConfigurations."{user}".activationPackage',
+                "--no-link",
+                "--print-out-paths",
+                *NIX_ARGS,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+        secret_key_path = tmp_path / "mirror-signing-key"
+        secret_key_path.write_text(secret_key)
+        subprocess.run(
+            [
+                "nix",
+                "store",
+                "sign",
+                "--key-file",
+                str(secret_key_path),
+                "--recursive",
+                store_path,
+                *NIX_ARGS,
+            ],
+            check=True,
+        )
+
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["nix", "copy", "--to", f"file://{cache_dir}", store_path, *NIX_ARGS],
+            check=True,
+        )
+    return store_path
 
 
 @pytest.fixture()
@@ -371,3 +400,37 @@ def container(container_image, mix_binary):
         yield Container(name)
     finally:
         subprocess.run(["podman", "rm", "-f", name], capture_output=True)
+
+
+def create_user(container: Container, name: str, sudo: bool = False) -> None:
+    container.exec("useradd", "--create-home", name, check=True)
+    if sudo:
+        container.exec(
+            "bash",
+            "-c",
+            f"echo '{name} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/{name}",
+            check=True,
+        )
+
+
+def group_members(container: Container, group: str) -> list[str]:
+    entry = container.exec("getent", "group", group, check=True).stdout.strip()
+    members = entry.split(":")[3]
+    return sorted(member for member in members.split(",") if member)
+
+
+def daemon_trusts(container: Container, user: str) -> bool:
+    """Asks the running nix-daemon whether it trusts `user`."""
+    home = container.exec("getent", "passwd", user, check=True).stdout.split(":")[5]
+    result = container.exec(
+        NIX_BINARY,
+        "store",
+        "info",
+        "--json",
+        "--store",
+        "daemon",
+        user=user,
+        env={"HOME": home},
+        check=True,
+    )
+    return bool(json.loads(result.stdout)["trusted"])

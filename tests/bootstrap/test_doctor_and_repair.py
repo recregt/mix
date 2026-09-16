@@ -1,23 +1,14 @@
-import ast
-import pathlib
-import re
+from conftest import (
+    MIX_USERS_GROUP,
+    NIX_CONF_CONTENT,
+    create_user,
+    daemon_trusts,
+    group_members,
+)
 
 MIX_MANAGED_MARKER = "/nix/.mix-managed"
 DEFAULT_PROFILE_BIN = "/nix/var/nix/profiles/default/bin"
 SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-
-
-def _nix_conf_content() -> str:
-    models_src = (
-        pathlib.Path(__file__).resolve().parents[2] / "crates/core/src/models.rs"
-    ).read_text()
-    match = re.search(r'NIX_CONF_BASE:\s*&str\s*=\s*(".*?");', models_src, re.S)
-    if not match:
-        raise RuntimeError("could not find the NIX_CONF_BASE constant in models.rs")
-    return ast.literal_eval(match.group(1))
-
-
-NIX_CONF_CONTENT = _nix_conf_content()
 
 
 def _bootstrap(container, mock_nix_server):
@@ -105,7 +96,7 @@ def test_doctor_detects_a_stopped_socket_alone(container, mock_nix_server):
 def test_doctor_check_succeeds_for_a_non_root_user(container, mock_nix_server):
     _bootstrap(container, mock_nix_server)
 
-    container.exec("useradd", "--create-home", "plainuser", check=True)
+    create_user(container, "plainuser")
 
     check = container.exec("mix", "doctor", user="plainuser")
     assert check.returncode == 0, check.stderr + check.stdout
@@ -188,13 +179,7 @@ def test_repair_cannot_restore_a_deleted_default_profile_but_bootstrap_can(conta
 
 
 def test_bootstrap_auto_escalates_for_a_sudo_user(container, mock_nix_server, mirror_cache):
-    container.exec("useradd", "--create-home", "ciuser", check=True)
-    container.exec(
-        "bash",
-        "-c",
-        "echo 'ciuser ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ciuser",
-        check=True,
-    )
+    create_user(container, "ciuser", sudo=True)
 
     mirror_key = (mirror_cache / "mix-mirror.pub").read_text().strip()
     result = container.exec(
@@ -226,8 +211,9 @@ def test_bootstrap_auto_escalates_for_a_sudo_user(container, mock_nix_server, mi
     assert 'system = "x86_64-linux"' in flake_contents
     assert 'homeConfigurations."ciuser"' in flake_contents
 
-    nix_conf_contents = container.exec("cat", "/etc/nix/nix.conf", check=True).stdout
-    assert "trusted-users = root ciuser" in nix_conf_contents
+    assert container.exec("cat", "/etc/nix/nix.conf", check=True).stdout == NIX_CONF_CONTENT
+    assert group_members(container, MIX_USERS_GROUP) == ["ciuser"]
+    assert daemon_trusts(container, "ciuser")
 
     git_dir = f"{state_dir}/.git"
     assert container.path_exists(git_dir)
@@ -239,6 +225,22 @@ def test_bootstrap_auto_escalates_for_a_sudo_user(container, mock_nix_server, mi
 
     doctor = container.exec("mix", "doctor", user="ciuser")
     assert doctor.returncode == 0, doctor.stdout + doctor.stderr
+
+    stray = f"{state_dir}/id_rsa"
+    container.exec("bash", "-c", f"echo stray > {stray}", check=True)
+    container.exec("chown", "ciuser:ciuser", stray, check=True)
+
+    synced = container.exec("mix", "repair", user="ciuser")
+    assert synced.returncode == 0, synced.stderr
+
+    tracked = set(
+        container.exec(git_bin, "-C", state_dir, "ls-files", user="ciuser", check=True).stdout.split()
+    )
+    assert {".gitignore", "flake.nix", "home.nix"} <= tracked
+    assert "id_rsa" not in tracked, "mix must not track a file it did not generate"
+    assert container.path_exists(stray), "mix must not delete what it does not manage"
+    ignored_status = container.exec(git_bin, "-C", state_dir, "status", "--short", user="ciuser", check=True)
+    assert ignored_status.stdout.strip() == ""
 
     container.exec("chown", "-R", "root:root", state_dir, check=True)
     container.exec("chmod", "755", state_dir, check=True)
@@ -257,12 +259,10 @@ def test_bootstrap_auto_escalates_for_a_sudo_user(container, mock_nix_server, mi
     healed = container.exec("mix", "doctor", user="ciuser")
     assert healed.returncode == 0, healed.stdout + healed.stderr
 
-    ciuser_uid = container.exec("id", "-u", "ciuser", check=True).stdout.strip()
-    marker = f"/nix/.mix-managed-users/{ciuser_uid}"
-    assert container.path_exists(marker)
-
     container.exec("rm", "-rf", state_dir, check=True)
-    assert container.path_exists(marker), "the marker must survive deleting the state dir"
+    assert group_members(container, MIX_USERS_GROUP) == ["ciuser"], (
+        "group membership must survive deleting the state dir"
+    )
 
     wiped = container.exec("mix", "doctor", user="ciuser")
     assert wiped.returncode != 0, "doctor should treat a wiped state dir as drift, not as unmanaged"
@@ -282,11 +282,13 @@ def test_bootstrap_auto_escalates_for_a_sudo_user(container, mock_nix_server, mi
 def test_doctor_ignores_a_user_mix_never_configured(container, mock_nix_server):
     _bootstrap(container, mock_nix_server)
 
-    container.exec("useradd", "--create-home", "plainuser", check=True)
+    create_user(container, "plainuser")
 
     check = container.exec("mix", "doctor", user="plainuser")
     assert check.returncode == 0, check.stderr + check.stdout
     assert not container.path_exists("/home/plainuser/.local/state/mix")
+    assert group_members(container, MIX_USERS_GROUP) == []
+    assert not daemon_trusts(container, "plainuser")
 
 
 def test_repair_fixes_injected_drift(container, mock_nix_server):

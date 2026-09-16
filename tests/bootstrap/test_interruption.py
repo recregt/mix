@@ -3,7 +3,7 @@ import time
 MIX_MANAGED_MARKER = "/nix/.mix-managed"
 PROVISIONING_MANIFEST = "/nix/.mix-provisioning-manifest"
 DEFAULT_PROFILE_NIX_ENV = "/nix/var/nix/profiles/default/bin/nix-env"
-RUNNING_CREATE_USERS_AND_GROUPS = "running: create nixbld group and build users"
+RUNNING_CREATE_USERS_AND_GROUPS = "running: create the managed groups and build users"
 RUNNING_FETCH_AND_UNPACK = "running: fetch and activate the managed runtime"
 WINDING_DOWN_NOTICE = "Cancelling... (cleaning up)"
 
@@ -33,6 +33,7 @@ def test_sigint_during_a_fast_step_exits_promptly_and_rolls_back_cleanly(contain
     assert WINDING_DOWN_NOTICE in result.stdout
     assert not container.path_exists(MIX_MANAGED_MARKER)
     assert container.exec("getent", "group", "nixbld").returncode != 0
+    assert container.exec("getent", "group", "mix-users").returncode != 0
     assert _nixbld_users(container) == []
 
 
