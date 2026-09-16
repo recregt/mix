@@ -107,11 +107,12 @@ impl Step for ActivateHomeManagerConfig {
         let activate = format!("{store_path}/activate");
         run_as(&cfg.user, &activate, &[], token).await?;
 
+        let git = git::Git::resolve(&cfg.user).await;
         self.created_git_dir = !path_exists(state_dir.join(".git")).await;
         if self.created_git_dir {
-            git::init(&cfg.user, &state_dir, token).await?;
+            git.init(&cfg.user, &state_dir, token).await?;
         }
-        git::sync(&cfg.user, &state_dir, token).await?;
+        git.sync(&cfg.user, &state_dir, token).await?;
 
         Ok(())
     }

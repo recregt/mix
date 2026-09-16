@@ -64,7 +64,8 @@ pub async fn repair(user_config: Option<&UserConfig>) -> Vec<RepairReport> {
 
     if let Some(cfg) = user_config {
         let state_dir = mix_state_dir(&cfg.user.home);
-        match git::sync(&cfg.user, &state_dir, &token).await {
+        let git = git::Git::resolve(&cfg.user).await;
+        match git.sync(&cfg.user, &state_dir, &token).await {
             Ok(true) => {
                 tracing::debug!("committed drift in git-tracked state");
                 reports.push(RepairReport {
