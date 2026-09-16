@@ -17,6 +17,9 @@ pub mod paths {
         "/nix/var/nix/daemon-socket",
     ];
 
+    pub const NIX_DAEMON_SERVICE_UNIT: &str = "nix-daemon.service";
+    pub const NIX_DAEMON_SOCKET_UNIT: &str = "nix-daemon.socket";
+
     pub const NIX_DAEMON_SERVICE_SRC: &str =
         "/nix/var/nix/profiles/default/lib/systemd/system/nix-daemon.service";
     pub const NIX_DAEMON_SERVICE_DEST: &str = "/etc/systemd/system/nix-daemon.service";

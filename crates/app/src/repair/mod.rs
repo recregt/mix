@@ -3,12 +3,14 @@ use std::path::{Path, PathBuf};
 
 use mix_core::identity;
 use mix_core::models::{Target, UserConfig, targets};
-use mix_core::paths::mix_state_dir;
+use mix_core::paths::{NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT, mix_state_dir};
 use mix_core::{CancellationToken, Error as CoreError};
 use nix::unistd::{Gid, Uid, chown};
 
 use crate::shared::git;
-use crate::shared::os::{DIR_MODE_MASK, files_match, path_exists, run, systemd_unit_is_active};
+use crate::shared::os::{
+    DIR_MODE_MASK, files_match, path_exists, run, systemd_restart_if_active, systemd_unit_is_active,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -61,6 +63,22 @@ pub async fn repair(user_config: Option<&UserConfig>) -> Vec<RepairReport> {
         }
     }
 
+    if rewrote_nix_conf(&reports) {
+        match systemd_restart_if_active(NIX_DAEMON_SERVICE_UNIT, &token).await {
+            Ok(false) => {}
+            Ok(true) => reports.push(RepairReport {
+                name: NIX_DAEMON_SERVICE_UNIT.to_string(),
+                fixed: true,
+                detail: None,
+            }),
+            Err(e) => reports.push(RepairReport {
+                name: NIX_DAEMON_SERVICE_UNIT.to_string(),
+                fixed: false,
+                detail: Some(e.to_string()),
+            }),
+        }
+    }
+
     if let Some(cfg) = user_config {
         let state_dir = mix_state_dir(&cfg.user.home);
         let git = git::Git::resolve(&cfg.user).await;
@@ -86,6 +104,13 @@ pub async fn repair(user_config: Option<&UserConfig>) -> Vec<RepairReport> {
     }
 
     reports
+}
+
+/// A rewritten nix.conf only reaches a running nix-daemon when it restarts.
+fn rewrote_nix_conf(reports: &[RepairReport]) -> bool {
+    reports
+        .iter()
+        .any(|report| report.fixed && report.name == NIX_CONF_DEST)
 }
 
 pub(crate) async fn fix(target: &Target, token: &CancellationToken) -> Result<Outcome, Error> {
@@ -574,6 +599,26 @@ mod tests {
         let outcome = fix_file(&file, None, Some((uid, gid))).await.unwrap();
 
         assert!(matches!(outcome, Outcome::Healthy));
+    }
+
+    fn report(name: &str, fixed: bool) -> RepairReport {
+        RepairReport {
+            name: name.to_string(),
+            fixed,
+            detail: None,
+        }
+    }
+
+    #[test]
+    fn a_repaired_nix_conf_asks_for_a_daemon_restart() {
+        assert!(rewrote_nix_conf(&[report(NIX_CONF_DEST, true)]));
+    }
+
+    #[test]
+    fn a_healthy_nix_conf_leaves_the_daemon_alone() {
+        assert!(!rewrote_nix_conf(&[report("/nix", true)]));
+        assert!(!rewrote_nix_conf(&[report(NIX_CONF_DEST, false)]));
+        assert!(!rewrote_nix_conf(&[]));
     }
 
     #[tokio::test]

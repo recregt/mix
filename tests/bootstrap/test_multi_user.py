@@ -1,3 +1,5 @@
+import shlex
+
 from conftest import (
     MIRROR_TEST_USERS,
     MIX_USERS_GROUP,
@@ -94,6 +96,35 @@ def test_removing_a_user_from_the_group_revokes_trust_without_touching_nix_conf(
 
     assert group_members(container, MIX_USERS_GROUP) == [FIRST_USER]
     assert daemon_trusts(container, FIRST_USER)
+
+
+def test_a_rewritten_nix_conf_reaches_the_running_daemon(container, mock_nix_server):
+    result = container.exec("mix", "bootstrap", "--mirror", mock_nix_server["url"])
+    assert result.returncode == 0, result.stderr
+    create_user(container, UNMANAGED_USER)
+
+    legacy_conf = NIX_CONF_CONTENT.replace(
+        f"trusted-users = root @{MIX_USERS_GROUP}",
+        f"trusted-users = root {UNMANAGED_USER}",
+    )
+    container.exec(
+        "bash",
+        "-c",
+        f"printf '%s' {shlex.quote(legacy_conf)} > {NIX_CONF_DEST}",
+        check=True,
+    )
+    container.exec("systemctl", "restart", "nix-daemon.service", check=True)
+    assert daemon_trusts(container, UNMANAGED_USER), (
+        "the daemon must be running with the legacy config for this test to mean anything"
+    )
+
+    assert container.exec("mix", "doctor").returncode != 0
+
+    repair = container.exec("mix", "repair")
+    assert repair.returncode == 0, repair.stderr
+
+    assert _nix_conf(container) == NIX_CONF_CONTENT
+    assert not daemon_trusts(container, UNMANAGED_USER)
 
 
 def test_bootstrapping_as_bare_root_enrols_nobody(container, mock_nix_server):

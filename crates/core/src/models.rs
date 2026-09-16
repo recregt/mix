@@ -7,9 +7,10 @@ use crate::identity::{
 };
 use crate::paths::{
     DEFAULT_PROFILE_NIX_ENV, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, MIX_STATE_DIR_MODE, NIX_CONF_DEST,
-    NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC,
-    NIX_OWNERSHIP_MARKER, NIX_PROFILES_DIR_MODE, NIX_STORE, NIX_TREE_MODE, NIX_TREE_PATHS,
-    PROFILE_SNIPPET_DEST, mix_state_dir, nix_profiles_dir,
+    NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SERVICE_UNIT,
+    NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC, NIX_DAEMON_SOCKET_UNIT, NIX_OWNERSHIP_MARKER,
+    NIX_PROFILES_DIR_MODE, NIX_STORE, NIX_TREE_MODE, NIX_TREE_PATHS, PROFILE_SNIPPET_DEST,
+    mix_state_dir, nix_profiles_dir,
 };
 use crate::privilege::InvokingUser;
 
@@ -208,13 +209,13 @@ pub fn targets(user_config: Option<&UserConfig>) -> Vec<Target> {
         gid: NIXBLD_GID,
     }));
     items.push(Target::SystemdUnit {
-        name: "nix-daemon.service",
+        name: NIX_DAEMON_SERVICE_UNIT,
         src: NIX_DAEMON_SERVICE_SRC,
         dest: NIX_DAEMON_SERVICE_DEST,
         must_be_active: false,
     });
     items.push(Target::SystemdUnit {
-        name: "nix-daemon.socket",
+        name: NIX_DAEMON_SOCKET_UNIT,
         src: NIX_DAEMON_SOCKET_SRC,
         dest: NIX_DAEMON_SOCKET_DEST,
         must_be_active: true,
@@ -356,7 +357,7 @@ mod tests {
     fn category_groups_systemd_units_as_services() {
         assert_eq!(
             Target::SystemdUnit {
-                name: "nix-daemon.socket",
+                name: NIX_DAEMON_SOCKET_UNIT,
                 src: NIX_DAEMON_SOCKET_SRC,
                 dest: NIX_DAEMON_SOCKET_DEST,
                 must_be_active: true,

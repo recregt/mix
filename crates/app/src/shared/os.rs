@@ -156,6 +156,14 @@ pub async fn path_exists(path: impl AsRef<Path>) -> bool {
     tokio::fs::try_exists(path.as_ref()).await.unwrap_or(false)
 }
 
+pub async fn systemd_restart_if_active(name: &str, token: &CancellationToken) -> Result<bool> {
+    if !systemd_unit_is_active(name).await {
+        return Ok(false);
+    }
+    run("systemctl", &["restart", name], token).await?;
+    Ok(true)
+}
+
 pub async fn systemd_unit_is_active(name: &str) -> bool {
     tracing::debug!("checking systemd unit is-active: {name}");
     Command::new("systemctl")
