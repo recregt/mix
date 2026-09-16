@@ -226,6 +226,20 @@ def _seed_activation_package(user: str, secret_key: str, cache_dir: pathlib.Path
             text=True,
         ).stdout.strip()
 
+        deriver = subprocess.run(
+            ["nix-store", "--query", "--deriver", store_path],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+        build_closure = subprocess.run(
+            ["nix-store", "--query", "--requisites", "--include-outputs", deriver],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.split()
+
         secret_key_path = tmp_path / "mirror-signing-key"
         secret_key_path.write_text(secret_key)
         subprocess.run(
@@ -235,8 +249,7 @@ def _seed_activation_package(user: str, secret_key: str, cache_dir: pathlib.Path
                 "sign",
                 "--key-file",
                 str(secret_key_path),
-                "--recursive",
-                store_path,
+                *build_closure,
                 *NIX_ARGS,
             ],
             check=True,
@@ -244,7 +257,7 @@ def _seed_activation_package(user: str, secret_key: str, cache_dir: pathlib.Path
 
         cache_dir.mkdir(parents=True, exist_ok=True)
         subprocess.run(
-            ["nix", "copy", "--to", f"file://{cache_dir}", store_path, *NIX_ARGS],
+            ["nix", "copy", "--to", f"file://{cache_dir}", *build_closure, *NIX_ARGS],
             check=True,
         )
     return store_path
