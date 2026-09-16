@@ -5,8 +5,8 @@ use mix_core::{CancellationToken, Step};
 
 use crate::bootstrap::error::{Error, Result};
 use crate::bootstrap::util::{is_file, remove_dir_all, remove_file};
-use crate::home_manager::resolve_user_config;
-use crate::os::path_exists;
+use crate::shared::home_manager::resolve_user_config;
+use crate::shared::os::path_exists;
 
 #[derive(Default)]
 pub struct WriteHomeManagerConfig {

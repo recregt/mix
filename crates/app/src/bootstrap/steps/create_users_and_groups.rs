@@ -7,7 +7,7 @@ use mix_core::{CancellationToken, Step};
 
 use crate::bootstrap::error::{Error, Result};
 use crate::bootstrap::util::{create_dir_all, is_dir, set_permissions, warn_on_failure};
-use crate::os::run;
+use crate::shared::os::run;
 
 #[derive(Default)]
 pub struct CreateUsersAndGroups {

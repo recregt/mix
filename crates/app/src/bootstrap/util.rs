@@ -6,6 +6,8 @@ use nix::fcntl::{AT_FDCWD, AtFlags};
 use nix::unistd::{Gid, Uid, fchownat};
 use tokio::io::AsyncWriteExt;
 
+use crate::shared::os::DIR_MODE_MASK;
+
 pub async fn create_dir_with_mode(path: impl AsRef<Path>, mode: u32) -> Result<()> {
     let path = path.as_ref();
     tracing::debug!(
@@ -157,8 +159,6 @@ pub async fn is_dir(path: impl AsRef<Path>) -> bool {
         .await
         .is_ok_and(|meta| meta.is_dir())
 }
-
-pub const DIR_MODE_MASK: u32 = 0o7777;
 
 pub async fn dir_has_mode(path: impl AsRef<Path>, mode: u32) -> bool {
     match tokio::fs::metadata(path.as_ref()).await {

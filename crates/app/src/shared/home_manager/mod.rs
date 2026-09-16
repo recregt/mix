@@ -25,7 +25,7 @@ pub fn resolve_user_config() -> Option<UserConfig> {
 pub async fn resolve_existing_user_config() -> Option<UserConfig> {
     let cfg = resolve_user_config()?;
     let marker = mix_core::paths::mix_user_marker(cfg.user.uid);
-    crate::os::path_exists(&marker).await.then_some(cfg)
+    crate::shared::os::path_exists(&marker).await.then_some(cfg)
 }
 
 #[cfg(test)]

@@ -4,10 +4,8 @@ use std::path::Path;
 use mix_core::identity;
 use mix_core::models::{Category, Target};
 
-use crate::home_manager::resolve_existing_user_config;
-use crate::os::{files_match, path_exists, systemd_unit_is_active};
-
-const DIR_MODE_MASK: u32 = 0o7777;
+use crate::shared::home_manager::resolve_existing_user_config;
+use crate::shared::os::{DIR_MODE_MASK, files_match, path_exists, systemd_unit_is_active};
 
 pub struct HealthReport {
     pub name: String,

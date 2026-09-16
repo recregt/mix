@@ -8,7 +8,7 @@ use mix_core::{CancellationToken, Step};
 use crate::bootstrap::error::{Error, Result};
 use crate::bootstrap::steps::create_users_and_groups::delete_user;
 use crate::bootstrap::util::{remove_dir_all, remove_file, warn_on_failure};
-use crate::os::run;
+use crate::shared::os::run;
 
 #[derive(Default)]
 pub struct RemoveExistingInstallation;

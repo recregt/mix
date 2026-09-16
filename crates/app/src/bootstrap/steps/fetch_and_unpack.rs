@@ -482,7 +482,8 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
     })?;
 
     let nix_store = nix_pkg.join("bin/nix-store");
-    let command_line = crate::os::format_command(&nix_store.to_string_lossy(), &["--load-db"]);
+    let command_line =
+        crate::shared::os::format_command(&nix_store.to_string_lossy(), &["--load-db"]);
     tracing::debug!("running command: {command_line}");
 
     let mut child = std::process::Command::new(&nix_store)
@@ -513,7 +514,10 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
     );
 
     if !output.status.success() {
-        return Err(Error::Core(crate::os::command_error(command_line, &output)));
+        return Err(Error::Core(crate::shared::os::command_error(
+            command_line,
+            &output,
+        )));
     }
 
     writer
@@ -529,7 +533,7 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
 
 fn activate_default_profile(nix_pkg: &Path, nss_cacert_pkg: &Path) -> Result<()> {
     let nix_env = nix_pkg.join("bin/nix-env");
-    let command_line = crate::os::format_command(
+    let command_line = crate::shared::os::format_command(
         &nix_env.to_string_lossy(),
         &[
             "--profile",
@@ -570,7 +574,10 @@ fn activate_default_profile(nix_pkg: &Path, nss_cacert_pkg: &Path) -> Result<()>
     );
 
     if !output.status.success() {
-        return Err(Error::Core(crate::os::command_error(command_line, &output)));
+        return Err(Error::Core(crate::shared::os::command_error(
+            command_line,
+            &output,
+        )));
     }
 
     Ok(())

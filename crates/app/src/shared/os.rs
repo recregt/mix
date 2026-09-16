@@ -4,6 +4,8 @@ use mix_core::{CancellationToken, Error, Result};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
+pub(crate) const DIR_MODE_MASK: u32 = 0o7777;
+
 pub async fn run(command: &str, args: &[&str], token: &CancellationToken) -> Result<()> {
     let command_line = format_command(command, args);
     tracing::debug!("running command: {command_line}");

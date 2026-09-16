@@ -6,10 +6,8 @@ use mix_core::models::{Target, targets};
 use mix_core::{CancellationToken, Error as CoreError};
 use nix::unistd::{Gid, Uid, chown};
 
-use crate::home_manager::resolve_existing_user_config;
-use crate::os::{files_match, path_exists, run, systemd_unit_is_active};
-
-const DIR_MODE_MASK: u32 = 0o7777;
+use crate::shared::home_manager::resolve_existing_user_config;
+use crate::shared::os::{DIR_MODE_MASK, files_match, path_exists, run, systemd_unit_is_active};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

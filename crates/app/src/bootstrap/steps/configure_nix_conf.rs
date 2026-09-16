@@ -10,7 +10,7 @@ use crate::bootstrap::error::{Error, Result};
 use crate::bootstrap::util::{
     create_dir_all, remove_dir_all, remove_file, warn_on_failure, write_file_atomic,
 };
-use crate::os::path_exists;
+use crate::shared::os::path_exists;
 
 #[derive(Default)]
 pub struct ConfigureNixConf {
