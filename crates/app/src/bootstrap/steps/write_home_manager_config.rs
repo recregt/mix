@@ -1,15 +1,17 @@
 use async_trait::async_trait;
+use mix_core::identity::{self, MIX_USERS_GROUP};
 use mix_core::models::{UserConfig, user_targets};
-use mix_core::paths::{FLAKE_NIX, HOME_NIX, mix_state_dir, mix_user_marker};
+use mix_core::paths::{FLAKE_NIX, HOME_NIX, mix_state_dir};
 use mix_core::{CancellationToken, Step};
 
 use crate::bootstrap::error::{Error, Result};
-use crate::bootstrap::util::{is_file, remove_dir_all, remove_file};
-use crate::shared::os::path_exists;
+use crate::bootstrap::util::{remove_dir_all, remove_file, warn_on_failure};
+use crate::shared::os::{path_exists, run};
 
 pub struct WriteHomeManagerConfig {
     user_config: Option<UserConfig>,
     created_dir: bool,
+    enrolled: bool,
 }
 
 impl WriteHomeManagerConfig {
@@ -17,6 +19,7 @@ impl WriteHomeManagerConfig {
         Self {
             user_config,
             created_dir: false,
+            enrolled: false,
         }
     }
 }
@@ -33,7 +36,7 @@ impl Step for WriteHomeManagerConfig {
         let Some(cfg) = &self.user_config else {
             return Ok(true);
         };
-        Ok(is_file(mix_user_marker(cfg.user.uid)).await)
+        Ok(identity::group_has_member(MIX_USERS_GROUP, &cfg.user.name))
     }
 
     async fn execute(&mut self, token: &CancellationToken) -> Result<()> {
@@ -43,6 +46,7 @@ impl Step for WriteHomeManagerConfig {
         let state_dir = mix_state_dir(&cfg.user.home);
 
         self.created_dir = !path_exists(&state_dir).await;
+        self.enrolled = !identity::group_has_member(MIX_USERS_GROUP, &cfg.user.name);
         for target in user_targets(cfg) {
             crate::repair::fix(&target, token).await?;
         }
@@ -61,7 +65,20 @@ impl Step for WriteHomeManagerConfig {
             remove_file(state_dir.join(FLAKE_NIX)).await?;
             remove_file(state_dir.join(HOME_NIX)).await?;
         }
-        remove_file(mix_user_marker(cfg.user.uid)).await?;
+
+        if self.enrolled {
+            let token = CancellationToken::new();
+            warn_on_failure(
+                "un-enrol the user from the managed group",
+                run(
+                    "gpasswd",
+                    &["--delete", &cfg.user.name, MIX_USERS_GROUP],
+                    &token,
+                )
+                .await,
+            );
+            self.enrolled = false;
+        }
         Ok(())
     }
 }
@@ -101,6 +118,13 @@ mod tests {
     #[tokio::test]
     async fn check_passes_without_a_user_config() {
         assert!(WriteHomeManagerConfig::new(None).check().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn check_reports_an_unenrolled_user_as_unconfigured() {
+        let home = tempfile::tempdir().unwrap();
+        let step = WriteHomeManagerConfig::new(Some(user_config(home.path())));
+        assert!(!step.check().await.unwrap());
     }
 
     #[tokio::test]

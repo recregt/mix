@@ -1,3 +1,4 @@
+use mix_core::identity::MIX_USERS_GROUP;
 use mix_core::models::UserConfig;
 use mix_core::privilege::invoking_user;
 use mix_core::system::{Arch, Os};
@@ -36,10 +37,9 @@ pub fn resolve_user_config() -> Option<UserConfig> {
     Some(UserConfig { user, flake, home })
 }
 
-pub async fn resolve_existing_user_config() -> Option<UserConfig> {
+pub fn resolve_existing_user_config() -> Option<UserConfig> {
     let cfg = resolve_user_config()?;
-    let marker = mix_core::paths::mix_user_marker(cfg.user.uid);
-    crate::shared::os::path_exists(&marker).await.then_some(cfg)
+    mix_core::identity::group_has_member(MIX_USERS_GROUP, &cfg.user.name).then_some(cfg)
 }
 
 #[cfg(test)]

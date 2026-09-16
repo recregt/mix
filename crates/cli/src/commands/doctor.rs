@@ -4,7 +4,7 @@ use mix_app::doctor::HealthReport;
 use mix_core::Category;
 
 pub async fn run(verbose: u8) -> anyhow::Result<ExitCode> {
-    let user_config = mix_app::resolve_existing_user_config().await;
+    let user_config = mix_app::resolve_existing_user_config();
     let reports = mix_app::doctor::audit(user_config.as_ref()).await;
     render(&reports, verbose > 0);
 

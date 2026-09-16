@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use mix_core::identity::{
-    self, NIXBLD_GID, NIXBLD_GROUP, NIXBLD_HOME, NIXBLD_SHELL, NIXBLD_UID_BASE, NIXBLD_USER_COUNT,
-    user_name,
+    self, MIX_USERS_GID, MIX_USERS_GROUP, NIXBLD_GID, NIXBLD_GROUP, NIXBLD_HOME, NIXBLD_SHELL,
+    NIXBLD_UID_BASE, NIXBLD_USER_COUNT, user_name,
 };
 use mix_core::{CancellationToken, Step};
 
@@ -11,7 +11,7 @@ use crate::shared::os::run;
 
 #[derive(Default)]
 pub struct CreateUsersAndGroups {
-    created_group: bool,
+    created_groups: Vec<&'static str>,
     created_users: Vec<String>,
 }
 
@@ -20,11 +20,13 @@ impl Step for CreateUsersAndGroups {
     type Error = Error;
 
     fn name(&self) -> &'static str {
-        "create nixbld group and build users"
+        "create the managed groups and build users"
     }
 
     async fn check(&self) -> Result<bool> {
-        Ok(identity::group_has_gid(NIXBLD_GROUP, NIXBLD_GID) && all_users_valid())
+        Ok(identity::group_has_gid(NIXBLD_GROUP, NIXBLD_GID)
+            && identity::group_has_gid(MIX_USERS_GROUP, MIX_USERS_GID)
+            && all_users_valid())
     }
 
     async fn execute(&mut self, token: &CancellationToken) -> Result<()> {
@@ -33,22 +35,10 @@ impl Step for CreateUsersAndGroups {
             set_permissions(NIXBLD_HOME, 0o555).await?;
         }
 
-        if identity::group_exists(NIXBLD_GROUP)
-            && !identity::group_has_gid(NIXBLD_GROUP, NIXBLD_GID)
-        {
-            let gid = NIXBLD_GID.to_string();
-            run("groupmod", &["--gid", &gid, NIXBLD_GROUP], token).await?;
-        } else if !identity::group_exists(NIXBLD_GROUP) {
-            let gid = NIXBLD_GID.to_string();
-            let result = run(
-                "groupadd",
-                &["--system", "--gid", &gid, NIXBLD_GROUP],
-                token,
-            )
-            .await;
-            self.created_group = identity::group_exists(NIXBLD_GROUP);
-            result?;
-        }
+        self.reconcile_group(NIXBLD_GROUP, NIXBLD_GID, token)
+            .await?;
+        self.reconcile_group(MIX_USERS_GROUP, MIX_USERS_GID, token)
+            .await?;
 
         for n in 1..=NIXBLD_USER_COUNT {
             let name = user_name(n);
@@ -106,14 +96,35 @@ impl Step for CreateUsersAndGroups {
             delete_user(&name).await;
         }
 
-        if self.created_group {
-            warn_on_failure(
-                "delete nixbld group",
-                run("groupdel", &[NIXBLD_GROUP], &token).await,
-            );
-            self.created_group = false;
+        for name in self.created_groups.drain(..).rev() {
+            warn_on_failure("delete group", run("groupdel", &[name], &token).await);
         }
 
+        Ok(())
+    }
+}
+
+impl CreateUsersAndGroups {
+    async fn reconcile_group(
+        &mut self,
+        name: &'static str,
+        gid: u32,
+        token: &CancellationToken,
+    ) -> Result<()> {
+        if identity::group_exists(name) {
+            if !identity::group_has_gid(name, gid) {
+                let gid = gid.to_string();
+                run("groupmod", &["--gid", &gid, name], token).await?;
+            }
+            return Ok(());
+        }
+
+        let gid = gid.to_string();
+        let result = run("groupadd", &["--system", "--gid", &gid, name], token).await;
+        if identity::group_exists(name) {
+            self.created_groups.push(name);
+        }
+        result?;
         Ok(())
     }
 }

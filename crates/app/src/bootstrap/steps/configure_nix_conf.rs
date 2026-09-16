@@ -1,10 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use mix_core::models::UserConfig;
 use mix_core::{CancellationToken, Step};
 
-use mix_core::models::{PROFILE_SNIPPET, nix_conf};
+use mix_core::models::{NIX_CONF, PROFILE_SNIPPET};
 use mix_core::paths::{NIX_CONF_DEST, PROFILE_SNIPPET_DEST};
 
 use crate::bootstrap::error::{Error, Result};
@@ -13,35 +12,9 @@ use crate::bootstrap::util::{
 };
 use crate::shared::os::path_exists;
 
-/// Resolved on every use rather than once at plan time: `--force` wipes the
-/// marker directory mid-run, and the file has to match what `doctor` expects
-/// afterwards.
-type ResolveTrustedUsers = fn(Option<&UserConfig>) -> Vec<String>;
-
+#[derive(Default)]
 pub struct ConfigureNixConf {
-    user_config: Option<UserConfig>,
-    trusted_users: ResolveTrustedUsers,
     written: Vec<WrittenFile>,
-}
-
-impl Default for ConfigureNixConf {
-    fn default() -> Self {
-        Self::new(None)
-    }
-}
-
-impl ConfigureNixConf {
-    pub fn new(user_config: Option<UserConfig>) -> Self {
-        Self {
-            user_config,
-            trusted_users: mix_core::managed::trusted_users,
-            written: Vec::new(),
-        }
-    }
-
-    fn nix_conf(&self) -> String {
-        nix_conf(&(self.trusted_users)(self.user_config.as_ref()))
-    }
 }
 
 struct WrittenFile {
@@ -59,13 +32,13 @@ impl Step for ConfigureNixConf {
     }
 
     async fn check(&self) -> Result<bool> {
-        Ok(matches_expected(NIX_CONF_DEST, &self.nix_conf()).await
+        Ok(matches_expected(NIX_CONF_DEST, NIX_CONF).await
             && matches_expected(PROFILE_SNIPPET_DEST, PROFILE_SNIPPET).await)
     }
 
     async fn execute(&mut self, _token: &CancellationToken) -> Result<()> {
         let previous = previous_contents(NIX_CONF_DEST).await;
-        let created_dir = write(NIX_CONF_DEST, &self.nix_conf()).await?;
+        let created_dir = write(NIX_CONF_DEST, NIX_CONF).await?;
         self.written.push(WrittenFile {
             path: NIX_CONF_DEST,
             previous,
@@ -141,65 +114,27 @@ async fn first_missing_ancestor(dir: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    use mix_core::models::NIX_CONF_BASE;
-
-    fn step_trusting(trusted_users: ResolveTrustedUsers) -> ConfigureNixConf {
-        ConfigureNixConf {
-            user_config: None,
-            trusted_users,
-            written: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn nix_conf_trusts_the_resolved_user() {
-        let step = step_trusting(|_| vec!["mix-user".to_string()]);
-        assert_eq!(
-            step.nix_conf(),
-            format!("{NIX_CONF_BASE}trusted-users = root mix-user\n")
-        );
-    }
-
-    #[test]
-    fn nix_conf_trusts_every_managed_user() {
-        let step = step_trusting(|_| vec!["other-user".to_string(), "mix-user".to_string()]);
-        assert_eq!(
-            step.nix_conf(),
-            format!("{NIX_CONF_BASE}trusted-users = root mix-user other-user\n")
-        );
-    }
-
-    #[test]
-    fn nix_conf_is_the_base_config_without_a_user() {
-        assert_eq!(step_trusting(|_| Vec::new()).nix_conf(), NIX_CONF_BASE);
-    }
-
-    #[test]
-    fn the_default_step_resolves_the_same_config_as_an_explicit_none() {
-        assert_eq!(
-            ConfigureNixConf::default().nix_conf(),
-            ConfigureNixConf::new(None).nix_conf()
-        );
-    }
-
     #[tokio::test]
     async fn matches_expected_is_true_for_identical_contents() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("nix.conf");
-        let expected = step_trusting(|_| vec!["mix-user".to_string()]).nix_conf();
-        tokio::fs::write(&file, &expected).await.unwrap();
+        tokio::fs::write(&file, NIX_CONF).await.unwrap();
 
-        assert!(matches_expected(file.to_str().unwrap(), &expected).await);
+        assert!(matches_expected(file.to_str().unwrap(), NIX_CONF).await);
     }
 
     #[tokio::test]
     async fn matches_expected_detects_a_dropped_trusted_users_line() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("nix.conf");
-        tokio::fs::write(&file, NIX_CONF_BASE).await.unwrap();
+        let without_trust: String = NIX_CONF
+            .lines()
+            .filter(|line| !line.starts_with("trusted-users"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        tokio::fs::write(&file, &without_trust).await.unwrap();
 
-        let expected = step_trusting(|_| vec!["mix-user".to_string()]).nix_conf();
-        assert!(!matches_expected(file.to_str().unwrap(), &expected).await);
+        assert!(!matches_expected(file.to_str().unwrap(), NIX_CONF).await);
     }
 
     #[tokio::test]
@@ -207,7 +142,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("absent").join("nix.conf");
 
-        assert!(!matches_expected(missing.to_str().unwrap(), NIX_CONF_BASE).await);
+        assert!(!matches_expected(missing.to_str().unwrap(), NIX_CONF).await);
     }
 
     #[tokio::test]
@@ -254,8 +189,6 @@ mod tests {
         let created_dir = write(file.to_str().unwrap(), "content").await.unwrap();
 
         let mut step = ConfigureNixConf {
-            user_config: None,
-            trusted_users: |_| Vec::new(),
             written: vec![WrittenFile {
                 path: Box::leak(file.to_str().unwrap().to_string().into_boxed_str()),
                 previous: None,

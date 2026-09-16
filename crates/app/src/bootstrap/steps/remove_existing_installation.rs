@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use mix_core::identity::{self, NIXBLD_GROUP, NIXBLD_USER_COUNT, user_name};
+use mix_core::identity::{self, MIX_USERS_GROUP, NIXBLD_GROUP, NIXBLD_USER_COUNT, user_name};
 use mix_core::paths::{
     NIX_CONF_DEST, NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SOCKET_DEST, PROFILE_SNIPPET_DEST,
 };
@@ -53,11 +53,10 @@ impl Step for RemoveExistingInstallation {
                 delete_user(&name).await;
             }
         }
-        if identity::group_exists(NIXBLD_GROUP) {
-            warn_on_failure(
-                "delete nixbld group",
-                run("groupdel", &[NIXBLD_GROUP], token).await,
-            );
+        for group in [NIXBLD_GROUP, MIX_USERS_GROUP] {
+            if identity::group_exists(group) {
+                warn_on_failure("delete group", run("groupdel", &[group], token).await);
+            }
         }
 
         remove_file(NIX_CONF_DEST).await?;

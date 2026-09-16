@@ -16,7 +16,7 @@ pub async fn run() -> ExitCode {
         cli.command,
         Command::Doctor | Command::Repair | Command::Bootstrap { .. }
     ) {
-        let user_config = mix_app::resolve_existing_user_config().await;
+        let user_config = mix_app::resolve_existing_user_config();
         if let Some(report) = mix_app::doctor::audit(user_config.as_ref())
             .await
             .into_iter()

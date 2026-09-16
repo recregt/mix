@@ -42,7 +42,6 @@ pub mod paths {
     pub const FLAKE_NIX: &str = "flake.nix";
     pub const HOME_NIX: &str = "home.nix";
     pub const FLAKE_LOCK: &str = "flake.lock";
-    pub const MIX_MANAGED_USERS_DIR: &str = "/nix/.mix-managed-users";
 
     pub const NIX_PROFILES_DIR: &str = ".local/state/nix/profiles";
     pub const NIX_PROFILES_DIR_MODE: u32 = 0o755;
@@ -56,10 +55,6 @@ pub mod paths {
         home.join(NIX_PROFILES_DIR)
     }
 
-    pub fn mix_user_marker(uid: u32) -> std::path::PathBuf {
-        std::path::PathBuf::from(MIX_MANAGED_USERS_DIR).join(uid.to_string())
-    }
-
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -69,14 +64,6 @@ pub mod paths {
             assert_eq!(
                 mix_state_dir(std::path::Path::new("/home/mix-user")),
                 std::path::PathBuf::from("/home/mix-user/.local/state/mix")
-            );
-        }
-
-        #[test]
-        fn mix_user_marker_is_keyed_by_uid_under_the_root_owned_tree() {
-            assert_eq!(
-                mix_user_marker(1000),
-                std::path::PathBuf::from("/nix/.mix-managed-users/1000")
             );
         }
     }
@@ -89,6 +76,9 @@ pub mod identity {
     pub const NIXBLD_UID_BASE: u32 = 30_000;
     pub const NIXBLD_HOME: &str = "/var/empty";
     pub const NIXBLD_SHELL: &str = "/usr/sbin/nologin";
+
+    pub const MIX_USERS_GROUP: &str = "mix-users";
+    pub const MIX_USERS_GID: u32 = 30_100;
 
     const NIXBLD_USER_NAMES: [&str; NIXBLD_USER_COUNT as usize] = [
         "nixbld1", "nixbld2", "nixbld3", "nixbld4", "nixbld5", "nixbld6", "nixbld7", "nixbld8",
@@ -114,6 +104,17 @@ pub mod identity {
             .ok()
             .flatten()
             .is_some_and(|group| group.gid.as_raw() == gid)
+    }
+
+    pub fn group_has_member(name: &str, user: &str) -> bool {
+        let Some(group) = nix::unistd::Group::from_name(name).ok().flatten() else {
+            return false;
+        };
+        group.mem.iter().any(|member| member == user)
+            || nix::unistd::User::from_name(user)
+                .ok()
+                .flatten()
+                .is_some_and(|resolved| resolved.gid == group.gid)
     }
 
     pub fn user_exists(name: &str) -> bool {
@@ -184,6 +185,21 @@ pub mod identity {
         #[test]
         fn group_has_gid_false_for_a_nonexistent_group() {
             assert!(!group_has_gid("mix-test-nonexistent-group-xyz", 0));
+        }
+
+        #[test]
+        fn group_has_member_counts_a_primary_group_as_membership() {
+            assert!(group_has_member("root", "root"));
+        }
+
+        #[test]
+        fn group_has_member_false_for_a_user_outside_the_group() {
+            assert!(!group_has_member("root", "mix-test-nonexistent-user-xyz"));
+        }
+
+        #[test]
+        fn group_has_member_false_for_a_nonexistent_group() {
+            assert!(!group_has_member("mix-test-nonexistent-group-xyz", "root"));
         }
 
         #[test]

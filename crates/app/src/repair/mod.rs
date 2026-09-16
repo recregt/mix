@@ -37,8 +37,7 @@ pub async fn repair(user_config: Option<&UserConfig>) -> Vec<RepairReport> {
     tracing::info!("repairing managed environment");
     let token = CancellationToken::new();
     let mut reports = Vec::new();
-    let trusted_users = mix_core::managed::trusted_users(user_config);
-    for target in targets(user_config, &trusted_users) {
+    for target in targets(user_config) {
         let name = target.label();
         tracing::debug!("checking: {name}");
         match fix(&target, &token).await {
@@ -98,6 +97,7 @@ pub(crate) async fn fix(target: &Target, token: &CancellationToken) -> Result<Ou
             owner,
         } => fix_file(path, expected.as_deref(), *owner).await,
         Target::Group { name, gid } => fix_group(name, *gid, token).await,
+        Target::GroupMember { group, user } => fix_group_member(group, user, token).await,
         Target::User { n, uid, gid } => fix_user(*n, *uid, *gid, token).await,
         Target::SystemdUnit {
             name,
@@ -273,6 +273,24 @@ async fn fix_group(name: &str, gid: u32, token: &CancellationToken) -> Result<Ou
         token,
     )
     .await?;
+    Ok(Outcome::Repaired)
+}
+
+async fn fix_group_member(
+    group: &str,
+    user: &str,
+    token: &CancellationToken,
+) -> Result<Outcome, Error> {
+    if identity::group_has_member(group, user) {
+        return Ok(Outcome::Healthy);
+    }
+    if !identity::user_exists(user) {
+        return Err(Error::Unrepairable {
+            artifact: user.to_string(),
+            hint: "the user no longer exists; nothing left to enrol",
+        });
+    }
+    run("gpasswd", &["--add", user, group], token).await?;
     Ok(Outcome::Repaired)
 }
 
@@ -556,6 +574,27 @@ mod tests {
         let outcome = fix_file(&file, None, Some((uid, gid))).await.unwrap();
 
         assert!(matches!(outcome, Outcome::Healthy));
+    }
+
+    #[tokio::test]
+    async fn fix_group_member_is_a_noop_for_an_existing_member() {
+        let outcome = fix_group_member("root", "root", &CancellationToken::new())
+            .await
+            .unwrap();
+
+        assert!(matches!(outcome, Outcome::Healthy));
+    }
+
+    #[tokio::test]
+    async fn fix_group_member_reports_unrepairable_for_a_user_that_is_gone() {
+        let result = fix_group_member(
+            "root",
+            "mix-test-nonexistent-user-xyz",
+            &CancellationToken::new(),
+        )
+        .await;
+
+        assert!(matches!(result, Err(Error::Unrepairable { .. })));
     }
 
     #[tokio::test]

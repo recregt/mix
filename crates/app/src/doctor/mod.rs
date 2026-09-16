@@ -16,8 +16,7 @@ pub struct HealthReport {
 
 pub async fn audit(user_config: Option<&UserConfig>) -> Vec<HealthReport> {
     tracing::info!("auditing managed environment");
-    let trusted_users = mix_core::managed::trusted_users(user_config);
-    let items = mix_core::models::targets(user_config, &trusted_users);
+    let items = mix_core::models::targets(user_config);
     let details = join_all(items.iter().map(inspect)).await;
     items
         .iter()
@@ -54,6 +53,10 @@ async fn inspect(target: &Target) -> Option<String> {
         Target::Group { name, gid } => {
             tracing::debug!("checking group: {name}");
             inspect_group(name, *gid)
+        }
+        Target::GroupMember { group, user } => {
+            tracing::debug!("checking {group} membership: {user}");
+            inspect_group_member(group, user)
         }
         Target::User { n, uid, gid } => {
             tracing::debug!("checking user: {}", mix_core::identity::user_name(*n));
@@ -130,6 +133,14 @@ fn inspect_group(name: &str, gid: u32) -> Option<String> {
     }
 }
 
+fn inspect_group_member(group: &str, user: &str) -> Option<String> {
+    if identity::group_has_member(group, user) {
+        None
+    } else {
+        Some(format!("not a member of the {group} group"))
+    }
+}
+
 fn inspect_user(n: u32, uid: u32, gid: u32) -> Option<String> {
     let name = identity::user_name(n);
     if identity::user_matches(&name, uid, gid) {
@@ -189,7 +200,7 @@ mod tests {
     #[tokio::test]
     async fn audit_reports_one_entry_per_target() {
         let reports = audit(None).await;
-        assert_eq!(reports.len(), mix_core::models::targets(None, &[]).len());
+        assert_eq!(reports.len(), mix_core::models::targets(None).len());
     }
 
     #[tokio::test]
@@ -200,7 +211,7 @@ mod tests {
 
         assert_eq!(
             reports.len(),
-            mix_core::models::targets(Some(&cfg), &[]).len(),
+            mix_core::models::targets(Some(&cfg)).len(),
             "every target of the injected config must be reported"
         );
         assert!(reports.len() > audit(None).await.len());
@@ -315,6 +326,19 @@ mod tests {
     #[test]
     fn inspect_group_reports_the_wrong_gid() {
         assert!(inspect_group("root", 9999).is_some());
+    }
+
+    #[test]
+    fn inspect_group_member_passes_for_a_member() {
+        assert!(inspect_group_member("root", "root").is_none());
+    }
+
+    #[test]
+    fn inspect_group_member_reports_a_user_outside_the_group() {
+        assert_eq!(
+            inspect_group_member("root", "mix-test-nonexistent-user-xyz").as_deref(),
+            Some("not a member of the root group")
+        );
     }
 
     #[tokio::test]

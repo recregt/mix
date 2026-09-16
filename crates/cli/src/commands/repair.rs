@@ -10,7 +10,7 @@ pub async fn run() -> anyhow::Result<ExitCode> {
     }
     let _lock = super::acquire_lock()?;
 
-    let user_config = mix_app::resolve_existing_user_config().await;
+    let user_config = mix_app::resolve_existing_user_config();
     let reports = mix_app::repair::repair(user_config.as_ref()).await;
 
     if reports.is_empty() {
