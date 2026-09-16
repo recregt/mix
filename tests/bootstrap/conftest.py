@@ -5,6 +5,7 @@ import os
 import pathlib
 import re
 import subprocess
+import tempfile
 import threading
 import time
 
@@ -14,6 +15,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 CACHE_DIR = pathlib.Path(os.environ.get("XDG_CACHE_HOME", pathlib.Path.home() / ".cache")) / "mix-bootstrap-tests"
 IMAGE_TAG = "mix-bootstrap-test:latest"
 REMOTE_IMAGE = os.environ.get("MIX_TEST_IMAGE")
+MIRROR_TEST_USER = "ciuser"
 
 
 def _pin(target: str) -> tuple[str, str]:
@@ -34,8 +36,18 @@ def _pin(target: str) -> tuple[str, str]:
     return url_match.group(1), sha256_match.group(1)
 
 
+def _source_rev(const_name: str) -> str:
+    pins_src = (REPO_ROOT / "crates/app/src/bootstrap/pins.rs").read_text()
+    match = re.search(rf'{const_name}:\s*&str\s*=\s*"([0-9a-f]{{40}})"', pins_src)
+    if not match:
+        raise RuntimeError(f"could not find {const_name} in pins.rs")
+    return match.group(1)
+
+
 NIX_URL, NIX_SHA256 = _pin("x86_64-linux")
 NIX_FILENAME = NIX_URL.rsplit("/", 1)[-1]
+NIXPKGS_REV = _source_rev("NIXPKGS_REV")
+HOME_MANAGER_REV = _source_rev("HOME_MANAGER_REV")
 
 
 @pytest.fixture(scope="session")
@@ -78,6 +90,135 @@ def nix_tarball():
         assert digest == NIX_SHA256, f"cached tarball does not match the pin in pins.rs: got {digest}"
 
     return dest
+
+
+@pytest.fixture(scope="session")
+def mirror_sources():
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    sources = {
+        "nixpkgs": (
+            f"https://github.com/NixOS/nixpkgs/archive/{NIXPKGS_REV}.tar.gz",
+            CACHE_DIR / f"nixpkgs-{NIXPKGS_REV}.tar.gz",
+        ),
+        "home-manager": (
+            f"https://github.com/nix-community/home-manager/archive/{HOME_MANAGER_REV}.tar.gz",
+            CACHE_DIR / f"home-manager-{HOME_MANAGER_REV}.tar.gz",
+        ),
+    }
+    for url, dest in sources.values():
+        with open(CACHE_DIR / f"{dest.name}.lock", "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if not dest.exists():
+                subprocess.run(["curl", "-fsSL", "-o", str(dest), url], check=True)
+    return CACHE_DIR
+
+
+_MIRROR_FLAKE_NIX = """
+{
+  description = "mirror cache seed";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/__NIXPKGS_REV__";
+    home-manager = {
+      url = "github:nix-community/home-manager/__HOME_MANAGER_REV__";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
+  outputs = { nixpkgs, home-manager, ... }:
+    let
+      system = "x86_64-linux";
+      pkgs = nixpkgs.legacyPackages.${system};
+    in {
+      homeConfigurations."__USER__" = home-manager.lib.homeManagerConfiguration {
+        inherit pkgs;
+        modules = [ ./home.nix ];
+      };
+    };
+}
+"""
+
+_MIRROR_HOME_NIX = """
+{ pkgs, ... }:
+{
+  home.username = "__USER__";
+  home.homeDirectory = "/home/__USER__";
+  home.stateVersion = "24.05";
+  home.packages = [ pkgs.git ];
+}
+"""
+
+
+@pytest.fixture(scope="session")
+def mirror_cache(mirror_sources):
+    cache_dir = CACHE_DIR / "cache"
+    marker = CACHE_DIR / f"cache-{NIXPKGS_REV}-{HOME_MANAGER_REV}.built"
+
+    with open(CACHE_DIR / "mirror-cache.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not marker.exists():
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_path = pathlib.Path(tmp)
+                flake_nix = (
+                    _MIRROR_FLAKE_NIX.replace("__NIXPKGS_REV__", NIXPKGS_REV)
+                    .replace("__HOME_MANAGER_REV__", HOME_MANAGER_REV)
+                    .replace("__USER__", MIRROR_TEST_USER)
+                )
+                home_nix = _MIRROR_HOME_NIX.replace("__USER__", MIRROR_TEST_USER)
+                (tmp_path / "flake.nix").write_text(flake_nix)
+                (tmp_path / "home.nix").write_text(home_nix)
+
+                nix_args = ["--extra-experimental-features", "nix-command flakes"]
+                store_path = subprocess.run(
+                    [
+                        "nix",
+                        "build",
+                        f'path:{tmp_path}#homeConfigurations."{MIRROR_TEST_USER}".activationPackage',
+                        "--no-link",
+                        "--print-out-paths",
+                        *nix_args,
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+
+                secret_key = subprocess.run(
+                    ["nix", "key", "generate-secret", "--key-name", "mix-mirror-test", *nix_args],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout
+                public_key = subprocess.run(
+                    ["nix", "key", "convert-secret-to-public", *nix_args],
+                    input=secret_key,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+                secret_key_path = tmp_path / "mirror-signing-key"
+                secret_key_path.write_text(secret_key)
+                subprocess.run(
+                    [
+                        "nix",
+                        "store",
+                        "sign",
+                        "--key-file",
+                        str(secret_key_path),
+                        "--recursive",
+                        store_path,
+                        *nix_args,
+                    ],
+                    check=True,
+                )
+
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                subprocess.run(
+                    ["nix", "copy", "--to", f"file://{cache_dir}", store_path, *nix_args],
+                    check=True,
+                )
+                (cache_dir / "mix-mirror.pub").write_text(public_key)
+            marker.write_text(store_path)
+
+    return cache_dir
 
 
 @pytest.fixture()

@@ -11,9 +11,9 @@ def _nix_conf_content() -> str:
     models_src = (
         pathlib.Path(__file__).resolve().parents[2] / "crates/core/src/models.rs"
     ).read_text()
-    match = re.search(r'NIX_CONF:\s*&str\s*=\s*(".*?");', models_src, re.S)
+    match = re.search(r'NIX_CONF_BASE:\s*&str\s*=\s*(".*?");', models_src, re.S)
     if not match:
-        raise RuntimeError("could not find the NIX_CONF constant in models.rs")
+        raise RuntimeError("could not find the NIX_CONF_BASE constant in models.rs")
     return ast.literal_eval(match.group(1))
 
 
@@ -187,7 +187,7 @@ def test_repair_cannot_restore_a_deleted_default_profile_but_bootstrap_can(conta
     assert container.exec("mix", "doctor").returncode == 0
 
 
-def test_bootstrap_auto_escalates_for_a_sudo_user(container, mock_nix_server):
+def test_bootstrap_auto_escalates_for_a_sudo_user(container, mock_nix_server, mirror_cache):
     container.exec("useradd", "--create-home", "ciuser", check=True)
     container.exec(
         "bash",
@@ -218,6 +218,17 @@ def test_bootstrap_auto_escalates_for_a_sudo_user(container, mock_nix_server):
     flake_contents = container.exec("cat", flake_nix, check=True).stdout
     assert 'system = "x86_64-linux"' in flake_contents
     assert 'homeConfigurations."ciuser"' in flake_contents
+
+    nix_conf_contents = container.exec("cat", "/etc/nix/nix.conf", check=True).stdout
+    assert "trusted-users = root ciuser" in nix_conf_contents
+
+    git_dir = f"{state_dir}/.git"
+    assert container.path_exists(git_dir)
+    git_bin = "/home/ciuser/.nix-profile/bin/git"
+    log = container.exec(git_bin, "-C", state_dir, "log", "--format=%an <%ae>", user="ciuser", check=True)
+    assert log.stdout.strip() == "mix <mix@localhost>"
+    status = container.exec(git_bin, "-C", state_dir, "status", "--short", user="ciuser", check=True)
+    assert status.stdout.strip() == ""
 
     doctor = container.exec("mix", "doctor", user="ciuser")
     assert doctor.returncode == 0, doctor.stdout + doctor.stderr

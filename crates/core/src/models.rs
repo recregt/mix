@@ -10,8 +10,15 @@ use crate::paths::{
 };
 use crate::privilege::InvokingUser;
 
-pub const NIX_CONF: &str =
+pub const NIX_CONF_BASE: &str =
     "build-users-group = nixbld\nexperimental-features = nix-command flakes\n";
+
+pub fn nix_conf(username: Option<&str>) -> String {
+    match username {
+        Some(name) => format!("{NIX_CONF_BASE}trusted-users = root {name}\n"),
+        None => NIX_CONF_BASE.to_string(),
+    }
+}
 pub const PROFILE_SNIPPET: &str = "# Managed by mix -- do not edit, changes are overwritten and will trip `mix doctor`.\nif [ -e '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh' ]; then\n    . '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'\nfi\n";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,7 +184,7 @@ pub fn targets(user_config: Option<&UserConfig>) -> Vec<Target> {
     });
     items.push(Target::File {
         path: PathBuf::from(NIX_CONF_DEST),
-        expected: Some(NIX_CONF.to_string()),
+        expected: Some(nix_conf(user_config.map(|cfg| cfg.user.name.as_str()))),
         owner: None,
     });
     items.push(Target::File {
@@ -293,7 +300,7 @@ mod tests {
         assert_eq!(
             Target::File {
                 path: PathBuf::from(NIX_CONF_DEST),
-                expected: Some(NIX_CONF.to_string()),
+                expected: Some(nix_conf(None)),
                 owner: None,
             }
             .category(),
@@ -411,6 +418,44 @@ mod tests {
             t,
             Target::File { path, expected, owner: Some((1000, 1000)) }
                 if path.ends_with("home.nix") && expected.as_deref() == Some("home-content")
+        )));
+    }
+
+    #[test]
+    fn nix_conf_has_no_trusted_users_line_without_a_username() {
+        assert_eq!(nix_conf(None), NIX_CONF_BASE);
+    }
+
+    #[test]
+    fn nix_conf_trusts_the_given_username_alongside_root() {
+        assert_eq!(
+            nix_conf(Some("alice")),
+            format!("{NIX_CONF_BASE}trusted-users = root alice\n")
+        );
+    }
+
+    #[test]
+    fn targets_trusts_the_bootstrapped_user_in_nix_conf() {
+        let cfg = sample_user_config();
+        let items = targets(Some(&cfg));
+
+        assert!(items.iter().any(|t| matches!(
+            t,
+            Target::File { path, expected, .. }
+                if path.as_path() == Path::new(NIX_CONF_DEST)
+                    && expected.as_deref() == Some(nix_conf(Some("mix-user")).as_str())
+        )));
+    }
+
+    #[test]
+    fn targets_has_no_trusted_users_line_without_a_user() {
+        let items = targets(None);
+
+        assert!(items.iter().any(|t| matches!(
+            t,
+            Target::File { path, expected, .. }
+                if path.as_path() == Path::new(NIX_CONF_DEST)
+                    && expected.as_deref() == Some(NIX_CONF_BASE)
         )));
     }
 

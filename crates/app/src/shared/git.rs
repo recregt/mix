@@ -39,20 +39,7 @@ pub async fn sync(
     let state_dir_str = state_dir.to_string_lossy().into_owned();
     let git = git_binary(user);
 
-    run_as(
-        user,
-        &git,
-        &[
-            "-C",
-            &state_dir_str,
-            "add",
-            "flake.nix",
-            "home.nix",
-            "flake.lock",
-        ],
-        token,
-    )
-    .await?;
+    run_as(user, &git, &["-C", &state_dir_str, "add", "-A", "."], token).await?;
 
     let clean = status_as(
         user,

@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
+use mix_core::models::UserConfig;
 use mix_core::{CancellationToken, Step};
 
-use mix_core::models::{NIX_CONF, PROFILE_SNIPPET};
+use mix_core::models::{PROFILE_SNIPPET, nix_conf};
 use mix_core::paths::{NIX_CONF_DEST, PROFILE_SNIPPET_DEST};
 
 use crate::bootstrap::error::{Error, Result};
@@ -14,7 +15,21 @@ use crate::shared::os::path_exists;
 
 #[derive(Default)]
 pub struct ConfigureNixConf {
+    user_config: Option<UserConfig>,
     written: Vec<WrittenFile>,
+}
+
+impl ConfigureNixConf {
+    pub fn new(user_config: Option<UserConfig>) -> Self {
+        Self {
+            user_config,
+            written: Vec::new(),
+        }
+    }
+
+    fn nix_conf(&self) -> String {
+        nix_conf(self.user_config.as_ref().map(|cfg| cfg.user.name.as_str()))
+    }
 }
 
 struct WrittenFile {
@@ -32,13 +47,13 @@ impl Step for ConfigureNixConf {
     }
 
     async fn check(&self) -> Result<bool> {
-        Ok(matches_expected(NIX_CONF_DEST, NIX_CONF).await
+        Ok(matches_expected(NIX_CONF_DEST, &self.nix_conf()).await
             && matches_expected(PROFILE_SNIPPET_DEST, PROFILE_SNIPPET).await)
     }
 
     async fn execute(&mut self, _token: &CancellationToken) -> Result<()> {
         let previous = previous_contents(NIX_CONF_DEST).await;
-        let created_dir = write(NIX_CONF_DEST, NIX_CONF).await?;
+        let created_dir = write(NIX_CONF_DEST, &self.nix_conf()).await?;
         self.written.push(WrittenFile {
             path: NIX_CONF_DEST,
             previous,
@@ -158,6 +173,7 @@ mod tests {
         let created_dir = write(file.to_str().unwrap(), "content").await.unwrap();
 
         let mut step = ConfigureNixConf {
+            user_config: None,
             written: vec![WrittenFile {
                 path: Box::leak(file.to_str().unwrap().to_string().into_boxed_str()),
                 previous: None,

@@ -7,6 +7,7 @@ use mix_core::{DownloadProgress, Error as CoreError};
 use sha2::{Digest, Sha256};
 
 use crate::bootstrap::error::{Error, Result};
+use crate::bootstrap::mirror::{filter_mirror, mirror_url};
 use crate::bootstrap::pins::{TarballPin, pin_for};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -60,14 +61,6 @@ pub async fn bytes(
     fetch_and_verify(&url, pin.sha256, progress)
         .await
         .map(Cow::Owned)
-}
-
-fn filter_mirror(value: Option<&str>) -> Option<&str> {
-    value.map(str::trim).filter(|s| !s.is_empty())
-}
-
-fn mirror_url(base: &str, filename: &str) -> String {
-    format!("{}/{filename}", base.trim().trim_end_matches('/'))
 }
 
 fn network_error(e: reqwest::Error) -> Error {
@@ -537,56 +530,6 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, Error::Network(_)));
-    }
-
-    #[test]
-    fn mirror_url_joins_base_and_filename() {
-        assert_eq!(
-            mirror_url("http://mirror.internal", "nix-2.35.2-x86_64-linux.tar.xz"),
-            "http://mirror.internal/nix-2.35.2-x86_64-linux.tar.xz"
-        );
-    }
-
-    #[test]
-    fn mirror_url_trims_a_trailing_slash_on_the_base() {
-        assert_eq!(
-            mirror_url("http://mirror.internal/", "nix-2.35.2-x86_64-linux.tar.xz"),
-            "http://mirror.internal/nix-2.35.2-x86_64-linux.tar.xz"
-        );
-    }
-
-    #[test]
-    fn mirror_url_trims_surrounding_whitespace_on_the_base() {
-        assert_eq!(
-            mirror_url(
-                " http://mirror.internal/ ",
-                "nix-2.35.2-x86_64-linux.tar.xz"
-            ),
-            "http://mirror.internal/nix-2.35.2-x86_64-linux.tar.xz"
-        );
-    }
-
-    #[test]
-    fn filter_mirror_none_when_unset() {
-        assert_eq!(filter_mirror(None), None);
-    }
-
-    #[test]
-    fn filter_mirror_none_when_empty_string() {
-        assert_eq!(filter_mirror(Some("")), None);
-    }
-
-    #[test]
-    fn filter_mirror_none_when_whitespace_only() {
-        assert_eq!(filter_mirror(Some("   ")), None);
-    }
-
-    #[test]
-    fn filter_mirror_some_when_a_real_url_is_set() {
-        assert_eq!(
-            filter_mirror(Some("http://mirror.internal")),
-            Some("http://mirror.internal")
-        );
     }
 
     #[test]
