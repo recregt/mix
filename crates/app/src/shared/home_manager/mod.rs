@@ -3,6 +3,8 @@ use mix_core::privilege::invoking_user;
 use mix_core::system::{Arch, Os};
 use mix_nixgen::{FlakeConfig, HomeManagerConfig};
 
+const HOME_MANAGER_STATE_VERSION: &str = "24.05";
+
 fn nix_system_double(arch: Arch, os: Os) -> &'static str {
     match (arch, os) {
         (Arch::X86_64, Os::Linux) => "x86_64-linux",
@@ -18,7 +20,17 @@ pub fn resolve_user_config() -> Option<UserConfig> {
     let flake = FlakeConfig::new(system, &user.name)
         .expect("system is a hardcoded literal and a real username cannot contain a null byte")
         .render();
-    let home = HomeManagerConfig::new().render();
+    let mut home_cfg = HomeManagerConfig::new();
+    home_cfg
+        .set_str("home.username", &user.name)
+        .expect("a real username cannot contain a null byte")
+        .set_str("home.homeDirectory", &user.home.to_string_lossy())
+        .expect("a real home directory cannot contain a null byte")
+        .set_str("home.stateVersion", HOME_MANAGER_STATE_VERSION)
+        .expect("state version is a hardcoded literal")
+        .packages(["git"])
+        .expect("\"git\" is a valid nix identifier");
+    let home = home_cfg.render();
     Some(UserConfig { user, flake, home })
 }
 

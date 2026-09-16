@@ -47,7 +47,7 @@ async fn inspect(target: &Target) -> Option<String> {
             owner,
         } => {
             tracing::debug!("checking file: {}", path.display());
-            inspect_file(path, expected, *owner).await
+            inspect_file(path, expected.as_deref(), *owner).await
         }
         Target::Group { name, gid } => {
             tracing::debug!("checking group: {name}");
@@ -88,15 +88,23 @@ async fn inspect_directory(path: &Path, mode: u32, owner: Option<(u32, u32)>) ->
     inspect_owner(&meta, owner)
 }
 
-async fn inspect_file(path: &Path, expected: &str, owner: Option<(u32, u32)>) -> Option<String> {
+async fn inspect_file(
+    path: &Path,
+    expected: Option<&str>,
+    owner: Option<(u32, u32)>,
+) -> Option<String> {
     let meta = match tokio::fs::metadata(path).await {
         Ok(meta) => meta,
+        Err(_) if expected.is_none() => return None,
         Err(e) => return Some(e.to_string()),
     };
-    match tokio::fs::read_to_string(path).await {
-        Ok(contents) if contents == expected => inspect_owner(&meta, owner),
-        Ok(_) => Some("configuration drift detected (contents modified)".to_string()),
-        Err(e) => Some(e.to_string()),
+    match expected {
+        Some(expected) => match tokio::fs::read_to_string(path).await {
+            Ok(contents) if contents == expected => inspect_owner(&meta, owner),
+            Ok(_) => Some("configuration drift detected (contents modified)".to_string()),
+            Err(e) => Some(e.to_string()),
+        },
+        None => inspect_owner(&meta, owner),
     }
 }
 
@@ -216,7 +224,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("f");
         std::fs::write(&file, "expected content").unwrap();
-        let detail = inspect_file(&file, "expected content", None).await;
+        let detail = inspect_file(&file, Some("expected content"), None).await;
         assert!(detail.is_none());
     }
 
@@ -225,7 +233,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("f");
         std::fs::write(&file, "modified").unwrap();
-        let detail = inspect_file(&file, "expected content", None).await;
+        let detail = inspect_file(&file, Some("expected content"), None).await;
         assert!(detail.is_some());
     }
 
@@ -234,7 +242,33 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("f");
         std::fs::write(&file, "expected content").unwrap();
-        let detail = inspect_file(&file, "expected content", Some((999_999, 999_999))).await;
+        let detail = inspect_file(&file, Some("expected content"), Some((999_999, 999_999))).await;
+        assert!(detail.is_some());
+    }
+
+    #[tokio::test]
+    async fn inspect_file_with_no_expected_content_is_healthy_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("flake.lock");
+        let detail = inspect_file(&file, None, None).await;
+        assert!(detail.is_none());
+    }
+
+    #[tokio::test]
+    async fn inspect_file_with_no_expected_content_ignores_whatever_is_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("flake.lock");
+        std::fs::write(&file, "anything nix wrote").unwrap();
+        let detail = inspect_file(&file, None, None).await;
+        assert!(detail.is_none());
+    }
+
+    #[tokio::test]
+    async fn inspect_file_with_no_expected_content_still_reports_owner_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("flake.lock");
+        std::fs::write(&file, "anything nix wrote").unwrap();
+        let detail = inspect_file(&file, None, Some((999_999, 999_999))).await;
         assert!(detail.is_some());
     }
 

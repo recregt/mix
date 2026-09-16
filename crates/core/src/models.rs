@@ -2,10 +2,10 @@ use std::path::{Path, PathBuf};
 
 use crate::identity::{self, NIXBLD_GID, NIXBLD_GROUP, NIXBLD_UID_BASE, NIXBLD_USER_COUNT};
 use crate::paths::{
-    DEFAULT_PROFILE_NIX_ENV, FLAKE_NIX, HOME_NIX, MIX_STATE_DIR_MODE, NIX_CONF_DEST,
+    DEFAULT_PROFILE_NIX_ENV, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, MIX_STATE_DIR_MODE, NIX_CONF_DEST,
     NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC,
-    NIX_OWNERSHIP_MARKER, NIX_STORE, NIX_TREE_MODE, NIX_TREE_PATHS, PROFILE_SNIPPET_DEST,
-    mix_state_dir, mix_user_marker,
+    NIX_OWNERSHIP_MARKER, NIX_PROFILES_DIR_MODE, NIX_STORE, NIX_TREE_MODE, NIX_TREE_PATHS,
+    PROFILE_SNIPPET_DEST, mix_state_dir, mix_user_marker, nix_profiles_dir,
 };
 use crate::privilege::InvokingUser;
 
@@ -57,7 +57,7 @@ pub enum Target {
     },
     File {
         path: PathBuf,
-        expected: String,
+        expected: Option<String>,
         owner: Owner,
     },
     Group {
@@ -118,19 +118,29 @@ fn push_user_targets(items: &mut Vec<Target>, cfg: &UserConfig) {
         mode: MIX_STATE_DIR_MODE,
         owner,
     });
+    items.push(Target::Directory {
+        path: nix_profiles_dir(&cfg.user.home),
+        mode: NIX_PROFILES_DIR_MODE,
+        owner,
+    });
     items.push(Target::File {
         path: state_dir.join(HOME_NIX),
-        expected: cfg.home.clone(),
+        expected: Some(cfg.home.clone()),
         owner,
     });
     items.push(Target::File {
         path: state_dir.join(FLAKE_NIX),
-        expected: cfg.flake.clone(),
+        expected: Some(cfg.flake.clone()),
+        owner,
+    });
+    items.push(Target::File {
+        path: state_dir.join(FLAKE_LOCK),
+        expected: None,
         owner,
     });
     items.push(Target::File {
         path: mix_user_marker(cfg.user.uid),
-        expected: String::new(),
+        expected: Some(String::new()),
         owner: None,
     });
 }
@@ -161,17 +171,17 @@ pub fn targets(user_config: Option<&UserConfig>) -> Vec<Target> {
     }));
     items.push(Target::File {
         path: PathBuf::from(NIX_OWNERSHIP_MARKER),
-        expected: String::new(),
+        expected: Some(String::new()),
         owner: None,
     });
     items.push(Target::File {
         path: PathBuf::from(NIX_CONF_DEST),
-        expected: NIX_CONF.to_string(),
+        expected: Some(NIX_CONF.to_string()),
         owner: None,
     });
     items.push(Target::File {
         path: PathBuf::from(PROFILE_SNIPPET_DEST),
-        expected: PROFILE_SNIPPET.to_string(),
+        expected: Some(PROFILE_SNIPPET.to_string()),
         owner: None,
     });
     items.push(Target::Group {
@@ -258,7 +268,7 @@ mod tests {
         assert_eq!(
             Target::File {
                 path: PathBuf::from(NIX_OWNERSHIP_MARKER),
-                expected: String::new(),
+                expected: Some(String::new()),
                 owner: None,
             }
             .category(),
@@ -271,7 +281,7 @@ mod tests {
         assert_eq!(
             Target::File {
                 path: PathBuf::from(NIX_CONF_DEST),
-                expected: NIX_CONF.to_string(),
+                expected: Some(NIX_CONF.to_string()),
                 owner: None,
             }
             .category(),
@@ -280,7 +290,7 @@ mod tests {
         assert_eq!(
             Target::File {
                 path: PathBuf::from(PROFILE_SNIPPET_DEST),
-                expected: PROFILE_SNIPPET.to_string(),
+                expected: Some(PROFILE_SNIPPET.to_string()),
                 owner: None,
             }
             .category(),
@@ -383,19 +393,39 @@ mod tests {
         assert!(items.iter().any(|t| matches!(
             t,
             Target::File { path, expected, owner: Some((1000, 1000)) }
-                if path.ends_with("flake.nix") && expected == "flake-content"
+                if path.ends_with("flake.nix") && expected.as_deref() == Some("flake-content")
         )));
         assert!(items.iter().any(|t| matches!(
             t,
             Target::File { path, expected, owner: Some((1000, 1000)) }
-                if path.ends_with("home.nix") && expected == "home-content"
+                if path.ends_with("home.nix") && expected.as_deref() == Some("home-content")
         )));
     }
 
     #[test]
-    fn user_targets_returns_exactly_the_four_per_user_entries() {
+    fn user_targets_returns_exactly_the_six_per_user_entries() {
         let cfg = sample_user_config();
-        assert_eq!(user_targets(&cfg).len(), 4);
+        assert_eq!(user_targets(&cfg).len(), 6);
+    }
+
+    #[test]
+    fn user_targets_includes_the_nix_profiles_directory() {
+        let cfg = sample_user_config();
+        assert!(user_targets(&cfg).iter().any(|t| matches!(
+            t,
+            Target::Directory { path, mode, owner: Some((1000, 1000)) }
+                if path.ends_with(".local/state/nix/profiles") && *mode == 0o755
+        )));
+    }
+
+    #[test]
+    fn user_targets_includes_a_flake_lock_with_no_expected_content() {
+        let cfg = sample_user_config();
+        assert!(user_targets(&cfg).iter().any(|t| matches!(
+            t,
+            Target::File { path, expected: None, owner: Some((1000, 1000)) }
+                if path.ends_with("flake.lock")
+        )));
     }
 
     #[test]
@@ -404,7 +434,7 @@ mod tests {
         assert!(user_targets(&cfg).iter().any(|t| matches!(
             t,
             Target::File { path, expected, owner: None }
-                if path.as_path() == Path::new("/nix/.mix-managed-users/1000") && expected.is_empty()
+                if path.as_path() == Path::new("/nix/.mix-managed-users/1000") && expected.as_deref() == Some("")
         )));
     }
 }

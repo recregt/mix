@@ -28,7 +28,9 @@ pub mod paths {
     pub const NIX_STORE: &str = "/nix/store";
     pub const NIX_PROVISIONING_MANIFEST: &str = "/nix/.mix-provisioning-manifest";
 
+    pub const DEFAULT_PROFILE_BIN: &str = "/nix/var/nix/profiles/default/bin";
     pub const DEFAULT_PROFILE_NIX_ENV: &str = "/nix/var/nix/profiles/default/bin/nix-env";
+    pub const DEFAULT_PROFILE_NIX: &str = "/nix/var/nix/profiles/default/bin/nix";
 
     pub const NIX_CONF_DEST: &str = "/etc/nix/nix.conf";
     pub const PROFILE_SNIPPET_DEST: &str = "/etc/profile.d/mix-nix.sh";
@@ -39,10 +41,19 @@ pub mod paths {
     pub const MIX_STATE_DIR_MODE: u32 = 0o700;
     pub const FLAKE_NIX: &str = "flake.nix";
     pub const HOME_NIX: &str = "home.nix";
+    pub const FLAKE_LOCK: &str = "flake.lock";
     pub const MIX_MANAGED_USERS_DIR: &str = "/nix/.mix-managed-users";
+
+    pub const NIX_PROFILES_DIR: &str = ".local/state/nix/profiles";
+    pub const NIX_PROFILES_DIR_MODE: u32 = 0o755;
+    pub const HOME_MANAGER_PROFILE_NAME: &str = "home-manager";
 
     pub fn mix_state_dir(home: &std::path::Path) -> std::path::PathBuf {
         home.join(MIX_STATE_DIR)
+    }
+
+    pub fn nix_profiles_dir(home: &std::path::Path) -> std::path::PathBuf {
+        home.join(NIX_PROFILES_DIR)
     }
 
     pub fn mix_user_marker(uid: u32) -> std::path::PathBuf {

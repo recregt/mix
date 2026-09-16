@@ -3,9 +3,11 @@ use std::path::{Path, PathBuf};
 
 use mix_core::identity;
 use mix_core::models::{Target, targets};
+use mix_core::paths::mix_state_dir;
 use mix_core::{CancellationToken, Error as CoreError};
 use nix::unistd::{Gid, Uid, chown};
 
+use crate::shared::git;
 use crate::shared::home_manager::resolve_existing_user_config;
 use crate::shared::os::{DIR_MODE_MASK, files_match, path_exists, run, systemd_unit_is_active};
 
@@ -60,6 +62,30 @@ pub async fn repair() -> Vec<RepairReport> {
             }
         }
     }
+
+    if let Some(cfg) = &user_config {
+        let state_dir = mix_state_dir(&cfg.user.home);
+        match git::sync(&cfg.user, &state_dir, &token).await {
+            Ok(true) => {
+                tracing::debug!("committed drift in git-tracked state");
+                reports.push(RepairReport {
+                    name: "git-tracked state".to_string(),
+                    fixed: true,
+                    detail: None,
+                })
+            }
+            Ok(false) => {}
+            Err(e) => {
+                tracing::debug!("failed to commit git-tracked state: {e}");
+                reports.push(RepairReport {
+                    name: "git-tracked state".to_string(),
+                    fixed: false,
+                    detail: Some(e.to_string()),
+                })
+            }
+        }
+    }
+
     reports
 }
 
@@ -70,7 +96,7 @@ pub(crate) async fn fix(target: &Target, token: &CancellationToken) -> Result<Ou
             path,
             expected,
             owner,
-        } => fix_file(path, expected, *owner).await,
+        } => fix_file(path, expected.as_deref(), *owner).await,
         Target::Group { name, gid } => fix_group(name, *gid, token).await,
         Target::User { n, uid, gid } => fix_user(*n, *uid, *gid, token).await,
         Target::SystemdUnit {
@@ -104,11 +130,7 @@ async fn fix_directory(
             });
         }
         Err(_) => {
-            tracing::debug!("creating directory: {}", path.display());
-            tokio::fs::create_dir_all(path)
-                .await
-                .map_err(|source| io_error(path, source))?;
-            set_mode(path, mode).await?;
+            create_dir_all_owned(path, mode, owner).await?;
             true
         }
     };
@@ -122,6 +144,45 @@ async fn fix_directory(
     } else {
         Outcome::Healthy
     })
+}
+
+const INTERMEDIATE_DIR_MODE: u32 = 0o755;
+
+async fn create_dir_all_owned(
+    path: &Path,
+    mode: u32,
+    owner: Option<(u32, u32)>,
+) -> Result<(), Error> {
+    let mut missing = Vec::new();
+    let mut cur = path;
+    loop {
+        if tokio::fs::metadata(cur).await.is_ok() {
+            break;
+        }
+        missing.push(cur);
+        match cur.parent() {
+            Some(parent) => cur = parent,
+            None => break,
+        }
+    }
+
+    for dir in missing.into_iter().rev() {
+        tracing::debug!("creating directory: {}", dir.display());
+        match tokio::fs::create_dir(dir).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(io_error(dir, e).into()),
+        }
+        let dir_mode = if dir == path {
+            mode
+        } else {
+            INTERMEDIATE_DIR_MODE
+        };
+        set_mode(dir, dir_mode).await?;
+        set_owner_if_needed(dir, owner).await?;
+    }
+
+    Ok(())
 }
 
 async fn set_mode(path: &Path, mode: u32) -> Result<(), Error> {
@@ -157,25 +218,35 @@ async fn set_owner_if_needed(path: &Path, owner: Option<(u32, u32)>) -> Result<b
 
 async fn fix_file(
     path: &Path,
-    expected: &str,
+    expected: Option<&str>,
     owner: Option<(u32, u32)>,
 ) -> Result<Outcome, Error> {
-    let mut repaired = if let Ok(contents) = tokio::fs::read_to_string(path).await
-        && contents == expected
-    {
-        false
-    } else {
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|source| io_error(parent, source))?;
+    let mut repaired = false;
+
+    match expected {
+        Some(expected) => {
+            let matches = matches!(
+                tokio::fs::read_to_string(path).await,
+                Ok(contents) if contents == expected
+            );
+            if !matches {
+                if let Some(parent) = path.parent() {
+                    tokio::fs::create_dir_all(parent)
+                        .await
+                        .map_err(|source| io_error(parent, source))?;
+                }
+                tracing::debug!("writing file: {}", path.display());
+                tokio::fs::write(path, expected)
+                    .await
+                    .map_err(|source| io_error(path, source))?;
+                repaired = true;
+            }
         }
-        tracing::debug!("writing file: {}", path.display());
-        tokio::fs::write(path, expected)
-            .await
-            .map_err(|source| io_error(path, source))?;
-        true
-    };
+        None if !path_exists(path).await => {
+            return Ok(Outcome::Healthy);
+        }
+        None => {}
+    }
 
     if set_owner_if_needed(path, owner).await? {
         repaired = true;
@@ -316,6 +387,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fix_directory_owns_every_intermediate_directory_it_creates() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("a/b/c");
+        let uid = Uid::current().as_raw();
+        let gid = Gid::current().as_raw();
+
+        let outcome = fix_directory(&path, 0o700, Some((uid, gid))).await.unwrap();
+
+        assert!(matches!(outcome, Outcome::Repaired));
+        for p in [root.path().join("a"), root.path().join("a/b"), path.clone()] {
+            let meta = tokio::fs::metadata(&p).await.unwrap();
+            assert_eq!(std::os::unix::fs::MetadataExt::uid(&meta), uid);
+            assert_eq!(std::os::unix::fs::MetadataExt::gid(&meta), gid);
+        }
+    }
+
+    #[tokio::test]
+    async fn fix_directory_gives_intermediate_directories_a_traversable_mode_and_the_leaf_its_own()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("a/b");
+
+        fix_directory(&path, 0o700, None).await.unwrap();
+
+        let intermediate = tokio::fs::metadata(root.path().join("a")).await.unwrap();
+        assert_eq!(intermediate.permissions().mode() & 0o7777, 0o755);
+        let leaf = tokio::fs::metadata(&path).await.unwrap();
+        assert_eq!(leaf.permissions().mode() & 0o7777, 0o700);
+    }
+
+    #[tokio::test]
+    async fn fix_directory_leaves_an_existing_ancestor_untouched() {
+        let root = tempfile::tempdir().unwrap();
+        let ancestor = root.path().join("a");
+        std::fs::create_dir(&ancestor).unwrap();
+        std::fs::set_permissions(&ancestor, std::fs::Permissions::from_mode(0o750)).unwrap();
+        let path = ancestor.join("b");
+
+        fix_directory(&path, 0o700, None).await.unwrap();
+
+        let meta = tokio::fs::metadata(&ancestor).await.unwrap();
+        assert_eq!(meta.permissions().mode() & 0o7777, 0o750);
+    }
+
+    #[tokio::test]
     async fn fix_directory_repairs_a_drifted_mode_in_place() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -367,7 +483,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("f");
 
-        let outcome = fix_file(&file, "expected content", None).await.unwrap();
+        let outcome = fix_file(&file, Some("expected content"), None)
+            .await
+            .unwrap();
 
         assert!(matches!(outcome, Outcome::Repaired));
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "expected content");
@@ -379,7 +497,9 @@ mod tests {
         let file = dir.path().join("f");
         std::fs::write(&file, "expected content").unwrap();
 
-        let outcome = fix_file(&file, "expected content", None).await.unwrap();
+        let outcome = fix_file(&file, Some("expected content"), None)
+            .await
+            .unwrap();
 
         assert!(matches!(outcome, Outcome::Healthy));
     }
@@ -392,9 +512,48 @@ mod tests {
         let uid = Uid::current().as_raw();
         let gid = Gid::current().as_raw();
 
-        let outcome = fix_file(&file, "expected content", Some((uid, gid)))
+        let outcome = fix_file(&file, Some("expected content"), Some((uid, gid)))
             .await
             .unwrap();
+
+        assert!(matches!(outcome, Outcome::Healthy));
+    }
+
+    #[tokio::test]
+    async fn fix_file_with_no_expected_content_is_healthy_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("flake.lock");
+
+        let outcome = fix_file(&file, None, None).await.unwrap();
+
+        assert!(matches!(outcome, Outcome::Healthy));
+        assert!(!file.exists());
+    }
+
+    #[tokio::test]
+    async fn fix_file_with_no_expected_content_never_rewrites_present_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("flake.lock");
+        std::fs::write(&file, "whatever nix wrote").unwrap();
+
+        let outcome = fix_file(&file, None, None).await.unwrap();
+
+        assert!(matches!(outcome, Outcome::Healthy));
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "whatever nix wrote"
+        );
+    }
+
+    #[tokio::test]
+    async fn fix_file_with_no_expected_content_still_fixes_ownership_when_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("flake.lock");
+        std::fs::write(&file, "whatever nix wrote").unwrap();
+        let uid = Uid::current().as_raw();
+        let gid = Gid::current().as_raw();
+
+        let outcome = fix_file(&file, None, Some((uid, gid))).await.unwrap();
 
         assert!(matches!(outcome, Outcome::Healthy));
     }
