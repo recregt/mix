@@ -2,6 +2,7 @@ pub mod nix;
 
 use arbitrary::Arbitrary;
 use mix_nixgen::{FlakeConfig, HomeManagerConfig};
+use mix_pins::{HOME_MANAGER_REV, NIXPKGS_REV};
 
 #[derive(Debug, Arbitrary)]
 pub enum Op {
@@ -82,9 +83,6 @@ fn related(a: &[String], b: &[String]) -> bool {
     a.starts_with(b) || b.starts_with(a)
 }
 
-const FUZZ_NIXPKGS_REV: &str = "efe6f071ede9d21c37462d2d6682d5e670099684";
-const FUZZ_HOME_MANAGER_REV: &str = "efa3ccb4c3cc90d832eab232976379058fa75aa3";
-
 #[derive(Debug, Arbitrary)]
 pub struct FlakeInput {
     pub system: String,
@@ -95,8 +93,8 @@ pub fn render_flake(input: &FlakeInput) -> Option<String> {
     FlakeConfig::new(
         &input.system,
         &input.username,
-        FUZZ_NIXPKGS_REV,
-        FUZZ_HOME_MANAGER_REV,
+        NIXPKGS_REV,
+        HOME_MANAGER_REV,
     )
     .ok()
     .map(|cfg| cfg.render())

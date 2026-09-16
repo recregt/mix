@@ -9,6 +9,7 @@ license = "MPL-2.0"
 thiserror = { workspace = true }
 
 [dev-dependencies]
+mix-pins = { path = "../pins" }
 divan = { workspace = true }
 proptest = { workspace = true }
 tempfile = { workspace = true }

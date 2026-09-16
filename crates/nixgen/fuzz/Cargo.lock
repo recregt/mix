@@ -125,8 +125,13 @@ dependencies = [
  "arbitrary",
  "libfuzzer-sys",
  "mix-nixgen",
+ "mix-pins",
  "tempfile",
 ]
+
+[[package]]
+name = "mix-pins"
+version = "0.1.0"
 
 [[package]]
 name = "once_cell"

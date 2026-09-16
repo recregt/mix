@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::bootstrap::error::{Error, Result};
 use crate::bootstrap::mirror::{filter_mirror, mirror_url};
-use crate::bootstrap::pins::{TarballPin, pin_for};
+use mix_pins::{TarballPin, pin_for};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -74,7 +74,7 @@ async fn fetch_and_verify(
 ) -> Result<Vec<u8>> {
     tracing::info!(
         "fetching runtime archive: {url} (nix {})",
-        crate::bootstrap::pins::NIX_VERSION
+        mix_pins::NIX_VERSION
     );
     fetch_and_verify_with_limits(
         url,
@@ -143,7 +143,7 @@ async fn fetch_and_verify_with_limits(
     if digest != expected_sha256 {
         return Err(Error::Integrity {
             artifact: url.to_string(),
-            detail: format!("sha256 was {digest}, expected {expected_sha256} (pin in src/pins.rs)"),
+            detail: format!("sha256 was {digest}, expected {expected_sha256} (pin in crates/pins)"),
         });
     }
 
@@ -546,57 +546,6 @@ mod tests {
     #[test]
     fn host_target_key_matches_a_known_pin_on_this_platform() {
         assert!(pin_for(&host_target_key()).is_some());
-    }
-
-    #[test]
-    fn pin_for_returns_none_for_an_unknown_target() {
-        assert!(pin_for("sparc64-solaris").is_none());
-    }
-
-    #[test]
-    fn every_pin_has_a_well_formed_url_and_digest() {
-        for pin in crate::bootstrap::pins::NIX_TARBALLS {
-            assert!(
-                pin.url.starts_with("https://"),
-                "{}: url {:?} is not https",
-                pin.target,
-                pin.url
-            );
-            assert_eq!(
-                pin.sha256.len(),
-                64,
-                "{}: sha256 {:?} is not 64 hex characters",
-                pin.target,
-                pin.sha256
-            );
-            assert!(
-                pin.sha256
-                    .chars()
-                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
-                "{}: sha256 {:?} is not lowercase hex",
-                pin.target,
-                pin.sha256
-            );
-        }
-    }
-
-    #[test]
-    fn the_pinned_flake_inputs_are_full_commit_revisions() {
-        for (name, rev) in [
-            ("nixpkgs", crate::bootstrap::pins::NIXPKGS_REV),
-            ("home-manager", crate::bootstrap::pins::HOME_MANAGER_REV),
-        ] {
-            assert_eq!(
-                rev.len(),
-                40,
-                "{name}: revision {rev:?} is not a 40 character commit hash"
-            );
-            assert!(
-                rev.chars()
-                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
-                "{name}: revision {rev:?} is not lowercase hex"
-            );
-        }
     }
 
     fn xz_compress(bytes: &[u8]) -> Vec<u8> {

@@ -1,11 +1,11 @@
 use std::fmt::Write as _;
 
-include!("src/bootstrap/pins.rs");
+use mix_pins::pin_for;
 
 fn main() {
     println!("cargo:rerun-if-env-changed=MIX_NIX_TARBALL_PATH");
     println!("cargo:rerun-if-env-changed=MIX_NIX_TARGET");
-    println!("cargo:rerun-if-changed=src/pins.rs");
+    println!("cargo:rerun-if-changed=../pins/src/lib.rs");
 
     if std::env::var_os("CARGO_FEATURE_EMBED_TARBALL").is_none() {
         return;
@@ -19,14 +19,14 @@ fn main() {
     let pin = pin_for(&key).unwrap_or_else(|| {
         panic!(
             "no pinned Nix tarball for target `{key}` (from rustc target `{rustc_target}`); \
-             add one to crates/app/src/bootstrap/pins.rs"
+             add one to crates/pins/src/lib.rs"
         )
     });
 
     let path = std::env::var("MIX_NIX_TARBALL_PATH").unwrap_or_else(|_| {
         panic!(
             "building with --features embed-tarball requires MIX_NIX_TARBALL_PATH to point \
-             at a downloaded copy of {} -- run scripts/bump-nix.sh or download it yourself",
+             at a downloaded copy of {} -- run crates/pins/scripts/bump-nix.sh or download it yourself",
             pin.url
         )
     });
@@ -37,7 +37,7 @@ fn main() {
     let digest = sha256_hex(&bytes);
     assert_eq!(
         digest, pin.sha256,
-        "downloaded tarball at {path} does not match the pin for {key} in src/bootstrap/pins.rs \
+        "downloaded tarball at {path} does not match the pin for {key} in crates/pins \
          (expected {}, got {digest})",
         pin.sha256,
     );

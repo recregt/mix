@@ -22,7 +22,7 @@ if [ -z "$home_manager_rev" ]; then
 fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-pins_file="$script_dir/../src/bootstrap/pins.rs"
+pins_file="$script_dir/../src/lib.rs"
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 

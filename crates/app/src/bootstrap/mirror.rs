@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::bootstrap::pins::{HOME_MANAGER_REV, NIXPKGS_REV};
+use mix_pins::{HOME_MANAGER_REV, NIXPKGS_REV};
 
 const CACHE_NIXOS_ORG_KEY: &str = "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=";
 const TRUSTED_KEY_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);

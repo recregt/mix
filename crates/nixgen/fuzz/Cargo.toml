@@ -15,6 +15,9 @@ tempfile = "3"
 [dependencies.mix-nixgen]
 path = ".."
 
+[dependencies.mix-pins]
+path = "../../pins"
+
 [[bin]]
 name = "codegen"
 path = "fuzz_targets/codegen.rs"

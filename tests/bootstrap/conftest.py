@@ -19,28 +19,28 @@ MIRROR_TEST_USER = "ciuser"
 
 
 def _pin(target: str) -> tuple[str, str]:
-    pins_src = (REPO_ROOT / "crates/app/src/bootstrap/pins.rs").read_text()
+    pins_src = (REPO_ROOT / "crates/pins/src/lib.rs").read_text()
     block_match = re.search(
         rf'target:\s*"{re.escape(target)}"\s*,(.*?)\n\s*\}},',
         pins_src,
         re.S,
     )
     if not block_match:
-        raise RuntimeError(f"no pin found for {target} in pins.rs")
+        raise RuntimeError(f"no pin found for {target} in crates/pins")
     block = block_match.group(1)
 
     url_match = re.search(r'url:\s*"([^"]+)"', block)
     sha256_match = re.search(r'sha256:\s*"([0-9a-f]{64})"', block)
     if not url_match or not sha256_match:
-        raise RuntimeError(f"could not parse url/sha256 for {target} in pins.rs")
+        raise RuntimeError(f"could not parse url/sha256 for {target} in crates/pins")
     return url_match.group(1), sha256_match.group(1)
 
 
 def _source_rev(const_name: str) -> str:
-    pins_src = (REPO_ROOT / "crates/app/src/bootstrap/pins.rs").read_text()
+    pins_src = (REPO_ROOT / "crates/pins/src/lib.rs").read_text()
     match = re.search(rf'{const_name}:\s*&str\s*=\s*"([0-9a-f]{{40}})"', pins_src)
     if not match:
-        raise RuntimeError(f"could not find {const_name} in pins.rs")
+        raise RuntimeError(f"could not find {const_name} in crates/pins")
     return match.group(1)
 
 

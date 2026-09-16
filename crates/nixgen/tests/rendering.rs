@@ -1,11 +1,9 @@
 mod support;
 
 use mix_nixgen::{FlakeConfig, HomeManagerConfig};
+use mix_pins::{HOME_MANAGER_REV, NIXPKGS_REV};
 use proptest::collection::vec;
 use proptest::prelude::*;
-
-const NIXPKGS_REV: &str = "efe6f071ede9d21c37462d2d6682d5e670099684";
-const HOME_MANAGER_REV: &str = "efa3ccb4c3cc90d832eab232976379058fa75aa3";
 
 #[test]
 #[ignore = "requires nix-instantiate on PATH"]

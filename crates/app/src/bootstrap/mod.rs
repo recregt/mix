@@ -1,6 +1,5 @@
 mod error;
 pub(crate) mod mirror;
-pub(crate) mod pins;
 mod planner;
 mod steps;
 mod util;

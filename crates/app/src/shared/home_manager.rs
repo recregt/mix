@@ -3,7 +3,7 @@ use mix_core::privilege::invoking_user;
 use mix_core::system::{Arch, Os};
 use mix_nixgen::{FlakeConfig, HomeManagerConfig};
 
-use crate::bootstrap::pins::{HOME_MANAGER_REV, NIXPKGS_REV};
+use mix_pins::{HOME_MANAGER_REV, NIXPKGS_REV};
 
 const HOME_MANAGER_STATE_VERSION: &str = "24.05";
 
