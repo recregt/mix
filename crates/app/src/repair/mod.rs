@@ -2,13 +2,12 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use mix_core::identity;
-use mix_core::models::{Target, targets};
+use mix_core::models::{Target, UserConfig, targets};
 use mix_core::paths::mix_state_dir;
 use mix_core::{CancellationToken, Error as CoreError};
 use nix::unistd::{Gid, Uid, chown};
 
 use crate::shared::git;
-use crate::shared::home_manager::resolve_existing_user_config;
 use crate::shared::os::{DIR_MODE_MASK, files_match, path_exists, run, systemd_unit_is_active};
 
 #[derive(Debug, thiserror::Error)]
@@ -34,12 +33,11 @@ pub struct RepairReport {
     pub detail: Option<String>,
 }
 
-pub async fn repair() -> Vec<RepairReport> {
+pub async fn repair(user_config: Option<&UserConfig>) -> Vec<RepairReport> {
     tracing::info!("repairing managed environment");
     let token = CancellationToken::new();
-    let user_config = resolve_existing_user_config().await;
     let mut reports = Vec::new();
-    for target in targets(user_config.as_ref()) {
+    for target in targets(user_config) {
         let name = target.label();
         tracing::debug!("checking: {name}");
         match fix(&target, &token).await {
@@ -63,7 +61,7 @@ pub async fn repair() -> Vec<RepairReport> {
         }
     }
 
-    if let Some(cfg) = &user_config {
+    if let Some(cfg) = user_config {
         let state_dir = mix_state_dir(&cfg.user.home);
         match git::sync(&cfg.user, &state_dir, &token).await {
             Ok(true) => {

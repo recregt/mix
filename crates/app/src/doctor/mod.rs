@@ -3,9 +3,8 @@ use std::path::Path;
 
 use futures_util::future::join_all;
 use mix_core::identity;
-use mix_core::models::{Category, Target};
+use mix_core::models::{Category, Target, UserConfig};
 
-use crate::shared::home_manager::resolve_existing_user_config;
 use crate::shared::os::{DIR_MODE_MASK, files_match, path_exists, systemd_unit_is_active};
 
 pub struct HealthReport {
@@ -15,10 +14,9 @@ pub struct HealthReport {
     pub detail: Option<String>,
 }
 
-pub async fn audit() -> Vec<HealthReport> {
+pub async fn audit(user_config: Option<&UserConfig>) -> Vec<HealthReport> {
     tracing::info!("auditing managed environment");
-    let user_config = resolve_existing_user_config().await;
-    let items = mix_core::models::targets(user_config.as_ref());
+    let items = mix_core::models::targets(user_config);
     let details = join_all(items.iter().map(inspect)).await;
     items
         .iter()
@@ -168,14 +166,47 @@ async fn inspect_path_exists(path: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use mix_core::privilege::InvokingUser;
+
     use super::*;
+
+    fn user_config() -> UserConfig {
+        UserConfig {
+            user: InvokingUser {
+                uid: 1000,
+                gid: 1000,
+                name: "mix-user".to_string(),
+                home: PathBuf::from("/home/mix-user"),
+            },
+            flake: "flake-content".to_string(),
+            home: "home-content".to_string(),
+        }
+    }
 
     #[tokio::test]
     async fn audit_reports_one_entry_per_target() {
-        let reports = audit().await;
+        let reports = audit(None).await;
+        assert_eq!(reports.len(), mix_core::models::targets(None).len());
+    }
+
+    #[tokio::test]
+    async fn audit_covers_the_per_user_targets_of_the_config_it_is_given() {
+        let cfg = user_config();
+
+        let reports = audit(Some(&cfg)).await;
+
         assert_eq!(
             reports.len(),
-            mix_core::models::targets(resolve_existing_user_config().await.as_ref()).len()
+            mix_core::models::targets(Some(&cfg)).len(),
+            "every target of the injected config must be reported"
+        );
+        assert!(reports.len() > audit(None).await.len());
+        assert!(
+            reports
+                .iter()
+                .any(|report| report.name.contains("/home/mix-user"))
         );
     }
 
