@@ -228,6 +228,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn nix_build_args_always_start_with_the_build_invocation() {
+        for mirror in [None, Some(UNREACHABLE_MIRROR)] {
+            let args = nix_build_args("path:/state#x", "/profile", mirror).await;
+            assert_eq!(
+                args[..6],
+                [
+                    "build",
+                    "path:/state#x",
+                    "--no-link",
+                    "--print-out-paths",
+                    "--profile",
+                    "/profile"
+                ]
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn nix_build_args_ignores_a_blank_mirror() {
         let args = nix_build_args("path:/state#x", "/profile", Some("   ")).await;
         assert!(!args.iter().any(|a| a == "--override-input"));

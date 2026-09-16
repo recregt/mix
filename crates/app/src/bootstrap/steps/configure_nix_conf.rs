@@ -129,6 +129,72 @@ async fn first_missing_ancestor(dir: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    use mix_core::models::NIX_CONF_BASE;
+    use mix_core::privilege::InvokingUser;
+
+    fn user_config(name: &str) -> UserConfig {
+        UserConfig {
+            user: InvokingUser {
+                uid: 1000,
+                gid: 1000,
+                name: name.to_string(),
+                home: PathBuf::from("/home").join(name),
+            },
+            flake: "flake-content".to_string(),
+            home: "home-content".to_string(),
+        }
+    }
+
+    #[test]
+    fn nix_conf_trusts_the_injected_user() {
+        let step = ConfigureNixConf::new(Some(user_config("mix-user")));
+        assert_eq!(
+            step.nix_conf(),
+            format!("{NIX_CONF_BASE}trusted-users = root mix-user\n")
+        );
+    }
+
+    #[test]
+    fn nix_conf_is_the_base_config_without_a_user() {
+        assert_eq!(ConfigureNixConf::new(None).nix_conf(), NIX_CONF_BASE);
+    }
+
+    #[test]
+    fn the_default_step_writes_the_same_config_as_an_explicit_none() {
+        assert_eq!(
+            ConfigureNixConf::default().nix_conf(),
+            ConfigureNixConf::new(None).nix_conf()
+        );
+    }
+
+    #[tokio::test]
+    async fn matches_expected_is_true_for_identical_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("nix.conf");
+        let expected = ConfigureNixConf::new(Some(user_config("mix-user"))).nix_conf();
+        tokio::fs::write(&file, &expected).await.unwrap();
+
+        assert!(matches_expected(file.to_str().unwrap(), &expected).await);
+    }
+
+    #[tokio::test]
+    async fn matches_expected_detects_a_dropped_trusted_users_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("nix.conf");
+        tokio::fs::write(&file, NIX_CONF_BASE).await.unwrap();
+
+        let expected = ConfigureNixConf::new(Some(user_config("mix-user"))).nix_conf();
+        assert!(!matches_expected(file.to_str().unwrap(), &expected).await);
+    }
+
+    #[tokio::test]
+    async fn matches_expected_is_false_when_the_file_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("absent").join("nix.conf");
+
+        assert!(!matches_expected(missing.to_str().unwrap(), NIX_CONF_BASE).await);
+    }
+
     #[tokio::test]
     async fn first_missing_ancestor_is_none_when_the_directory_already_exists() {
         let dir = tempfile::tempdir().unwrap();

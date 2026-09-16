@@ -54,6 +54,8 @@ pub async fn trusted_public_keys(base: &str) -> String {
 mod tests {
     use super::*;
 
+    use mockito::{Mock, Server, ServerGuard};
+
     #[test]
     fn mirror_url_joins_base_and_filename() {
         assert_eq!(
@@ -128,8 +130,22 @@ mod tests {
         );
     }
 
+    const MIRROR_KEY: &str = "mix-mirror-1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    const KEY_PATH: &str = "/cache/mix-mirror.pub";
+
+    async fn mirror_serving(status: usize, body: &str) -> (ServerGuard, Mock) {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("GET", KEY_PATH)
+            .with_status(status)
+            .with_body(body)
+            .create_async()
+            .await;
+        (server, mock)
+    }
+
     #[tokio::test]
-    async fn trusted_public_keys_is_just_the_default_when_the_mirror_has_no_key() {
+    async fn trusted_public_keys_is_just_the_default_when_the_mirror_is_unreachable() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         drop(listener);
@@ -141,29 +157,70 @@ mod tests {
 
     #[tokio::test]
     async fn trusted_public_keys_includes_a_key_the_mirror_publishes() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        std::thread::spawn(move || {
-            use std::io::{Read, Write};
-            if let Ok((mut conn, _)) = listener.accept() {
-                let mut buf = [0u8; 1024];
-                let _ = conn.read(&mut buf);
-                let body = "mix-mirror-1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n";
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = conn.write_all(response.as_bytes());
-            }
-        });
+        let (server, mock) = mirror_serving(200, &format!("{MIRROR_KEY}\n")).await;
 
-        let keys = trusted_public_keys(&format!("http://{addr}")).await;
+        let keys = trusted_public_keys(&server.url()).await;
+
+        assert_eq!(keys, format!("{CACHE_NIXOS_ORG_KEY} {MIRROR_KEY}"));
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn trusted_public_keys_reads_the_key_from_under_the_mirror_cache_path() {
+        let (server, mock) = mirror_serving(200, MIRROR_KEY).await;
+
+        trusted_public_keys(&format!("{}/", server.url())).await;
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn trusted_public_keys_ignores_a_mirror_that_does_not_publish_a_key() {
+        let (server, _mock) = mirror_serving(404, "<html>not found</html>").await;
 
         assert_eq!(
-            keys,
-            format!(
-                "{CACHE_NIXOS_ORG_KEY} mix-mirror-1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-            )
+            trusted_public_keys(&server.url()).await,
+            CACHE_NIXOS_ORG_KEY
         );
+    }
+
+    #[tokio::test]
+    async fn trusted_public_keys_ignores_a_mirror_that_errors() {
+        let (server, _mock) = mirror_serving(500, "boom").await;
+
+        assert_eq!(
+            trusted_public_keys(&server.url()).await,
+            CACHE_NIXOS_ORG_KEY
+        );
+    }
+
+    #[tokio::test]
+    async fn trusted_public_keys_ignores_an_empty_key_file() {
+        let (server, _mock) = mirror_serving(200, "").await;
+
+        assert_eq!(
+            trusted_public_keys(&server.url()).await,
+            CACHE_NIXOS_ORG_KEY
+        );
+    }
+
+    #[tokio::test]
+    async fn trusted_public_keys_ignores_a_blank_key_file() {
+        let (server, _mock) = mirror_serving(200, "  \n\t\n").await;
+
+        assert_eq!(
+            trusted_public_keys(&server.url()).await,
+            CACHE_NIXOS_ORG_KEY
+        );
+    }
+
+    #[tokio::test]
+    async fn trusted_public_keys_keeps_the_default_cache_key_first() {
+        let (server, _mock) = mirror_serving(200, &format!("  {MIRROR_KEY}  ")).await;
+
+        let keys = trusted_public_keys(&server.url()).await;
+
+        assert!(keys.starts_with(CACHE_NIXOS_ORG_KEY));
+        assert_eq!(keys.split(' ').count(), 2);
     }
 }

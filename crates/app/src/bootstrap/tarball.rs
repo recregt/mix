@@ -580,6 +580,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_pinned_flake_inputs_are_full_commit_revisions() {
+        for (name, rev) in [
+            ("nixpkgs", crate::bootstrap::pins::NIXPKGS_REV),
+            ("home-manager", crate::bootstrap::pins::HOME_MANAGER_REV),
+        ] {
+            assert_eq!(
+                rev.len(),
+                40,
+                "{name}: revision {rev:?} is not a 40 character commit hash"
+            );
+            assert!(
+                rev.chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+                "{name}: revision {rev:?} is not lowercase hex"
+            );
+        }
+    }
+
     fn xz_compress(bytes: &[u8]) -> Vec<u8> {
         use std::io::Write as _;
         let mut child = std::process::Command::new("xz")
