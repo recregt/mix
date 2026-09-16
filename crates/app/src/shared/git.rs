@@ -98,3 +98,38 @@ pub async fn init(user: &InvokingUser, state_dir: &Path, token: &CancellationTok
     .await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn user(home: &Path) -> InvokingUser {
+        InvokingUser {
+            uid: nix::unistd::Uid::current().as_raw(),
+            gid: nix::unistd::Gid::current().as_raw(),
+            name: "mix-user".to_string(),
+            home: home.to_path_buf(),
+        }
+    }
+
+    #[test]
+    fn git_binary_resolves_inside_the_users_nix_profile() {
+        assert_eq!(
+            git_binary(&user(Path::new("/home/mix-user"))),
+            "/home/mix-user/.nix-profile/bin/git"
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_is_a_noop_for_a_state_dir_that_is_not_a_repository() {
+        let home = tempfile::tempdir().unwrap();
+        let state_dir = home.path().join(".local/state/mix");
+        tokio::fs::create_dir_all(&state_dir).await.unwrap();
+
+        let committed = sync(&user(home.path()), &state_dir, &CancellationToken::new())
+            .await
+            .unwrap();
+
+        assert!(!committed);
+    }
+}

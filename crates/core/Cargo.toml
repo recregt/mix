@@ -25,3 +25,7 @@ harness = false
 [[bench]]
 name = "plan_observed"
 harness = false
+
+[[bench]]
+name = "targets"
+harness = false

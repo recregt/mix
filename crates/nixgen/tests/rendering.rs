@@ -71,4 +71,19 @@ proptest! {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+
+    #[test]
+    #[ignore = "requires nix-instantiate on PATH"]
+    fn arbitrary_usernames_always_render_a_parseable_flake(
+        username in arbitrary_text()
+    ) {
+        let rendered = FlakeConfig::new("x86_64-linux", &username).unwrap().render();
+
+        let output = support::parse_with_nix(&rendered);
+        prop_assert!(
+            output.status.success(),
+            "parse failed for username {username:?}:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
