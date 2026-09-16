@@ -5,7 +5,7 @@ use mix_core::{DownloadProgress, Step};
 use crate::bootstrap::error::Error;
 use crate::bootstrap::steps::{
     ConfigureNixConf, ConfigureSystemdService, CreateNixDir, CreateNixTree, CreateUsersAndGroups,
-    FetchAndUnpack, RemoveExistingInstallation,
+    FetchAndUnpack, RemoveExistingInstallation, WriteHomeManagerConfig,
 };
 
 pub fn bootstrap_steps(
@@ -23,5 +23,6 @@ pub fn bootstrap_steps(
     steps.push(Box::new(FetchAndUnpack::new(mirror, progress)));
     steps.push(Box::new(ConfigureNixConf::default()));
     steps.push(Box::new(ConfigureSystemdService::default()));
+    steps.push(Box::new(WriteHomeManagerConfig::default()));
     steps
 }

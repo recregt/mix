@@ -1,10 +1,12 @@
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use mix_core::identity;
 use mix_core::models::{Target, targets};
 use mix_core::{CancellationToken, Error as CoreError};
+use nix::unistd::{Gid, Uid, chown};
 
+use crate::home_manager::resolve_existing_user_config;
 use crate::os::{files_match, path_exists, run, systemd_unit_is_active};
 
 const DIR_MODE_MASK: u32 = 0o7777;
@@ -21,7 +23,7 @@ pub enum Error {
     },
 }
 
-enum Outcome {
+pub(crate) enum Outcome {
     Healthy,
     Repaired,
 }
@@ -35,8 +37,9 @@ pub struct RepairReport {
 pub async fn repair() -> Vec<RepairReport> {
     tracing::info!("repairing managed environment");
     let token = CancellationToken::new();
+    let user_config = resolve_existing_user_config().await;
     let mut reports = Vec::new();
-    for target in targets() {
+    for target in targets(user_config.as_ref()) {
         let name = target.label();
         tracing::debug!("checking: {name}");
         match fix(&target, &token).await {
@@ -62,70 +65,129 @@ pub async fn repair() -> Vec<RepairReport> {
     reports
 }
 
-async fn fix(target: &Target, token: &CancellationToken) -> Result<Outcome, Error> {
-    match *target {
-        Target::Directory { path, mode } => fix_directory(path, mode).await,
-        Target::File { path, expected } => fix_file(path, expected).await,
-        Target::Group { name, gid } => fix_group(name, gid, token).await,
-        Target::User { n, uid, gid } => fix_user(n, uid, gid, token).await,
+pub(crate) async fn fix(target: &Target, token: &CancellationToken) -> Result<Outcome, Error> {
+    match target {
+        Target::Directory { path, mode, owner } => fix_directory(path, *mode, *owner).await,
+        Target::File {
+            path,
+            expected,
+            owner,
+        } => fix_file(path, expected, *owner).await,
+        Target::Group { name, gid } => fix_group(name, *gid, token).await,
+        Target::User { n, uid, gid } => fix_user(*n, *uid, *gid, token).await,
         Target::SystemdUnit {
             name,
             src,
             dest,
             must_be_active,
-        } => fix_systemd_unit(name, src, dest, must_be_active, token).await,
+        } => fix_systemd_unit(name, src, dest, *must_be_active, token).await,
         Target::PathExists { name, path } => fix_path_exists(name, path).await,
     }
 }
 
-async fn fix_directory(path: &str, mode: u32) -> Result<Outcome, Error> {
-    match tokio::fs::metadata(path).await {
+async fn fix_directory(
+    path: &Path,
+    mode: u32,
+    owner: Option<(u32, u32)>,
+) -> Result<Outcome, Error> {
+    let mut repaired = match tokio::fs::metadata(path).await {
         Ok(meta) if meta.is_dir() => {
             if meta.permissions().mode() & DIR_MODE_MASK == mode {
-                return Ok(Outcome::Healthy);
+                false
+            } else {
+                set_mode(path, mode).await?;
+                true
             }
-            set_mode(path, mode).await?;
-            Ok(Outcome::Repaired)
         }
-        Ok(_) => Err(Error::Unrepairable {
-            artifact: path.to_string(),
-            hint: "exists but is not a directory; remove it manually and retry",
-        }),
+        Ok(_) => {
+            return Err(Error::Unrepairable {
+                artifact: path.display().to_string(),
+                hint: "exists but is not a directory; remove it manually and retry",
+            });
+        }
         Err(_) => {
-            tracing::debug!("creating directory: {path}");
+            tracing::debug!("creating directory: {}", path.display());
             tokio::fs::create_dir_all(path)
                 .await
                 .map_err(|source| io_error(path, source))?;
             set_mode(path, mode).await?;
-            Ok(Outcome::Repaired)
+            true
         }
+    };
+
+    if set_owner_if_needed(path, owner).await? {
+        repaired = true;
     }
+
+    Ok(if repaired {
+        Outcome::Repaired
+    } else {
+        Outcome::Healthy
+    })
 }
 
-async fn set_mode(path: &str, mode: u32) -> Result<(), Error> {
-    tracing::debug!("setting permissions: {path} ({mode:o})");
+async fn set_mode(path: &Path, mode: u32) -> Result<(), Error> {
+    tracing::debug!("setting permissions: {} ({mode:o})", path.display());
     tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
         .await
         .map_err(|source| io_error(path, source))?;
     Ok(())
 }
 
-async fn fix_file(path: &str, expected: &str) -> Result<Outcome, Error> {
-    if let Ok(contents) = tokio::fs::read_to_string(path).await
-        && contents == expected
-    {
-        return Ok(Outcome::Healthy);
-    }
-    if let Some(parent) = std::path::Path::new(path).parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|source| io_error(path, source))?;
-    }
-    tracing::debug!("writing file: {path}");
-    tokio::fs::write(path, expected)
+async fn set_owner_if_needed(path: &Path, owner: Option<(u32, u32)>) -> Result<bool, Error> {
+    let Some((uid, gid)) = owner else {
+        return Ok(false);
+    };
+    let meta = tokio::fs::metadata(path)
         .await
         .map_err(|source| io_error(path, source))?;
-    Ok(Outcome::Repaired)
+    if std::os::unix::fs::MetadataExt::uid(&meta) == uid
+        && std::os::unix::fs::MetadataExt::gid(&meta) == gid
+    {
+        return Ok(false);
+    }
+    tracing::debug!("setting owner: {} ({uid}:{gid})", path.display());
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        chown(&path, Some(Uid::from_raw(uid)), Some(Gid::from_raw(gid)))
+            .map_err(|e| io_error(&path, std::io::Error::from(e)))
+    })
+    .await
+    .map_err(|e| CoreError::TaskPanicked(e.to_string()))??;
+    Ok(true)
+}
+
+async fn fix_file(
+    path: &Path,
+    expected: &str,
+    owner: Option<(u32, u32)>,
+) -> Result<Outcome, Error> {
+    let mut repaired = if let Ok(contents) = tokio::fs::read_to_string(path).await
+        && contents == expected
+    {
+        false
+    } else {
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|source| io_error(parent, source))?;
+        }
+        tracing::debug!("writing file: {}", path.display());
+        tokio::fs::write(path, expected)
+            .await
+            .map_err(|source| io_error(path, source))?;
+        true
+    };
+
+    if set_owner_if_needed(path, owner).await? {
+        repaired = true;
+    }
+
+    Ok(if repaired {
+        Outcome::Repaired
+    } else {
+        Outcome::Healthy
+    })
 }
 
 async fn fix_group(name: &str, gid: u32, token: &CancellationToken) -> Result<Outcome, Error> {
@@ -200,10 +262,10 @@ async fn fix_systemd_unit(
         tracing::debug!("copying unit file: {src} -> {dest}");
         let contents = tokio::fs::read(src)
             .await
-            .map_err(|source| io_error(src, source))?;
+            .map_err(|source| io_error(Path::new(src), source))?;
         tokio::fs::write(dest, contents)
             .await
-            .map_err(|source| io_error(dest, source))?;
+            .map_err(|source| io_error(Path::new(dest), source))?;
         run("systemctl", &["daemon-reload"], token).await?;
         changed = true;
     }
@@ -231,7 +293,7 @@ async fn fix_path_exists(name: &str, path: &str) -> Result<Outcome, Error> {
     }
 }
 
-fn io_error(path: &str, source: std::io::Error) -> CoreError {
+fn io_error(path: &Path, source: std::io::Error) -> CoreError {
     CoreError::Io {
         path: PathBuf::from(path),
         source,
@@ -246,12 +308,11 @@ mod tests {
     async fn fix_directory_creates_a_missing_directory_with_the_right_mode() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("sticky");
-        let path = path.to_str().unwrap();
 
-        let outcome = fix_directory(path, 0o1777).await.unwrap();
+        let outcome = fix_directory(&path, 0o1777, None).await.unwrap();
 
         assert!(matches!(outcome, Outcome::Repaired));
-        let meta = tokio::fs::metadata(path).await.unwrap();
+        let meta = tokio::fs::metadata(&path).await.unwrap();
         assert!(meta.is_dir());
         assert_eq!(meta.permissions().mode() & 0o7777, 0o1777);
     }
@@ -260,12 +321,11 @@ mod tests {
     async fn fix_directory_repairs_a_drifted_mode_in_place() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        let path = dir.path().to_str().unwrap();
 
-        let outcome = fix_directory(path, 0o755).await.unwrap();
+        let outcome = fix_directory(dir.path(), 0o755, None).await.unwrap();
 
         assert!(matches!(outcome, Outcome::Repaired));
-        let meta = tokio::fs::metadata(path).await.unwrap();
+        let meta = tokio::fs::metadata(dir.path()).await.unwrap();
         assert_eq!(meta.permissions().mode() & 0o7777, 0o755);
     }
 
@@ -273,9 +333,8 @@ mod tests {
     async fn fix_directory_is_a_noop_when_already_healthy() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-        let path = dir.path().to_str().unwrap();
 
-        let outcome = fix_directory(path, 0o755).await.unwrap();
+        let outcome = fix_directory(dir.path(), 0o755, None).await.unwrap();
 
         assert!(matches!(outcome, Outcome::Healthy));
     }
@@ -286,9 +345,23 @@ mod tests {
         let file = dir.path().join("not-a-dir");
         std::fs::write(&file, "x").unwrap();
 
-        let result = fix_directory(file.to_str().unwrap(), 0o755).await;
+        let result = fix_directory(&file, 0o755, None).await;
 
         assert!(matches!(result, Err(Error::Unrepairable { .. })));
+    }
+
+    #[tokio::test]
+    async fn fix_directory_is_healthy_when_owner_already_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let uid = Uid::current().as_raw();
+        let gid = Gid::current().as_raw();
+
+        let outcome = fix_directory(dir.path(), 0o755, Some((uid, gid)))
+            .await
+            .unwrap();
+
+        assert!(matches!(outcome, Outcome::Healthy));
     }
 
     #[tokio::test]
@@ -296,9 +369,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("f");
 
-        let outcome = fix_file(file.to_str().unwrap(), "expected content")
-            .await
-            .unwrap();
+        let outcome = fix_file(&file, "expected content", None).await.unwrap();
 
         assert!(matches!(outcome, Outcome::Repaired));
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "expected content");
@@ -310,7 +381,20 @@ mod tests {
         let file = dir.path().join("f");
         std::fs::write(&file, "expected content").unwrap();
 
-        let outcome = fix_file(file.to_str().unwrap(), "expected content")
+        let outcome = fix_file(&file, "expected content", None).await.unwrap();
+
+        assert!(matches!(outcome, Outcome::Healthy));
+    }
+
+    #[tokio::test]
+    async fn fix_file_is_healthy_when_owner_already_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("f");
+        std::fs::write(&file, "expected content").unwrap();
+        let uid = Uid::current().as_raw();
+        let gid = Gid::current().as_raw();
+
+        let outcome = fix_file(&file, "expected content", Some((uid, gid)))
             .await
             .unwrap();
 

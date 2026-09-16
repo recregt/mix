@@ -1,7 +1,9 @@
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 
 use mix_core::{Error, Result};
+use nix::fcntl::{AT_FDCWD, AtFlags};
+use nix::unistd::{Gid, Uid, fchownat};
 use tokio::io::AsyncWriteExt;
 
 pub async fn create_dir_with_mode(path: impl AsRef<Path>, mode: u32) -> Result<()> {
@@ -191,6 +193,47 @@ pub async fn remove_file(path: impl AsRef<Path>) -> Result<()> {
     }
 }
 
+pub(crate) fn ensure_ownership_under(root: &Path, uid: Uid, gid: Gid) -> Result<()> {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        let meta = std::fs::symlink_metadata(&path).map_err(|e| Error::Io {
+            path: path.clone(),
+            source: e,
+        })?;
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        if meta.is_dir() {
+            let entries = std::fs::read_dir(&path).map_err(|e| Error::Io {
+                path: path.clone(),
+                source: e,
+            })?;
+            for entry in entries {
+                let entry = entry.map_err(|e| Error::Io {
+                    path: path.clone(),
+                    source: e,
+                })?;
+                stack.push(entry.path());
+            }
+        }
+
+        if meta.gid() != gid.as_raw() || meta.uid() != uid.as_raw() {
+            fchownat(
+                AT_FDCWD,
+                &path,
+                Some(uid),
+                Some(gid),
+                AtFlags::AT_SYMLINK_NOFOLLOW,
+            )
+            .map_err(|e| Error::Io {
+                path: path.clone(),
+                source: std::io::Error::from(e),
+            })?;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn warn_on_failure<T, E: std::fmt::Display>(
     action: &'static str,
     result: std::result::Result<T, E>,
@@ -375,6 +418,29 @@ mod tests {
         TempFileGuard::new(path.clone()).disarm();
 
         assert!(path.exists());
+    }
+
+    #[test]
+    fn ensure_ownership_under_is_a_noop_when_already_matching() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f"), "x").unwrap();
+
+        let uid = nix::unistd::Uid::current();
+        let gid = nix::unistd::Gid::current();
+
+        assert!(ensure_ownership_under(dir.path(), uid, gid).is_ok());
+    }
+
+    #[test]
+    fn ensure_ownership_under_skips_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(target.path(), dir.path().join("link")).unwrap();
+
+        let uid = nix::unistd::Uid::current();
+        let gid = nix::unistd::Gid::current();
+
+        assert!(ensure_ownership_under(dir.path(), uid, gid).is_ok());
     }
 
     #[tokio::test]

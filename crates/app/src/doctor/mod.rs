@@ -1,8 +1,10 @@
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::path::Path;
 
 use mix_core::identity;
 use mix_core::models::{Category, Target};
 
+use crate::home_manager::resolve_existing_user_config;
 use crate::os::{files_match, path_exists, systemd_unit_is_active};
 
 const DIR_MODE_MASK: u32 = 0o7777;
@@ -16,8 +18,9 @@ pub struct HealthReport {
 
 pub async fn audit() -> Vec<HealthReport> {
     tracing::info!("auditing managed environment");
+    let user_config = resolve_existing_user_config().await;
     let mut reports = Vec::new();
-    for target in mix_core::models::targets() {
+    for target in mix_core::models::targets(user_config.as_ref()) {
         let name = target.label();
         let category = target.category();
         let detail = inspect(&target).await;
@@ -35,22 +38,26 @@ pub async fn audit() -> Vec<HealthReport> {
 }
 
 async fn inspect(target: &Target) -> Option<String> {
-    match *target {
-        Target::Directory { path, mode } => {
-            tracing::debug!("checking directory: {path}");
-            inspect_directory(path, mode).await
+    match target {
+        Target::Directory { path, mode, owner } => {
+            tracing::debug!("checking directory: {}", path.display());
+            inspect_directory(path, *mode, *owner).await
         }
-        Target::File { path, expected } => {
-            tracing::debug!("checking file: {path}");
-            inspect_file(path, expected).await
+        Target::File {
+            path,
+            expected,
+            owner,
+        } => {
+            tracing::debug!("checking file: {}", path.display());
+            inspect_file(path, expected, *owner).await
         }
         Target::Group { name, gid } => {
             tracing::debug!("checking group: {name}");
-            inspect_group(name, gid)
+            inspect_group(name, *gid)
         }
         Target::User { n, uid, gid } => {
-            tracing::debug!("checking user: {}", mix_core::identity::user_name(n));
-            inspect_user(n, uid, gid)
+            tracing::debug!("checking user: {}", mix_core::identity::user_name(*n));
+            inspect_user(*n, *uid, *gid)
         }
         Target::SystemdUnit {
             name,
@@ -59,7 +66,7 @@ async fn inspect(target: &Target) -> Option<String> {
             must_be_active,
         } => {
             tracing::debug!("checking systemd unit: {name}");
-            inspect_systemd_unit(name, src, dest, must_be_active).await
+            inspect_systemd_unit(name, src, dest, *must_be_active).await
         }
         Target::PathExists { name, path } => {
             tracing::debug!("checking path: {path} ({name})");
@@ -68,7 +75,7 @@ async fn inspect(target: &Target) -> Option<String> {
     }
 }
 
-async fn inspect_directory(path: &str, mode: u32) -> Option<String> {
+async fn inspect_directory(path: &Path, mode: u32, owner: Option<(u32, u32)>) -> Option<String> {
     let meta = match tokio::fs::metadata(path).await {
         Ok(meta) => meta,
         Err(e) => return Some(e.to_string()),
@@ -80,15 +87,31 @@ async fn inspect_directory(path: &str, mode: u32) -> Option<String> {
     if actual != mode {
         return Some(format!("mode is {actual:o}, expected {mode:o}"));
     }
-    None
+    inspect_owner(&meta, owner)
 }
 
-async fn inspect_file(path: &str, expected: &str) -> Option<String> {
+async fn inspect_file(path: &Path, expected: &str, owner: Option<(u32, u32)>) -> Option<String> {
+    let meta = match tokio::fs::metadata(path).await {
+        Ok(meta) => meta,
+        Err(e) => return Some(e.to_string()),
+    };
     match tokio::fs::read_to_string(path).await {
-        Ok(contents) if contents == expected => None,
+        Ok(contents) if contents == expected => inspect_owner(&meta, owner),
         Ok(_) => Some("configuration drift detected (contents modified)".to_string()),
         Err(e) => Some(e.to_string()),
     }
+}
+
+fn inspect_owner(meta: &std::fs::Metadata, owner: Option<(u32, u32)>) -> Option<String> {
+    let (uid, gid) = owner?;
+    if meta.uid() != uid || meta.gid() != gid {
+        return Some(format!(
+            "owned by {}:{}, expected {uid}:{gid}",
+            meta.uid(),
+            meta.gid()
+        ));
+    }
+    None
 }
 
 fn inspect_group(name: &str, gid: u32) -> Option<String> {
@@ -141,14 +164,17 @@ mod tests {
     #[tokio::test]
     async fn audit_reports_one_entry_per_target() {
         let reports = audit().await;
-        assert_eq!(reports.len(), mix_core::models::targets().len());
+        assert_eq!(
+            reports.len(),
+            mix_core::models::targets(resolve_existing_user_config().await.as_ref()).len()
+        );
     }
 
     #[tokio::test]
     async fn inspect_directory_passes_when_mode_matches() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-        let detail = inspect_directory(dir.path().to_str().unwrap(), 0o755).await;
+        let detail = inspect_directory(dir.path(), 0o755, None).await;
         assert!(detail.is_none());
     }
 
@@ -156,7 +182,7 @@ mod tests {
     async fn inspect_directory_reports_a_mode_drift() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        let detail = inspect_directory(dir.path().to_str().unwrap(), 0o755).await;
+        let detail = inspect_directory(dir.path(), 0o755, None).await;
         assert!(detail.is_some());
     }
 
@@ -165,8 +191,26 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("not-a-dir");
         std::fs::write(&file, "x").unwrap();
-        let detail = inspect_directory(file.to_str().unwrap(), 0o755).await;
+        let detail = inspect_directory(&file, 0o755, None).await;
         assert_eq!(detail.as_deref(), Some("exists but is not a directory"));
+    }
+
+    #[tokio::test]
+    async fn inspect_directory_passes_when_owner_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let uid = nix::unistd::Uid::current().as_raw();
+        let gid = nix::unistd::Gid::current().as_raw();
+        let detail = inspect_directory(dir.path(), 0o755, Some((uid, gid))).await;
+        assert!(detail.is_none());
+    }
+
+    #[tokio::test]
+    async fn inspect_directory_reports_an_owner_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let detail = inspect_directory(dir.path(), 0o755, Some((999_999, 999_999))).await;
+        assert!(detail.is_some());
     }
 
     #[tokio::test]
@@ -174,7 +218,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("f");
         std::fs::write(&file, "expected content").unwrap();
-        let detail = inspect_file(file.to_str().unwrap(), "expected content").await;
+        let detail = inspect_file(&file, "expected content", None).await;
         assert!(detail.is_none());
     }
 
@@ -183,7 +227,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("f");
         std::fs::write(&file, "modified").unwrap();
-        let detail = inspect_file(file.to_str().unwrap(), "expected content").await;
+        let detail = inspect_file(&file, "expected content", None).await;
+        assert!(detail.is_some());
+    }
+
+    #[tokio::test]
+    async fn inspect_file_reports_an_owner_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("f");
+        std::fs::write(&file, "expected content").unwrap();
+        let detail = inspect_file(&file, "expected content", Some((999_999, 999_999))).await;
         assert!(detail.is_some());
     }
 

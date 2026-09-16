@@ -204,6 +204,72 @@ def test_bootstrap_auto_escalates_for_a_sudo_user(container, mock_nix_server):
     assert "re-running with sudo" in result.stderr.lower()
     assert container.path_exists("/nix/var/nix/profiles/default/bin/nix-env")
 
+    state_dir = "/home/ciuser/.local/state/mix"
+    flake_nix = f"{state_dir}/flake.nix"
+    home_nix = f"{state_dir}/home.nix"
+    assert container.path_exists(flake_nix)
+    assert container.path_exists(home_nix)
+
+    owner = container.exec("stat", "-c", "%U:%G", state_dir, check=True)
+    assert owner.stdout.strip() == "ciuser:ciuser"
+    flake_owner = container.exec("stat", "-c", "%U:%G", flake_nix, check=True)
+    assert flake_owner.stdout.strip() == "ciuser:ciuser"
+
+    flake_contents = container.exec("cat", flake_nix, check=True).stdout
+    assert 'system = "x86_64-linux"' in flake_contents
+    assert 'homeConfigurations."ciuser"' in flake_contents
+
+    doctor = container.exec("mix", "doctor", user="ciuser")
+    assert doctor.returncode == 0, doctor.stdout + doctor.stderr
+
+    container.exec("chown", "-R", "root:root", state_dir, check=True)
+    container.exec("chmod", "755", state_dir, check=True)
+
+    drifted = container.exec("mix", "doctor", user="ciuser")
+    assert drifted.returncode != 0, "doctor should detect the ownership/mode drift"
+
+    fixed = container.exec("mix", "repair", user="ciuser")
+    assert fixed.returncode == 0, fixed.stderr
+
+    owner_after_repair = container.exec("stat", "-c", "%U:%G", state_dir, check=True)
+    assert owner_after_repair.stdout.strip() == "ciuser:ciuser"
+    mode_after_repair = container.exec("stat", "-c", "%a", state_dir, check=True)
+    assert mode_after_repair.stdout.strip() == "700"
+
+    healed = container.exec("mix", "doctor", user="ciuser")
+    assert healed.returncode == 0, healed.stdout + healed.stderr
+
+    ciuser_uid = container.exec("id", "-u", "ciuser", check=True).stdout.strip()
+    marker = f"/nix/.mix-managed-users/{ciuser_uid}"
+    assert container.path_exists(marker)
+
+    container.exec("rm", "-rf", state_dir, check=True)
+    assert container.path_exists(marker), "the marker must survive deleting the state dir"
+
+    wiped = container.exec("mix", "doctor", user="ciuser")
+    assert wiped.returncode != 0, "doctor should treat a wiped state dir as drift, not as unmanaged"
+
+    restored = container.exec("mix", "repair", user="ciuser")
+    assert restored.returncode == 0, restored.stderr
+
+    assert container.path_exists(flake_nix)
+    assert container.path_exists(home_nix)
+    restored_owner = container.exec("stat", "-c", "%U:%G", flake_nix, check=True)
+    assert restored_owner.stdout.strip() == "ciuser:ciuser"
+
+    restored_flake_contents = container.exec("cat", flake_nix, check=True).stdout
+    assert 'homeConfigurations."ciuser"' in restored_flake_contents
+
+
+def test_doctor_ignores_a_user_mix_never_configured(container, mock_nix_server):
+    _bootstrap(container, mock_nix_server)
+
+    container.exec("useradd", "--create-home", "plainuser", check=True)
+
+    check = container.exec("mix", "doctor", user="plainuser")
+    assert check.returncode == 0, check.stderr + check.stdout
+    assert not container.path_exists("/home/plainuser/.local/state/mix")
+
 
 def test_repair_fixes_injected_drift(container, mock_nix_server):
     _bootstrap(container, mock_nix_server)

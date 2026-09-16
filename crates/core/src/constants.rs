@@ -34,6 +34,41 @@ pub mod paths {
     pub const PROFILE_SNIPPET_DEST: &str = "/etc/profile.d/mix-nix.sh";
 
     pub const LOCK_FILE: &str = "/run/mix.lock";
+
+    pub const MIX_STATE_DIR: &str = ".local/state/mix";
+    pub const MIX_STATE_DIR_MODE: u32 = 0o700;
+    pub const FLAKE_NIX: &str = "flake.nix";
+    pub const HOME_NIX: &str = "home.nix";
+    pub const MIX_MANAGED_USERS_DIR: &str = "/nix/.mix-managed-users";
+
+    pub fn mix_state_dir(home: &std::path::Path) -> std::path::PathBuf {
+        home.join(MIX_STATE_DIR)
+    }
+
+    pub fn mix_user_marker(uid: u32) -> std::path::PathBuf {
+        std::path::PathBuf::from(MIX_MANAGED_USERS_DIR).join(uid.to_string())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn mix_state_dir_joins_home_and_the_state_dir_fragment() {
+            assert_eq!(
+                mix_state_dir(std::path::Path::new("/home/mix-user")),
+                std::path::PathBuf::from("/home/mix-user/.local/state/mix")
+            );
+        }
+
+        #[test]
+        fn mix_user_marker_is_keyed_by_uid_under_the_root_owned_tree() {
+            assert_eq!(
+                mix_user_marker(1000),
+                std::path::PathBuf::from("/nix/.mix-managed-users/1000")
+            );
+        }
+    }
 }
 
 pub mod identity {

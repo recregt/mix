@@ -1074,6 +1074,7 @@ dependencies = [
  "codspeed-divan-compat",
  "liblzma",
  "mix-core",
+ "mix-nixgen",
  "mockito",
  "nix",
  "reqwest",

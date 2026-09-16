@@ -12,6 +12,7 @@ embed-tarball = []
 
 [dependencies]
 mix-core = { path = "../core" }
+mix-nixgen = { path = "../nixgen" }
 async-trait = { workspace = true }
 liblzma = { version = "0.4.8", default-features = false, features = ["static"] }
 nix = { workspace = true }

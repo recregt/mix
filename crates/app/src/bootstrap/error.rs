@@ -15,6 +15,9 @@ pub enum Error {
     #[error("unsupported platform: {0}")]
     UnsupportedTarget(String),
 
+    #[error(transparent)]
+    Repair(#[from] crate::repair::Error),
+
     #[error("decompressing archive: {0}")]
     Decompression(String),
 

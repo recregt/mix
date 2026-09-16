@@ -1,13 +1,24 @@
+use std::path::{Path, PathBuf};
+
 use crate::identity::{self, NIXBLD_GID, NIXBLD_GROUP, NIXBLD_UID_BASE, NIXBLD_USER_COUNT};
 use crate::paths::{
-    DEFAULT_PROFILE_NIX_ENV, NIX_CONF_DEST, NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC,
-    NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC, NIX_OWNERSHIP_MARKER, NIX_STORE, NIX_TREE_MODE,
-    NIX_TREE_PATHS, PROFILE_SNIPPET_DEST,
+    DEFAULT_PROFILE_NIX_ENV, FLAKE_NIX, HOME_NIX, MIX_STATE_DIR_MODE, NIX_CONF_DEST,
+    NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC,
+    NIX_OWNERSHIP_MARKER, NIX_STORE, NIX_TREE_MODE, NIX_TREE_PATHS, PROFILE_SNIPPET_DEST,
+    mix_state_dir, mix_user_marker,
 };
+use crate::privilege::InvokingUser;
 
 pub const NIX_CONF: &str =
     "build-users-group = nixbld\nexperimental-features = nix-command flakes\n";
 pub const PROFILE_SNIPPET: &str = "# Managed by mix -- do not edit, changes are overwritten and will trip `mix doctor`.\nif [ -e '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh' ]; then\n    . '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'\nfi\n";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserConfig {
+    pub user: InvokingUser,
+    pub flake: String,
+    pub home: String,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
@@ -35,15 +46,19 @@ impl Category {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+type Owner = Option<(u32, u32)>;
+
+#[derive(Debug, Clone)]
 pub enum Target {
     Directory {
-        path: &'static str,
+        path: PathBuf,
         mode: u32,
+        owner: Owner,
     },
     File {
-        path: &'static str,
-        expected: &'static str,
+        path: PathBuf,
+        expected: String,
+        owner: Owner,
     },
     Group {
         name: &'static str,
@@ -68,20 +83,23 @@ pub enum Target {
 
 impl Target {
     pub fn label(&self) -> String {
-        match *self {
-            Target::Directory { path, .. } => path.to_string(),
-            Target::File { path, .. } => path.to_string(),
+        match self {
+            Target::Directory { path, .. } => path.display().to_string(),
+            Target::File { path, .. } => path.display().to_string(),
             Target::Group { name, .. } => name.to_string(),
-            Target::User { n, .. } => identity::user_name(n),
+            Target::User { n, .. } => identity::user_name(*n),
             Target::SystemdUnit { name, .. } => name.to_string(),
             Target::PathExists { name, .. } => name.to_string(),
         }
     }
 
     pub fn category(&self) -> Category {
-        match *self {
+        match self {
             Target::Directory { .. } => Category::Filesystem,
-            Target::File { path, .. } if path == NIX_CONF_DEST || path == PROFILE_SNIPPET_DEST => {
+            Target::File { path, .. }
+                if path.as_path() == Path::new(NIX_CONF_DEST)
+                    || path.as_path() == Path::new(PROFILE_SNIPPET_DEST) =>
+            {
                 Category::Configuration
             }
             Target::File { .. } => Category::Filesystem,
@@ -92,32 +110,69 @@ impl Target {
     }
 }
 
-pub fn targets() -> Vec<Target> {
+fn push_user_targets(items: &mut Vec<Target>, cfg: &UserConfig) {
+    let state_dir = mix_state_dir(&cfg.user.home);
+    let owner = Some((cfg.user.uid, cfg.user.gid));
+    items.push(Target::Directory {
+        path: state_dir.clone(),
+        mode: MIX_STATE_DIR_MODE,
+        owner,
+    });
+    items.push(Target::File {
+        path: state_dir.join(HOME_NIX),
+        expected: cfg.home.clone(),
+        owner,
+    });
+    items.push(Target::File {
+        path: state_dir.join(FLAKE_NIX),
+        expected: cfg.flake.clone(),
+        owner,
+    });
+    items.push(Target::File {
+        path: mix_user_marker(cfg.user.uid),
+        expected: String::new(),
+        owner: None,
+    });
+}
+
+pub fn user_targets(cfg: &UserConfig) -> Vec<Target> {
+    let mut items = Vec::new();
+    push_user_targets(&mut items, cfg);
+    items
+}
+
+pub fn targets(user_config: Option<&UserConfig>) -> Vec<Target> {
     let mut items = vec![
         Target::Directory {
-            path: "/nix",
+            path: PathBuf::from("/nix"),
             mode: 0o755,
+            owner: None,
         },
         Target::Directory {
-            path: NIX_STORE,
+            path: PathBuf::from(NIX_STORE),
             mode: 0o1775,
+            owner: None,
         },
     ];
     items.extend(NIX_TREE_PATHS.iter().map(|&path| Target::Directory {
-        path,
+        path: PathBuf::from(path),
         mode: NIX_TREE_MODE,
+        owner: None,
     }));
     items.push(Target::File {
-        path: NIX_OWNERSHIP_MARKER,
-        expected: "",
+        path: PathBuf::from(NIX_OWNERSHIP_MARKER),
+        expected: String::new(),
+        owner: None,
     });
     items.push(Target::File {
-        path: NIX_CONF_DEST,
-        expected: NIX_CONF,
+        path: PathBuf::from(NIX_CONF_DEST),
+        expected: NIX_CONF.to_string(),
+        owner: None,
     });
     items.push(Target::File {
-        path: PROFILE_SNIPPET_DEST,
-        expected: PROFILE_SNIPPET,
+        path: PathBuf::from(PROFILE_SNIPPET_DEST),
+        expected: PROFILE_SNIPPET.to_string(),
+        owner: None,
     });
     items.push(Target::Group {
         name: NIXBLD_GROUP,
@@ -144,6 +199,11 @@ pub fn targets() -> Vec<Target> {
         name: "default profile",
         path: DEFAULT_PROFILE_NIX_ENV,
     });
+
+    if let Some(cfg) = user_config {
+        push_user_targets(&mut items, cfg);
+    }
+
     items
 }
 
@@ -151,11 +211,25 @@ pub fn targets() -> Vec<Target> {
 mod tests {
     use super::*;
 
+    fn sample_user_config() -> UserConfig {
+        UserConfig {
+            user: InvokingUser {
+                uid: 1000,
+                gid: 1000,
+                name: "mix-user".to_string(),
+                home: PathBuf::from("/home/mix-user"),
+            },
+            flake: "flake-content".to_string(),
+            home: "home-content".to_string(),
+        }
+    }
+
     #[test]
     fn label_uses_the_path_for_path_based_targets() {
         let target = Target::Directory {
-            path: "/nix",
+            path: PathBuf::from("/nix"),
             mode: 0o755,
+            owner: None,
         };
         assert_eq!(target.label(), "/nix");
     }
@@ -174,16 +248,18 @@ mod tests {
     fn category_groups_directories_and_the_ownership_marker_as_filesystem() {
         assert_eq!(
             Target::Directory {
-                path: "/nix",
+                path: PathBuf::from("/nix"),
                 mode: 0o755,
+                owner: None,
             }
             .category(),
             Category::Filesystem
         );
         assert_eq!(
             Target::File {
-                path: NIX_OWNERSHIP_MARKER,
-                expected: "",
+                path: PathBuf::from(NIX_OWNERSHIP_MARKER),
+                expected: String::new(),
+                owner: None,
             }
             .category(),
             Category::Filesystem
@@ -194,16 +270,18 @@ mod tests {
     fn category_groups_nix_conf_and_the_profile_snippet_as_configuration() {
         assert_eq!(
             Target::File {
-                path: NIX_CONF_DEST,
-                expected: NIX_CONF,
+                path: PathBuf::from(NIX_CONF_DEST),
+                expected: NIX_CONF.to_string(),
+                owner: None,
             }
             .category(),
             Category::Configuration
         );
         assert_eq!(
             Target::File {
-                path: PROFILE_SNIPPET_DEST,
-                expected: PROFILE_SNIPPET,
+                path: PathBuf::from(PROFILE_SNIPPET_DEST),
+                expected: PROFILE_SNIPPET.to_string(),
+                owner: None,
             }
             .category(),
             Category::Configuration
@@ -259,12 +337,13 @@ mod tests {
 
     #[test]
     fn targets_include_every_directory_in_the_managed_nix_tree() {
-        let items = targets();
+        let items = targets(None);
         for &path in NIX_TREE_PATHS {
             assert!(
                 items.iter().any(|t| matches!(
                     t,
-                    Target::Directory { path: p, mode } if *p == path && *mode == NIX_TREE_MODE
+                    Target::Directory { path: p, mode, .. }
+                        if p.as_path() == Path::new(path) && *mode == NIX_TREE_MODE
                 )),
                 "targets() is missing an entry for {path} (mode {NIX_TREE_MODE:o})"
             );
@@ -273,11 +352,59 @@ mod tests {
 
     #[test]
     fn targets_include_all_build_users() {
-        let items = targets();
+        let items = targets(None);
         let user_count = items
             .iter()
             .filter(|t| matches!(t, Target::User { .. }))
             .count();
         assert_eq!(user_count, NIXBLD_USER_COUNT as usize);
+    }
+
+    #[test]
+    fn targets_excludes_per_user_entries_when_no_user_is_given() {
+        let items = targets(None);
+        assert!(
+            !items
+                .iter()
+                .any(|t| matches!(t, Target::Directory { path, .. } if path.ends_with("mix")))
+        );
+    }
+
+    #[test]
+    fn targets_includes_per_user_entries_when_a_user_is_given() {
+        let cfg = sample_user_config();
+        let items = targets(Some(&cfg));
+
+        assert!(items.iter().any(|t| matches!(
+            t,
+            Target::Directory { path, mode, owner: Some((1000, 1000)) }
+                if path.ends_with(".local/state/mix") && *mode == MIX_STATE_DIR_MODE
+        )));
+        assert!(items.iter().any(|t| matches!(
+            t,
+            Target::File { path, expected, owner: Some((1000, 1000)) }
+                if path.ends_with("flake.nix") && expected == "flake-content"
+        )));
+        assert!(items.iter().any(|t| matches!(
+            t,
+            Target::File { path, expected, owner: Some((1000, 1000)) }
+                if path.ends_with("home.nix") && expected == "home-content"
+        )));
+    }
+
+    #[test]
+    fn user_targets_returns_exactly_the_four_per_user_entries() {
+        let cfg = sample_user_config();
+        assert_eq!(user_targets(&cfg).len(), 4);
+    }
+
+    #[test]
+    fn user_targets_includes_a_marker_keyed_by_uid_under_the_root_owned_tree() {
+        let cfg = sample_user_config();
+        assert!(user_targets(&cfg).iter().any(|t| matches!(
+            t,
+            Target::File { path, expected, owner: None }
+                if path.as_path() == Path::new("/nix/.mix-managed-users/1000") && expected.is_empty()
+        )));
     }
 }
