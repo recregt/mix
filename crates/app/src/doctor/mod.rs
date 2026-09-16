@@ -16,7 +16,8 @@ pub struct HealthReport {
 
 pub async fn audit(user_config: Option<&UserConfig>) -> Vec<HealthReport> {
     tracing::info!("auditing managed environment");
-    let items = mix_core::models::targets(user_config);
+    let trusted_users = mix_core::managed::trusted_users(user_config);
+    let items = mix_core::models::targets(user_config, &trusted_users);
     let details = join_all(items.iter().map(inspect)).await;
     items
         .iter()
@@ -188,7 +189,7 @@ mod tests {
     #[tokio::test]
     async fn audit_reports_one_entry_per_target() {
         let reports = audit(None).await;
-        assert_eq!(reports.len(), mix_core::models::targets(None).len());
+        assert_eq!(reports.len(), mix_core::models::targets(None, &[]).len());
     }
 
     #[tokio::test]
@@ -199,7 +200,7 @@ mod tests {
 
         assert_eq!(
             reports.len(),
-            mix_core::models::targets(Some(&cfg)).len(),
+            mix_core::models::targets(Some(&cfg), &[]).len(),
             "every target of the injected config must be reported"
         );
         assert!(reports.len() > audit(None).await.len());

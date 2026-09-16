@@ -13,22 +13,34 @@ use crate::bootstrap::util::{
 };
 use crate::shared::os::path_exists;
 
-#[derive(Default)]
+/// Resolved on every use rather than once at plan time: `--force` wipes the
+/// marker directory mid-run, and the file has to match what `doctor` expects
+/// afterwards.
+type ResolveTrustedUsers = fn(Option<&UserConfig>) -> Vec<String>;
+
 pub struct ConfigureNixConf {
     user_config: Option<UserConfig>,
+    trusted_users: ResolveTrustedUsers,
     written: Vec<WrittenFile>,
+}
+
+impl Default for ConfigureNixConf {
+    fn default() -> Self {
+        Self::new(None)
+    }
 }
 
 impl ConfigureNixConf {
     pub fn new(user_config: Option<UserConfig>) -> Self {
         Self {
             user_config,
+            trusted_users: mix_core::managed::trusted_users,
             written: Vec::new(),
         }
     }
 
     fn nix_conf(&self) -> String {
-        nix_conf(self.user_config.as_ref().map(|cfg| cfg.user.name.as_str()))
+        nix_conf(&(self.trusted_users)(self.user_config.as_ref()))
     }
 }
 
@@ -130,24 +142,18 @@ mod tests {
     use super::*;
 
     use mix_core::models::NIX_CONF_BASE;
-    use mix_core::privilege::InvokingUser;
 
-    fn user_config(name: &str) -> UserConfig {
-        UserConfig {
-            user: InvokingUser {
-                uid: 1000,
-                gid: 1000,
-                name: name.to_string(),
-                home: PathBuf::from("/home").join(name),
-            },
-            flake: "flake-content".to_string(),
-            home: "home-content".to_string(),
+    fn step_trusting(trusted_users: ResolveTrustedUsers) -> ConfigureNixConf {
+        ConfigureNixConf {
+            user_config: None,
+            trusted_users,
+            written: Vec::new(),
         }
     }
 
     #[test]
-    fn nix_conf_trusts_the_injected_user() {
-        let step = ConfigureNixConf::new(Some(user_config("mix-user")));
+    fn nix_conf_trusts_the_resolved_user() {
+        let step = step_trusting(|_| vec!["mix-user".to_string()]);
         assert_eq!(
             step.nix_conf(),
             format!("{NIX_CONF_BASE}trusted-users = root mix-user\n")
@@ -155,12 +161,21 @@ mod tests {
     }
 
     #[test]
-    fn nix_conf_is_the_base_config_without_a_user() {
-        assert_eq!(ConfigureNixConf::new(None).nix_conf(), NIX_CONF_BASE);
+    fn nix_conf_trusts_every_managed_user() {
+        let step = step_trusting(|_| vec!["other-user".to_string(), "mix-user".to_string()]);
+        assert_eq!(
+            step.nix_conf(),
+            format!("{NIX_CONF_BASE}trusted-users = root mix-user other-user\n")
+        );
     }
 
     #[test]
-    fn the_default_step_writes_the_same_config_as_an_explicit_none() {
+    fn nix_conf_is_the_base_config_without_a_user() {
+        assert_eq!(step_trusting(|_| Vec::new()).nix_conf(), NIX_CONF_BASE);
+    }
+
+    #[test]
+    fn the_default_step_resolves_the_same_config_as_an_explicit_none() {
         assert_eq!(
             ConfigureNixConf::default().nix_conf(),
             ConfigureNixConf::new(None).nix_conf()
@@ -171,7 +186,7 @@ mod tests {
     async fn matches_expected_is_true_for_identical_contents() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("nix.conf");
-        let expected = ConfigureNixConf::new(Some(user_config("mix-user"))).nix_conf();
+        let expected = step_trusting(|_| vec!["mix-user".to_string()]).nix_conf();
         tokio::fs::write(&file, &expected).await.unwrap();
 
         assert!(matches_expected(file.to_str().unwrap(), &expected).await);
@@ -183,7 +198,7 @@ mod tests {
         let file = dir.path().join("nix.conf");
         tokio::fs::write(&file, NIX_CONF_BASE).await.unwrap();
 
-        let expected = ConfigureNixConf::new(Some(user_config("mix-user"))).nix_conf();
+        let expected = step_trusting(|_| vec!["mix-user".to_string()]).nix_conf();
         assert!(!matches_expected(file.to_str().unwrap(), &expected).await);
     }
 
@@ -240,6 +255,7 @@ mod tests {
 
         let mut step = ConfigureNixConf {
             user_config: None,
+            trusted_users: |_| Vec::new(),
             written: vec![WrittenFile {
                 path: Box::leak(file.to_str().unwrap().to_string().into_boxed_str()),
                 previous: None,

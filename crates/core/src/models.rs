@@ -20,11 +20,18 @@ fn is_nix_conf_value(name: &str) -> bool {
             .any(|c| c.is_whitespace() || c.is_control() || c == '#')
 }
 
-pub fn nix_conf(username: Option<&str>) -> String {
-    match username.filter(|name| is_nix_conf_value(name)) {
-        Some(name) => format!("{NIX_CONF_BASE}trusted-users = root {name}\n"),
-        None => NIX_CONF_BASE.to_string(),
+pub fn nix_conf<S: AsRef<str>>(trusted_users: &[S]) -> String {
+    let mut names: Vec<&str> = trusted_users
+        .iter()
+        .map(AsRef::as_ref)
+        .filter(|name| *name != "root" && is_nix_conf_value(name))
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    if names.is_empty() {
+        return NIX_CONF_BASE.to_string();
     }
+    format!("{NIX_CONF_BASE}trusted-users = root {}\n", names.join(" "))
 }
 pub const PROFILE_SNIPPET: &str = "# Managed by mix -- do not edit, changes are overwritten and will trip `mix doctor`.\nif [ -e '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh' ]; then\n    . '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'\nfi\n";
 
@@ -166,7 +173,7 @@ pub fn user_targets(cfg: &UserConfig) -> Vec<Target> {
     items
 }
 
-pub fn targets(user_config: Option<&UserConfig>) -> Vec<Target> {
+pub fn targets(user_config: Option<&UserConfig>, trusted_users: &[String]) -> Vec<Target> {
     let mut items = vec![
         Target::Directory {
             path: PathBuf::from("/nix"),
@@ -191,7 +198,7 @@ pub fn targets(user_config: Option<&UserConfig>) -> Vec<Target> {
     });
     items.push(Target::File {
         path: PathBuf::from(NIX_CONF_DEST),
-        expected: Some(nix_conf(user_config.map(|cfg| cfg.user.name.as_str()))),
+        expected: Some(nix_conf(trusted_users)),
         owner: None,
     });
     items.push(Target::File {
@@ -236,6 +243,12 @@ pub fn targets(user_config: Option<&UserConfig>) -> Vec<Target> {
 mod tests {
     use super::*;
 
+    const NO_USERS: &[String] = &[];
+
+    fn trusted(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_string()).collect()
+    }
+
     fn sample_user_config() -> UserConfig {
         UserConfig {
             user: InvokingUser {
@@ -272,7 +285,7 @@ mod tests {
     #[test]
     fn label_borrows_instead_of_allocating_for_every_target() {
         let cfg = sample_user_config();
-        for target in targets(Some(&cfg)) {
+        for target in targets(Some(&cfg), &trusted(&["mix-user"])) {
             assert!(
                 matches!(target.label(), Cow::Borrowed(_)),
                 "label() allocated for {target:?}"
@@ -307,7 +320,7 @@ mod tests {
         assert_eq!(
             Target::File {
                 path: PathBuf::from(NIX_CONF_DEST),
-                expected: Some(nix_conf(None)),
+                expected: Some(nix_conf(NO_USERS)),
                 owner: None,
             }
             .category(),
@@ -373,7 +386,7 @@ mod tests {
 
     #[test]
     fn targets_include_every_directory_in_the_managed_nix_tree() {
-        let items = targets(None);
+        let items = targets(None, NO_USERS);
         for &path in NIX_TREE_PATHS {
             assert!(
                 items.iter().any(|t| matches!(
@@ -388,7 +401,7 @@ mod tests {
 
     #[test]
     fn targets_include_all_build_users() {
-        let items = targets(None);
+        let items = targets(None, NO_USERS);
         let user_count = items
             .iter()
             .filter(|t| matches!(t, Target::User { .. }))
@@ -398,7 +411,7 @@ mod tests {
 
     #[test]
     fn targets_excludes_per_user_entries_when_no_user_is_given() {
-        let items = targets(None);
+        let items = targets(None, NO_USERS);
         assert!(
             !items
                 .iter()
@@ -409,7 +422,7 @@ mod tests {
     #[test]
     fn targets_includes_per_user_entries_when_a_user_is_given() {
         let cfg = sample_user_config();
-        let items = targets(Some(&cfg));
+        let items = targets(Some(&cfg), &trusted(&["mix-user"]));
 
         assert!(items.iter().any(|t| matches!(
             t,
@@ -430,20 +443,20 @@ mod tests {
 
     #[test]
     fn nix_conf_has_no_trusted_users_line_without_a_username() {
-        assert_eq!(nix_conf(None), NIX_CONF_BASE);
+        assert_eq!(nix_conf(NO_USERS), NIX_CONF_BASE);
     }
 
     #[test]
     fn nix_conf_trusts_the_given_username_alongside_root() {
         assert_eq!(
-            nix_conf(Some("alice")),
+            nix_conf(&["alice"]),
             format!("{NIX_CONF_BASE}trusted-users = root alice\n")
         );
     }
 
     #[test]
     fn nix_conf_keeps_the_trusted_users_line_to_a_single_setting() {
-        let rendered = nix_conf(Some("alice"));
+        let rendered = nix_conf(&["alice"]);
         assert_eq!(
             rendered
                 .lines()
@@ -458,7 +471,7 @@ mod tests {
     fn nix_conf_accepts_the_punctuation_real_usernames_use() {
         for name in ["mix-user", "mix_user", "mix.user", "mix$", "user123"] {
             assert_eq!(
-                nix_conf(Some(name)),
+                nix_conf(&[name]),
                 format!("{NIX_CONF_BASE}trusted-users = root {name}\n"),
                 "{name} should be usable as a trusted-users entry"
             );
@@ -469,7 +482,7 @@ mod tests {
     fn nix_conf_drops_a_username_that_would_extend_the_setting() {
         for name in ["alice bob", "alice\tbob", "alice\u{a0}bob"] {
             assert_eq!(
-                nix_conf(Some(name)),
+                nix_conf(&[name]),
                 NIX_CONF_BASE,
                 "{name:?} must not smuggle in a second trusted user"
             );
@@ -479,17 +492,17 @@ mod tests {
     #[test]
     fn nix_conf_drops_a_username_that_would_inject_another_setting() {
         assert_eq!(
-            nix_conf(Some("alice\nallowed-users = *")),
+            nix_conf(&["alice\nallowed-users = *"]),
             NIX_CONF_BASE,
             "a newline must not start a new nix.conf setting"
         );
         assert_eq!(
-            nix_conf(Some("alice\r")),
+            nix_conf(&["alice\r"]),
             NIX_CONF_BASE,
             "a control character must not end up in nix.conf"
         );
         assert_eq!(
-            nix_conf(Some("alice#comment")),
+            nix_conf(&["alice#comment"]),
             NIX_CONF_BASE,
             "a comment marker must not end up in nix.conf"
         );
@@ -497,25 +510,83 @@ mod tests {
 
     #[test]
     fn nix_conf_drops_an_empty_username() {
-        assert_eq!(nix_conf(Some("")), NIX_CONF_BASE);
+        assert_eq!(nix_conf(&[""]), NIX_CONF_BASE);
+    }
+
+    #[test]
+    fn nix_conf_trusts_every_managed_user_on_one_line() {
+        assert_eq!(
+            nix_conf(&["alice", "bob"]),
+            format!("{NIX_CONF_BASE}trusted-users = root alice bob\n")
+        );
+    }
+
+    #[test]
+    fn nix_conf_orders_the_trusted_users_deterministically() {
+        assert_eq!(
+            nix_conf(&["zoe", "adam", "bob"]),
+            nix_conf(&["bob", "zoe", "adam"])
+        );
+        assert_eq!(
+            nix_conf(&["zoe", "adam"]),
+            format!("{NIX_CONF_BASE}trusted-users = root adam zoe\n")
+        );
+    }
+
+    #[test]
+    fn nix_conf_lists_a_repeated_username_once() {
+        assert_eq!(
+            nix_conf(&["alice", "alice"]),
+            format!("{NIX_CONF_BASE}trusted-users = root alice\n")
+        );
+    }
+
+    #[test]
+    fn nix_conf_never_repeats_root() {
+        assert_eq!(
+            nix_conf(&["root", "alice"]),
+            format!("{NIX_CONF_BASE}trusted-users = root alice\n")
+        );
+    }
+
+    #[test]
+    fn nix_conf_drops_only_the_username_that_would_extend_the_setting() {
+        assert_eq!(
+            nix_conf(&["alice bob", "carol"]),
+            format!("{NIX_CONF_BASE}trusted-users = root carol\n")
+        );
     }
 
     #[test]
     fn targets_trusts_the_bootstrapped_user_in_nix_conf() {
         let cfg = sample_user_config();
-        let items = targets(Some(&cfg));
+        let items = targets(Some(&cfg), &trusted(&["mix-user"]));
 
         assert!(items.iter().any(|t| matches!(
             t,
             Target::File { path, expected, .. }
                 if path.as_path() == Path::new(NIX_CONF_DEST)
-                    && expected.as_deref() == Some(nix_conf(Some("mix-user")).as_str())
+                    && expected.as_deref() == Some(nix_conf(&["mix-user"]).as_str())
+        )));
+    }
+
+    #[test]
+    fn targets_trusts_every_managed_user_not_just_the_invoking_one() {
+        let cfg = sample_user_config();
+        let items = targets(Some(&cfg), &trusted(&["other-user", "mix-user"]));
+
+        assert!(items.iter().any(|t| matches!(
+            t,
+            Target::File { path, expected, .. }
+                if path.as_path() == Path::new(NIX_CONF_DEST)
+                    && expected.as_deref()
+                        == Some(format!("{NIX_CONF_BASE}trusted-users = root mix-user other-user\n").as_str())
         )));
     }
 
     #[test]
     fn targets_has_no_trusted_users_line_without_a_user() {
-        let items = targets(None);
+        let items = targets(None, NO_USERS);
 
         assert!(items.iter().any(|t| matches!(
             t,

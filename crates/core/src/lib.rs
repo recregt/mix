@@ -1,6 +1,7 @@
 pub mod constants;
 pub mod error;
 pub mod lock;
+pub mod managed;
 pub mod models;
 pub mod privilege;
 pub mod progress;

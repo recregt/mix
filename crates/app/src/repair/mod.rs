@@ -37,7 +37,8 @@ pub async fn repair(user_config: Option<&UserConfig>) -> Vec<RepairReport> {
     tracing::info!("repairing managed environment");
     let token = CancellationToken::new();
     let mut reports = Vec::new();
-    for target in targets(user_config) {
+    let trusted_users = mix_core::managed::trusted_users(user_config);
+    for target in targets(user_config, &trusted_users) {
         let name = target.label();
         tracing::debug!("checking: {name}");
         match fix(&target, &token).await {
