@@ -13,8 +13,15 @@ use crate::privilege::InvokingUser;
 pub const NIX_CONF_BASE: &str =
     "build-users-group = nixbld\nexperimental-features = nix-command flakes\n";
 
+fn is_nix_conf_value(name: &str) -> bool {
+    !name.is_empty()
+        && !name
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '#')
+}
+
 pub fn nix_conf(username: Option<&str>) -> String {
-    match username {
+    match username.filter(|name| is_nix_conf_value(name)) {
         Some(name) => format!("{NIX_CONF_BASE}trusted-users = root {name}\n"),
         None => NIX_CONF_BASE.to_string(),
     }
@@ -432,6 +439,65 @@ mod tests {
             nix_conf(Some("alice")),
             format!("{NIX_CONF_BASE}trusted-users = root alice\n")
         );
+    }
+
+    #[test]
+    fn nix_conf_keeps_the_trusted_users_line_to_a_single_setting() {
+        let rendered = nix_conf(Some("alice"));
+        assert_eq!(
+            rendered
+                .lines()
+                .filter(|line| line.starts_with("trusted-users"))
+                .count(),
+            1
+        );
+        assert!(rendered.ends_with('\n'));
+    }
+
+    #[test]
+    fn nix_conf_accepts_the_punctuation_real_usernames_use() {
+        for name in ["mix-user", "mix_user", "mix.user", "mix$", "user123"] {
+            assert_eq!(
+                nix_conf(Some(name)),
+                format!("{NIX_CONF_BASE}trusted-users = root {name}\n"),
+                "{name} should be usable as a trusted-users entry"
+            );
+        }
+    }
+
+    #[test]
+    fn nix_conf_drops_a_username_that_would_extend_the_setting() {
+        for name in ["alice bob", "alice\tbob", "alice\u{a0}bob"] {
+            assert_eq!(
+                nix_conf(Some(name)),
+                NIX_CONF_BASE,
+                "{name:?} must not smuggle in a second trusted user"
+            );
+        }
+    }
+
+    #[test]
+    fn nix_conf_drops_a_username_that_would_inject_another_setting() {
+        assert_eq!(
+            nix_conf(Some("alice\nallowed-users = *")),
+            NIX_CONF_BASE,
+            "a newline must not start a new nix.conf setting"
+        );
+        assert_eq!(
+            nix_conf(Some("alice\r")),
+            NIX_CONF_BASE,
+            "a control character must not end up in nix.conf"
+        );
+        assert_eq!(
+            nix_conf(Some("alice#comment")),
+            NIX_CONF_BASE,
+            "a comment marker must not end up in nix.conf"
+        );
+    }
+
+    #[test]
+    fn nix_conf_drops_an_empty_username() {
+        assert_eq!(nix_conf(Some("")), NIX_CONF_BASE);
     }
 
     #[test]
