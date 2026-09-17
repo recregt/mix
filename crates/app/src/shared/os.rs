@@ -1,7 +1,7 @@
+use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::Arc;
 
-use mix_core::nix_log::{Event, NixLog};
 use mix_core::paths::DEFAULT_PROFILE_BIN;
 use mix_core::privilege::InvokingUser;
 use mix_core::{ActivityReporter, BuildPlan, CancellationToken, Error, Result};
@@ -9,7 +9,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tracing::Instrument;
 
-use crate::shared::output::{LineSplitter, TailBuffer};
+use crate::shared::output::StreamDrain;
 
 pub(crate) const DIR_MODE_MASK: u32 = 0o7777;
 
@@ -38,71 +38,35 @@ fn command_as(user: &InvokingUser, command: &str, args: &[&str]) -> Command {
     cmd
 }
 
-/// Drains a pipe, handing every line to `activity` as it arrives and keeping only the tail of
-/// the stream for a later error message.
-///
-/// A process asked for `--log-format internal-json` writes records rather than prose, so the
-/// stream is folded into counters as it goes and the diagnostics are decoded out of it; anything
-/// that is not a record flows through untouched.
+/// Drains a pipe, handing every line to `activity` as it arrives and keeping only what a later
+/// error message would be written from.
 async fn stream(mut pipe: impl AsyncRead + Unpin, activity: Arc<dyn ActivityReporter>) -> Vec<u8> {
     let mut chunk = vec![0u8; STREAM_CHUNK];
-    let mut splitter = LineSplitter::new();
-    let mut tail = TailBuffer::new(STREAM_TAIL);
-    let mut decoded = TailBuffer::new(STREAM_TAIL);
-    let mut log = NixLog::new();
+    let mut drain = StreamDrain::new(STREAM_TAIL);
 
     while let Ok(read) = pipe.read(&mut chunk).await {
         if read == 0 {
             break;
         }
-        let bytes = &chunk[..read];
-        tail.extend(bytes);
-        splitter.push(bytes, |line| {
-            report(line, &mut log, &mut decoded, activity.as_ref())
-        });
+        drain.push(&chunk[..read], activity.as_ref());
     }
 
-    splitter.finish(|line| report(line, &mut log, &mut decoded, activity.as_ref()));
-    activity.clear();
-
-    // Raw records explain nothing to a human, so a structured stream is reported through the
-    // diagnostics decoded out of it instead.
-    if log.is_structured() {
-        return decoded.into_bytes();
-    }
-    tail.into_bytes()
-}
-
-fn report(line: &str, log: &mut NixLog, decoded: &mut TailBuffer, activity: &dyn ActivityReporter) {
-    match log.observe(line) {
-        Event::Plain(line) => {
-            // Only worth a second copy once the raw tail is known to be unreadable.
-            if log.is_structured() {
-                decoded.push_line(line);
-            }
-            activity.line(line);
-        }
-        Event::Message(message) => {
-            decoded.push_line(&message);
-            activity.line(&message);
-        }
-        Event::Transient(text) => activity.line(&text),
-        Event::Progress => activity.progress(&log.snapshot()),
-        Event::Ignored => {}
-    }
+    drain.finish(activity.as_ref())
 }
 
 async fn run_command(
     command: Command,
-    command_line: String,
+    command_line: &str,
     token: &CancellationToken,
 ) -> Result<std::process::Output> {
     run_command_reporting(command, command_line, token, None).await
 }
 
+/// The command line is borrowed rather than handed over: it is only ever needed as an owned
+/// string to name a failure with, and a command that succeeds is the common case.
 async fn run_command_reporting(
     mut command: Command,
-    command_line: String,
+    command_line: &str,
     token: &CancellationToken,
     activity: Option<Arc<dyn ActivityReporter>>,
 ) -> Result<std::process::Output> {
@@ -113,7 +77,7 @@ async fn run_command_reporting(
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| Error::Exec {
-            command: command_line.clone(),
+            command: command_line.to_string(),
             source: e,
         })?;
 
@@ -137,17 +101,17 @@ async fn run_command_reporting(
 
     let status = tokio::select! {
         status = child.wait() => status.map_err(|e| Error::Exec {
-            command: command_line.clone(),
+            command: command_line.to_string(),
             source: e,
         })?,
         () = token.cancelled() => {
             child.kill().await.map_err(|e| Error::Exec {
-                command: command_line.clone(),
+                command: command_line.to_string(),
                 source: e,
             })?;
             stdout_task.abort();
             stderr_task.abort();
-            return Err(Error::Cancelled { command: command_line });
+            return Err(Error::Cancelled { command: command_line.to_string() });
         }
     };
 
@@ -171,7 +135,7 @@ pub async fn run(command: &str, args: &[&str], token: &CancellationToken) -> Res
     let command_line = format_command(command, args);
     let mut cmd = Command::new(command);
     cmd.args(args);
-    let output = run_command(cmd, command_line.clone(), token).await?;
+    let output = run_command(cmd, &command_line, token).await?;
     if !output.status.success() {
         return Err(command_error(command_line, &output));
     }
@@ -197,7 +161,7 @@ pub async fn run_as_reporting(
 ) -> Result<String> {
     let command_line = format_command(command, args);
     let cmd = command_as(user, command, args);
-    let output = run_command_reporting(cmd, command_line.clone(), token, activity).await?;
+    let output = run_command_reporting(cmd, &command_line, token, activity).await?;
     if !output.status.success() {
         return Err(command_error(command_line, &output));
     }
@@ -217,7 +181,7 @@ pub async fn plan_as(
 ) -> Result<BuildPlan> {
     let command_line = format_command(command, args);
     let cmd = command_as(user, command, args);
-    let output = run_command(cmd, command_line.clone(), token).await?;
+    let output = run_command(cmd, &command_line, token).await?;
     if !output.status.success() {
         return Err(command_error(command_line, &output));
     }
@@ -232,16 +196,24 @@ pub async fn status_as(
 ) -> Result<bool> {
     let command_line = format_command(command, args);
     let cmd = command_as(user, command, args);
-    let output = run_command(cmd, command_line, token).await?;
+    let output = run_command(cmd, &command_line, token).await?;
     Ok(output.status.success())
 }
 
+/// Renders a command line for a log line or an error message.
+///
+/// Built in one buffer sized for the whole line: this runs for every command the tool spawns,
+/// including the ones that only answer a question.
 pub fn format_command(command: &str, args: &[&str]) -> String {
-    let mut rendered = command.to_string();
+    let width = command.len() + args.iter().map(|arg| arg.len() + 3).sum::<usize>();
+    let mut rendered = String::with_capacity(width);
+    rendered.push_str(command);
+
     for arg in args {
         rendered.push(' ');
         if arg.is_empty() || arg.contains(char::is_whitespace) {
-            rendered.push_str(&format!("{arg:?}"));
+            // An argument that would not survive being read back as one word is quoted.
+            let _ = write!(rendered, "{arg:?}");
         } else {
             rendered.push_str(arg);
         }
@@ -791,7 +763,7 @@ mod tests {
 
         let output = run_command_reporting(
             cmd,
-            "sh".to_string(),
+            "sh",
             &token,
             Some(Arc::clone(&recorder) as Arc<dyn ActivityReporter>),
         )
@@ -825,7 +797,7 @@ mod tests {
 
         let output = run_command_reporting(
             cmd,
-            "sh".to_string(),
+            "sh",
             &token,
             Some(Arc::clone(&recorder) as Arc<dyn ActivityReporter>),
         )
@@ -856,7 +828,7 @@ mod tests {
             std::time::Duration::from_secs(30),
             run_command_reporting(
                 cmd,
-                "sh".to_string(),
+                "sh",
                 &token,
                 Some(Arc::clone(&recorder) as Arc<dyn ActivityReporter>),
             ),

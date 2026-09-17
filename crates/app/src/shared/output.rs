@@ -1,7 +1,92 @@
 //! Turning a child process's live byte stream into display lines, cheaply.
 
+use mix_core::ActivityReporter;
+use mix_core::nix_log::{Event, NixLog};
+
 /// Bytes a single unterminated line may buffer before it is handed over anyway.
 const MAX_LINE: usize = 4 * 1024;
+
+/// Everything a streamed process's output is put through: split into lines, folded into
+/// counters, reported as it arrives, and kept — only as far as a failure would be explained
+/// from it.
+///
+/// A process asked for `--log-format internal-json` writes records rather than prose, so the
+/// stream is folded into counters as it goes and the diagnostics are decoded out of it; anything
+/// that is not a record flows through untouched.
+pub struct StreamDrain {
+    splitter: LineSplitter,
+    /// The raw bytes, kept for as long as they are what a reader would be shown.
+    tail: TailBuffer,
+    /// The diagnostics decoded out of a structured stream, which is what a reader is shown
+    /// instead once nix is writing records.
+    decoded: TailBuffer,
+    log: NixLog,
+}
+
+impl StreamDrain {
+    pub fn new(cap: usize) -> Self {
+        Self {
+            splitter: LineSplitter::new(),
+            tail: TailBuffer::new(cap),
+            decoded: TailBuffer::new(cap),
+            log: NixLog::new(),
+        }
+    }
+
+    /// Takes a chunk as it was read, reporting whatever it completes.
+    pub fn push(&mut self, chunk: &[u8], activity: &dyn ActivityReporter) {
+        // The raw bytes are only worth keeping while they are what a failure would be explained
+        // with. Once nix is writing records, the tail is discarded in favour of the diagnostics
+        // decoded out of it, so copying the stream through it buys nothing: a whole build log
+        // used to be copied into a buffer whose contents were then thrown away.
+        if !self.log.is_structured() {
+            self.tail.extend(chunk);
+        }
+
+        let (log, decoded) = (&mut self.log, &mut self.decoded);
+        self.splitter
+            .push(chunk, |line| report(line, log, decoded, activity));
+
+        if self.log.is_structured() {
+            self.tail.discard();
+        }
+    }
+
+    /// Reports whatever the stream ended on, and hands back what a failure should be explained
+    /// with.
+    pub fn finish(mut self, activity: &dyn ActivityReporter) -> Vec<u8> {
+        let (log, decoded) = (&mut self.log, &mut self.decoded);
+        self.splitter
+            .finish(|line| report(line, log, decoded, activity));
+        activity.clear();
+
+        // Raw records explain nothing to a human, so a structured stream is reported through the
+        // diagnostics decoded out of it instead.
+        if self.log.is_structured() {
+            return self.decoded.into_bytes();
+        }
+        self.tail.into_bytes()
+    }
+}
+
+fn report(line: &str, log: &mut NixLog, decoded: &mut TailBuffer, activity: &dyn ActivityReporter) {
+    match log.observe(line) {
+        Event::Plain(line) => {
+            // Only worth a second copy once the raw tail is known to be unreadable.
+            if log.is_structured() {
+                decoded.push_line(line);
+            }
+            activity.line(line);
+        }
+        Event::Message(message) => {
+            decoded.push_line(&message);
+            activity.line(&message);
+        }
+        Event::Transient(text) => activity.line(&text),
+        Event::Progress => activity.progress(&log.snapshot()),
+        Event::Ignored => {}
+    }
+}
 
 /// Splits a byte stream into display lines as the bytes arrive.
 ///
@@ -92,6 +177,13 @@ impl TailBuffer {
         self.buf.extend_from_slice(line.as_bytes());
         self.buf.push(b'\n');
         self.compact();
+    }
+
+    /// Gives up what has been kept, and the memory it was kept in, for a stream whose raw bytes
+    /// have turned out not to be what a reader will be shown.
+    pub fn discard(&mut self) {
+        self.buf = Vec::new();
+        self.truncated = false;
     }
 
     fn compact(&mut self) {
@@ -199,6 +291,21 @@ mod tests {
         assert!(bytes.ends_with(b"6789"));
         assert!(bytes.starts_with(TRUNCATION_NOTE));
         assert!(bytes.len() <= TRUNCATION_NOTE.len() + 16);
+    }
+
+    /// A structured stream is explained with the diagnostics decoded out of it, so the raw bytes
+    /// kept up to that point are not only unused but worth giving the memory back for.
+    #[test]
+    fn tail_gives_up_what_it_kept_and_the_memory_with_it() {
+        let mut tail = TailBuffer::new(8);
+        for _ in 0..64 {
+            tail.extend(b"0123456789");
+        }
+
+        tail.discard();
+
+        assert_eq!(tail.buf.capacity(), 0);
+        assert!(tail.into_bytes().is_empty());
     }
 
     #[test]

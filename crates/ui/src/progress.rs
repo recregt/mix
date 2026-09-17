@@ -140,12 +140,26 @@ impl<'writer> FormatFields<'writer> for NameOnlyFields {
 }
 
 fn own_crates_only() -> Targets {
+    own_crates_at(LevelFilter::TRACE, LevelFilter::OFF)
+}
+
+/// What `-v` turns up, and what it deliberately does not.
+///
+/// Verbosity is a request for more of *this* tool's reasoning, not for its dependencies': a
+/// blanket level filter meant `-vv` also turned on every debug line `hyper`, `rustls` and
+/// `tokio` emit, which is thousands of lines around the one being looked for. Their warnings
+/// are still shown, at the level they were shown at before.
+fn own_crates_at(level: LevelFilter, default: LevelFilter) -> Targets {
     OWN_CRATES
         .iter()
         .fold(Targets::new(), |targets, name| {
-            targets.with_target(*name, LevelFilter::TRACE)
+            targets.with_target(*name, level)
         })
-        .with_default(LevelFilter::OFF)
+        .with_default(default)
+}
+
+fn log_filter(verbosity: u8) -> Targets {
+    own_crates_at(level_filter(verbosity), LevelFilter::WARN)
 }
 
 struct IndicatifDownloadProgress;
@@ -201,7 +215,7 @@ pub fn init_tracing(verbosity: u8, progress: bool) {
                     .with_writer(std::io::stderr)
                     .without_time()
                     .with_target(false)
-                    .with_filter(level_filter(verbosity)),
+                    .with_filter(log_filter(verbosity)),
             )
             .init();
         return;
@@ -223,7 +237,7 @@ pub fn init_tracing(verbosity: u8, progress: bool) {
                 .with_writer(indicatif_layer.get_stderr_writer())
                 .without_time()
                 .with_target(false)
-                .with_filter(level_filter(verbosity)),
+                .with_filter(log_filter(verbosity)),
         )
         .with(indicatif_layer.with_filter(own_crates_only()))
         .init();
@@ -403,6 +417,27 @@ mod tests {
     fn the_spinner_and_the_live_text_fit_the_draw_budget() {
         let asked = 1000 / SPINNER_TICK_MS + 1000 / crate::activity::FRAME_INTERVAL_MS;
         assert!(asked <= u64::from(TERM_DRAW_HZ), "{asked} draws a second");
+    }
+
+    /// `-vv` is a request for this tool's own reasoning; a dependency's debug stream is noise
+    /// around the line being looked for.
+    #[test]
+    fn verbosity_turns_up_this_tool_and_not_its_dependencies() {
+        let filter = log_filter(2);
+
+        assert!(filter.would_enable("mix_app", &tracing::Level::DEBUG));
+        assert!(filter.would_enable("mix_app::bootstrap", &tracing::Level::DEBUG));
+        assert!(!filter.would_enable("hyper::client", &tracing::Level::DEBUG));
+    }
+
+    /// A dependency that has something to warn about is still worth hearing from.
+    #[test]
+    fn a_dependency_keeps_the_level_it_was_always_heard_at() {
+        for verbosity in [0, 1, 2, 3] {
+            let filter = log_filter(verbosity);
+            assert!(filter.would_enable("rustls::client", &tracing::Level::WARN));
+            assert!(!filter.would_enable("rustls::client", &tracing::Level::INFO));
+        }
     }
 
     #[test]
