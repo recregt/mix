@@ -44,3 +44,7 @@ harness = false
 [[bench]]
 name = "tarball"
 harness = false
+
+[[bench]]
+name = "target"
+harness = false
