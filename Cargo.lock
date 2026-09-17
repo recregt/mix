@@ -1115,6 +1115,8 @@ dependencies = [
  "codspeed-divan-compat",
  "futures-util",
  "nix",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
  "tokio",

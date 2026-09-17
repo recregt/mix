@@ -50,6 +50,10 @@ async fn inspect(target: &Target) -> Option<String> {
             tracing::debug!("checking file: {}", path.display());
             inspect_file(path, expected.as_deref(), *owner).await
         }
+        Target::SeededFile { path, owner, .. } => {
+            tracing::debug!("checking seeded file: {}", path.display());
+            inspect_seeded_file(path, *owner).await
+        }
         Target::Group { name, gid } => {
             tracing::debug!("checking group: {name}");
             inspect_group(name, *gid)
@@ -111,6 +115,14 @@ async fn inspect_file(
         },
         None => inspect_owner(&meta, owner),
     }
+}
+
+async fn inspect_seeded_file(path: &Path, owner: Option<(u32, u32)>) -> Option<String> {
+    let meta = match tokio::fs::metadata(path).await {
+        Ok(meta) => meta,
+        Err(e) => return Some(e.to_string()),
+    };
+    inspect_owner(&meta, owner)
 }
 
 fn inspect_owner(meta: &std::fs::Metadata, owner: Option<(u32, u32)>) -> Option<String> {
@@ -315,6 +327,32 @@ mod tests {
         let file = dir.path().join("flake.lock");
         std::fs::write(&file, "anything nix wrote").unwrap();
         let detail = inspect_file(&file, None, Some((999_999, 999_999))).await;
+        assert!(detail.is_some());
+    }
+
+    #[tokio::test]
+    async fn inspect_seeded_file_is_unhealthy_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("state");
+        let detail = inspect_seeded_file(&file, None).await;
+        assert!(detail.is_some());
+    }
+
+    #[tokio::test]
+    async fn inspect_seeded_file_is_healthy_when_present_regardless_of_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("state");
+        std::fs::write(&file, "whatever mix install has done to it since").unwrap();
+        let detail = inspect_seeded_file(&file, None).await;
+        assert!(detail.is_none());
+    }
+
+    #[tokio::test]
+    async fn inspect_seeded_file_still_reports_owner_drift_when_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("state");
+        std::fs::write(&file, "content").unwrap();
+        let detail = inspect_seeded_file(&file, Some((999_999, 999_999))).await;
         assert!(detail.is_some());
     }
 

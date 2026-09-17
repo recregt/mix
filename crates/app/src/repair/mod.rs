@@ -121,6 +121,7 @@ pub(crate) async fn fix(target: &Target, token: &CancellationToken) -> Result<Ou
             expected,
             owner,
         } => fix_file(path, expected.as_deref(), *owner).await,
+        Target::SeededFile { path, seed, owner } => fix_seeded_file(path, seed, *owner).await,
         Target::Group { name, gid } => fix_group(name, *gid, token).await,
         Target::GroupMember { group, user } => fix_group_member(group, user, token).await,
         Target::User { n, uid, gid } => fix_user(*n, *uid, *gid, token).await,
@@ -271,6 +272,37 @@ async fn fix_file(
             return Ok(Outcome::Healthy);
         }
         None => {}
+    }
+
+    if set_owner_if_needed(path, owner).await? {
+        repaired = true;
+    }
+
+    Ok(if repaired {
+        Outcome::Repaired
+    } else {
+        Outcome::Healthy
+    })
+}
+
+async fn fix_seeded_file(
+    path: &Path,
+    seed: &str,
+    owner: Option<(u32, u32)>,
+) -> Result<Outcome, Error> {
+    let mut repaired = false;
+
+    if !path_exists(path).await {
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|source| io_error(parent, source))?;
+        }
+        tracing::debug!("seeding file: {}", path.display());
+        tokio::fs::write(path, seed)
+            .await
+            .map_err(|source| io_error(path, source))?;
+        repaired = true;
     }
 
     if set_owner_if_needed(path, owner).await? {
@@ -597,6 +629,47 @@ mod tests {
         let gid = Gid::current().as_raw();
 
         let outcome = fix_file(&file, None, Some((uid, gid))).await.unwrap();
+
+        assert!(matches!(outcome, Outcome::Healthy));
+    }
+
+    #[tokio::test]
+    async fn fix_seeded_file_writes_the_seed_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("state");
+
+        let outcome = fix_seeded_file(&file, "seed content", None).await.unwrap();
+
+        assert!(matches!(outcome, Outcome::Repaired));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "seed content");
+    }
+
+    #[tokio::test]
+    async fn fix_seeded_file_never_rewrites_present_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("state");
+        std::fs::write(&file, "installed by the user since").unwrap();
+
+        let outcome = fix_seeded_file(&file, "seed content", None).await.unwrap();
+
+        assert!(matches!(outcome, Outcome::Healthy));
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "installed by the user since"
+        );
+    }
+
+    #[tokio::test]
+    async fn fix_seeded_file_still_fixes_ownership_when_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("state");
+        std::fs::write(&file, "installed by the user since").unwrap();
+        let uid = Uid::current().as_raw();
+        let gid = Gid::current().as_raw();
+
+        let outcome = fix_seeded_file(&file, "seed content", Some((uid, gid)))
+            .await
+            .unwrap();
 
         assert!(matches!(outcome, Outcome::Healthy));
     }

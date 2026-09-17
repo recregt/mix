@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use mix_core::paths::{FLAKE_LOCK, FLAKE_NIX, HOME_NIX};
+use mix_core::paths::{FLAKE_LOCK, FLAKE_NIX, HOME_NIX, STATE_FILE};
 use mix_core::privilege::InvokingUser;
 use mix_core::{CancellationToken, Error, Result};
 
@@ -14,9 +14,9 @@ const GIT_BINARY_ENV: &str = "MIX_GIT_PATH";
 const PROFILE_GIT: &str = ".nix-profile/bin/git";
 const GITIGNORE: &str = ".gitignore";
 
-const MANAGED_FILES: &[&str] = &[GITIGNORE, FLAKE_LOCK, FLAKE_NIX, HOME_NIX];
+const MANAGED_FILES: &[&str] = &[GITIGNORE, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, STATE_FILE];
 
-const GITIGNORE_CONTENTS: &str = "# Managed by mix -- do not edit, changes are overwritten.\n/*\n!/.gitignore\n!/flake.lock\n!/flake.nix\n!/home.nix\n";
+const GITIGNORE_CONTENTS: &str = "# Managed by mix -- do not edit, changes are overwritten.\n/*\n!/.gitignore\n!/flake.lock\n!/flake.nix\n!/home.nix\n!/state\n";
 
 pub struct Git {
     binary: String,
@@ -276,7 +276,7 @@ mod tests {
 
         let contents = std::fs::read_to_string(state_dir.join(GITIGNORE)).unwrap();
         assert!(contents.contains("/*"));
-        for file in [FLAKE_NIX, HOME_NIX, FLAKE_LOCK, GITIGNORE] {
+        for file in [FLAKE_NIX, HOME_NIX, FLAKE_LOCK, STATE_FILE, GITIGNORE] {
             assert!(
                 contents.contains(&format!("!/{file}")),
                 "{file} should stay tracked"

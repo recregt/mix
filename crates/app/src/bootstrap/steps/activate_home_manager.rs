@@ -66,6 +66,38 @@ async fn nix_build_args(
     args
 }
 
+pub(crate) async fn activate(
+    cfg: &UserConfig,
+    mirror: Option<&str>,
+    mirror_key: Option<&str>,
+    token: &CancellationToken,
+) -> Result<bool> {
+    let state_dir = mix_state_dir(&cfg.user.home);
+    let state_dir_str = state_dir.to_string_lossy().into_owned();
+
+    let flake_attr = format!(
+        "path:{state_dir_str}#homeConfigurations.\"{}\".activationPackage",
+        cfg.user.name
+    );
+    let profile = nix_profiles_dir(&cfg.user.home).join(HOME_MANAGER_PROFILE_NAME);
+    let profile_str = profile.to_string_lossy().into_owned();
+    let args = nix_build_args(&flake_attr, &profile_str, mirror, mirror_key).await;
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let store_path = run_as(&cfg.user, DEFAULT_PROFILE_NIX, &arg_refs, token).await?;
+
+    let activate = format!("{store_path}/activate");
+    run_as(&cfg.user, &activate, &[], token).await?;
+
+    let git = git::Git::resolve(&cfg.user).await;
+    let created_git_dir = !path_exists(state_dir.join(".git")).await;
+    if created_git_dir {
+        git.init(&cfg.user, &state_dir, token).await?;
+    }
+    git.sync(&cfg.user, &state_dir, token).await?;
+
+    Ok(created_git_dir)
+}
+
 #[async_trait]
 impl Step for ActivateHomeManagerConfig {
     type Error = Error;
@@ -85,35 +117,13 @@ impl Step for ActivateHomeManagerConfig {
         let Some(cfg) = &self.user_config else {
             return Ok(());
         };
-        let state_dir = mix_state_dir(&cfg.user.home);
-        let state_dir_str = state_dir.to_string_lossy().into_owned();
-
-        let flake_attr = format!(
-            "path:{state_dir_str}#homeConfigurations.\"{}\".activationPackage",
-            cfg.user.name
-        );
-        let profile = nix_profiles_dir(&cfg.user.home).join(HOME_MANAGER_PROFILE_NAME);
-        let profile_str = profile.to_string_lossy().into_owned();
-        let args = nix_build_args(
-            &flake_attr,
-            &profile_str,
+        self.created_git_dir = activate(
+            cfg,
             self.mirror.as_deref(),
             self.mirror_key.as_deref(),
+            token,
         )
-        .await;
-        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let store_path = run_as(&cfg.user, DEFAULT_PROFILE_NIX, &arg_refs, token).await?;
-
-        let activate = format!("{store_path}/activate");
-        run_as(&cfg.user, &activate, &[], token).await?;
-
-        let git = git::Git::resolve(&cfg.user).await;
-        self.created_git_dir = !path_exists(state_dir.join(".git")).await;
-        if self.created_git_dir {
-            git.init(&cfg.user, &state_dir, token).await?;
-        }
-        git.sync(&cfg.user, &state_dir, token).await?;
-
+        .await?;
         Ok(())
     }
 

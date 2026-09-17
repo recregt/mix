@@ -4,6 +4,7 @@ pub mod lock;
 pub mod models;
 pub mod privilege;
 pub mod progress;
+pub mod state;
 pub mod step;
 pub mod system;
 

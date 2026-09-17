@@ -3,7 +3,7 @@ use std::path::Path;
 use mix_core::paths::DEFAULT_PROFILE_BIN;
 use mix_core::privilege::InvokingUser;
 use mix_core::{CancellationToken, Error, Result};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 pub(crate) const DIR_MODE_MASK: u32 = 0o7777;
@@ -156,6 +156,83 @@ pub async fn path_exists(path: impl AsRef<Path>) -> bool {
     tokio::fs::try_exists(path.as_ref()).await.unwrap_or(false)
 }
 
+pub async fn write_file_atomic(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) -> Result<()> {
+    let path = path.as_ref();
+    tracing::debug!("writing file atomically: {}", path.display());
+
+    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
+    let dir = dir.unwrap_or_else(|| Path::new("."));
+    let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+    let temp_path = dir.join(format!(
+        ".{file_name}.mix-tmp-{}-{}",
+        std::process::id(),
+        next_temp_nonce()
+    ));
+
+    let guard = TempFileGuard::new(temp_path.clone());
+    write_and_sync(&temp_path, contents.as_ref()).await?;
+
+    tokio::fs::rename(&temp_path, path)
+        .await
+        .map_err(|e| Error::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+    guard.disarm();
+
+    sync_dir_best_effort(dir).await;
+    Ok(())
+}
+
+fn next_temp_nonce() -> u64 {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+struct TempFileGuard {
+    path: std::path::PathBuf,
+    armed: bool,
+}
+
+impl TempFileGuard {
+    fn new(path: std::path::PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+pub(crate) async fn sync_dir_best_effort(dir: &Path) {
+    if let Ok(handle) = tokio::fs::File::open(dir).await {
+        let _ = handle.sync_all().await;
+    }
+}
+
+async fn write_and_sync(path: &Path, contents: &[u8]) -> Result<()> {
+    let mut file = tokio::fs::File::create(path).await.map_err(|e| Error::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    file.write_all(contents).await.map_err(|e| Error::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    file.sync_all().await.map_err(|e| Error::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })
+}
+
 pub async fn systemd_restart_if_active(name: &str, token: &CancellationToken) -> Result<bool> {
     if !systemd_unit_is_active(name).await {
         return Ok(false);
@@ -193,6 +270,102 @@ mod tests {
     #[tokio::test]
     async fn path_exists_false_when_missing() {
         assert!(!path_exists("/does/not/exist/mix-test").await);
+    }
+
+    #[tokio::test]
+    async fn write_file_atomic_writes_the_full_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nix.conf");
+
+        write_file_atomic(&path, b"hello").await.unwrap();
+
+        assert_eq!(std::fs::read(&path).unwrap(), b"hello");
+    }
+
+    #[tokio::test]
+    async fn write_file_atomic_replaces_existing_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nix.conf");
+        std::fs::write(&path, b"old").unwrap();
+
+        write_file_atomic(&path, b"new").await.unwrap();
+
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+    }
+
+    #[tokio::test]
+    async fn write_file_atomic_leaves_no_temp_file_behind_on_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nix.conf");
+
+        write_file_atomic(&path, b"hello").await.unwrap();
+
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(entries, vec![std::ffi::OsString::from("nix.conf")]);
+    }
+
+    #[tokio::test]
+    async fn write_file_atomic_does_not_touch_the_destination_when_the_write_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing-subdir").join("nix.conf");
+
+        assert!(write_file_atomic(&path, b"hello").await.is_err());
+
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn write_file_atomic_temp_names_do_not_collide_under_concurrency() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nix.conf");
+
+        let tasks: Vec<_> = (0..20)
+            .map(|i| {
+                let path = path.clone();
+                tokio::spawn(async move {
+                    write_file_atomic(&path, format!("content-{i}").into_bytes()).await
+                })
+            })
+            .collect();
+        for task in tasks {
+            task.await.unwrap().unwrap();
+        }
+
+        assert!(path.exists());
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            entries,
+            vec![std::ffi::OsString::from("nix.conf")],
+            "no orphaned or colliding temp file should remain"
+        );
+    }
+
+    #[test]
+    fn temp_file_guard_removes_the_file_when_dropped_while_armed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("leftover");
+        std::fs::write(&path, b"x").unwrap();
+
+        drop(TempFileGuard::new(path.clone()));
+
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn temp_file_guard_leaves_the_file_when_disarmed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kept");
+        std::fs::write(&path, b"x").unwrap();
+
+        TempFileGuard::new(path.clone()).disarm();
+
+        assert!(path.exists());
     }
 
     fn output_with(stdout: &str, stderr: &str, exit_code: i32) -> std::process::Output {

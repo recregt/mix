@@ -7,10 +7,8 @@ use mix_core::models::{NIX_CONF, PROFILE_SNIPPET};
 use mix_core::paths::{NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT, PROFILE_SNIPPET_DEST};
 
 use crate::bootstrap::error::{Error, Result};
-use crate::bootstrap::util::{
-    create_dir_all, remove_dir_all, remove_file, warn_on_failure, write_file_atomic,
-};
-use crate::shared::os::{path_exists, systemd_restart_if_active};
+use crate::bootstrap::util::{create_dir_all, remove_dir_all, remove_file, warn_on_failure};
+use crate::shared::os::{path_exists, systemd_restart_if_active, write_file_atomic};
 
 #[derive(Default)]
 pub struct ConfigureNixConf {

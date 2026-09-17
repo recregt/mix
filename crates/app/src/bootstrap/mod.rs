@@ -10,6 +10,7 @@ pub mod preflight;
 pub mod tarball;
 
 pub use error::{Error, Result};
+pub(crate) use steps::activate;
 
 use std::sync::Arc;
 

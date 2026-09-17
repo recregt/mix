@@ -28,6 +28,21 @@ pub enum Command {
         force: bool,
     },
 
+    /// Add packages to your home-manager profile
+    Install {
+        /// Packages to add
+        #[arg(required = true)]
+        packages: Vec<String>,
+
+        /// Alternate URL to fetch the pinned Nix archive from
+        #[arg(long, env = "MIX_NIX_MIRROR")]
+        mirror: Option<String>,
+
+        /// Public key the mirror's binary cache is signed with
+        #[arg(long, env = "MIX_NIX_MIRROR_KEY")]
+        mirror_key: Option<String>,
+    },
+
     /// Inspect system health
     Doctor,
 

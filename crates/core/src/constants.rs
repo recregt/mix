@@ -45,6 +45,7 @@ pub mod paths {
     pub const FLAKE_NIX: &str = "flake.nix";
     pub const HOME_NIX: &str = "home.nix";
     pub const FLAKE_LOCK: &str = "flake.lock";
+    pub const STATE_FILE: &str = "state";
 
     pub const NIX_PROFILES_DIR: &str = ".local/state/nix/profiles";
     pub const NIX_PROFILES_DIR_MODE: u32 = 0o755;
