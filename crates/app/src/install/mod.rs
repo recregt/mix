@@ -38,18 +38,16 @@ pub async fn install(
     mirror: Option<&str>,
     mirror_key: Option<&str>,
 ) -> Result<Vec<String>> {
-    let requested = dedupe(packages);
     let state = read_state(&cfg.user.home);
+    let partition = state.partition(packages);
 
-    let already: Vec<String> = requested
-        .iter()
-        .filter(|p| state.packages.contains(p))
-        .cloned()
-        .collect();
-    if !already.is_empty() {
-        return Err(Error::AlreadyInstalled(already));
+    if !partition.installed.is_empty() {
+        return Err(Error::AlreadyInstalled(
+            partition.installed.iter().map(|p| p.to_string()).collect(),
+        ));
     }
 
+    let requested: Vec<String> = partition.missing.iter().map(|p| p.to_string()).collect();
     let mut candidate_packages = state.packages.clone();
     candidate_packages.extend(requested.iter().cloned());
     let new_home = render_home(&cfg.user, &candidate_packages)?;
@@ -102,15 +100,6 @@ where
     Ok(())
 }
 
-fn dedupe(packages: &[String]) -> Vec<String> {
-    let mut seen = std::collections::HashSet::new();
-    packages
-        .iter()
-        .filter(|p| seen.insert(p.as_str()))
-        .cloned()
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use mix_core::privilege::InvokingUser;
@@ -130,14 +119,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn dedupe_keeps_first_occurrence_order() {
-        assert_eq!(
-            dedupe(&["git".to_string(), "ripgrep".to_string(), "git".to_string()]),
-            vec!["git".to_string(), "ripgrep".to_string()]
-        );
-    }
-
     #[tokio::test]
     async fn install_rejects_a_package_already_present() {
         let home = tempfile::tempdir().unwrap();
@@ -151,6 +132,28 @@ mod tests {
         let err = install(&user_config(home.path()), &["git".to_string()], None, None)
             .await
             .unwrap_err();
+
+        assert!(matches!(err, Error::AlreadyInstalled(pkgs) if pkgs == vec!["git".to_string()]));
+    }
+
+    #[tokio::test]
+    async fn install_reports_a_repeated_package_once() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(mix_state_dir(home.path())).unwrap();
+        std::fs::write(
+            mix_state_dir(home.path()).join(STATE_FILE),
+            StateManifest::seed().render(),
+        )
+        .unwrap();
+
+        let err = install(
+            &user_config(home.path()),
+            &["git".to_string(), "git".to_string()],
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
 
         assert!(matches!(err, Error::AlreadyInstalled(pkgs) if pkgs == vec!["git".to_string()]));
     }
