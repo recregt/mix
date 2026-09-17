@@ -21,3 +21,7 @@ divan = { workspace = true }
 [[bench]]
 name = "activity"
 harness = false
+
+[[bench]]
+name = "message"
+harness = false

@@ -23,7 +23,9 @@ pub enum Error {
     #[error(transparent)]
     InvalidPackage(#[from] mix_nixgen::InvalidInput),
 
-    #[error("'mix install' cannot be run as root.\nRun as a regular user.")]
+    #[error(
+        "`mix install` cannot be run as root.\nRun it as the user whose profile it installs into."
+    )]
     NotRoot,
 
     #[error("not bootstrapped yet.\nRun `mix bootstrap` first.")]

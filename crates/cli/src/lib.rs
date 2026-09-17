@@ -51,7 +51,8 @@ pub async fn run() -> ExitCode {
     match result {
         Ok(code) => code,
         Err(e) => {
-            mix_ui::fail(e);
+            // The chain, not just the top of it: a library error explains itself in its sources.
+            mix_ui::fail_error(&*e);
             ExitCode::FAILURE
         }
     }

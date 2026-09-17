@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("io error at {path}: {source}")]
+    #[error("I/O error at {path}: {source}")]
     Io {
         path: PathBuf,
         #[source]
@@ -25,7 +25,11 @@ pub enum Error {
     #[error("command `{command}` was interrupted")]
     Cancelled { command: String },
 
-    #[error("already locked: {}", path.display())]
+    #[error(
+        "already locked: {}\n\
+         Another `mix` command is running; wait for it to finish and retry.",
+        path.display()
+    )]
     Locked { path: PathBuf },
 }
 
