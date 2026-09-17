@@ -35,5 +35,9 @@ divan = { workspace = true }
 mockito = "=1.7.2"
 
 [[bench]]
+name = "output"
+harness = false
+
+[[bench]]
 name = "tarball"
 harness = false

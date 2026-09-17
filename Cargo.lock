@@ -1143,6 +1143,7 @@ version = "0.1.0"
 name = "mix-ui"
 version = "0.1.0"
 dependencies = [
+ "codspeed-divan-compat",
  "indicatif",
  "mix-core",
  "owo-colors",

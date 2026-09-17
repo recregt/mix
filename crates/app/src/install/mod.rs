@@ -1,10 +1,12 @@
 use std::future::Future;
 use std::path::Path;
+use std::sync::Arc;
 
-use mix_core::CancellationToken;
 use mix_core::models::UserConfig;
 use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
 use mix_core::state::StateManifest;
+use mix_core::{ActivityReporter, CancellationToken};
+use tracing::Instrument;
 
 use crate::shared::home_manager::{read_state, render_home};
 use crate::shared::os::write_file_atomic;
@@ -20,9 +22,6 @@ pub enum Error {
     #[error(transparent)]
     InvalidPackage(#[from] mix_nixgen::InvalidInput),
 
-    #[error("already installed: {}", .0.join(", "))]
-    AlreadyInstalled(Vec<String>),
-
     #[error("'mix install' cannot be run as root.\nRun as a regular user.")]
     NotRoot,
 
@@ -32,42 +31,86 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// What a run of `install` actually did, so a caller can report an idempotent no-op as a
+/// success rather than a failure.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Installed {
+    /// Packages added to the profile by this run, in the order they were requested.
+    pub added: Vec<String>,
+    /// Packages that were already in the profile and were left alone.
+    pub skipped: Vec<String>,
+}
+
+impl Installed {
+    pub fn changed_nothing(&self) -> bool {
+        self.added.is_empty()
+    }
+}
+
 pub async fn install(
     cfg: &UserConfig,
     packages: &[String],
     mirror: Option<&str>,
     mirror_key: Option<&str>,
-) -> Result<Vec<String>> {
+    activity: Arc<dyn ActivityReporter>,
+) -> Result<Installed> {
     let state = read_state(&cfg.user.home);
     let partition = state.partition(packages);
+    let skipped: Vec<String> = partition.installed.iter().map(|p| p.to_string()).collect();
+    let added: Vec<String> = partition.missing.iter().map(|p| p.to_string()).collect();
 
-    if !partition.installed.is_empty() {
-        return Err(Error::AlreadyInstalled(
-            partition.installed.iter().map(|p| p.to_string()).collect(),
-        ));
+    // Everything requested is already there: nothing to render, write or build.
+    if added.is_empty() {
+        return Ok(Installed { added, skipped });
     }
 
-    let requested: Vec<String> = partition.missing.iter().map(|p| p.to_string()).collect();
-    let mut candidate_packages = state.packages.clone();
-    candidate_packages.extend(requested.iter().cloned());
-    let new_home = render_home(&cfg.user, &candidate_packages)?;
-    let new_state = StateManifest {
-        version: state.version,
-        packages: candidate_packages,
-    }
-    .render();
+    let (new_state, new_home) = render_candidate(cfg, &state, &added)?;
 
     let state_dir = mix_state_dir(&cfg.user.home);
     let state_path = state_dir.join(STATE_FILE);
     let home_path = state_dir.join(HOME_NIX);
     let token = CancellationToken::new();
 
+    let label = install_label(&added);
+    let span = tracing::info_span!("step", name = label.as_str());
+
     write_then_activate(&state_path, &home_path, &new_state, &new_home, || {
-        crate::bootstrap::activate(cfg, mirror, mirror_key, &token)
+        crate::bootstrap::activate(cfg, mirror, mirror_key, &activity, &token)
     })
+    .instrument(span)
     .await?;
 
-    Ok(requested)
+    Ok(Installed { added, skipped })
+}
+
+/// Names the packages being installed, or counts them once the list stops fitting on a line.
+fn install_label(added: &[String]) -> String {
+    match added.len() {
+        0..=3 => format!("Installing {}", added.join(", ")),
+        n => format!("Installing {n} packages"),
+    }
+}
+
+/// Renders the manifest and the `home.nix` the profile would have once `added` is installed.
+///
+/// Done before anything is written so an invalid package name fails with the profile untouched.
+fn render_candidate(
+    cfg: &UserConfig,
+    state: &StateManifest,
+    added: &[String],
+) -> Result<(String, String)> {
+    let mut packages = Vec::with_capacity(state.packages.len() + added.len());
+    packages.extend_from_slice(&state.packages);
+    packages.extend_from_slice(added);
+
+    let home = render_home(&cfg.user, &packages)?;
+    let manifest = StateManifest {
+        version: state.version,
+        packages,
+    }
+    .render();
+
+    Ok((manifest, home))
 }
 
 async fn write_then_activate<F, Fut>(
@@ -102,9 +145,25 @@ where
 
 #[cfg(test)]
 mod tests {
+    use mix_core::NoopActivity;
     use mix_core::privilege::InvokingUser;
 
     use super::*;
+
+    fn noop() -> Arc<dyn ActivityReporter> {
+        Arc::new(NoopActivity)
+    }
+
+    fn seeded_home() -> tempfile::TempDir {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(mix_state_dir(home.path())).unwrap();
+        std::fs::write(
+            mix_state_dir(home.path()).join(STATE_FILE),
+            StateManifest::seed().render(),
+        )
+        .unwrap();
+        home
+    }
 
     fn user_config(home: &std::path::Path) -> UserConfig {
         UserConfig {
@@ -120,65 +179,142 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn install_rejects_a_package_already_present() {
-        let home = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(mix_state_dir(home.path())).unwrap();
-        std::fs::write(
-            mix_state_dir(home.path()).join(STATE_FILE),
-            StateManifest::seed().render(),
+    async fn install_skips_a_package_that_is_already_present() {
+        let home = seeded_home();
+
+        let installed = install(
+            &user_config(home.path()),
+            &["git".to_string()],
+            None,
+            None,
+            noop(),
         )
+        .await
         .unwrap();
 
-        let err = install(&user_config(home.path()), &["git".to_string()], None, None)
-            .await
-            .unwrap_err();
+        assert!(installed.changed_nothing());
+        assert_eq!(installed.skipped, vec!["git".to_string()]);
+    }
 
-        assert!(matches!(err, Error::AlreadyInstalled(pkgs) if pkgs == vec!["git".to_string()]));
+    #[tokio::test]
+    async fn install_touches_nothing_when_every_package_is_already_present() {
+        let home = seeded_home();
+        let state_before =
+            std::fs::read_to_string(mix_state_dir(home.path()).join(STATE_FILE)).unwrap();
+
+        install(
+            &user_config(home.path()),
+            &["git".to_string()],
+            None,
+            None,
+            noop(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(mix_state_dir(home.path()).join(STATE_FILE)).unwrap(),
+            state_before
+        );
+        assert!(!mix_state_dir(home.path()).join(HOME_NIX).exists());
     }
 
     #[tokio::test]
     async fn install_reports_a_repeated_package_once() {
-        let home = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(mix_state_dir(home.path())).unwrap();
-        std::fs::write(
-            mix_state_dir(home.path()).join(STATE_FILE),
-            StateManifest::seed().render(),
-        )
-        .unwrap();
+        let home = seeded_home();
 
-        let err = install(
+        let installed = install(
             &user_config(home.path()),
             &["git".to_string(), "git".to_string()],
             None,
             None,
+            noop(),
         )
         .await
-        .unwrap_err();
+        .unwrap();
 
-        assert!(matches!(err, Error::AlreadyInstalled(pkgs) if pkgs == vec!["git".to_string()]));
+        assert_eq!(installed.skipped, vec!["git".to_string()]);
+        assert!(installed.added.is_empty());
     }
 
     #[tokio::test]
     async fn install_leaves_nothing_written_for_an_invalid_package_name() {
-        let home = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(mix_state_dir(home.path())).unwrap();
-        std::fs::write(
-            mix_state_dir(home.path()).join(STATE_FILE),
-            StateManifest::seed().render(),
-        )
-        .unwrap();
+        let home = seeded_home();
 
         let err = install(
             &user_config(home.path()),
             &["not a valid ident".to_string()],
             None,
             None,
+            noop(),
         )
         .await
         .unwrap_err();
 
         assert!(matches!(err, Error::InvalidPackage(_)));
         assert!(!mix_state_dir(home.path()).join(HOME_NIX).exists());
+    }
+
+    #[test]
+    fn install_label_names_a_short_list_of_packages() {
+        assert_eq!(
+            install_label(&["git".to_string(), "fd".to_string()]),
+            "Installing git, fd"
+        );
+    }
+
+    #[test]
+    fn install_label_counts_a_long_list_of_packages() {
+        let packages: Vec<String> = (0..12).map(|i| format!("package-{i}")).collect();
+        assert_eq!(install_label(&packages), "Installing 12 packages");
+    }
+
+    #[test]
+    fn render_candidate_keeps_the_installed_packages_and_appends_the_new_ones() {
+        let home = tempfile::tempdir().unwrap();
+        let state = StateManifest {
+            version: 1,
+            packages: vec!["git".to_string()],
+        };
+
+        let (manifest, home_nix) =
+            render_candidate(&user_config(home.path()), &state, &["ripgrep".to_string()]).unwrap();
+
+        assert_eq!(
+            StateManifest::parse(&manifest).unwrap().packages,
+            vec!["git".to_string(), "ripgrep".to_string()]
+        );
+        assert!(home_nix.contains("ripgrep"));
+        assert!(home_nix.contains("git"));
+    }
+
+    #[test]
+    fn render_candidate_keeps_the_manifest_version() {
+        let home = tempfile::tempdir().unwrap();
+        let state = StateManifest {
+            version: 7,
+            packages: Vec::new(),
+        };
+
+        let (manifest, _) =
+            render_candidate(&user_config(home.path()), &state, &["fd".to_string()]).unwrap();
+
+        assert_eq!(StateManifest::parse(&manifest).unwrap().version, 7);
+    }
+
+    #[test]
+    fn render_candidate_rejects_an_invalid_package_name() {
+        let home = tempfile::tempdir().unwrap();
+        let state = StateManifest::seed();
+
+        let err = render_candidate(
+            &user_config(home.path()),
+            &state,
+            &["not a valid ident".to_string()],
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, Error::InvalidPackage(_)));
     }
 
     #[tokio::test]

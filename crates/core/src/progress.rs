@@ -15,3 +15,22 @@ impl DownloadProgress for NoopProgress {
 pub trait StepObserver: Send + Sync {
     fn on_step_span(&self, span: &tracing::Span);
 }
+
+/// Receives a long-running child process's output as it is produced, one display line at a time.
+///
+/// A build can emit thousands of lines a second, so `line` is on a hot path: implementations are
+/// expected to drop what they cannot draw rather than queue it, and to do no work at all when
+/// nothing is watching.
+pub trait ActivityReporter: Send + Sync {
+    fn line(&self, line: &str);
+
+    /// Called once the process has exited, to drop whatever the last line left on screen.
+    fn clear(&self);
+}
+
+pub struct NoopActivity;
+
+impl ActivityReporter for NoopActivity {
+    fn line(&self, _line: &str) {}
+    fn clear(&self) {}
+}

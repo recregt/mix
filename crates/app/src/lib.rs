@@ -5,3 +5,6 @@ pub mod repair;
 mod shared;
 
 pub use shared::home_manager::resolve_existing_user_config;
+
+#[doc(hidden)]
+pub use shared::output;

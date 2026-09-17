@@ -1,12 +1,23 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use mix_core::paths::DEFAULT_PROFILE_BIN;
 use mix_core::privilege::InvokingUser;
-use mix_core::{CancellationToken, Error, Result};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use mix_core::{ActivityReporter, CancellationToken, Error, Result};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
+use tracing::Instrument;
+
+use crate::shared::output::{LineSplitter, TailBuffer};
 
 pub(crate) const DIR_MODE_MASK: u32 = 0o7777;
+
+/// Read size for a streamed pipe: large enough that a burst of output costs one syscall,
+/// small enough that a single slow line still reaches the screen immediately.
+const STREAM_CHUNK: usize = 8 * 1024;
+
+/// How much of a streamed process's output is kept to explain a failure with.
+const STREAM_TAIL: usize = 64 * 1024;
 
 fn path_with_nix_profile() -> String {
     match std::env::var("PATH") {
@@ -26,10 +37,40 @@ fn command_as(user: &InvokingUser, command: &str, args: &[&str]) -> Command {
     cmd
 }
 
+/// Drains a pipe, handing every line to `activity` as it arrives and keeping only the tail of
+/// the stream for a later error message.
+async fn stream(mut pipe: impl AsyncRead + Unpin, activity: Arc<dyn ActivityReporter>) -> Vec<u8> {
+    let mut chunk = vec![0u8; STREAM_CHUNK];
+    let mut splitter = LineSplitter::new();
+    let mut tail = TailBuffer::new(STREAM_TAIL);
+
+    while let Ok(read) = pipe.read(&mut chunk).await {
+        if read == 0 {
+            break;
+        }
+        let bytes = &chunk[..read];
+        tail.extend(bytes);
+        splitter.push(bytes, |line| activity.line(line));
+    }
+
+    splitter.finish(|line| activity.line(line));
+    activity.clear();
+    tail.into_bytes()
+}
+
 async fn run_command(
+    command: Command,
+    command_line: String,
+    token: &CancellationToken,
+) -> Result<std::process::Output> {
+    run_command_reporting(command, command_line, token, None).await
+}
+
+async fn run_command_reporting(
     mut command: Command,
     command_line: String,
     token: &CancellationToken,
+    activity: Option<Arc<dyn ActivityReporter>>,
 ) -> Result<std::process::Output> {
     tracing::debug!("running command: {command_line}");
 
@@ -49,11 +90,16 @@ async fn run_command(
         let _ = stdout_pipe.read_to_end(&mut buf).await;
         buf
     });
-    let stderr_task = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        let _ = stderr_pipe.read_to_end(&mut buf).await;
-        buf
-    });
+    // Progress goes to stderr, so that is the pipe worth watching live. The reader keeps the
+    // caller's span so the reporter can draw on the line the step already owns.
+    let stderr_task = match activity {
+        Some(activity) => tokio::spawn(stream(stderr_pipe, activity).in_current_span()),
+        None => tokio::spawn(async move {
+            let mut buf = Vec::new();
+            let _ = stderr_pipe.read_to_end(&mut buf).await;
+            buf
+        }),
+    };
 
     let status = tokio::select! {
         status = child.wait() => status.map_err(|e| Error::Exec {
@@ -104,9 +150,20 @@ pub async fn run_as(
     args: &[&str],
     token: &CancellationToken,
 ) -> Result<String> {
+    run_as_reporting(user, command, args, token, None).await
+}
+
+/// Like [`run_as`], but reports the command's output line by line while it runs.
+pub async fn run_as_reporting(
+    user: &InvokingUser,
+    command: &str,
+    args: &[&str],
+    token: &CancellationToken,
+    activity: Option<Arc<dyn ActivityReporter>>,
+) -> Result<String> {
     let command_line = format_command(command, args);
     let cmd = command_as(user, command, args);
-    let output = run_command(cmd, command_line.clone(), token).await?;
+    let output = run_command_reporting(cmd, command_line.clone(), token, activity).await?;
     if !output.status.success() {
         return Err(command_error(command_line, &output));
     }
@@ -492,6 +549,98 @@ mod tests {
             Ok(run_result) => run_result.unwrap(),
             Err(_) => panic!("run() did not return within the timeout, likely deadlocked"),
         }
+    }
+
+    #[derive(Default)]
+    struct Recorder {
+        lines: std::sync::Mutex<Vec<String>>,
+        cleared: std::sync::atomic::AtomicBool,
+    }
+
+    impl Recorder {
+        fn lines(&self) -> Vec<String> {
+            self.lines.lock().unwrap().clone()
+        }
+
+        fn cleared(&self) -> bool {
+            self.cleared.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    impl ActivityReporter for Recorder {
+        fn line(&self, line: &str) {
+            self.lines.lock().unwrap().push(line.to_string());
+        }
+
+        fn clear(&self) {
+            self.cleared
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_reports_each_line_and_returns_the_output() {
+        let recorder = Arc::new(Recorder::default());
+
+        let bytes = stream(
+            &b"first\nsecond\n"[..],
+            Arc::clone(&recorder) as Arc<dyn ActivityReporter>,
+        )
+        .await;
+
+        assert_eq!(recorder.lines(), ["first", "second"]);
+        assert!(recorder.cleared(), "the last line should be cleared");
+        assert_eq!(bytes, b"first\nsecond\n");
+    }
+
+    #[tokio::test]
+    async fn a_streamed_command_reports_its_progress_and_still_returns_its_output() {
+        let token = CancellationToken::new();
+        let recorder = Arc::new(Recorder::default());
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "echo building >&2; echo done >&2; echo /nix/store/x"]);
+
+        let output = run_command_reporting(
+            cmd,
+            "sh".to_string(),
+            &token,
+            Some(Arc::clone(&recorder) as Arc<dyn ActivityReporter>),
+        )
+        .await
+        .unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "/nix/store/x"
+        );
+        assert_eq!(recorder.lines(), ["building", "done"]);
+    }
+
+    #[tokio::test]
+    async fn a_streamed_command_keeps_only_the_tail_of_a_flood_of_output() {
+        let token = CancellationToken::new();
+        let recorder = Arc::new(Recorder::default());
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "seq 1 60000 >&2"]);
+
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            run_command_reporting(
+                cmd,
+                "sh".to_string(),
+                &token,
+                Some(Arc::clone(&recorder) as Arc<dyn ActivityReporter>),
+            ),
+        )
+        .await
+        .expect("streaming a flood of output should not deadlock")
+        .unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(recorder.lines().len(), 60000);
+        assert!(output.stderr.len() < STREAM_TAIL * 2);
+        assert!(String::from_utf8_lossy(&output.stderr).ends_with("60000\n"));
     }
 
     #[tokio::test]

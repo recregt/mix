@@ -14,7 +14,7 @@ pub(crate) use steps::activate;
 
 use std::sync::Arc;
 
-use mix_core::{DownloadProgress, Outcome, Plan, StepObserver, privilege};
+use mix_core::{ActivityReporter, DownloadProgress, Outcome, Plan, StepObserver, privilege};
 
 pub struct Environment(());
 
@@ -41,6 +41,7 @@ pub async fn bootstrap(
     force: bool,
     progress: Arc<dyn DownloadProgress>,
     step_observer: Arc<dyn StepObserver>,
+    activity: Arc<dyn ActivityReporter>,
 ) -> Result<Environment> {
     if !privilege::is_root() {
         return Err(Error::NotRoot("bootstrap the managed environment"));
@@ -53,7 +54,7 @@ pub async fn bootstrap(
         preflight::check_nix_not_installed().await?;
     }
 
-    run_steps(mirror, mirror_key, force, progress, step_observer).await
+    run_steps(mirror, mirror_key, force, progress, step_observer, activity).await
 }
 
 async fn run_steps(
@@ -62,9 +63,10 @@ async fn run_steps(
     force: bool,
     progress: Arc<dyn DownloadProgress>,
     step_observer: Arc<dyn StepObserver>,
+    activity: Arc<dyn ActivityReporter>,
 ) -> Result<Environment> {
     let mut plan = Plan::new(planner::bootstrap_steps(
-        mirror, mirror_key, force, progress,
+        mirror, mirror_key, force, progress, activity,
     ))
     .with_step_observer(step_observer);
     let cause = match plan.run_cancellable(interrupted()).await {

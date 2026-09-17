@@ -22,9 +22,20 @@ pub async fn run(
         &packages,
         mirror.as_deref(),
         mirror_key.as_deref(),
+        mix_ui::activity_reporter(),
     )
     .await?;
 
-    mix_ui::ok(format!("installed: {}", installed.join(", ")));
+    if !installed.skipped.is_empty() {
+        mix_ui::skipped(format!(
+            "already installed: {}",
+            installed.skipped.join(", ")
+        ));
+    }
+    if installed.changed_nothing() {
+        mix_ui::ok("nothing to install");
+    } else {
+        mix_ui::ok(format!("installed: {}", installed.added.join(", ")));
+    }
     Ok(ExitCode::SUCCESS)
 }

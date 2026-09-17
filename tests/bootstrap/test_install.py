@@ -46,16 +46,26 @@ def test_install_adds_a_package_as_a_regular_user_with_no_sudo(
     status = container.exec(git_bin, "-C", state_dir, "status", "--short", user=USER, check=True)
     assert status.stdout.strip() == ""
 
+    # Re-running the same install is a no-op that still succeeds, so a script can install
+    # unconditionally.
+    again = container.exec("mix", "install", INSTALL_TEST_PACKAGE, user=USER)
+    assert again.returncode == 0, again.stderr
+    assert "already installed" in (again.stdout + again.stderr).lower()
+    assert container.exec("cat", f"{state_dir}/state", check=True).stdout == state
 
-def test_install_rejects_a_package_that_is_already_installed(
+
+def test_install_skips_a_package_that_is_already_installed(
     container, mock_nix_server, mirror_cache
 ):
     _bootstrap_as(container, USER, mock_nix_server, mirror_cache)
+    state_dir = f"/home/{USER}/.local/state/mix"
+    state_before = container.exec("cat", f"{state_dir}/state", check=True).stdout
 
     result = container.exec("mix", "install", "git", user=USER)
 
-    assert result.returncode != 0
+    assert result.returncode == 0, result.stderr
     assert "already installed" in (result.stdout + result.stderr).lower()
+    assert container.exec("cat", f"{state_dir}/state", check=True).stdout == state_before
 
 
 def test_install_cannot_be_run_as_root(container, mock_nix_server, mirror_cache):

@@ -1,10 +1,12 @@
 use std::io::IsTerminal;
 
 use owo_colors::OwoColorize;
-use owo_colors::colors::{Green, Red};
+use owo_colors::colors::{Green, Red, Yellow};
 
+pub mod activity;
 mod progress;
 
+pub use activity::activity_reporter;
 pub use progress::{download_reporter, init_tracing, step_observer};
 
 fn colors_enabled(is_terminal: bool) -> bool {
@@ -15,22 +17,29 @@ fn looks_like_an_identifier(message: &str) -> bool {
     message.starts_with('/') || message.ends_with(".service") || message.ends_with(".socket")
 }
 
-fn sentence_case(message: &str) -> String {
-    let capitalized = match message.chars().next() {
-        Some(c) if c.is_ascii_lowercase() && !looks_like_an_identifier(message) => {
-            c.to_ascii_uppercase().to_string() + &message[c.len_utf8()..]
-        }
-        _ => message.to_string(),
-    };
-    if capitalized.contains('\n') || capitalized.ends_with(['.', '!', '?']) {
-        capitalized
-    } else {
-        capitalized + "."
+/// Capitalizes and terminates a message in place: every line printed goes through this, and it
+/// only ever needs the string the caller already rendered.
+pub(crate) fn sentence_case(message: impl Into<String>) -> String {
+    let mut message: String = message.into();
+
+    let capitalize = message
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase())
+        && !looks_like_an_identifier(&message);
+    if capitalize {
+        // The first character is ASCII, so this is a one-byte in-place uppercase.
+        message[..1].make_ascii_uppercase();
     }
+
+    if !message.contains('\n') && !message.ends_with(['.', '!', '?']) {
+        message.push('.');
+    }
+    message
 }
 
 pub fn ok(message: impl std::fmt::Display) {
-    let message = sentence_case(&message.to_string());
+    let message = sentence_case(message.to_string());
     if colors_enabled(std::io::stdout().is_terminal()) {
         println!("{} {message}", "✓".fg::<Green>());
     } else {
@@ -39,7 +48,7 @@ pub fn ok(message: impl std::fmt::Display) {
 }
 
 pub fn fail(message: impl std::fmt::Display) {
-    let message = sentence_case(&message.to_string());
+    let message = sentence_case(message.to_string());
     if colors_enabled(std::io::stderr().is_terminal()) {
         eprintln!("{} {message}", "✗".fg::<Red>());
     } else {
@@ -47,8 +56,18 @@ pub fn fail(message: impl std::fmt::Display) {
     }
 }
 
+/// Reports something that was deliberately left alone, e.g. a package that is already installed.
+pub fn skipped(message: impl std::fmt::Display) {
+    let message = sentence_case(message.to_string());
+    if colors_enabled(std::io::stderr().is_terminal()) {
+        eprintln!("{} {message}", "•".fg::<Yellow>());
+    } else {
+        eprintln!("• {message}");
+    }
+}
+
 pub fn info(message: impl std::fmt::Display) {
-    eprintln!("{}", sentence_case(&message.to_string()));
+    eprintln!("{}", sentence_case(message.to_string()));
 }
 
 pub fn header(message: impl std::fmt::Display) {
