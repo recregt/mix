@@ -1,3 +1,6 @@
+use std::future::Future;
+use std::path::Path;
+
 use mix_core::CancellationToken;
 use mix_core::models::UserConfig;
 use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
@@ -59,25 +62,44 @@ pub async fn install(
     let state_dir = mix_state_dir(&cfg.user.home);
     let state_path = state_dir.join(STATE_FILE);
     let home_path = state_dir.join(HOME_NIX);
-
-    let previous_state = tokio::fs::read_to_string(&state_path).await.ok();
-    let previous_home = tokio::fs::read_to_string(&home_path).await.ok();
-
-    write_file_atomic(&state_path, &new_state).await?;
-    write_file_atomic(&home_path, &new_home).await?;
-
     let token = CancellationToken::new();
-    if let Err(e) = crate::bootstrap::activate(cfg, mirror, mirror_key, &token).await {
+
+    write_then_activate(&state_path, &home_path, &new_state, &new_home, || {
+        crate::bootstrap::activate(cfg, mirror, mirror_key, &token)
+    })
+    .await?;
+
+    Ok(requested)
+}
+
+async fn write_then_activate<F, Fut>(
+    state_path: &Path,
+    home_path: &Path,
+    new_state: &str,
+    new_home: &str,
+    activate: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = crate::bootstrap::Result<bool>>,
+{
+    let previous_state = tokio::fs::read_to_string(state_path).await.ok();
+    let previous_home = tokio::fs::read_to_string(home_path).await.ok();
+
+    write_file_atomic(state_path, new_state).await?;
+    write_file_atomic(home_path, new_home).await?;
+
+    if let Err(e) = activate().await {
         if let Some(previous) = previous_state {
-            let _ = write_file_atomic(&state_path, &previous).await;
+            let _ = write_file_atomic(state_path, &previous).await;
         }
         if let Some(previous) = previous_home {
-            let _ = write_file_atomic(&home_path, &previous).await;
+            let _ = write_file_atomic(home_path, &previous).await;
         }
         return Err(e.into());
     }
 
-    Ok(requested)
+    Ok(())
 }
 
 fn dedupe(packages: &[String]) -> Vec<String> {
@@ -154,5 +176,58 @@ mod tests {
 
         assert!(matches!(err, Error::InvalidPackage(_)));
         assert!(!mix_state_dir(home.path()).join(HOME_NIX).exists());
+    }
+
+    #[tokio::test]
+    async fn write_then_activate_restores_previous_content_when_activation_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_path = dir.path().join("state");
+        let home_path = dir.path().join("home.nix");
+        std::fs::write(&state_path, "old state").unwrap();
+        std::fs::write(&home_path, "old home").unwrap();
+
+        let err = write_then_activate(&state_path, &home_path, "new state", "new home", || {
+            std::future::ready(Err(crate::bootstrap::Error::Interrupted))
+        })
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, Error::Activation(_)));
+        assert_eq!(std::fs::read_to_string(&state_path).unwrap(), "old state");
+        assert_eq!(std::fs::read_to_string(&home_path).unwrap(), "old home");
+    }
+
+    #[tokio::test]
+    async fn write_then_activate_leaves_nothing_behind_when_there_was_no_previous_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_path = dir.path().join("state");
+        let home_path = dir.path().join("home.nix");
+
+        write_then_activate(&state_path, &home_path, "new state", "new home", || {
+            std::future::ready(Err(crate::bootstrap::Error::Interrupted))
+        })
+        .await
+        .unwrap_err();
+
+        assert_eq!(std::fs::read_to_string(&state_path).unwrap(), "new state");
+        assert_eq!(std::fs::read_to_string(&home_path).unwrap(), "new home");
+    }
+
+    #[tokio::test]
+    async fn write_then_activate_keeps_the_new_content_when_activation_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_path = dir.path().join("state");
+        let home_path = dir.path().join("home.nix");
+        std::fs::write(&state_path, "old state").unwrap();
+        std::fs::write(&home_path, "old home").unwrap();
+
+        write_then_activate(&state_path, &home_path, "new state", "new home", || {
+            std::future::ready(Ok(false))
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(std::fs::read_to_string(&state_path).unwrap(), "new state");
+        assert_eq!(std::fs::read_to_string(&home_path).unwrap(), "new home");
     }
 }

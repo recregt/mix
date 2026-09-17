@@ -66,3 +66,18 @@ def test_install_cannot_be_run_as_root(container, mock_nix_server, mirror_cache)
     assert result.returncode != 0
     assert "cannot be run as root" in (result.stdout + result.stderr).lower()
     assert not container.path_exists(f"/home/{USER}/.nix-profile/bin/{INSTALL_TEST_PACKAGE}")
+
+
+def test_install_rolls_back_state_and_home_nix_when_activation_fails(
+    container, mock_nix_server, mirror_cache
+):
+    _bootstrap_as(container, USER, mock_nix_server, mirror_cache)
+    state_dir = f"/home/{USER}/.local/state/mix"
+    state_before = container.exec("cat", f"{state_dir}/state", check=True).stdout
+    home_before = container.exec("cat", f"{state_dir}/home.nix", check=True).stdout
+
+    result = container.exec("mix", "install", "doesnotexistinnixpkgs", user=USER)
+
+    assert result.returncode != 0
+    assert container.exec("cat", f"{state_dir}/state", check=True).stdout == state_before
+    assert container.exec("cat", f"{state_dir}/home.nix", check=True).stdout == home_before
