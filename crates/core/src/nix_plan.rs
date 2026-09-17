@@ -6,6 +6,10 @@
 //! generation locally — the profile is assembled on the machine it is for — so those entries are
 //! expected and have to be told apart from a package that would really be compiled from source.
 //!
+//! Most of those entries say so themselves, through the attributes nix uses to decide where a
+//! derivation is built. The handful that do not — home-manager's own documentation, planned only
+//! on a store that has never built it — are named in [`ALWAYS_LOCAL`].
+//!
 //! The plan is read in a single pass over the output and nothing is copied except the store
 //! paths themselves, and the derivations are classified straight out of `nix derivation show`
 //! without deserialising the attributes that the answer does not depend on.
@@ -85,6 +89,34 @@ fn is_derivation_path(entry: &str) -> bool {
     entry.starts_with(STORE_PREFIX) && entry.ends_with(DRV_SUFFIX)
 }
 
+/// Derivations home-manager renders from its own sources, allowed by name.
+///
+/// These are home-manager's own documentation and message catalogues: they are built with
+/// `runCommand`, so they carry neither `preferLocalBuild` nor `allowSubstitutes` and cannot be
+/// told apart from a package by their attributes. A store that has them is the normal case and
+/// they never reach a plan; a store that does not — a fresh one, or one after a
+/// `nix-collect-garbage` — plans them as real builds, and refusing them would make a clean
+/// install impossible for the sake of a few seconds of work no cache is going to serve.
+///
+/// Every name here is unversioned and belongs to home-manager rather than to nixpkgs, so the
+/// list cannot be hit by a package a user asked for.
+pub const ALWAYS_LOCAL: [&str; 3] = [
+    // nixpkgs' `nixosOptionsDoc`, rendered for home-manager's option set.
+    "options.json",
+    // `man home-configuration.nix`.
+    "home-configuration-reference-manpage",
+    // The gettext catalogues the activation script's messages are read from.
+    "hm-modules-messages",
+];
+
+/// Whether a planned derivation is one home-manager always renders here.
+///
+/// Three length-checked comparisons, and only on the entries the attributes did not already
+/// explain, so the allowlist costs nothing on a plan that holds no documentation.
+pub fn is_always_local(name: &str) -> bool {
+    ALWAYS_LOCAL.contains(&name)
+}
+
 /// The readable part of a store path: no directory, no hash, no `.drv`.
 pub fn derivation_name(path: &str) -> &str {
     let file = path.rsplit('/').next().unwrap_or(path);
@@ -103,15 +135,20 @@ pub fn derivation_name(path: &str) -> &str {
 /// by the attributes nix itself uses to decide as much, `preferLocalBuild` and
 /// `allowSubstitutes`, rather than by name, so a renamed or newly added one still passes.
 ///
+/// The few that carry no such attribute but are still home-manager's own — its documentation and
+/// its message catalogues, which only appear in a plan on a store that has never built them — are
+/// allowed by name through [`ALWAYS_LOCAL`].
+///
 /// `derivations` is the output of `nix derivation show` for exactly `planned`. If it cannot be
 /// read, every planned derivation is reported: refusing to build is the safe answer.
-pub fn source_builds<'a>(planned: &'a [String], derivations: &str) -> Vec<&'a str> {
+pub fn source_builds<'a, P: AsRef<str>>(planned: &'a [P], derivations: &str) -> Vec<&'a str> {
     let shown = Shown::parse(derivations);
 
     planned
         .iter()
-        .filter(|path| !shown.is_local(path))
-        .map(|path| derivation_name(path))
+        .map(|path| (path.as_ref(), derivation_name(path.as_ref())))
+        .filter(|(path, name)| !is_always_local(name) && !shown.is_local(path))
+        .map(|(_, name)| name)
         .collect()
 }
 
@@ -418,6 +455,46 @@ these 2 paths will be fetched (1.5 MiB download, 4.0 MiB unpacked):
             vec!["/nix/store/00000000000000000000000000000001-hello-2.12.3.drv".to_string()];
 
         assert_eq!(source_builds(&planned, "not json at all"), ["hello-2.12.3"]);
+    }
+
+    #[test]
+    fn home_managers_own_documentation_is_allowed_by_name() {
+        let planned: Vec<String> = ALWAYS_LOCAL
+            .iter()
+            .enumerate()
+            .map(|(index, name)| format!("/nix/store/{:032}-{name}.drv", index + 1))
+            .collect();
+
+        assert!(
+            source_builds(&planned, &shown(&[])).is_empty(),
+            "a clean store plans these and no cache can serve them"
+        );
+    }
+
+    #[test]
+    fn a_package_planned_beside_the_documentation_is_still_refused() {
+        let planned = vec![
+            "/nix/store/00000000000000000000000000000001-options.json.drv".to_string(),
+            "/nix/store/00000000000000000000000000000002-hm-modules-messages.drv".to_string(),
+            "/nix/store/00000000000000000000000000000003-hello-2.12.3.drv".to_string(),
+        ];
+
+        assert_eq!(source_builds(&planned, &shown(&[])), ["hello-2.12.3"]);
+    }
+
+    #[test]
+    fn the_allowed_names_are_matched_whole() {
+        assert!(is_always_local("options.json"));
+        assert!(!is_always_local("options.json-wrapper"));
+        assert!(!is_always_local("options"));
+        assert!(!is_always_local("home-configuration-reference-manpage-1.0"));
+    }
+
+    #[test]
+    fn a_plan_of_borrowed_paths_classifies_the_same_way() {
+        let planned = ["/nix/store/00000000000000000000000000000001-hello-2.12.3.drv"];
+
+        assert_eq!(source_builds(&planned, &shown(&[])), ["hello-2.12.3"]);
     }
 
     #[test]

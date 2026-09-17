@@ -1,4 +1,6 @@
-use mix_core::nix_plan::{BuildPlan, source_builds};
+use mix_core::nix_plan::{
+    ALWAYS_LOCAL, BuildPlan, derivation_name, is_always_local, source_builds,
+};
 
 fn main() {
     divan::main();
@@ -70,4 +72,33 @@ fn classify_the_planned_derivations(bencher: divan::Bencher, builds: usize) {
     let shown = shown_derivations(builds);
 
     bencher.bench(|| source_builds(divan::black_box(&planned), divan::black_box(&shown)));
+}
+
+/// Dropping the derivations home-manager always renders here, which is what a clean store — or
+/// one after a garbage collection — plans on top of the packages being installed.
+///
+/// This runs before `nix derivation show` is called, so what it saves is not its own cost but
+/// the attributes of every entry it removes from that call.
+#[divan::bench(args = [1, 8, 64])]
+fn drop_the_always_local_derivations(bencher: divan::Bencher, builds: usize) {
+    let mut planned: Vec<String> = ALWAYS_LOCAL
+        .iter()
+        .enumerate()
+        .map(|(index, name)| store_path(index, name, ".drv"))
+        .collect();
+    planned.extend((0..builds).map(|build| {
+        store_path(
+            build + ALWAYS_LOCAL.len(),
+            &format!("package-{build}"),
+            ".drv",
+        )
+    }));
+
+    bencher.bench(|| {
+        divan::black_box(&planned)
+            .iter()
+            .map(String::as_str)
+            .filter(|path| !is_always_local(derivation_name(path)))
+            .collect::<Vec<&str>>()
+    });
 }

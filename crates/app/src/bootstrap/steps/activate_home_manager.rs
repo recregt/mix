@@ -123,9 +123,9 @@ fn nix_dry_run_args(installable: &str, options: &[String]) -> Vec<String> {
     args
 }
 
-fn nix_derivation_show_args(paths: &[String]) -> Vec<String> {
+fn nix_derivation_show_args(paths: &[&str]) -> Vec<String> {
     let mut args = vec!["derivation".to_string(), "show".to_string()];
-    args.extend_from_slice(paths);
+    args.extend(paths.iter().map(|path| (*path).to_string()));
     args
 }
 
@@ -137,7 +137,9 @@ fn as_refs(args: &[String]) -> Vec<&str> {
 ///
 /// home-manager's own generation is always built here — the profile is assembled on the machine
 /// it is for, and no cache can hold it — so the plan is classified rather than merely counted:
-/// only the entries nix would not have built locally anyway are a source build.
+/// only the entries nix would not have built locally anyway are a source build. The
+/// documentation home-manager renders from its own sources is allowed by name, so a store that
+/// has never built it — a clean install, or one after a garbage collection — installs as usual.
 async fn refuse_source_builds(
     cfg: &UserConfig,
     installable: &str,
@@ -150,16 +152,29 @@ async fn refuse_source_builds(
         return Ok(());
     }
 
-    let planned = plan.to_build();
-    let classified = planned.len().min(CLASSIFY_LIMIT);
-    let show = nix_derivation_show_args(&planned[..classified]);
+    // home-manager renders its own documentation here whatever a cache holds, and on a store
+    // that has never built it — a clean install, or one after a garbage collection — it is
+    // planned like anything else. Those entries are dropped before nix is asked about them, so a
+    // clean install neither pays for their attributes nor counts them against the limit below.
+    let candidates: Vec<&str> = plan
+        .to_build()
+        .iter()
+        .map(String::as_str)
+        .filter(|path| !nix_plan::is_always_local(nix_plan::derivation_name(path)))
+        .collect();
+    if candidates.is_empty() {
+        return Ok(());
+    }
+
+    let classified = candidates.len().min(CLASSIFY_LIMIT);
+    let show = nix_derivation_show_args(&candidates[..classified]);
     let shown = run_as(&cfg.user, DEFAULT_PROFILE_NIX, &as_refs(&show), token).await?;
 
-    let mut source_builds: Vec<String> = nix_plan::source_builds(&planned[..classified], &shown)
+    let mut source_builds: Vec<String> = nix_plan::source_builds(&candidates[..classified], &shown)
         .into_iter()
         .map(str::to_string)
         .collect();
-    source_builds.extend(planned[classified..].iter().map(|p| {
+    source_builds.extend(candidates[classified..].iter().map(|p| {
         // Beyond the classification limit nothing is assumed: an unclassified build is refused.
         nix_plan::derivation_name(p).to_string()
     }));
@@ -462,15 +477,36 @@ mod tests {
 
     #[test]
     fn nix_derivation_show_args_name_every_planned_derivation() {
-        let planned = vec![
-            "/nix/store/a.drv".to_string(),
-            "/nix/store/b.drv".to_string(),
-        ];
-        let args = nix_derivation_show_args(&planned);
+        let args = nix_derivation_show_args(&["/nix/store/a.drv", "/nix/store/b.drv"]);
 
         assert_eq!(
             args,
             ["derivation", "show", "/nix/store/a.drv", "/nix/store/b.drv"]
+        );
+    }
+
+    /// The plan a clean store produces carries home-manager's own documentation, and none of it
+    /// is worth asking nix about.
+    #[test]
+    fn the_documentation_a_clean_store_plans_is_not_asked_about() {
+        let planned = [
+            "/nix/store/00000000000000000000000000000001-options.json.drv",
+            "/nix/store/00000000000000000000000000000002-hm-modules-messages.drv",
+            "/nix/store/00000000000000000000000000000003-home-configuration-reference-manpage.drv",
+            "/nix/store/00000000000000000000000000000004-hello-2.12.3.drv",
+        ];
+        let candidates: Vec<&str> = planned
+            .into_iter()
+            .filter(|path| !nix_plan::is_always_local(nix_plan::derivation_name(path)))
+            .collect();
+
+        assert_eq!(
+            nix_derivation_show_args(&candidates),
+            [
+                "derivation",
+                "show",
+                "/nix/store/00000000000000000000000000000004-hello-2.12.3.drv"
+            ]
         );
     }
 
