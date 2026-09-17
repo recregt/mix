@@ -19,7 +19,6 @@ impl StateManifest {
         }
     }
 
-    /// The rendered seed manifest, serialized once and shared by every caller.
     pub fn seed_rendered() -> &'static str {
         &SEED_RENDERED
     }
