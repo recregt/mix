@@ -9,6 +9,8 @@ license = "MPL-2.0"
 async-trait = { workspace = true }
 futures-util = { workspace = true }
 nix = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio-util = { version = "0.7", default-features = false }
 tracing = { workspace = true }
@@ -19,11 +21,23 @@ tempfile = { workspace = true }
 tokio = { workspace = true }
 
 [[bench]]
+name = "nix_log"
+harness = false
+
+[[bench]]
+name = "nix_plan"
+harness = false
+
+[[bench]]
 name = "plan"
 harness = false
 
 [[bench]]
 name = "plan_observed"
+harness = false
+
+[[bench]]
+name = "state"
 harness = false
 
 [[bench]]

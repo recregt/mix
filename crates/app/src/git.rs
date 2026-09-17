@@ -1,10 +1,17 @@
+//! The git repository the generated configuration is tracked in.
+//!
+//! Every write mix makes to a user's state directory is committed, so a reader can see what
+//! changed and when. Which `git` that is depends on what the machine has: the one in the
+//! profile mix installed, or the one that was already on the system.
+
 use std::path::{Path, PathBuf};
 
-use mix_core::paths::{FLAKE_LOCK, FLAKE_NIX, HOME_NIX};
+use mix_core::paths::{FLAKE_LOCK, FLAKE_NIX, HOME_NIX, STATE_FILE};
 use mix_core::privilege::InvokingUser;
 use mix_core::{CancellationToken, Error, Result};
 
-use crate::shared::os::{path_exists, run, run_as, status_as};
+use crate::exec::{run, run_as, status_as};
+use crate::fs::exists;
 
 const AUTHOR_NAME: &str = "mix";
 const AUTHOR_EMAIL: &str = "mix@localhost";
@@ -14,9 +21,9 @@ const GIT_BINARY_ENV: &str = "MIX_GIT_PATH";
 const PROFILE_GIT: &str = ".nix-profile/bin/git";
 const GITIGNORE: &str = ".gitignore";
 
-const MANAGED_FILES: &[&str] = &[GITIGNORE, FLAKE_LOCK, FLAKE_NIX, HOME_NIX];
+const MANAGED_FILES: &[&str] = &[GITIGNORE, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, STATE_FILE];
 
-const GITIGNORE_CONTENTS: &str = "# Managed by mix -- do not edit, changes are overwritten.\n/*\n!/.gitignore\n!/flake.lock\n!/flake.nix\n!/home.nix\n";
+const GITIGNORE_CONTENTS: &str = "# Managed by mix -- do not edit, changes are overwritten.\n/*\n!/.gitignore\n!/flake.lock\n!/flake.nix\n!/home.nix\n!/state\n";
 
 pub struct Git {
     binary: String,
@@ -48,7 +55,7 @@ impl Git {
         token: &CancellationToken,
     ) -> Result<bool> {
         let git_dir = state_dir.join(".git");
-        if !path_exists(&git_dir).await {
+        if !exists(&git_dir).await {
             return Ok(false);
         }
         run(
@@ -115,8 +122,7 @@ impl Git {
 
         let mut paths: Vec<&str> = Vec::new();
         for file in MANAGED_FILES {
-            if tracked.lines().any(|line| line == *file) || path_exists(state_dir.join(file)).await
-            {
+            if tracked.lines().any(|line| line == *file) || exists(state_dir.join(file)).await {
                 paths.push(file);
             }
         }
@@ -156,7 +162,7 @@ async fn resolve_binary(user: &InvokingUser, configured: Option<String>) -> Stri
         return binary;
     }
     let profile_git = profile_git(user);
-    if path_exists(&profile_git).await {
+    if exists(&profile_git).await {
         return profile_git.to_string_lossy().into_owned();
     }
     "git".to_string()
@@ -276,7 +282,7 @@ mod tests {
 
         let contents = std::fs::read_to_string(state_dir.join(GITIGNORE)).unwrap();
         assert!(contents.contains("/*"));
-        for file in [FLAKE_NIX, HOME_NIX, FLAKE_LOCK, GITIGNORE] {
+        for file in [FLAKE_NIX, HOME_NIX, FLAKE_LOCK, STATE_FILE, GITIGNORE] {
             assert!(
                 contents.contains(&format!("!/{file}")),
                 "{file} should stay tracked"

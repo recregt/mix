@@ -1,5 +1,6 @@
 pub mod bootstrap;
 pub mod doctor;
+pub mod install;
 pub mod repair;
 
 use std::process::ExitCode;

@@ -3,9 +3,9 @@ use std::path::Path;
 use mix_core::paths::NIX_OWNERSHIP_MARKER;
 
 use crate::bootstrap::detect::{self, Wsl};
-use crate::bootstrap::error::{Error, Result};
-use crate::bootstrap::util::{is_dir, is_file};
-use crate::shared::os::path_exists;
+use crate::bootstrap::error::{Error, Host, Result};
+use crate::fs::exists;
+use crate::fs::{is_dir, is_file};
 
 pub async fn check_not_nixos() -> Result<()> {
     tracing::debug!("checking host is not NixOS");
@@ -13,7 +13,7 @@ pub async fn check_not_nixos() -> Result<()> {
 }
 
 async fn check_not_nixos_at(marker: &Path) -> Result<()> {
-    if path_exists(marker).await {
+    if exists(marker).await {
         return Err(Error::UnsupportedHost);
     }
     Ok(())
@@ -54,18 +54,15 @@ pub async fn check_systemd_ready() -> Result<()> {
         return Ok(());
     }
 
-    let hint = if detect::wsl::detect().await != Wsl::No {
-        "On WSL2, systemd isn't enabled by default. Add `[boot]\\nsystemd=true` to \
-         `/etc/wsl.conf`, then run `wsl.exe --shutdown` from Windows and reopen the \
-         distro."
+    // Which host this is decides how systemd is turned back on, so it travels with the error;
+    // the sentence that says how is written where the command is known.
+    let host = if detect::wsl::detect().await != Wsl::No {
+        Host::Wsl
     } else {
-        "systemd doesn't appear to be active (`/run/systemd/system` missing or PID 1 \
-         isn't systemd).\n\
-         `mix` needs systemd to manage its background services; check that it is \
-         installed and set as your init system, then retry."
+        Host::Native
     };
 
-    Err(Error::SystemdNotReady { hint })
+    Err(Error::SystemdNotReady { host })
 }
 
 #[cfg(test)]

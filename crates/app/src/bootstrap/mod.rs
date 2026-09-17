@@ -1,19 +1,18 @@
+mod cleanup;
 mod error;
-pub(crate) mod mirror;
 mod planner;
 mod steps;
-mod util;
 
 pub mod detect;
 pub mod preflight;
 #[doc(hidden)]
 pub mod tarball;
 
-pub use error::{Error, Result};
+pub use error::{Error, Host, Result};
 
 use std::sync::Arc;
 
-use mix_core::{DownloadProgress, Outcome, Plan, StepObserver, privilege};
+use mix_core::{ActivityReporter, DownloadProgress, Outcome, Plan, StepObserver, privilege};
 
 pub struct Environment(());
 
@@ -40,6 +39,7 @@ pub async fn bootstrap(
     force: bool,
     progress: Arc<dyn DownloadProgress>,
     step_observer: Arc<dyn StepObserver>,
+    activity: Arc<dyn ActivityReporter>,
 ) -> Result<Environment> {
     if !privilege::is_root() {
         return Err(Error::NotRoot("bootstrap the managed environment"));
@@ -52,7 +52,7 @@ pub async fn bootstrap(
         preflight::check_nix_not_installed().await?;
     }
 
-    run_steps(mirror, mirror_key, force, progress, step_observer).await
+    run_steps(mirror, mirror_key, force, progress, step_observer, activity).await
 }
 
 async fn run_steps(
@@ -61,9 +61,10 @@ async fn run_steps(
     force: bool,
     progress: Arc<dyn DownloadProgress>,
     step_observer: Arc<dyn StepObserver>,
+    activity: Arc<dyn ActivityReporter>,
 ) -> Result<Environment> {
     let mut plan = Plan::new(planner::bootstrap_steps(
-        mirror, mirror_key, force, progress,
+        mirror, mirror_key, force, progress, activity,
     ))
     .with_step_observer(step_observer);
     let cause = match plan.run_cancellable(interrupted()).await {
@@ -79,7 +80,7 @@ async fn run_steps(
     Err(Error::Rollback {
         cause: Box::new(cause),
         summary: format!(
-            "{} rollback step(s) failed, the system may need manual cleanup: {}",
+            "{} rollback step(s) failed: {}",
             failed_rollbacks.len(),
             failed_rollbacks.join("; ")
         ),

@@ -12,7 +12,7 @@ use mix_core::paths::{NIX_PROVISIONING_MANIFEST, NIX_STORE};
 
 use crate::bootstrap::error::{Error, Result};
 use crate::bootstrap::tarball;
-use crate::bootstrap::util::{ensure_ownership_under, is_file};
+use crate::fs::{chown_tree, is_file};
 use mix_pins::NIX_VERSION;
 
 const DEFAULT_PROFILE: &str = "/nix/var/nix/profiles/default";
@@ -365,7 +365,7 @@ fn move_entries_into(
         let is_new = dest_path.symlink_metadata().is_err();
         let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
 
-        ensure_ownership_under(&src_path, uid, gid)?;
+        chown_tree(&src_path, uid, gid)?;
         if is_dir {
             make_contents_read_only(&src_path)?;
         } else {
@@ -482,8 +482,7 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
     })?;
 
     let nix_store = nix_pkg.join("bin/nix-store");
-    let command_line =
-        crate::shared::os::format_command(&nix_store.to_string_lossy(), &["--load-db"]);
+    let command_line = crate::exec::format_command(&nix_store.to_string_lossy(), &["--load-db"]);
     tracing::debug!("running command: {command_line}");
 
     let mut child = std::process::Command::new(&nix_store)
@@ -514,7 +513,7 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
     );
 
     if !output.status.success() {
-        return Err(Error::Core(crate::shared::os::command_error(
+        return Err(Error::Core(crate::exec::command_error(
             command_line,
             &output,
         )));
@@ -533,7 +532,7 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path) -> Result<()> {
 
 fn activate_default_profile(nix_pkg: &Path, nss_cacert_pkg: &Path) -> Result<()> {
     let nix_env = nix_pkg.join("bin/nix-env");
-    let command_line = crate::shared::os::format_command(
+    let command_line = crate::exec::format_command(
         &nix_env.to_string_lossy(),
         &[
             "--profile",
@@ -574,7 +573,7 @@ fn activate_default_profile(nix_pkg: &Path, nss_cacert_pkg: &Path) -> Result<()>
     );
 
     if !output.status.success() {
-        return Err(Error::Core(crate::shared::os::command_error(
+        return Err(Error::Core(crate::exec::command_error(
             command_line,
             &output,
         )));

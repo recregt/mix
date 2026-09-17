@@ -159,9 +159,15 @@ _MIRROR_HOME_NIX = """
   home.username = "__USER__";
   home.homeDirectory = "/home/__USER__";
   home.stateVersion = "24.05";
-  home.packages = [ pkgs.git ];
+  home.packages = [ pkgs.git __EXTRA_PACKAGES__ ];
 }
 """
+
+INSTALL_TEST_PACKAGE = "hello"
+
+# A package deliberately left out of the mirror's cache: installing it against that mirror can
+# only be done by compiling it.
+UNCACHED_TEST_PACKAGE = "cowsay"
 
 
 @pytest.fixture(scope="session")
@@ -178,6 +184,14 @@ def mirror_cache(mirror_sources):
                 _seed_activation_package(user, secret_key, cache_dir)
                 for user in MIRROR_TEST_USERS
             ]
+            store_paths.append(
+                _seed_activation_package(
+                    MIRROR_TEST_USERS[0],
+                    secret_key,
+                    cache_dir,
+                    extra_packages=[INSTALL_TEST_PACKAGE],
+                )
+            )
             (cache_dir / "mix-mirror.pub").write_text(public_key)
             marker.write_text("\n".join(store_paths))
 
@@ -201,7 +215,12 @@ def _signing_key() -> tuple[str, str]:
     return secret_key, public_key
 
 
-def _seed_activation_package(user: str, secret_key: str, cache_dir: pathlib.Path) -> str:
+def _seed_activation_package(
+    user: str,
+    secret_key: str,
+    cache_dir: pathlib.Path,
+    extra_packages: list[str] | None = None,
+) -> str:
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = pathlib.Path(tmp)
         flake_nix = (
@@ -210,7 +229,11 @@ def _seed_activation_package(user: str, secret_key: str, cache_dir: pathlib.Path
             .replace("__USER__", user)
         )
         (tmp_path / "flake.nix").write_text(flake_nix)
-        (tmp_path / "home.nix").write_text(_MIRROR_HOME_NIX.replace("__USER__", user))
+        extra = " ".join(f"pkgs.{pkg}" for pkg in extra_packages or [])
+        home_nix = _MIRROR_HOME_NIX.replace("__USER__", user).replace(
+            "__EXTRA_PACKAGES__", extra
+        )
+        (tmp_path / "home.nix").write_text(home_nix)
 
         store_path = subprocess.run(
             [
