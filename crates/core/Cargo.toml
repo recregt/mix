@@ -29,5 +29,9 @@ name = "plan_observed"
 harness = false
 
 [[bench]]
+name = "state"
+harness = false
+
+[[bench]]
 name = "targets"
 harness = false

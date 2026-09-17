@@ -1,4 +1,8 @@
+use std::sync::LazyLock;
+
 use serde::{Deserialize, Serialize};
+
+static SEED_RENDERED: LazyLock<String> = LazyLock::new(|| StateManifest::seed().render());
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StateManifest {
@@ -13,6 +17,11 @@ impl StateManifest {
             version: 1,
             packages: vec!["git".to_string()],
         }
+    }
+
+    /// The rendered seed manifest, serialized once and shared by every caller.
+    pub fn seed_rendered() -> &'static str {
+        &SEED_RENDERED
     }
 
     pub fn render(&self) -> String {
@@ -36,6 +45,22 @@ mod tests {
         let seed = StateManifest::seed();
         assert_eq!(seed.version, 1);
         assert_eq!(seed.packages, vec!["git".to_string()]);
+    }
+
+    #[test]
+    fn seed_rendered_matches_rendering_the_seed() {
+        assert_eq!(
+            StateManifest::seed_rendered(),
+            StateManifest::seed().render()
+        );
+    }
+
+    #[test]
+    fn seed_rendered_hands_out_the_same_buffer_every_time() {
+        assert!(std::ptr::eq(
+            StateManifest::seed_rendered(),
+            StateManifest::seed_rendered()
+        ));
     }
 
     #[test]

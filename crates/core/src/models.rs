@@ -67,7 +67,7 @@ pub enum Target {
     },
     SeededFile {
         path: PathBuf,
-        seed: String,
+        seed: Cow<'static, str>,
         owner: Owner,
     },
     Group {
@@ -159,7 +159,7 @@ fn push_user_targets(items: &mut Vec<Target>, cfg: &UserConfig) {
     });
     items.push(Target::SeededFile {
         path: state_dir.join(STATE_FILE),
-        seed: crate::state::StateManifest::seed().render(),
+        seed: Cow::Borrowed(crate::state::StateManifest::seed_rendered()),
         owner,
     });
     items.push(Target::GroupMember {
@@ -515,7 +515,8 @@ mod tests {
         assert!(user_targets(&cfg).iter().any(|t| matches!(
             t,
             Target::SeededFile { path, seed, owner: Some((1000, 1000)) }
-                if path.ends_with("state") && seed == &crate::state::StateManifest::seed().render()
+                if path.ends_with("state")
+                    && seed.as_ref() == crate::state::StateManifest::seed().render()
         )));
     }
 
