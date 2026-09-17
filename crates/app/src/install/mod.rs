@@ -33,7 +33,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// What a run of `install` actually did, so a caller can report an idempotent no-op as a
 /// success rather than a failure.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Installed {
     /// Packages added to the profile by this run, in the order they were requested.
     pub added: Vec<String>,
@@ -44,6 +44,11 @@ pub struct Installed {
 impl Installed {
     pub fn changed_nothing(&self) -> bool {
         self.added.is_empty()
+    }
+
+    /// The result as one line of JSON, for a script that would rather not read prose.
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).expect("Installed always serializes")
     }
 }
 
@@ -253,6 +258,27 @@ mod tests {
 
         assert!(matches!(err, Error::InvalidPackage(_)));
         assert!(!mix_state_dir(home.path()).join(HOME_NIX).exists());
+    }
+
+    #[test]
+    fn the_json_report_names_both_sides_of_the_request() {
+        let installed = Installed {
+            added: vec!["ripgrep".to_string(), "fd".to_string()],
+            skipped: vec!["git".to_string()],
+        };
+
+        assert_eq!(
+            installed.to_json(),
+            r#"{"added":["ripgrep","fd"],"skipped":["git"]}"#
+        );
+    }
+
+    #[test]
+    fn the_json_report_keeps_both_keys_when_nothing_was_installed() {
+        assert_eq!(
+            Installed::default().to_json(),
+            r#"{"added":[],"skipped":[]}"#
+        );
     }
 
     #[test]

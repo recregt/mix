@@ -107,7 +107,26 @@ pub fn step_observer() -> Arc<dyn StepObserver> {
     Arc::new(IndicatifStepObserver)
 }
 
-pub fn init_tracing(verbosity: u8) {
+/// Sets up the output for the whole process.
+///
+/// With `progress` off nothing is drawn in place: no spinners, no live output, just log lines on
+/// stderr. That is what a script or a CI job wants even when it happens to own a terminal.
+pub fn init_tracing(verbosity: u8, progress: bool) {
+    crate::set_progress_enabled(progress);
+
+    if !progress {
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_writer(std::io::stderr)
+                    .without_time()
+                    .with_target(false)
+                    .with_filter(level_filter(verbosity)),
+            )
+            .init();
+        return;
+    }
+
     let indicatif_layer = IndicatifLayer::new()
         .with_span_field_formatter(NameOnlyFields)
         .with_progress_style(

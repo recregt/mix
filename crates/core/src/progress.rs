@@ -1,3 +1,5 @@
+use crate::nix_log::BuildProgress;
+
 pub trait DownloadProgress: Send + Sync {
     fn set_total(&self, total: u64);
     fn add(&self, delta: u64);
@@ -24,6 +26,10 @@ pub trait StepObserver: Send + Sync {
 pub trait ActivityReporter: Send + Sync {
     fn line(&self, line: &str);
 
+    /// Reports what the process is doing as counters rather than as text. Called as often as
+    /// `line`, and for the same reason expected to drop frames rather than queue them.
+    fn progress(&self, progress: &BuildProgress);
+
     /// Called once the process has exited, to drop whatever the last line left on screen.
     fn clear(&self);
 }
@@ -32,5 +38,6 @@ pub struct NoopActivity;
 
 impl ActivityReporter for NoopActivity {
     fn line(&self, _line: &str) {}
+    fn progress(&self, _progress: &BuildProgress) {}
     fn clear(&self) {}
 }

@@ -1,3 +1,5 @@
+import json
+
 from conftest import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS, create_user
 
 USER = MIRROR_TEST_USERS[0]
@@ -66,6 +68,36 @@ def test_install_skips_a_package_that_is_already_installed(
     assert result.returncode == 0, result.stderr
     assert "already installed" in (result.stdout + result.stderr).lower()
     assert container.exec("cat", f"{state_dir}/state", check=True).stdout == state_before
+
+
+def test_install_is_script_friendly(container, mock_nix_server, mirror_cache):
+    _bootstrap_as(container, USER, mock_nix_server, mirror_cache)
+
+    result = container.exec(
+        "mix", "install", "--json", INSTALL_TEST_PACKAGE, "git", user=USER
+    )
+
+    # Stdout is the report and nothing else, so a script never has to parse prose.
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "added": [INSTALL_TEST_PACKAGE],
+        "skipped": ["git"],
+    }
+
+    again = container.exec("mix", "install", "--json", INSTALL_TEST_PACKAGE, user=USER)
+    assert again.returncode == 0, again.stderr
+    assert json.loads(again.stdout) == {"added": [], "skipped": [INSTALL_TEST_PACKAGE]}
+
+    # Plain output can also be demanded explicitly, with or without JSON.
+    for args, env in (
+        (["--no-progress", "install", INSTALL_TEST_PACKAGE], None),
+        (["install", INSTALL_TEST_PACKAGE], {"CI": "true"}),
+        (["install", INSTALL_TEST_PACKAGE], {"MIX_NO_PROGRESS": "1"}),
+    ):
+        plain = container.exec("mix", *args, user=USER, env=env)
+        assert plain.returncode == 0, plain.stderr
+        assert "already installed" in (plain.stdout + plain.stderr).lower()
+        assert "\x1b[" not in plain.stderr, "nothing should be drawn in place"
 
 
 def test_install_cannot_be_run_as_root(container, mock_nix_server, mirror_cache):

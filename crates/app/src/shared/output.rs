@@ -84,6 +84,17 @@ impl TailBuffer {
 
     pub fn extend(&mut self, chunk: &[u8]) {
         self.buf.extend_from_slice(chunk);
+        self.compact();
+    }
+
+    /// Appends a decoded line, for a stream whose raw bytes are not what a reader wants to see.
+    pub fn push_line(&mut self, line: &str) {
+        self.buf.extend_from_slice(line.as_bytes());
+        self.buf.push(b'\n');
+        self.compact();
+    }
+
+    fn compact(&mut self) {
         if self.buf.len() > self.cap * 2 {
             self.buf.drain(..self.buf.len() - self.cap);
             self.truncated = true;

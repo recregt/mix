@@ -21,6 +21,10 @@ tempfile = { workspace = true }
 tokio = { workspace = true }
 
 [[bench]]
+name = "nix_log"
+harness = false
+
+[[bench]]
 name = "plan"
 harness = false
 

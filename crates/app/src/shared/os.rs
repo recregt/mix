@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use mix_core::nix_log::{Event, NixLog};
 use mix_core::paths::DEFAULT_PROFILE_BIN;
 use mix_core::privilege::InvokingUser;
 use mix_core::{ActivityReporter, CancellationToken, Error, Result};
@@ -39,10 +40,16 @@ fn command_as(user: &InvokingUser, command: &str, args: &[&str]) -> Command {
 
 /// Drains a pipe, handing every line to `activity` as it arrives and keeping only the tail of
 /// the stream for a later error message.
+///
+/// A process asked for `--log-format internal-json` writes records rather than prose, so the
+/// stream is folded into counters as it goes and the diagnostics are decoded out of it; anything
+/// that is not a record flows through untouched.
 async fn stream(mut pipe: impl AsyncRead + Unpin, activity: Arc<dyn ActivityReporter>) -> Vec<u8> {
     let mut chunk = vec![0u8; STREAM_CHUNK];
     let mut splitter = LineSplitter::new();
     let mut tail = TailBuffer::new(STREAM_TAIL);
+    let mut decoded = TailBuffer::new(STREAM_TAIL);
+    let mut log = NixLog::new();
 
     while let Ok(read) = pipe.read(&mut chunk).await {
         if read == 0 {
@@ -50,12 +57,39 @@ async fn stream(mut pipe: impl AsyncRead + Unpin, activity: Arc<dyn ActivityRepo
         }
         let bytes = &chunk[..read];
         tail.extend(bytes);
-        splitter.push(bytes, |line| activity.line(line));
+        splitter.push(bytes, |line| {
+            report(line, &mut log, &mut decoded, activity.as_ref())
+        });
     }
 
-    splitter.finish(|line| activity.line(line));
+    splitter.finish(|line| report(line, &mut log, &mut decoded, activity.as_ref()));
     activity.clear();
+
+    // Raw records explain nothing to a human, so a structured stream is reported through the
+    // diagnostics decoded out of it instead.
+    if log.is_structured() {
+        return decoded.into_bytes();
+    }
     tail.into_bytes()
+}
+
+fn report(line: &str, log: &mut NixLog, decoded: &mut TailBuffer, activity: &dyn ActivityReporter) {
+    match log.observe(line) {
+        Event::Plain(line) => {
+            // Only worth a second copy once the raw tail is known to be unreadable.
+            if log.is_structured() {
+                decoded.push_line(line);
+            }
+            activity.line(line);
+        }
+        Event::Message(message) => {
+            decoded.push_line(&message);
+            activity.line(&message);
+        }
+        Event::Transient(text) => activity.line(&text),
+        Event::Progress => activity.progress(&log.snapshot()),
+        Event::Ignored => {}
+    }
 }
 
 async fn run_command(
@@ -554,12 +588,17 @@ mod tests {
     #[derive(Default)]
     struct Recorder {
         lines: std::sync::Mutex<Vec<String>>,
+        progress: std::sync::Mutex<Vec<mix_core::BuildProgress>>,
         cleared: std::sync::atomic::AtomicBool,
     }
 
     impl Recorder {
         fn lines(&self) -> Vec<String> {
             self.lines.lock().unwrap().clone()
+        }
+
+        fn last_progress(&self) -> Option<mix_core::BuildProgress> {
+            self.progress.lock().unwrap().last().copied()
         }
 
         fn cleared(&self) -> bool {
@@ -570,6 +609,10 @@ mod tests {
     impl ActivityReporter for Recorder {
         fn line(&self, line: &str) {
             self.lines.lock().unwrap().push(line.to_string());
+        }
+
+        fn progress(&self, progress: &mix_core::BuildProgress) {
+            self.progress.lock().unwrap().push(*progress);
         }
 
         fn clear(&self) {
@@ -594,6 +637,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stream_reports_structured_records_as_counters() {
+        let recorder = Arc::new(Recorder::default());
+        let records = concat!(
+            r#"@nix {"action":"start","id":1,"level":3,"text":"","type":104,"fields":[]}"#,
+            "\n",
+            r#"@nix {"action":"result","id":1,"type":105,"fields":[2,5,1,0]}"#,
+            "\n",
+        );
+
+        let bytes = stream(
+            records.as_bytes(),
+            Arc::clone(&recorder) as Arc<dyn ActivityReporter>,
+        )
+        .await;
+
+        let progress = recorder.last_progress().expect("counters were reported");
+        assert_eq!(progress.builds_done, 2);
+        assert_eq!(progress.builds_expected, 5);
+        assert!(recorder.lines().is_empty(), "records are not shown as text");
+        // No diagnostic was decoded, and raw records would explain nothing to a reader.
+        assert!(bytes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn stream_keeps_plain_lines_that_arrive_alongside_records() {
+        let recorder = Arc::new(Recorder::default());
+        let records = concat!(
+            r#"@nix {"action":"msg","level":0,"msg":"error: build failed"}"#,
+            "\n",
+            "warning: from something that is not nix\n",
+        );
+
+        let bytes = stream(
+            records.as_bytes(),
+            Arc::clone(&recorder) as Arc<dyn ActivityReporter>,
+        )
+        .await;
+
+        assert_eq!(
+            String::from_utf8_lossy(&bytes),
+            "error: build failed\nwarning: from something that is not nix\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_keeps_the_decoded_diagnostics_of_a_structured_stream() {
+        let recorder = Arc::new(Recorder::default());
+        let records = concat!(
+            r#"@nix {"action":"start","id":1,"level":3,"text":"","type":104,"fields":[]}"#,
+            "\n",
+            r#"@nix {"action":"msg","level":0,"msg":"error: attribute 'nope' missing"}"#,
+            "\n",
+        );
+
+        let bytes = stream(
+            records.as_bytes(),
+            Arc::clone(&recorder) as Arc<dyn ActivityReporter>,
+        )
+        .await;
+
+        assert_eq!(bytes, b"error: attribute 'nope' missing\n");
+        assert_eq!(recorder.lines(), ["error: attribute 'nope' missing"]);
+    }
+
+    #[tokio::test]
+    async fn stream_leaves_a_plain_text_stream_alone() {
+        let recorder = Arc::new(Recorder::default());
+
+        let bytes = stream(
+            &b"  indented failure detail  \nsecond line\n"[..],
+            Arc::clone(&recorder) as Arc<dyn ActivityReporter>,
+        )
+        .await;
+
+        // The raw bytes are kept verbatim, indentation and all, for the error message.
+        assert_eq!(bytes, b"  indented failure detail  \nsecond line\n");
+        assert!(recorder.last_progress().is_none());
+    }
+
+    #[tokio::test]
     async fn a_streamed_command_reports_its_progress_and_still_returns_its_output() {
         let token = CancellationToken::new();
         let recorder = Arc::new(Recorder::default());
@@ -615,6 +738,45 @@ mod tests {
             "/nix/store/x"
         );
         assert_eq!(recorder.lines(), ["building", "done"]);
+    }
+
+    /// The whole path a build takes: a real pipe, split into lines, folded into counters and
+    /// handed to the reporter that draws them.
+    #[tokio::test]
+    async fn a_streamed_command_reports_structured_progress_end_to_end() {
+        let token = CancellationToken::new();
+        let recorder = Arc::new(Recorder::default());
+        let mut cmd = Command::new("sh");
+        cmd.args([
+            "-c",
+            concat!(
+                r#"echo '@nix {"action":"start","id":1,"level":3,"text":"","type":103,"fields":[]}' >&2;"#,
+                r#"echo '@nix {"action":"result","id":1,"type":105,"fields":[12,37,1,0]}' >&2;"#,
+                r#"echo '@nix {"action":"start","id":2,"level":3,"text":"","type":100,"fields":[]}' >&2;"#,
+                r#"echo '@nix {"action":"result","id":2,"type":105,"fields":[50525798,95420416,0,0]}' >&2"#,
+            ),
+        ]);
+
+        let output = run_command_reporting(
+            cmd,
+            "sh".to_string(),
+            &token,
+            Some(Arc::clone(&recorder) as Arc<dyn ActivityReporter>),
+        )
+        .await
+        .unwrap();
+
+        assert!(output.status.success());
+        let progress = recorder.last_progress().expect("counters were reported");
+        assert_eq!(
+            (progress.downloads_done, progress.downloads_expected),
+            (12, 37)
+        );
+        assert_eq!(
+            (progress.bytes_done, progress.bytes_expected),
+            (50_525_798, 95_420_416)
+        );
+        assert!(recorder.lines().is_empty());
     }
 
     #[tokio::test]

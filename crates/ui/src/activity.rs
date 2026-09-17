@@ -1,12 +1,13 @@
 //! Showing a long-running command's output without turning the terminal into a flicker box.
 
 use std::borrow::Cow;
+use std::fmt::Write;
 use std::io::IsTerminal;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
-use mix_core::{ActivityReporter, NoopActivity};
+use mix_core::{ActivityReporter, BuildProgress, NoopActivity};
 use owo_colors::OwoColorize;
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
@@ -126,20 +127,115 @@ fn strip_ansi(raw: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
+/// Renders a snapshot of what the build is doing, e.g.
+/// `building 3/17 · downloading 12/37 · 48.2 MiB/91.0 MiB`.
+///
+/// Counters are cheaper to draw than free-form output: the text is short, bounded, and only the
+/// numbers in it change from one frame to the next.
+pub fn render_progress(progress: &BuildProgress) -> String {
+    let mut out = String::with_capacity(64);
+
+    if progress.builds_expected > 0 || progress.builds_done > 0 {
+        let _ = write!(
+            out,
+            "building {}/{}",
+            progress.builds_done, progress.builds_expected
+        );
+    }
+
+    if progress.downloads_expected > 0 || progress.downloads_done > 0 {
+        separate(&mut out);
+        let _ = write!(
+            out,
+            "downloading {}/{}",
+            progress.downloads_done, progress.downloads_expected
+        );
+    }
+
+    if progress.bytes_expected > 0 || progress.bytes_done > 0 {
+        separate(&mut out);
+        write_bytes(&mut out, progress.bytes_done);
+        out.push('/');
+        write_bytes(&mut out, progress.bytes_expected);
+    }
+
+    out
+}
+
+fn separate(out: &mut String) {
+    if !out.is_empty() {
+        out.push_str(" · ");
+    }
+}
+
+/// Writes a byte count with one decimal, e.g. `48.2 MiB`.
+///
+/// Integer maths only: formatting a float is an order of magnitude dearer than dividing, and
+/// this runs on every drawn frame.
+fn write_bytes(out: &mut String, bytes: u64) {
+    const UNIT: u64 = 1024;
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+
+    let mut divisor = 1u64;
+    let mut unit = 0;
+    while bytes / divisor >= UNIT && unit + 1 < UNITS.len() {
+        divisor *= UNIT;
+        unit += 1;
+    }
+
+    let _ = if unit == 0 {
+        write!(out, "{bytes} B")
+    } else {
+        let mut whole = bytes / divisor;
+        let mut tenths = ((bytes % divisor) * 10 + divisor / 2) / divisor;
+        if tenths == 10 {
+            whole += 1;
+            tenths = 0;
+        }
+        write!(out, "{whole}.{tenths} {}", UNITS[unit])
+    };
+}
+
 struct SpanActivity {
     throttle: Throttle,
+    /// Whether nix is reporting counters. Once it is, they own the line: a stray log line must
+    /// not fight them for it, and dropping those lines costs an atomic load.
+    counting: AtomicBool,
+}
+
+impl SpanActivity {
+    fn new() -> Self {
+        Self {
+            throttle: Throttle::new(),
+            counting: AtomicBool::new(false),
+        }
+    }
 }
 
 impl ActivityReporter for SpanActivity {
     fn line(&self, line: &str) {
-        if !self.throttle.due() {
+        if self.counting.load(Ordering::Relaxed) || !self.throttle.due() {
             return;
         }
         let line = display_line(line);
         tracing::Span::current().pb_set_message(&format!(" {}", line.dimmed()));
     }
 
+    fn progress(&self, progress: &BuildProgress) {
+        if progress.is_idle() {
+            self.counting.store(false, Ordering::Relaxed);
+            return;
+        }
+        self.counting.store(true, Ordering::Relaxed);
+        if !self.throttle.due() {
+            return;
+        }
+        let rendered = render_progress(progress);
+        tracing::Span::current().pb_set_message(&format!(" {}", rendered.dimmed()));
+    }
+
     fn clear(&self) {
+        self.counting.store(false, Ordering::Relaxed);
         tracing::Span::current().pb_set_message("");
     }
 }
@@ -153,15 +249,18 @@ impl ActivityReporter for LoggedActivity {
         tracing::debug!("{line}");
     }
 
+    fn progress(&self, _progress: &BuildProgress) {}
+
     fn clear(&self) {}
 }
 
 /// The reporter to hand to a long-running command, chosen once for the process.
+///
+/// Nothing is drawn unless progress was left on and there is a terminal watching: a script that
+/// asked for plain output pays nothing per line.
 pub fn activity_reporter() -> Arc<dyn ActivityReporter> {
-    if std::io::stderr().is_terminal() {
-        Arc::new(SpanActivity {
-            throttle: Throttle::new(),
-        })
+    if crate::progress_enabled() && std::io::stderr().is_terminal() {
+        Arc::new(SpanActivity::new())
     } else if tracing::enabled!(tracing::Level::DEBUG) {
         Arc::new(LoggedActivity)
     } else {
@@ -252,10 +351,133 @@ mod tests {
 
     #[test]
     fn reporting_a_line_without_a_progress_bar_is_harmless() {
-        let reporter = SpanActivity {
-            throttle: Throttle::new(),
-        };
+        let reporter = SpanActivity::new();
         reporter.line("no subscriber is installed");
+        reporter.progress(&BuildProgress {
+            builds_done: 1,
+            builds_expected: 2,
+            ..BuildProgress::default()
+        });
         reporter.clear();
+    }
+
+    fn progress() -> BuildProgress {
+        BuildProgress {
+            builds_done: 3,
+            builds_expected: 17,
+            builds_running: 1,
+            downloads_done: 12,
+            downloads_expected: 37,
+            downloads_running: 2,
+            bytes_done: 50_525_798,
+            bytes_expected: 95_420_416,
+        }
+    }
+
+    #[test]
+    fn a_full_snapshot_renders_builds_downloads_and_bytes() {
+        assert_eq!(
+            render_progress(&progress()),
+            "building 3/17 · downloading 12/37 · 48.2 MiB/91.0 MiB"
+        );
+    }
+
+    #[test]
+    fn a_download_only_snapshot_leaves_the_build_counter_out() {
+        let progress = BuildProgress {
+            downloads_done: 1,
+            downloads_expected: 4,
+            bytes_done: 2_048,
+            bytes_expected: 8_192,
+            ..BuildProgress::default()
+        };
+        assert_eq!(
+            render_progress(&progress),
+            "downloading 1/4 · 2.0 KiB/8.0 KiB"
+        );
+    }
+
+    #[test]
+    fn a_build_only_snapshot_is_just_the_build_counter() {
+        let progress = BuildProgress {
+            builds_done: 1,
+            builds_expected: 2,
+            ..BuildProgress::default()
+        };
+        assert_eq!(render_progress(&progress), "building 1/2");
+    }
+
+    #[test]
+    fn small_byte_counts_stay_in_bytes() {
+        let progress = BuildProgress {
+            bytes_done: 12,
+            bytes_expected: 900,
+            ..BuildProgress::default()
+        };
+        assert_eq!(render_progress(&progress), "12 B/900 B");
+    }
+
+    /// 48.185… MiB: truncating would report a tenth less than it should.
+    #[test]
+    fn a_byte_count_is_rounded_rather_than_truncated() {
+        let progress = BuildProgress {
+            bytes_done: 50_525_798,
+            bytes_expected: 50_525_798,
+            ..BuildProgress::default()
+        };
+        assert_eq!(render_progress(&progress), "48.2 MiB/48.2 MiB");
+    }
+
+    #[test]
+    fn large_byte_counts_reach_gibibytes() {
+        let progress = BuildProgress {
+            bytes_done: 3_221_225_472,
+            bytes_expected: 6_442_450_944,
+            ..BuildProgress::default()
+        };
+        assert_eq!(render_progress(&progress), "3.0 GiB/6.0 GiB");
+    }
+
+    #[test]
+    fn an_idle_snapshot_renders_nothing() {
+        assert!(render_progress(&BuildProgress::default()).is_empty());
+    }
+
+    /// Nothing nix reports comes close to these, and even then the counters stay on one line.
+    #[test]
+    fn the_rendered_counters_fit_on_the_step_line() {
+        let progress = BuildProgress {
+            builds_done: 999_999,
+            builds_expected: 999_999,
+            downloads_done: 999_999,
+            downloads_expected: 999_999,
+            bytes_done: 99 * 1024 * 1024 * 1024,
+            bytes_expected: 99 * 1024 * 1024 * 1024,
+            ..progress()
+        };
+        assert!(
+            render_progress(&progress).chars().count() <= MAX_WIDTH,
+            "{}",
+            render_progress(&progress)
+        );
+    }
+
+    #[test]
+    fn counters_take_the_line_over_from_free_form_output() {
+        let reporter = SpanActivity::new();
+        reporter.progress(&progress());
+        assert!(reporter.counting.load(Ordering::Relaxed));
+
+        // Cheap enough to be safe under a flood: a dropped line is one atomic load.
+        reporter.line("copying path");
+        assert!(reporter.counting.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn an_idle_snapshot_hands_the_line_back_to_free_form_output() {
+        let reporter = SpanActivity::new();
+        reporter.progress(&progress());
+        reporter.progress(&BuildProgress::default());
+        assert!(!reporter.counting.load(Ordering::Relaxed));
     }
 }

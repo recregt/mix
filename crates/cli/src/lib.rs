@@ -10,7 +10,7 @@ use cli::{Cli, Command};
 pub async fn run() -> ExitCode {
     let cli = Cli::parse();
 
-    mix_ui::init_tracing(cli.verbose);
+    mix_ui::init_tracing(cli.verbose, cli.draws_progress());
 
     if !matches!(
         cli.command,
@@ -41,7 +41,8 @@ pub async fn run() -> ExitCode {
             packages,
             mirror,
             mirror_key,
-        } => commands::install::run(packages, mirror, mirror_key).await,
+            json,
+        } => commands::install::run(packages, mirror, mirror_key, json).await,
         Command::Doctor => commands::doctor::run(cli.verbose).await,
         Command::Repair => commands::repair::run().await,
     };

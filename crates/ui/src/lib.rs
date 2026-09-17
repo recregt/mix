@@ -1,4 +1,5 @@
 use std::io::IsTerminal;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use owo_colors::OwoColorize;
 use owo_colors::colors::{Green, Red, Yellow};
@@ -8,6 +9,19 @@ mod progress;
 
 pub use activity::activity_reporter;
 pub use progress::{download_reporter, init_tracing, step_observer};
+
+/// Whether anything may be drawn in place. Set once by [`init_tracing`], so a caller that never
+/// initialises the output keeps the default.
+static PROGRESS: AtomicBool = AtomicBool::new(true);
+
+pub(crate) fn set_progress_enabled(enabled: bool) {
+    PROGRESS.store(enabled, Ordering::Relaxed);
+}
+
+/// Whether progress bars and live output are drawn at all.
+pub fn progress_enabled() -> bool {
+    PROGRESS.load(Ordering::Relaxed)
+}
 
 fn colors_enabled(is_terminal: bool) -> bool {
     is_terminal && std::env::var_os("NO_COLOR").is_none()

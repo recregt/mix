@@ -51,6 +51,10 @@ async fn nix_build_args(
         "--print-out-paths".to_string(),
         "--profile".to_string(),
         profile_str.to_string(),
+        // Structured records instead of a redrawn text bar: what is downloaded and built can then
+        // be counted rather than parsed out of prose.
+        "--log-format".to_string(),
+        "internal-json".to_string(),
     ];
 
     if let Some(base) = mirror::filter_mirror(mirror) {
@@ -284,14 +288,16 @@ mod tests {
         for mirror in [None, Some(UNREACHABLE_MIRROR)] {
             let args = nix_build_args("path:/state#x", "/profile", mirror, None).await;
             assert_eq!(
-                args[..6],
+                args[..8],
                 [
                     "build",
                     "path:/state#x",
                     "--no-link",
                     "--print-out-paths",
                     "--profile",
-                    "/profile"
+                    "/profile",
+                    "--log-format",
+                    "internal-json"
                 ]
             );
         }

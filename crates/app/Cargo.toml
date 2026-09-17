@@ -19,6 +19,8 @@ futures-util = { workspace = true }
 liblzma = { version = "0.4.8", default-features = false, features = ["static"] }
 nix = { workspace = true }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "http2"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
 sha2 = "0.11.0"
 tar = "0.4.46"
 tempfile = { workspace = true }

@@ -1,4 +1,5 @@
-use mix_ui::activity::{MAX_WIDTH, Throttle, display_line};
+use mix_core::BuildProgress;
+use mix_ui::activity::{MAX_WIDTH, Throttle, display_line, render_progress};
 
 fn main() {
     divan::main();
@@ -30,6 +31,24 @@ fn render_a_long_line(bencher: divan::Bencher) {
     let line = long_line();
     assert!(line.len() > MAX_WIDTH);
     bencher.bench(|| display_line(divan::black_box(&line)));
+}
+
+/// What a drawn frame costs once nix is reporting counters: a short, bounded string where only
+/// the numbers change, instead of a line of free-form output that has to be scanned and trimmed.
+#[divan::bench]
+fn render_the_build_counters(bencher: divan::Bencher) {
+    let progress = BuildProgress {
+        builds_done: 3,
+        builds_expected: 17,
+        builds_running: 1,
+        downloads_done: 12,
+        downloads_expected: 37,
+        downloads_running: 2,
+        bytes_done: 50_525_798,
+        bytes_expected: 95_420_416,
+    };
+
+    bencher.bench(|| render_progress(divan::black_box(&progress)));
 }
 
 /// The cost a flooding process actually pays: the frame is not due, so the line is dropped.

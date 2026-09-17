@@ -7,6 +7,7 @@ pub async fn run(
     packages: Vec<String>,
     mirror: Option<String>,
     mirror_key: Option<String>,
+    json: bool,
 ) -> anyhow::Result<ExitCode> {
     if is_root() {
         return Err(Error::NotRoot.into());
@@ -25,6 +26,12 @@ pub async fn run(
         mix_ui::activity_reporter(),
     )
     .await?;
+
+    // One line of JSON on stdout and nothing else, so a script never has to parse prose.
+    if json {
+        println!("{}", installed.to_json());
+        return Ok(ExitCode::SUCCESS);
+    }
 
     if !installed.skipped.is_empty() {
         mix_ui::skipped(format!(
