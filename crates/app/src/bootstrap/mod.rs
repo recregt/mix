@@ -1,8 +1,7 @@
+mod cleanup;
 mod error;
-pub(crate) mod mirror;
 mod planner;
 mod steps;
-mod util;
 
 pub mod detect;
 pub mod preflight;
@@ -10,7 +9,6 @@ pub mod preflight;
 pub mod tarball;
 
 pub use error::{Error, Host, Result};
-pub(crate) use steps::{BuildPolicy, activate};
 
 use std::sync::Arc;
 

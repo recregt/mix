@@ -18,6 +18,10 @@ pub enum Error {
     #[error(transparent)]
     Core(#[from] mix_core::Error),
 
+    /// The profile would not activate: bootstrap's last step is the same one `mix install` runs.
+    #[error(transparent)]
+    Activation(#[from] crate::profile::Error),
+
     #[error("network request failed: {0}")]
     Network(#[source] Box<dyn std::error::Error + Send + Sync>),
 
@@ -28,7 +32,7 @@ pub enum Error {
     UnsupportedTarget(String),
 
     #[error(transparent)]
-    Repair(#[from] crate::repair::Error),
+    Target(#[from] crate::target::Error),
 
     #[error("decompressing archive: {0}")]
     Decompression(String),
@@ -64,9 +68,6 @@ pub enum Error {
         summary: String,
     },
 
-    #[error("the binary cache has nothing to download for: {}", .0.join(", "))]
-    SourceBuildRequired(Vec<String>),
-
     #[error("interrupted; rolled back any partially applied changes")]
     Interrupted,
 }
@@ -100,9 +101,14 @@ mod tests {
         );
     }
 
+    /// An activation failure is carried as it was raised: bootstrap adds nothing to it, because
+    /// the same fact reaches a reader who ran `mix install` too.
     #[test]
-    fn source_build_error_names_every_derivation_it_refused() {
-        let err = Error::SourceBuildRequired(vec!["hello-2.12.3".into(), "cowsay-3.8.4".into()]);
+    fn an_activation_failure_keeps_the_words_the_profile_layer_raised() {
+        let err = Error::Activation(crate::profile::Error::SourceBuildRequired(vec![
+            "hello-2.12.3".into(),
+            "cowsay-3.8.4".into(),
+        ]));
 
         assert_eq!(
             err.to_string(),

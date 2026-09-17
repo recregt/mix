@@ -5,9 +5,11 @@ use mix_core::paths::{
     NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC,
 };
 
+use crate::bootstrap::cleanup::warn_on_failure;
 use crate::bootstrap::error::{Error, Result};
-use crate::bootstrap::util::{copy_file_atomic, remove_file, warn_on_failure};
-use crate::shared::os::{files_match, run, systemd_unit_is_active, write_file_atomic};
+use crate::exec::run;
+use crate::fs::{copy_atomic, files_match, remove_file, write_atomic};
+use crate::systemd::unit_is_active;
 
 #[derive(Default)]
 pub struct ConfigureSystemdService {
@@ -27,7 +29,7 @@ impl Step for ConfigureSystemdService {
         Ok(
             files_match(NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SERVICE_DEST).await
                 && files_match(NIX_DAEMON_SOCKET_SRC, NIX_DAEMON_SOCKET_DEST).await
-                && systemd_unit_is_active("nix-daemon.socket").await,
+                && unit_is_active("nix-daemon.socket").await,
         )
     }
 
@@ -36,13 +38,13 @@ impl Step for ConfigureSystemdService {
             NIX_DAEMON_SERVICE_DEST,
             previous_contents(NIX_DAEMON_SERVICE_DEST).await,
         ));
-        copy_file_atomic(NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SERVICE_DEST).await?;
+        copy_atomic(NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SERVICE_DEST).await?;
 
         self.written.push((
             NIX_DAEMON_SOCKET_DEST,
             previous_contents(NIX_DAEMON_SOCKET_DEST).await,
         ));
-        copy_file_atomic(NIX_DAEMON_SOCKET_SRC, NIX_DAEMON_SOCKET_DEST).await?;
+        copy_atomic(NIX_DAEMON_SOCKET_SRC, NIX_DAEMON_SOCKET_DEST).await?;
 
         run("systemctl", &["daemon-reload"], token).await?;
         self.started_socket = true;
@@ -80,7 +82,7 @@ impl Step for ConfigureSystemdService {
             warn_on_failure(
                 "restore systemd unit file",
                 match previous {
-                    Some(contents) => write_file_atomic(path, contents).await,
+                    Some(contents) => write_atomic(path, contents).await,
                     None => remove_file(path).await,
                 },
             );

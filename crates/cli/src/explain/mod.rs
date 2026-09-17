@@ -7,6 +7,8 @@
 //! required` is advice to re-run with sudo in one command and a refusal in another.
 //!
 //! So the facts travel up untouched and the sentences are written here, one module per command.
+//! The work more than one command shares — activating a profile, reconciling a declared target —
+//! is written once in a module of its own and told which command to name.
 //! A [`Diagnostic`] is what comes out: what happened, and — when there is one worth giving — what
 //! to do about it on the line underneath.
 
@@ -14,6 +16,9 @@ pub mod bootstrap;
 pub mod doctor;
 pub mod install;
 pub mod repair;
+
+mod activation;
+pub mod target;
 
 use std::borrow::Cow;
 

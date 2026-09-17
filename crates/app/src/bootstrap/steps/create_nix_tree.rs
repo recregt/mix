@@ -2,11 +2,9 @@ use async_trait::async_trait;
 use mix_core::paths::{NIX_TREE_MODE, NIX_TREE_PATHS};
 use mix_core::{CancellationToken, Step};
 
+use crate::bootstrap::cleanup::warn_on_failure;
 use crate::bootstrap::error::{Error, Result};
-use crate::bootstrap::util::{
-    create_dir_with_mode, dir_has_mode, remove_dir_all, set_permissions, warn_on_failure,
-};
-use crate::shared::os::path_exists;
+use crate::fs::{create_dir, dir_has_mode, exists, remove_dir_all, set_mode};
 
 #[derive(Default)]
 pub struct CreateNixTree {
@@ -48,7 +46,7 @@ async fn provision_all(
     created: &mut Vec<&'static str>,
 ) -> Result<()> {
     for &path in paths {
-        let is_new = !path_exists(path).await;
+        let is_new = !exists(path).await;
         if is_new {
             created.push(path);
         }
@@ -59,9 +57,9 @@ async fn provision_all(
 
 async fn provision(path: &str, mode: u32, is_new: bool) -> Result<()> {
     if is_new {
-        create_dir_with_mode(path, mode).await?;
+        create_dir(path, mode).await?;
     } else {
-        set_permissions(path, mode).await?;
+        set_mode(path, mode).await?;
     }
     Ok(())
 }

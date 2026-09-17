@@ -22,6 +22,8 @@ pub(crate) fn describe(error: &Error, command: &str) -> Diagnostic {
     match error {
         Error::Core(e) => core_error(e, command),
 
+        Error::Activation(e) => super::activation::describe(e, command),
+
         Error::Network(_) => Diagnostic::hinting(
             "could not fetch the pinned nix archive",
             "Check your network connection and proxy settings, or point `--mirror` at a \
@@ -39,7 +41,7 @@ pub(crate) fn describe(error: &Error, command: &str) -> Diagnostic {
             "`mix` bootstraps x86_64 and aarch64 Linux",
         ),
 
-        Error::Repair(e) => super::repair::describe(e, command),
+        Error::Target(e) => super::target::describe(e, command),
 
         Error::Decompression(detail) => Diagnostic::hinting(
             format!("the nix archive could not be decompressed: {detail}"),
@@ -105,8 +107,6 @@ pub(crate) fn describe(error: &Error, command: &str) -> Diagnostic {
             describe(cause, command).summary,
             format!("{summary}\nThe system may need manual cleanup"),
         ),
-
-        Error::SourceBuildRequired(derivations) => super::install::source_build(derivations),
 
         Error::Interrupted => {
             Diagnostic::new("interrupted; every partially applied change was rolled back")

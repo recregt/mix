@@ -8,9 +8,9 @@ use mix_core::state::StateManifest;
 use mix_core::{ActivityReporter, CancellationToken};
 use tracing::Instrument;
 
-use crate::bootstrap::BuildPolicy;
-use crate::shared::home_manager::{read_state, render_home};
-use crate::shared::os::write_file_atomic;
+use crate::fs::write_atomic;
+use crate::profile::config::{read_state, render_home};
+use crate::profile::{self, BuildPolicy};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -18,7 +18,7 @@ pub enum Error {
     Core(#[from] mix_core::Error),
 
     #[error(transparent)]
-    Activation(#[from] crate::bootstrap::Error),
+    Activation(#[from] crate::profile::Error),
 
     #[error(transparent)]
     InvalidPackage(#[from] mix_nixgen::InvalidInput),
@@ -87,7 +87,7 @@ pub async fn install(
     let policy = BuildPolicy::from_allowing_source(allow_source_builds);
 
     write_then_activate(&state_path, &home_path, &new_state, &new_home, || {
-        crate::bootstrap::activate(cfg, mirror, mirror_key, &activity, &token, policy)
+        profile::activate(cfg, mirror, mirror_key, &activity, &token, policy)
     })
     .instrument(span)
     .await?;
@@ -134,20 +134,20 @@ async fn write_then_activate<F, Fut>(
 ) -> Result<()>
 where
     F: FnOnce() -> Fut,
-    Fut: Future<Output = crate::bootstrap::Result<bool>>,
+    Fut: Future<Output = profile::Result<bool>>,
 {
     let previous_state = tokio::fs::read_to_string(state_path).await.ok();
     let previous_home = tokio::fs::read_to_string(home_path).await.ok();
 
-    write_file_atomic(state_path, new_state).await?;
-    write_file_atomic(home_path, new_home).await?;
+    write_atomic(state_path, new_state).await?;
+    write_atomic(home_path, new_home).await?;
 
     if let Err(e) = activate().await {
         if let Some(previous) = previous_state {
-            let _ = write_file_atomic(state_path, &previous).await;
+            let _ = write_atomic(state_path, &previous).await;
         }
         if let Some(previous) = previous_home {
-            let _ = write_file_atomic(home_path, &previous).await;
+            let _ = write_atomic(home_path, &previous).await;
         }
         return Err(e.into());
     }
@@ -363,7 +363,9 @@ mod tests {
         std::fs::write(&home_path, "old home").unwrap();
 
         let err = write_then_activate(&state_path, &home_path, "new state", "new home", || {
-            std::future::ready(Err(crate::bootstrap::Error::Interrupted))
+            std::future::ready(Err(profile::Error::Core(mix_core::Error::Cancelled {
+                command: "nix build".to_string(),
+            })))
         })
         .await
         .unwrap_err();
@@ -380,7 +382,9 @@ mod tests {
         let home_path = dir.path().join("home.nix");
 
         write_then_activate(&state_path, &home_path, "new state", "new home", || {
-            std::future::ready(Err(crate::bootstrap::Error::Interrupted))
+            std::future::ready(Err(profile::Error::Core(mix_core::Error::Cancelled {
+                command: "nix build".to_string(),
+            })))
         })
         .await
         .unwrap_err();

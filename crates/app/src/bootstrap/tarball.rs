@@ -7,7 +7,7 @@ use mix_core::{DownloadProgress, Error as CoreError};
 use sha2::{Digest, Sha256};
 
 use crate::bootstrap::error::{Error, Result};
-use crate::bootstrap::mirror::{filter_mirror, mirror_url};
+use crate::mirror::{filter_mirror, mirror_url};
 use mix_pins::{TarballPin, pin_for};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);

@@ -1,96 +1,42 @@
-//! What `mix repair` says when it cannot finish, and what it says about a single artifact it
-//! could not put back.
+//! What `mix repair` says when it cannot finish.
 
-use mix_app::repair::{Error, Unfixable};
+use mix_app::target::Error;
 
-use super::{Diagnostic, core_error};
+use super::Diagnostic;
 
 /// How the command is spelled when the reader is told to run it again.
 const COMMAND: &str = "mix repair";
 
 pub fn explain(error: &anyhow::Error) -> Diagnostic {
     match error.downcast_ref::<Error>() {
-        Some(error) => describe(error, COMMAND),
+        Some(error) => super::target::describe(error, COMMAND),
         None => Diagnostic::new(error.to_string()),
-    }
-}
-
-pub(crate) fn describe(error: &Error, command: &str) -> Diagnostic {
-    match error {
-        Error::Core(e) => core_error(e, command),
-        Error::Unrepairable { artifact, reason } => Diagnostic::hinting(
-            format!("{artifact}: {reason}"),
-            unfixable(*reason).to_string(),
-        ),
-    }
-}
-
-/// What went wrong with one artifact, for printing under its own name.
-///
-/// An artifact that could not be repaired says why, and what would put it back; anything else is
-/// the raw failure as it was raised. The name is the caller's to print, so nothing here has to
-/// guess whether it is a word or a path.
-pub fn report(error: &Error) -> String {
-    match error {
-        Error::Unrepairable { reason, .. } => format!("{reason}\n{}", unfixable(*reason)),
-        e => e.to_string(),
-    }
-}
-
-/// What to do about an artifact repair will not touch.
-///
-/// Written once and read by both commands: `mix doctor` says the same thing about a finding
-/// repair cannot reconcile as `mix repair` says when it meets it.
-pub(crate) fn unfixable(reason: Unfixable) -> &'static str {
-    match reason {
-        Unfixable::NotADirectory => "Remove it by hand, then run `mix repair` again",
-        Unfixable::MissingUser => "Nothing is left to enrol; the user has to exist first",
-        Unfixable::MissingRuntime => "Run `mix bootstrap` to restore the nix installation",
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use mix_app::target::Unfixable;
+
     use super::*;
 
     #[test]
-    fn a_missing_runtime_is_sent_to_bootstrap() {
-        let error = Error::Unrepairable {
-            artifact: "default profile".to_string(),
-            reason: Unfixable::MissingRuntime,
-        };
+    fn a_target_repair_will_not_touch_is_explained_in_its_own_words() {
+        let error = anyhow::Error::from(Error::Unrepairable {
+            artifact: "/nix".to_string(),
+            reason: Unfixable::NotADirectory,
+        });
 
-        let line = report(&error);
-
-        assert!(line.contains("produced by the Nix installation"));
-        assert!(line.contains("mix bootstrap"));
-    }
-
-    #[test]
-    fn something_in_the_way_is_left_to_the_reader_to_remove() {
-        let message = describe(
-            &Error::Unrepairable {
-                artifact: "/nix".to_string(),
-                reason: Unfixable::NotADirectory,
-            },
-            COMMAND,
-        )
-        .message();
+        let message = explain(&error).message();
 
         assert!(message.contains("/nix: exists but is not a directory"));
         assert!(message.contains("Remove it by hand"));
     }
 
     #[test]
-    fn a_raw_failure_is_reported_as_the_line_it_is() {
-        let error = Error::Core(mix_core::Error::Command {
-            command: "gpasswd --add ciuser mix-users".to_string(),
-            detail: "exit 1".to_string(),
-        });
+    fn a_failure_that_is_not_a_target_failure_is_reported_as_it_is() {
+        let error = anyhow::anyhow!("something else entirely");
 
-        assert_eq!(
-            report(&error),
-            "command `gpasswd --add ciuser mix-users` failed: exit 1"
-        );
+        assert_eq!(explain(&error).message(), "something else entirely");
     }
 }

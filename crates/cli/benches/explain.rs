@@ -1,7 +1,7 @@
-use mix_app::bootstrap::Error as ActivationError;
-use mix_app::doctor::{Finding, HealthReport};
+use mix_app::doctor::HealthReport;
 use mix_app::install::Error as InstallError;
-use mix_app::repair::{Error as RepairError, Unfixable};
+use mix_app::profile::Error as ActivationError;
+use mix_app::target::{Error as TargetError, Finding, Unfixable};
 use mix_cli::explain;
 use mix_core::Category;
 
@@ -40,12 +40,12 @@ fn explain_a_held_lock(bencher: divan::Bencher) {
 /// for every target it could not put back.
 #[divan::bench]
 fn explain_a_repair_report(bencher: divan::Bencher) {
-    let error = RepairError::Unrepairable {
+    let error = TargetError::Unrepairable {
         artifact: "default profile".to_string(),
         reason: Unfixable::MissingRuntime,
     };
 
-    bencher.bench(|| explain::repair::report(divan::black_box(&error)));
+    bencher.bench(|| explain::target::report(divan::black_box(&error)));
 }
 
 fn report(name: &str, finding: Finding) -> HealthReport {

@@ -9,7 +9,7 @@ use crate::bootstrap::steps::{
     CreateNixTree, CreateUsersAndGroups, FetchAndUnpack, RemoveExistingInstallation,
     WriteHomeManagerConfig,
 };
-use crate::shared::home_manager::resolve_user_config;
+use crate::profile::config::resolve_user_config;
 
 pub fn bootstrap_steps(
     mirror: Option<&str>,

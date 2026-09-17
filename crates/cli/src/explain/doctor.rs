@@ -6,7 +6,8 @@
 
 use std::borrow::Cow;
 
-use mix_app::doctor::{Finding, HealthReport};
+use mix_app::doctor::HealthReport;
+use mix_app::target::Finding;
 
 use super::Diagnostic;
 
@@ -87,7 +88,7 @@ pub fn check(report: &HealthReport) -> Cow<'static, str> {
     };
     let words = finding(found);
     match found.unfixable() {
-        Some(reason) => format!("{words}\n{}", super::repair::unfixable(reason)).into(),
+        Some(reason) => format!("{words}\n{}", super::target::unfixable(reason)).into(),
         None => words,
     }
 }
@@ -115,7 +116,7 @@ pub fn unhealthy(reports: &[HealthReport]) -> Diagnostic {
     match unfixable {
         Some(reason) => Diagnostic::hinting(
             "system health check failed",
-            super::repair::unfixable(reason),
+            super::target::unfixable(reason),
         ),
         None => Diagnostic::new("system health check failed"),
     }
@@ -129,7 +130,7 @@ pub fn unhealthy(reports: &[HealthReport]) -> Diagnostic {
 pub fn blocked(report: &HealthReport) -> Diagnostic {
     let summary = format!("system health check failed: {}", measured(report));
     match report.finding.and_then(Finding::unfixable) {
-        Some(reason) => Diagnostic::hinting(summary, super::repair::unfixable(reason)),
+        Some(reason) => Diagnostic::hinting(summary, super::target::unfixable(reason)),
         None => Diagnostic::hinting(
             summary,
             "Run `mix doctor` to see what drifted, and `mix repair` to reconcile it",
