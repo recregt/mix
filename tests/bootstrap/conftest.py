@@ -165,6 +165,10 @@ _MIRROR_HOME_NIX = """
 
 INSTALL_TEST_PACKAGE = "hello"
 
+# A package deliberately left out of the mirror's cache: installing it against that mirror can
+# only be done by compiling it.
+UNCACHED_TEST_PACKAGE = "cowsay"
+
 
 @pytest.fixture(scope="session")
 def mirror_cache(mirror_sources):

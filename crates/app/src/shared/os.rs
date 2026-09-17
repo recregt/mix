@@ -4,7 +4,7 @@ use std::sync::Arc;
 use mix_core::nix_log::{Event, NixLog};
 use mix_core::paths::DEFAULT_PROFILE_BIN;
 use mix_core::privilege::InvokingUser;
-use mix_core::{ActivityReporter, CancellationToken, Error, Result};
+use mix_core::{ActivityReporter, BuildPlan, CancellationToken, Error, Result};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tracing::Instrument;
@@ -204,6 +204,26 @@ pub async fn run_as_reporting(
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// Runs a nix dry run as `user` and reads back the plan it printed.
+///
+/// A dry run answers a question instead of doing work: it prints its plan and exits, so its
+/// output is read once it is complete rather than streamed, and it is left in plain text so a
+/// failure still reads as prose.
+pub async fn plan_as(
+    user: &InvokingUser,
+    command: &str,
+    args: &[&str],
+    token: &CancellationToken,
+) -> Result<BuildPlan> {
+    let command_line = format_command(command, args);
+    let cmd = command_as(user, command, args);
+    let output = run_command(cmd, command_line.clone(), token).await?;
+    if !output.status.success() {
+        return Err(command_error(command_line, &output));
+    }
+    Ok(BuildPlan::parse(&String::from_utf8_lossy(&output.stderr)))
+}
+
 pub async fn status_as(
     user: &InvokingUser,
     command: &str,
@@ -351,6 +371,52 @@ pub async fn files_match(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The user the test itself runs as: switching to it is a no-op, so a command can be run
+    /// without any privilege at all.
+    fn current_user() -> InvokingUser {
+        InvokingUser {
+            uid: nix::unistd::Uid::current().as_raw(),
+            gid: nix::unistd::Gid::current().as_raw(),
+            name: "mix-test".to_string(),
+            home: std::env::temp_dir(),
+        }
+    }
+
+    #[tokio::test]
+    async fn plan_as_reads_back_the_derivations_a_dry_run_would_build() {
+        let plan = plan_as(
+            &current_user(),
+            "/bin/sh",
+            &[
+                "-c",
+                "printf 'this derivation will be built:\\n  \
+                 /nix/store/00000000000000000000000000000001-hello.drv\\n' >&2",
+            ],
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            plan.to_build(),
+            ["/nix/store/00000000000000000000000000000001-hello.drv".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn plan_as_reports_a_dry_run_that_failed_rather_than_an_empty_plan() {
+        let err = plan_as(
+            &current_user(),
+            "/bin/sh",
+            &["-c", "echo \"error: attribute 'nope' missing\" >&2; exit 1"],
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("attribute 'nope' missing"));
+    }
 
     #[tokio::test]
     async fn path_exists_true_for_a_real_path() {

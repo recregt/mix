@@ -70,8 +70,37 @@ pub enum Error {
         summary: String,
     },
 
+    #[error("{}", source_build_message(.0))]
+    SourceBuildRequired(Vec<String>),
+
     #[error("interrupted; rolled back any partially applied changes")]
     Interrupted,
+}
+
+/// How many derivations are worth naming before the list stops being readable.
+const NAMED_SOURCE_BUILDS: usize = 5;
+
+fn source_build_message(derivations: &[String]) -> String {
+    let named: Vec<&str> = derivations
+        .iter()
+        .take(NAMED_SOURCE_BUILDS)
+        .map(String::as_str)
+        .collect();
+    let mut list = named.join(", ");
+    if let Some(rest) = derivations
+        .len()
+        .checked_sub(named.len())
+        .filter(|n| *n > 0)
+    {
+        list.push_str(&format!(" and {rest} more"));
+    }
+
+    format!(
+        "the binary cache has nothing to download for: {list}\n\
+         Installing this would compile it from source, which can take hours.\n\
+         To compile it anyway, re-run with --build:\n\
+         \x20 mix install --build ..."
+    )
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -99,6 +128,25 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("/nix/store/pkg-a"));
         assert!(message.contains("fstab"));
+    }
+
+    #[test]
+    fn source_build_error_names_the_derivations_and_the_way_out() {
+        let err = Error::SourceBuildRequired(vec!["hello-2.12.3".to_string()]);
+
+        let message = err.to_string();
+        assert!(message.contains("hello-2.12.3"));
+        assert!(message.contains("mix install --build"));
+    }
+
+    #[test]
+    fn source_build_error_counts_the_derivations_it_does_not_name() {
+        let derivations: Vec<String> = (0..8).map(|i| format!("package-{i}")).collect();
+        let message = Error::SourceBuildRequired(derivations).to_string();
+
+        assert!(message.contains("package-4"));
+        assert!(!message.contains("package-5"));
+        assert!(message.contains("and 3 more"));
     }
 
     #[test]

@@ -10,7 +10,7 @@ pub mod create_nix_tree;
 pub mod create_users_and_groups;
 
 pub use activate_home_manager::ActivateHomeManagerConfig;
-pub(crate) use activate_home_manager::activate;
+pub(crate) use activate_home_manager::{BuildPolicy, activate};
 pub use configure_nix_conf::ConfigureNixConf;
 pub use configure_systemd_service::ConfigureSystemdService;
 pub use create_nix_dir::CreateNixDir;

@@ -42,7 +42,8 @@ pub async fn run() -> ExitCode {
             mirror,
             mirror_key,
             json,
-        } => commands::install::run(packages, mirror, mirror_key, json).await,
+            build,
+        } => commands::install::run(packages, mirror, mirror_key, json, build).await,
         Command::Doctor => commands::doctor::run(cli.verbose).await,
         Command::Repair => commands::repair::run().await,
     };

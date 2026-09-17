@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use mix_core::models::UserConfig;
+use mix_core::nix_plan;
 use mix_core::paths::{
     DEFAULT_PROFILE_NIX, HOME_MANAGER_PROFILE_NAME, mix_state_dir, nix_profiles_dir,
 };
@@ -11,7 +12,7 @@ use crate::bootstrap::error::{Error, Result};
 use crate::bootstrap::mirror;
 use crate::bootstrap::util::remove_dir_all;
 use crate::shared::git;
-use crate::shared::os::{path_exists, run_as_reporting};
+use crate::shared::os::{path_exists, plan_as, run_as, run_as_reporting};
 
 pub struct ActivateHomeManagerConfig {
     user_config: Option<UserConfig>,
@@ -38,15 +39,60 @@ impl ActivateHomeManagerConfig {
     }
 }
 
-async fn nix_build_args(
-    flake_attr: &str,
-    profile_str: &str,
-    mirror: Option<&str>,
-    mirror_key: Option<&str>,
-) -> Vec<String> {
+/// How many planned derivations are worth asking nix about.
+///
+/// A plan longer than this is a source build many times over, so reading the attributes of every
+/// entry would mean parsing megabytes of JSON to reach an answer that is already known.
+const CLASSIFY_LIMIT: usize = 64;
+
+/// Whether a package the binary cache cannot provide may be compiled on this machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BuildPolicy {
+    /// Fetch binaries only, and refuse rather than start a compile nobody asked for.
+    CacheOnly,
+    /// Build whatever the cache has no binary for.
+    AllowSource,
+}
+
+impl BuildPolicy {
+    pub(crate) fn from_allowing_source(allow: bool) -> Self {
+        if allow {
+            Self::AllowSource
+        } else {
+            Self::CacheOnly
+        }
+    }
+}
+
+/// Where every nix invocation in this path fetches its inputs and its binaries from.
+///
+/// Resolved once and shared, so the mirror's key is fetched once no matter how many times nix is
+/// called.
+async fn nix_options(mirror: Option<&str>, mirror_key: Option<&str>) -> Vec<String> {
+    let Some(base) = mirror::filter_mirror(mirror) else {
+        return Vec::new();
+    };
+
+    vec![
+        "--override-input".to_string(),
+        "nixpkgs".to_string(),
+        mirror::nixpkgs_override(base),
+        "--override-input".to_string(),
+        "home-manager".to_string(),
+        mirror::home_manager_override(base),
+        "--option".to_string(),
+        "substituters".to_string(),
+        mirror::substituter(base),
+        "--option".to_string(),
+        "trusted-public-keys".to_string(),
+        mirror::trusted_public_keys(base, mirror_key).await,
+    ]
+}
+
+fn nix_build_args(installable: &str, profile_str: &str, options: &[String]) -> Vec<String> {
     let mut args = vec![
         "build".to_string(),
-        flake_attr.to_string(),
+        installable.to_string(),
         "--no-link".to_string(),
         "--print-out-paths".to_string(),
         "--profile".to_string(),
@@ -56,23 +102,72 @@ async fn nix_build_args(
         "--log-format".to_string(),
         "internal-json".to_string(),
     ];
+    args.extend_from_slice(options);
+    args
+}
 
-    if let Some(base) = mirror::filter_mirror(mirror) {
-        args.push("--override-input".to_string());
-        args.push("nixpkgs".to_string());
-        args.push(mirror::nixpkgs_override(base));
-        args.push("--override-input".to_string());
-        args.push("home-manager".to_string());
-        args.push(mirror::home_manager_override(base));
-        args.push("--option".to_string());
-        args.push("substituters".to_string());
-        args.push(mirror::substituter(base));
-        args.push("--option".to_string());
-        args.push("trusted-public-keys".to_string());
-        args.push(mirror::trusted_public_keys(base, mirror_key).await);
+/// Asks what the build would entail, without building any of it.
+///
+/// Evaluating a home-manager configuration is the expensive half of an activation, seconds of
+/// work either way, so the plan is not asked for on top of the build but ahead of it: nix keys
+/// its evaluation cache on the flake's contents, and the build that follows this dry run reads
+/// the evaluation back out of that cache instead of repeating it.
+fn nix_dry_run_args(installable: &str, options: &[String]) -> Vec<String> {
+    let mut args = vec![
+        "build".to_string(),
+        installable.to_string(),
+        "--no-link".to_string(),
+        "--dry-run".to_string(),
+    ];
+    args.extend_from_slice(options);
+    args
+}
+
+fn nix_derivation_show_args(paths: &[String]) -> Vec<String> {
+    let mut args = vec!["derivation".to_string(), "show".to_string()];
+    args.extend_from_slice(paths);
+    args
+}
+
+fn as_refs(args: &[String]) -> Vec<&str> {
+    args.iter().map(String::as_str).collect()
+}
+
+/// Refuses an activation that would compile a package instead of fetching it.
+///
+/// home-manager's own generation is always built here — the profile is assembled on the machine
+/// it is for, and no cache can hold it — so the plan is classified rather than merely counted:
+/// only the entries nix would not have built locally anyway are a source build.
+async fn refuse_source_builds(
+    cfg: &UserConfig,
+    installable: &str,
+    options: &[String],
+    token: &CancellationToken,
+) -> Result<()> {
+    let args = nix_dry_run_args(installable, options);
+    let plan = plan_as(&cfg.user, DEFAULT_PROFILE_NIX, &as_refs(&args), token).await?;
+    if plan.is_empty() {
+        return Ok(());
     }
 
-    args
+    let planned = plan.to_build();
+    let classified = planned.len().min(CLASSIFY_LIMIT);
+    let show = nix_derivation_show_args(&planned[..classified]);
+    let shown = run_as(&cfg.user, DEFAULT_PROFILE_NIX, &as_refs(&show), token).await?;
+
+    let mut source_builds: Vec<String> = nix_plan::source_builds(&planned[..classified], &shown)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    source_builds.extend(planned[classified..].iter().map(|p| {
+        // Beyond the classification limit nothing is assumed: an unclassified build is refused.
+        nix_plan::derivation_name(p).to_string()
+    }));
+
+    if source_builds.is_empty() {
+        return Ok(());
+    }
+    Err(Error::SourceBuildRequired(source_builds))
 }
 
 pub(crate) async fn activate(
@@ -81,6 +176,7 @@ pub(crate) async fn activate(
     mirror_key: Option<&str>,
     activity: &Arc<dyn ActivityReporter>,
     token: &CancellationToken,
+    policy: BuildPolicy,
 ) -> Result<bool> {
     let state_dir = mix_state_dir(&cfg.user.home);
     let state_dir_str = state_dir.to_string_lossy().into_owned();
@@ -91,12 +187,17 @@ pub(crate) async fn activate(
     );
     let profile = nix_profiles_dir(&cfg.user.home).join(HOME_MANAGER_PROFILE_NAME);
     let profile_str = profile.to_string_lossy().into_owned();
-    let args = nix_build_args(&flake_attr, &profile_str, mirror, mirror_key).await;
-    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let options = nix_options(mirror, mirror_key).await;
+
+    if policy == BuildPolicy::CacheOnly {
+        refuse_source_builds(cfg, &flake_attr, &options, token).await?;
+    }
+
+    let args = nix_build_args(&flake_attr, &profile_str, &options);
     let store_path = run_as_reporting(
         &cfg.user,
         DEFAULT_PROFILE_NIX,
-        &arg_refs,
+        &as_refs(&args),
         token,
         Some(Arc::clone(activity)),
     )
@@ -134,12 +235,15 @@ impl Step for ActivateHomeManagerConfig {
         let Some(cfg) = &self.user_config else {
             return Ok(());
         };
+        // Bootstrapping has to build home-manager's generation from whatever the cache offers,
+        // so it is not the place to refuse a build.
         self.created_git_dir = activate(
             cfg,
             self.mirror.as_deref(),
             self.mirror_key.as_deref(),
             &self.activity,
             token,
+            BuildPolicy::AllowSource,
         )
         .await?;
         Ok(())
@@ -255,16 +359,24 @@ mod tests {
     const UNREACHABLE_MIRROR: &str = "http://127.0.0.1:1";
 
     #[tokio::test]
+    async fn nix_options_are_empty_when_no_mirror_is_set() {
+        assert!(nix_options(None, None).await.is_empty());
+    }
+
+    #[tokio::test]
     async fn nix_build_args_omits_mirror_flags_when_no_mirror_is_set() {
-        let args = nix_build_args("path:/state#x", "/profile", None, None).await;
+        let args = nix_build_args("path:/state#x", "/profile", &nix_options(None, None).await);
         assert!(!args.iter().any(|a| a == "--override-input"));
         assert!(!args.iter().any(|a| a == "substituters"));
     }
 
     #[tokio::test]
     async fn nix_build_args_adds_override_inputs_and_a_substituter_when_mirrored() {
-        let args =
-            nix_build_args("path:/state#x", "/profile", Some(UNREACHABLE_MIRROR), None).await;
+        let args = nix_build_args(
+            "path:/state#x",
+            "/profile",
+            &nix_options(Some(UNREACHABLE_MIRROR), None).await,
+        );
         assert!(args.iter().any(|a| a == "nixpkgs"));
         assert!(args.iter().any(|a| a == "home-manager"));
         assert!(
@@ -286,7 +398,11 @@ mod tests {
     #[tokio::test]
     async fn nix_build_args_always_start_with_the_build_invocation() {
         for mirror in [None, Some(UNREACHABLE_MIRROR)] {
-            let args = nix_build_args("path:/state#x", "/profile", mirror, None).await;
+            let args = nix_build_args(
+                "path:/state#x",
+                "/profile",
+                &nix_options(mirror, None).await,
+            );
             assert_eq!(
                 args[..8],
                 [
@@ -310,10 +426,8 @@ mod tests {
         let args = nix_build_args(
             "path:/state#x",
             "/profile",
-            Some(UNREACHABLE_MIRROR),
-            Some(KEY),
-        )
-        .await;
+            &nix_options(Some(UNREACHABLE_MIRROR), Some(KEY)).await,
+        );
 
         let keys = args
             .iter()
@@ -328,7 +442,47 @@ mod tests {
 
     #[tokio::test]
     async fn nix_build_args_ignores_a_blank_mirror() {
-        let args = nix_build_args("path:/state#x", "/profile", Some("   "), None).await;
+        let args = nix_build_args(
+            "path:/state#x",
+            "/profile",
+            &nix_options(Some("   "), None).await,
+        );
         assert!(!args.iter().any(|a| a == "--override-input"));
+    }
+
+    #[test]
+    fn nix_dry_run_args_build_nothing_and_touch_no_profile() {
+        let args = nix_dry_run_args("/nix/store/x.drv^*", &[]);
+
+        assert_eq!(
+            args,
+            ["build", "/nix/store/x.drv^*", "--no-link", "--dry-run"]
+        );
+    }
+
+    #[test]
+    fn nix_derivation_show_args_name_every_planned_derivation() {
+        let planned = vec![
+            "/nix/store/a.drv".to_string(),
+            "/nix/store/b.drv".to_string(),
+        ];
+        let args = nix_derivation_show_args(&planned);
+
+        assert_eq!(
+            args,
+            ["derivation", "show", "/nix/store/a.drv", "/nix/store/b.drv"]
+        );
+    }
+
+    #[test]
+    fn the_build_policy_follows_whether_source_builds_were_asked_for() {
+        assert_eq!(
+            BuildPolicy::from_allowing_source(true),
+            BuildPolicy::AllowSource
+        );
+        assert_eq!(
+            BuildPolicy::from_allowing_source(false),
+            BuildPolicy::CacheOnly
+        );
     }
 }

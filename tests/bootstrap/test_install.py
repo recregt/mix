@@ -1,20 +1,26 @@
 import json
 
-from conftest import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS, create_user
+from conftest import (
+    INSTALL_TEST_PACKAGE,
+    MIRROR_TEST_USERS,
+    UNCACHED_TEST_PACKAGE,
+    create_user,
+)
 
 USER = MIRROR_TEST_USERS[0]
 
 
+def _mirror_args(mock_nix_server, mirror_cache):
+    mirror_key = (mirror_cache / "mix-mirror.pub").read_text().strip()
+    return ["--mirror", mock_nix_server["url"], "--mirror-key", mirror_key]
+
+
 def _bootstrap_as(container, user, mock_nix_server, mirror_cache):
     create_user(container, user, sudo=True)
-    mirror_key = (mirror_cache / "mix-mirror.pub").read_text().strip()
     result = container.exec(
         "mix",
         "bootstrap",
-        "--mirror",
-        mock_nix_server["url"],
-        "--mirror-key",
-        mirror_key,
+        *_mirror_args(mock_nix_server, mirror_cache),
         user=user,
     )
     assert result.returncode == 0, result.stderr
@@ -108,6 +114,47 @@ def test_install_cannot_be_run_as_root(container, mock_nix_server, mirror_cache)
     assert result.returncode != 0
     assert "cannot be run as root" in (result.stdout + result.stderr).lower()
     assert not container.path_exists(f"/home/{USER}/.nix-profile/bin/{INSTALL_TEST_PACKAGE}")
+
+
+def test_install_refuses_a_package_the_cache_cannot_serve(
+    container, mock_nix_server, mirror_cache
+):
+    _bootstrap_as(container, USER, mock_nix_server, mirror_cache)
+    state_dir = f"/home/{USER}/.local/state/mix"
+    state_before = container.exec("cat", f"{state_dir}/state", check=True).stdout
+    home_before = container.exec("cat", f"{state_dir}/home.nix", check=True).stdout
+
+    # The mirror is the only substituter here, and it was never given this package, so
+    # installing it could only mean compiling it.
+    result = container.exec(
+        "mix",
+        "install",
+        UNCACHED_TEST_PACKAGE,
+        *_mirror_args(mock_nix_server, mirror_cache),
+        user=USER,
+    )
+
+    assert result.returncode != 0
+    output = (result.stdout + result.stderr).lower()
+    assert "binary cache" in output
+    assert "--build" in output
+    assert UNCACHED_TEST_PACKAGE in output
+
+    # Refusing costs the user nothing: the profile and the files that describe it are untouched.
+    assert container.exec("cat", f"{state_dir}/state", check=True).stdout == state_before
+    assert container.exec("cat", f"{state_dir}/home.nix", check=True).stdout == home_before
+    assert not container.path_exists(f"/home/{USER}/.nix-profile/bin/{UNCACHED_TEST_PACKAGE}")
+
+
+def test_install_with_the_build_flag_installs_a_cached_package_as_usual(
+    container, mock_nix_server, mirror_cache
+):
+    _bootstrap_as(container, USER, mock_nix_server, mirror_cache)
+
+    result = container.exec("mix", "install", "--build", INSTALL_TEST_PACKAGE, user=USER)
+
+    assert result.returncode == 0, result.stderr
+    assert container.path_exists(f"/home/{USER}/.nix-profile/bin/{INSTALL_TEST_PACKAGE}")
 
 
 def test_install_rolls_back_state_and_home_nix_when_activation_fails(

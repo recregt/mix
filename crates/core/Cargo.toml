@@ -25,6 +25,10 @@ name = "nix_log"
 harness = false
 
 [[bench]]
+name = "nix_plan"
+harness = false
+
+[[bench]]
 name = "plan"
 harness = false
 

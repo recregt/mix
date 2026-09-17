@@ -57,6 +57,10 @@ pub enum Command {
         /// Report the result as JSON on stdout, for scripts
         #[arg(long)]
         json: bool,
+
+        /// Compile packages the binary cache cannot provide, instead of refusing
+        #[arg(long)]
+        build: bool,
     },
 
     /// Inspect system health

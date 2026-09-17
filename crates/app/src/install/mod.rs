@@ -8,6 +8,7 @@ use mix_core::state::StateManifest;
 use mix_core::{ActivityReporter, CancellationToken};
 use tracing::Instrument;
 
+use crate::bootstrap::BuildPolicy;
 use crate::shared::home_manager::{read_state, render_home};
 use crate::shared::os::write_file_atomic;
 
@@ -58,6 +59,7 @@ pub async fn install(
     mirror: Option<&str>,
     mirror_key: Option<&str>,
     activity: Arc<dyn ActivityReporter>,
+    allow_source_builds: bool,
 ) -> Result<Installed> {
     let state = read_state(&cfg.user.home);
     let partition = state.partition(packages);
@@ -79,8 +81,13 @@ pub async fn install(
     let label = install_label(&added);
     let span = tracing::info_span!("step", name = label.as_str());
 
+    // Nothing is compiled behind the user's back: unless they asked for it, a package the binary
+    // cache cannot serve is refused before anything is built, with the files put back as they
+    // were.
+    let policy = BuildPolicy::from_allowing_source(allow_source_builds);
+
     write_then_activate(&state_path, &home_path, &new_state, &new_home, || {
-        crate::bootstrap::activate(cfg, mirror, mirror_key, &activity, &token)
+        crate::bootstrap::activate(cfg, mirror, mirror_key, &activity, &token, policy)
     })
     .instrument(span)
     .await?;
@@ -193,6 +200,7 @@ mod tests {
             None,
             None,
             noop(),
+            false,
         )
         .await
         .unwrap();
@@ -213,6 +221,7 @@ mod tests {
             None,
             None,
             noop(),
+            false,
         )
         .await
         .unwrap();
@@ -234,6 +243,7 @@ mod tests {
             None,
             None,
             noop(),
+            false,
         )
         .await
         .unwrap();
@@ -252,6 +262,7 @@ mod tests {
             None,
             None,
             noop(),
+            false,
         )
         .await
         .unwrap_err();

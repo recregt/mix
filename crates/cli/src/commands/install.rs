@@ -8,6 +8,7 @@ pub async fn run(
     mirror: Option<String>,
     mirror_key: Option<String>,
     json: bool,
+    build: bool,
 ) -> anyhow::Result<ExitCode> {
     if is_root() {
         return Err(Error::NotRoot.into());
@@ -24,6 +25,7 @@ pub async fn run(
         mirror.as_deref(),
         mirror_key.as_deref(),
         mix_ui::activity_reporter(),
+        build,
     )
     .await?;
 
