@@ -138,6 +138,30 @@ pub fn status_line(status: Status, message: &str, colour: bool) -> String {
     out
 }
 
+/// The same line about a named artifact: `✓ /nix/store: missing`.
+///
+/// The name is printed as it arrived and the rest is read as prose. A caller that has the two
+/// separately does not have to hope the shape of the joined line gives them away.
+pub fn status_line_about(status: Status, name: &str, message: &str, colour: bool) -> String {
+    let marker = status.marker();
+    let mut out = String::with_capacity(name.len() + message.len() + 26);
+
+    if let Some((glyph, colour_code)) = marker {
+        if colour {
+            out.push_str(colour_code);
+            out.push_str(glyph);
+            out.push_str(RESET);
+        } else {
+            out.push_str(glyph);
+        }
+        out.push(' ');
+    }
+
+    let indent = if marker.is_some() { MARKER_WIDTH } else { 0 };
+    message::write_about(&mut out, name, message, indent, colour);
+    out
+}
+
 fn print_status(status: Status, message: &str, to_stderr: bool) {
     let colour = if to_stderr {
         stderr_colors()
@@ -153,6 +177,14 @@ pub fn ok(message: impl std::fmt::Display) {
 
 pub fn fail(message: impl std::fmt::Display) {
     print_status(Status::Failed, &message.to_string(), true);
+}
+
+/// Reports a failure about a named artifact: the name as it is, and what was found about it.
+pub fn fail_about(name: &str, message: &str) {
+    print_line(
+        &status_line_about(Status::Failed, name, message, stderr_colors()),
+        true,
+    );
 }
 
 /// Reports something that was deliberately left alone, e.g. a package that is already installed.
@@ -267,6 +299,29 @@ mod tests {
     fn a_status_line_colours_the_marker_and_nothing_else() {
         let drawn = status_line(Status::Failed, "it failed", true);
         assert_eq!(drawn, format!("{RED}✗{RESET} It failed."));
+    }
+
+    /// `mix doctor` and `mix repair` print one of these per artifact: the name is theirs, the
+    /// rest is a measurement.
+    #[test]
+    fn a_line_about_a_named_artifact_keeps_the_name_it_was_given() {
+        assert_eq!(
+            status_line_about(Status::Failed, "default profile", "missing", false),
+            "✗ default profile: missing."
+        );
+    }
+
+    #[test]
+    fn a_hint_under_a_named_artifact_is_indented_under_the_marker() {
+        assert_eq!(
+            status_line_about(
+                Status::Failed,
+                "/nix",
+                "exists but is not a directory\nRemove it by hand",
+                false
+            ),
+            "✗ /nix: exists but is not a directory\n  Remove it by hand."
+        );
     }
 
     #[test]

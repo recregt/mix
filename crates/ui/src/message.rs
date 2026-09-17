@@ -49,9 +49,44 @@ const UNCODE: &str = "\u{1b}[39m";
 /// One pass, straight into the caller's buffer: a printed line costs the string it is printed
 /// from and nothing else.
 pub fn write_message(out: &mut String, message: &str, indent: usize, colour: bool) {
-    let terminate = ends_a_sentence(last_line(message));
-    let capitalize = opens_with_prose(message);
+    let terminate = ends_a_sentence(last_line(message), false);
+    write_polished(
+        out,
+        message,
+        indent,
+        colour,
+        opens_with_prose(message),
+        terminate,
+    );
+}
 
+/// Appends a line about a named artifact: `name: what was measured about it`.
+///
+/// Shape alone cannot always tell a name from a word — `default profile` opens with an ordinary
+/// English word and is still the name of an artifact, and capitalizing it turns it into
+/// something the reader cannot search for. So a caller that knows which part of the line is a
+/// name says so instead of leaving it to be guessed: the name is written exactly as it arrived,
+/// and only what follows it is read as prose.
+pub fn write_about(out: &mut String, name: &str, message: &str, indent: usize, colour: bool) {
+    // The name is the first token of the line, so what follows it is read as the rest of a
+    // sentence: `missing` closes one here, where on its own it would be a label.
+    let terminate = ends_a_sentence(last_line(message), true);
+    out.push_str(name);
+    out.push_str(": ");
+    write_polished(out, message, indent, colour, false, terminate);
+}
+
+/// Both entry points are one pass over the message; keeping this inlined into them is what
+/// makes the shared body free rather than a call with six arguments.
+#[inline]
+fn write_polished(
+    out: &mut String,
+    message: &str,
+    indent: usize,
+    colour: bool,
+    capitalize: bool,
+    terminate: bool,
+) {
     let mut lines = message.split('\n').peekable();
     let mut first = true;
     while let Some(line) = lines.next() {
@@ -140,7 +175,10 @@ fn opens_with_prose(message: &str) -> bool {
 }
 
 /// Whether a full stop belongs at the end of this line.
-fn ends_a_sentence(line: &str) -> bool {
+///
+/// `labelled` says the line is already opened by a name the caller printed, so a message of one
+/// token is the end of a sentence about that name rather than a label of its own.
+fn ends_a_sentence(line: &str, labelled: bool) -> bool {
     // An indented line is a command to copy or a block to read, not a sentence to close.
     if line.starts_with([' ', '\t']) {
         return false;
@@ -153,7 +191,11 @@ fn ends_a_sentence(line: &str) -> bool {
 
     // A line of one token is a label — a path, a unit, a package — and a full stop would read
     // as part of it.
-    let Some(last) = line.rsplit(' ').next().filter(|_| line.contains(' ')) else {
+    let Some(last) = line
+        .rsplit(' ')
+        .next()
+        .filter(|_| labelled || line.contains(' '))
+    else {
         return false;
     };
     closes_a_sentence(last)
@@ -399,6 +441,55 @@ mod tests {
         assert!(result.starts_with("Cannot move /nix/store/pkg-a into place"));
         assert!(result.ends_with("at /nix/store and retry."));
         assert!(result.contains("\n  `mix` stages"));
+    }
+
+    /// A caller that knows which part of the line is a name says so, and shape is not asked.
+    #[test]
+    fn a_name_the_caller_hands_over_is_printed_as_it_arrived() {
+        let mut out = String::new();
+        write_about(&mut out, "default profile", "missing", 2, false);
+
+        assert_eq!(out, "default profile: missing.");
+    }
+
+    #[test]
+    fn a_measurement_about_a_name_is_closed_like_the_sentence_it_is() {
+        let mut out = String::new();
+        write_about(&mut out, "/nix", "mode is 700, expected 755", 2, false);
+
+        assert_eq!(out, "/nix: mode is 700, expected 755.");
+    }
+
+    /// The name decides nothing about the ending: what the line ends with does.
+    #[test]
+    fn a_measurement_ending_in_a_name_is_still_left_open() {
+        let mut out = String::new();
+        write_about(
+            &mut out,
+            "flake.lock",
+            "not tracked by /usr/bin/git",
+            2,
+            false,
+        );
+
+        assert_eq!(out, "flake.lock: not tracked by /usr/bin/git");
+    }
+
+    #[test]
+    fn a_hint_under_a_named_artifact_sits_under_the_line_it_belongs_to() {
+        let mut out = String::new();
+        write_about(
+            &mut out,
+            "/nix",
+            "exists but is not a directory\nRemove it by hand",
+            2,
+            false,
+        );
+
+        assert_eq!(
+            out,
+            "/nix: exists but is not a directory\n  Remove it by hand."
+        );
     }
 
     #[test]

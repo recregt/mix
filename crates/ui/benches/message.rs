@@ -1,5 +1,5 @@
 use mix_ui::message::polished;
-use mix_ui::{Status, status_line};
+use mix_ui::{Status, status_line, status_line_about};
 
 fn main() {
     divan::main();
@@ -37,6 +37,21 @@ fn build_a_coloured_status_line(bencher: divan::Bencher) {
 #[divan::bench]
 fn build_a_label_line(bencher: divan::Bencher) {
     bencher.bench(|| status_line(Status::Done, divan::black_box(LABEL), false));
+}
+
+/// What `mix doctor` prints per failed check: a name that keeps its spelling, and the
+/// measurement made about it. The name is handed over rather than looked at, so the line costs
+/// one copy instead of a shape decision.
+#[divan::bench]
+fn build_a_line_about_a_named_artifact(bencher: divan::Bencher) {
+    bencher.bench(|| {
+        status_line_about(
+            Status::Failed,
+            divan::black_box(LABEL),
+            divan::black_box("mode is 700, expected 755"),
+            false,
+        )
+    });
 }
 
 #[divan::bench]
