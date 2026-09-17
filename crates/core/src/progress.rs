@@ -16,6 +16,10 @@ impl DownloadProgress for NoopProgress {
 /// keep a fast-finishing step's indicator visible instead of letting it flash and disappear.
 pub trait StepObserver: Send + Sync {
     fn on_step_span(&self, span: &tracing::Span);
+
+    /// Called before the span of a step that failed is closed, so a presentation layer can mark
+    /// the line it is about to keep on screen as a failure rather than as a success.
+    fn on_step_failed(&self, _span: &tracing::Span) {}
 }
 
 /// Receives a long-running child process's output as it is produced, one display line at a time.

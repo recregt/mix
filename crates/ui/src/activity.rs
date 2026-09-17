@@ -10,9 +10,14 @@ use mix_core::{ActivityReporter, BuildProgress, NoopActivity};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 use unicode_width::UnicodeWidthChar;
 
-/// One frame per 50 ms, matching the rate the progress bars are redrawn at: drawing faster only
-/// costs work the terminal throws away.
-const FRAME_INTERVAL_MS: u64 = 50;
+/// How often the live text is redrawn, matching the interval the spinner advances at.
+///
+/// The two share one draw budget, and asking for more redraws than that budget allows does not
+/// buy any: indicatif renders the line in full and then drops it at the rate limiter, and the
+/// draw it drops may be the spinner's. Matching the spinner's interval keeps both inside the
+/// budget, so every frame of both reaches the terminal. Twelve updates a second is past what
+/// there is time to read anyway.
+pub const FRAME_INTERVAL_MS: u64 = 80;
 
 /// Longest activity line that is drawn, in terminal columns. The step's own line is trimmed to
 /// the real terminal width when it is drawn; this is the upper bound that keeps a runaway line
@@ -294,14 +299,66 @@ fn digits(value: u64) -> u32 {
     value.checked_ilog10().unwrap_or(0) + 1
 }
 
+/// The frame that is on screen, and the one being built to replace it.
+///
+/// Both are kept so a frame that renders to what is already drawn can be dropped instead of
+/// handed over. That is worth doing because handing one over is not cheap: the progress layer
+/// looks the span up, copies the text, re-renders the whole line and trims it to the terminal,
+/// and only then finds out whether the terminal is due a write. Comparing two strings is a
+/// memcmp. Counters are reported far more often than the text they render to changes — a build
+/// step that neither downloads nor finishes anything between two frames draws the same line —
+/// so this is the common case rather than a corner one.
+///
+/// Neither buffer is reallocated after the first few frames: the two are swapped rather than
+/// copied, and each is cleared and refilled in place.
+pub struct FrameBuffer {
+    next: String,
+    drawn: String,
+}
+
+impl Default for FrameBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FrameBuffer {
+    pub fn new() -> Self {
+        Self {
+            next: String::with_capacity(128),
+            drawn: String::with_capacity(128),
+        }
+    }
+
+    /// Builds the next frame and returns it, or `None` if it is the frame already on screen.
+    pub fn build(&mut self, fill: impl FnOnce(&mut String)) -> Option<&str> {
+        self.next.clear();
+        self.next.push_str(DIM);
+        fill(&mut self.next);
+        self.next.push_str(UNDIM);
+
+        if self.next == self.drawn {
+            return None;
+        }
+
+        std::mem::swap(&mut self.next, &mut self.drawn);
+        Some(&self.drawn)
+    }
+
+    /// Forgets what is on screen, for a line that was cleared by someone else.
+    pub fn forget(&mut self) {
+        self.drawn.clear();
+    }
+}
+
 struct SpanActivity {
     throttle: Throttle,
     /// Whether nix is reporting counters. Once it is, they own the line: a stray log line must
     /// not fight them for it, and dropping those lines costs an atomic load.
     counting: AtomicBool,
-    /// The buffer the drawn frame is built in, reused from one frame to the next. Uncontended
-    /// in practice: one reader drains the process's output.
-    frame: Mutex<String>,
+    /// The frame being drawn and the one it replaces. Uncontended in practice: one reader
+    /// drains the process's output.
+    frame: Mutex<FrameBuffer>,
 }
 
 impl SpanActivity {
@@ -309,20 +366,27 @@ impl SpanActivity {
         Self {
             throttle: Throttle::new(),
             counting: AtomicBool::new(false),
-            frame: Mutex::new(String::with_capacity(128)),
+            frame: Mutex::new(FrameBuffer::new()),
         }
     }
 
-    /// Builds a frame in the reporter's own buffer and hands it to the step's line.
+    /// Builds a frame in the reporter's own buffer and hands it to the step's line, unless it is
+    /// the frame that is already there.
     fn draw(&self, fill: impl FnOnce(&mut String)) {
         let Ok(mut frame) = self.frame.lock() else {
             return;
         };
-        frame.clear();
-        frame.push_str(DIM);
-        fill(&mut frame);
-        frame.push_str(UNDIM);
-        tracing::Span::current().pb_set_message(&frame);
+        if let Some(frame) = frame.build(fill) {
+            tracing::Span::current().pb_set_message(frame);
+        }
+    }
+
+    /// Takes the line back, after something else has drawn over it.
+    fn cleared(&self) {
+        if let Ok(mut frame) = self.frame.lock() {
+            frame.forget();
+        }
+        tracing::Span::current().pb_set_message("");
     }
 }
 
@@ -343,7 +407,7 @@ impl ActivityReporter for SpanActivity {
             // Counters that have gone back to nothing would otherwise stay on screen, frozen,
             // for the rest of the step.
             if self.counting.swap(false, Ordering::Relaxed) {
-                tracing::Span::current().pb_set_message("");
+                self.cleared();
             }
             return;
         }
@@ -356,7 +420,7 @@ impl ActivityReporter for SpanActivity {
 
     fn clear(&self) {
         self.counting.store(false, Ordering::Relaxed);
-        tracing::Span::current().pb_set_message("");
+        self.cleared();
     }
 }
 
@@ -640,6 +704,55 @@ mod tests {
             "{}",
             render_progress(&progress)
         );
+    }
+
+    #[test]
+    fn a_frame_that_is_already_on_screen_is_not_drawn_again() {
+        let mut frames = FrameBuffer::new();
+        assert!(
+            frames
+                .build(|out| write_progress(out, &progress()))
+                .is_some()
+        );
+        assert!(
+            frames
+                .build(|out| write_progress(out, &progress()))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_frame_that_changed_is_drawn() {
+        let mut frames = FrameBuffer::new();
+        frames.build(|out| write_progress(out, &progress()));
+
+        let moved = BuildProgress {
+            builds_done: 4,
+            ..progress()
+        };
+        let drawn = frames.build(|out| write_progress(out, &moved));
+        assert!(drawn.is_some_and(|frame| frame.contains("building  4/17")));
+    }
+
+    /// The line is cleared behind the reporter's back when the counters go idle, so the frame it
+    /// thinks is on screen has to go with it.
+    #[test]
+    fn a_frame_is_drawn_again_after_the_line_is_cleared() {
+        let mut frames = FrameBuffer::new();
+        frames.build(|out| write_progress(out, &progress()));
+        frames.forget();
+        assert!(
+            frames
+                .build(|out| write_progress(out, &progress()))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn a_drawn_frame_is_dimmed() {
+        let mut frames = FrameBuffer::new();
+        let drawn = frames.build(|out| out.push_str("copying path")).unwrap();
+        assert_eq!(drawn, format!("{DIM}copying path{UNDIM}"));
     }
 
     #[test]

@@ -100,13 +100,25 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
                 let token = token.get_or_insert_with(CancellationToken::new);
                 let (executed, interrupted) = if recording {
                     let span = observed(&self.step_observer, tracing::info_span!("step", name));
-                    match select(cancel.as_mut(), step.execute(token).instrument(span)).await {
+                    // The span outlives the step's own future on purpose: closing it is what
+                    // finishes the line it drew, and a finished line keeps the marker it was
+                    // left with, so a failure has to be reported before that happens.
+                    let ran = match select(
+                        cancel.as_mut(),
+                        step.execute(token).instrument(span.clone()),
+                    )
+                    .await
+                    {
                         Either::Left(((), executing)) => {
                             token.cancel();
                             (executing.await, true)
                         }
                         Either::Right((result, _)) => (result, false),
+                    };
+                    if ran.0.is_err() {
+                        failed(&self.step_observer, &span);
                     }
+                    ran
                 } else {
                     match select(cancel.as_mut(), step.execute(token)).await {
                         Either::Left(((), executing)) => {
@@ -172,6 +184,12 @@ fn observed(step_observer: &Option<Arc<dyn StepObserver>>, span: tracing::Span) 
     }
 
     span
+}
+
+fn failed(step_observer: &Option<Arc<dyn StepObserver>>, span: &tracing::Span) {
+    if let Some(step_observer) = step_observer {
+        step_observer.on_step_failed(span);
+    }
 }
 
 #[derive(Default)]
@@ -696,6 +714,10 @@ mod tests {
                 .unwrap_or("");
             self.0.lock().unwrap().push(name);
         }
+
+        fn on_step_failed(&self, _span: &tracing::Span) {
+            self.0.lock().unwrap().push("failed");
+        }
     }
 
     struct EnablingSubscriber;
@@ -746,9 +768,11 @@ mod tests {
         let _ = tracing::subscriber::set_global_default(EnablingSubscriber);
         assert!(matches!(runtime.block_on(plan.run()), Err(ProbeError)));
 
+        // The failure is reported while the failed step's span is still open, so a presentation
+        // layer can still reach the line that span is drawing.
         assert_eq!(
             *observed.lock().unwrap(),
-            ["step", "step", "rollback", "rollback"]
+            ["step", "step", "failed", "rollback", "rollback"]
         );
     }
 }

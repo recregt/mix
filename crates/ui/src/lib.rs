@@ -9,7 +9,7 @@ pub mod activity;
 mod progress;
 
 pub use activity::activity_reporter;
-pub use progress::{download_reporter, init_tracing, step_observer};
+pub use progress::{download_reporter, init_tracing, step_observer, step_style};
 
 /// Whether anything may be drawn in place. Set once by [`init_tracing`], so a caller that never
 /// initialises the output keeps the default.
@@ -36,7 +36,7 @@ fn stdout_colors() -> bool {
     *ENABLED.get_or_init(|| colors_enabled(std::io::stdout().is_terminal()))
 }
 
-fn stderr_colors() -> bool {
+pub(crate) fn stderr_colors() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| colors_enabled(std::io::stderr().is_terminal()))
 }
