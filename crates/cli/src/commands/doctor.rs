@@ -8,11 +8,11 @@ pub async fn run(verbose: u8) -> anyhow::Result<ExitCode> {
     let reports = mix_app::doctor::audit(user_config.as_ref()).await;
     render(&reports, verbose > 0);
 
-    if reports.iter().all(|report| report.healthy) {
+    if reports.iter().all(HealthReport::healthy) {
         mix_ui::ok("System health is intact.");
         Ok(ExitCode::SUCCESS)
     } else {
-        mix_ui::fail(crate::explain::doctor::unhealthy().message());
+        mix_ui::fail(crate::explain::doctor::unhealthy(&reports).message());
         Ok(ExitCode::FAILURE)
     }
 }
@@ -27,7 +27,7 @@ fn render(reports: &[HealthReport], verbose: bool) {
             continue;
         }
 
-        let all_healthy = members.iter().all(|report| report.healthy);
+        let all_healthy = members.iter().all(|report| report.healthy());
         if all_healthy && !verbose {
             mix_ui::ok(format!("{} ({} checks)", category.label(), members.len()));
             continue;
@@ -35,12 +35,12 @@ fn render(reports: &[HealthReport], verbose: bool) {
 
         mix_ui::header(category.label());
         for report in members {
-            if report.healthy {
+            if report.healthy() {
                 mix_ui::ok(&report.name);
                 continue;
             }
 
-            mix_ui::fail(crate::explain::doctor::check(report));
+            mix_ui::fail_about(&report.name, &crate::explain::doctor::check(report));
         }
     }
 }

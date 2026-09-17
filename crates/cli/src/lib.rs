@@ -22,7 +22,7 @@ pub async fn run() -> ExitCode {
         if let Some(report) = mix_app::doctor::audit(user_config.as_ref())
             .await
             .into_iter()
-            .find(|r| !r.healthy)
+            .find(|report| !report.healthy())
         {
             mix_ui::fail(explain::doctor::blocked(&report).message());
             return ExitCode::FAILURE;

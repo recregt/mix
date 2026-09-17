@@ -33,7 +33,7 @@ fn render(reports: &[RepairReport]) {
     for report in reports {
         match &report.error {
             None => mix_ui::ok(format!("repaired: {}", report.name)),
-            Some(error) => mix_ui::fail(crate::explain::repair::report(&report.name, error)),
+            Some(error) => mix_ui::fail_about(&report.name, &crate::explain::repair::report(error)),
         }
     }
 }

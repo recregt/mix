@@ -25,19 +25,23 @@ pub(crate) fn describe(error: &Error, command: &str) -> Diagnostic {
     }
 }
 
-/// One line per report, for the list `mix repair` prints as it goes.
+/// What went wrong with one artifact, for printing under its own name.
 ///
-/// A repaired artifact says so; one that could not be repaired says why, and what would put it
-/// back. Both are one line: the list is read as a list.
-pub fn report(name: &str, error: &Error) -> String {
+/// An artifact that could not be repaired says why, and what would put it back; anything else is
+/// the raw failure as it was raised. The name is the caller's to print, so nothing here has to
+/// guess whether it is a word or a path.
+pub fn report(error: &Error) -> String {
     match error {
-        Error::Unrepairable { reason, .. } => format!("{name}: {reason}\n{}", unfixable(*reason)),
-        e => format!("{name}: {e}"),
+        Error::Unrepairable { reason, .. } => format!("{reason}\n{}", unfixable(*reason)),
+        e => e.to_string(),
     }
 }
 
 /// What to do about an artifact repair will not touch.
-fn unfixable(reason: Unfixable) -> &'static str {
+///
+/// Written once and read by both commands: `mix doctor` says the same thing about a finding
+/// repair cannot reconcile as `mix repair` says when it meets it.
+pub(crate) fn unfixable(reason: Unfixable) -> &'static str {
     match reason {
         Unfixable::NotADirectory => "Remove it by hand, then run `mix repair` again",
         Unfixable::MissingUser => "Nothing is left to enrol; the user has to exist first",
@@ -56,9 +60,9 @@ mod tests {
             reason: Unfixable::MissingRuntime,
         };
 
-        let line = report("default profile", &error);
+        let line = report(&error);
 
-        assert!(line.contains("default profile"));
+        assert!(line.contains("produced by the Nix installation"));
         assert!(line.contains("mix bootstrap"));
     }
 
@@ -85,8 +89,8 @@ mod tests {
         });
 
         assert_eq!(
-            report("mix-users", &error),
-            "mix-users: command `gpasswd --add ciuser mix-users` failed: exit 1"
+            report(&error),
+            "command `gpasswd --add ciuser mix-users` failed: exit 1"
         );
     }
 }

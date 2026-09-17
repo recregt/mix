@@ -103,11 +103,16 @@ pub mod identity {
         nix::unistd::Group::from_name(name).ok().flatten().is_some()
     }
 
-    pub fn group_has_gid(name: &str, gid: u32) -> bool {
+    /// The gid the group carries, or `None` when there is no such group.
+    pub fn group_gid(name: &str) -> Option<u32> {
         nix::unistd::Group::from_name(name)
             .ok()
             .flatten()
-            .is_some_and(|group| group.gid.as_raw() == gid)
+            .map(|group| group.gid.as_raw())
+    }
+
+    pub fn group_has_gid(name: &str, gid: u32) -> bool {
+        group_gid(name) == Some(gid)
     }
 
     pub fn group_has_member(name: &str, user: &str) -> bool {
@@ -125,25 +130,27 @@ pub mod identity {
         nix::unistd::User::from_name(name).ok().flatten().is_some()
     }
 
-    pub fn user_has_gid(name: &str, gid: u32) -> bool {
+    /// The uid and gid the user carries, or `None` when there is no such user.
+    ///
+    /// One lookup for both: a caller that wants to say what it found rather than only whether it
+    /// matched needs the pair anyway.
+    pub fn user_ids(name: &str) -> Option<(u32, u32)> {
         nix::unistd::User::from_name(name)
             .ok()
             .flatten()
-            .is_some_and(|user| user.gid.as_raw() == gid)
+            .map(|user| (user.uid.as_raw(), user.gid.as_raw()))
+    }
+
+    pub fn user_has_gid(name: &str, gid: u32) -> bool {
+        user_ids(name).is_some_and(|(_, actual)| actual == gid)
     }
 
     pub fn user_has_uid(name: &str, uid: u32) -> bool {
-        nix::unistd::User::from_name(name)
-            .ok()
-            .flatten()
-            .is_some_and(|user| user.uid.as_raw() == uid)
+        user_ids(name).is_some_and(|(actual, _)| actual == uid)
     }
 
     pub fn user_matches(name: &str, uid: u32, gid: u32) -> bool {
-        nix::unistd::User::from_name(name)
-            .ok()
-            .flatten()
-            .is_some_and(|user| user.uid.as_raw() == uid && user.gid.as_raw() == gid)
+        user_ids(name) == Some((uid, gid))
     }
 
     #[cfg(test)]
@@ -174,6 +181,26 @@ pub mod identity {
         #[test]
         fn group_exists_false_for_a_nonexistent_group() {
             assert!(!group_exists("mix-test-nonexistent-group-xyz"));
+        }
+
+        #[test]
+        fn group_gid_reports_the_gid_a_known_system_group_carries() {
+            assert_eq!(group_gid("root"), Some(0));
+        }
+
+        #[test]
+        fn group_gid_is_none_for_a_nonexistent_group() {
+            assert_eq!(group_gid("mix-test-nonexistent-group-xyz"), None);
+        }
+
+        #[test]
+        fn user_ids_reports_both_ids_of_a_known_system_user() {
+            assert_eq!(user_ids("root"), Some((0, 0)));
+        }
+
+        #[test]
+        fn user_ids_is_none_for_a_nonexistent_user() {
+            assert_eq!(user_ids("mix-test-nonexistent-user-xyz"), None);
         }
 
         #[test]

@@ -1,3 +1,13 @@
+//! Measuring the managed environment: one inspection per target, one finding per inspection.
+//!
+//! An inspection measures, it does not write. What it found travels as a [`Finding`] — the mode
+//! it read and the mode it expected, the ids an account carries, the unit file that is not
+//! there — because the same measurement is read by three different callers: `mix doctor` prints
+//! it as a list, the health gate in front of the other commands prints one of them as a refusal,
+//! and `mix repair` decides from it whether there is anything it can do. Only the last of those
+//! is decided here, and it is decided as a value too: [`Finding::unfixable`] binds a finding to
+//! the reason repair cannot reconcile it. The words are `mix-cli`'s.
+
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 
@@ -5,38 +15,121 @@ use futures_util::future::join_all;
 use mix_core::identity;
 use mix_core::models::{Category, Target, UserConfig};
 
+use crate::repair::Unfixable;
 use crate::shared::os::{DIR_MODE_MASK, files_match, path_exists, systemd_unit_is_active};
+
+/// What an inspection measured about an artifact that is not as it should be.
+///
+/// Every variant is a fact and nothing else: no advice, no sentence, no name — the artifact is
+/// named by the report that carries the finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Finding {
+    /// Nothing is at the path.
+    Missing,
+
+    /// The path is there but could not be read.
+    Unreadable { kind: std::io::ErrorKind },
+
+    /// Something else is in the place of the directory.
+    NotADirectory,
+
+    /// The permission bits drifted from the ones mix sets.
+    Mode { actual: u32, expected: u32 },
+
+    /// The owning uid/gid drifted from the ones mix sets.
+    Owner {
+        actual: (u32, u32),
+        expected: (u32, u32),
+    },
+
+    /// The file is mix's to write, and its contents are no longer the ones mix wrote.
+    ContentDrift,
+
+    /// There is no such group.
+    GroupMissing,
+
+    /// The group exists under a different gid.
+    GroupGid { actual: u32, expected: u32 },
+
+    /// The user exists but is not enrolled in the group.
+    NotAMember { group: &'static str },
+
+    /// The user the membership was for is gone.
+    NoSuchUser,
+
+    /// There is no such user.
+    UserMissing,
+
+    /// The user exists under different ids.
+    UserIds {
+        actual: (u32, u32),
+        expected: (u32, u32),
+    },
+
+    /// The unit file is not installed.
+    UnitMissing,
+
+    /// The installed unit file drifted from the one mix ships.
+    UnitDrift,
+
+    /// The unit is installed but not running.
+    UnitInactive,
+
+    /// Part of the Nix runtime itself is not there.
+    RuntimeMissing,
+}
+
+impl Finding {
+    /// Why `mix repair` cannot reconcile this finding, or `None` when it can.
+    ///
+    /// Repair's reach is a fact about repair rather than a choice of words, so it is bound to
+    /// the finding here — and both commands then read the same answer instead of each deciding
+    /// for itself what the reader can be promised.
+    pub fn unfixable(self) -> Option<Unfixable> {
+        match self {
+            Finding::NotADirectory => Some(Unfixable::NotADirectory),
+            Finding::NoSuchUser => Some(Unfixable::MissingUser),
+            Finding::RuntimeMissing => Some(Unfixable::MissingRuntime),
+            _ => None,
+        }
+    }
+}
 
 pub struct HealthReport {
     pub name: String,
     pub category: Category,
-    pub healthy: bool,
-    pub detail: Option<String>,
+    /// What the inspection measured, or `None` when the artifact is as it should be.
+    pub finding: Option<Finding>,
+}
+
+impl HealthReport {
+    pub fn healthy(&self) -> bool {
+        self.finding.is_none()
+    }
 }
 
 pub async fn audit(user_config: Option<&UserConfig>) -> Vec<HealthReport> {
     tracing::info!("auditing managed environment");
     let items = mix_core::models::targets(user_config);
-    let details = join_all(items.iter().map(inspect)).await;
+    let findings = join_all(items.iter().map(inspect)).await;
     items
         .iter()
-        .zip(details)
-        .map(|(target, detail)| {
+        .zip(findings)
+        .map(|(target, finding)| {
             let name = target.label().into_owned();
-            if let Some(detail) = &detail {
-                tracing::debug!("unhealthy: {name}: {detail}");
+            if let Some(finding) = &finding {
+                tracing::debug!("unhealthy: {name}: {finding:?}");
             }
             HealthReport {
                 name,
                 category: target.category(),
-                healthy: detail.is_none(),
-                detail,
+                finding,
             }
         })
         .collect()
 }
 
-async fn inspect(target: &Target) -> Option<String> {
+async fn inspect(target: &Target) -> Option<Finding> {
     match target {
         Target::Directory { path, mode, owner } => {
             tracing::debug!("checking directory: {}", path.display());
@@ -60,6 +153,7 @@ async fn inspect(target: &Target) -> Option<String> {
         }
         Target::GroupMember { group, user } => {
             tracing::debug!("checking {group} membership: {user}");
+            // The group is one of the names mix declares, so the finding can borrow it.
             inspect_group_member(group, user)
         }
         Target::User { n, uid, gid } => {
@@ -82,17 +176,20 @@ async fn inspect(target: &Target) -> Option<String> {
     }
 }
 
-async fn inspect_directory(path: &Path, mode: u32, owner: Option<(u32, u32)>) -> Option<String> {
+async fn inspect_directory(path: &Path, mode: u32, owner: Option<(u32, u32)>) -> Option<Finding> {
     let meta = match tokio::fs::metadata(path).await {
         Ok(meta) => meta,
-        Err(e) => return Some(e.to_string()),
+        Err(e) => return Some(unreadable(e)),
     };
     if !meta.is_dir() {
-        return Some("exists but is not a directory".to_string());
+        return Some(Finding::NotADirectory);
     }
     let actual = meta.permissions().mode() & DIR_MODE_MASK;
     if actual != mode {
-        return Some(format!("mode is {actual:o}, expected {mode:o}"));
+        return Some(Finding::Mode {
+            actual,
+            expected: mode,
+        });
     }
     inspect_owner(&meta, owner)
 }
@@ -101,64 +198,74 @@ async fn inspect_file(
     path: &Path,
     expected: Option<&str>,
     owner: Option<(u32, u32)>,
-) -> Option<String> {
+) -> Option<Finding> {
     let meta = match tokio::fs::metadata(path).await {
         Ok(meta) => meta,
         Err(_) if expected.is_none() => return None,
-        Err(e) => return Some(e.to_string()),
+        Err(e) => return Some(unreadable(e)),
     };
     match expected {
         Some(expected) => match tokio::fs::read_to_string(path).await {
             Ok(contents) if contents == expected => inspect_owner(&meta, owner),
-            Ok(_) => Some("configuration drift detected (contents modified)".to_string()),
-            Err(e) => Some(e.to_string()),
+            Ok(_) => Some(Finding::ContentDrift),
+            Err(e) => Some(unreadable(e)),
         },
         None => inspect_owner(&meta, owner),
     }
 }
 
-async fn inspect_seeded_file(path: &Path, owner: Option<(u32, u32)>) -> Option<String> {
+async fn inspect_seeded_file(path: &Path, owner: Option<(u32, u32)>) -> Option<Finding> {
     let meta = match tokio::fs::metadata(path).await {
         Ok(meta) => meta,
-        Err(e) => return Some(e.to_string()),
+        Err(e) => return Some(unreadable(e)),
     };
     inspect_owner(&meta, owner)
 }
 
-fn inspect_owner(meta: &std::fs::Metadata, owner: Option<(u32, u32)>) -> Option<String> {
-    let (uid, gid) = owner?;
-    if meta.uid() != uid || meta.gid() != gid {
-        return Some(format!(
-            "owned by {}:{}, expected {uid}:{gid}",
-            meta.uid(),
-            meta.gid()
-        ));
-    }
-    None
-}
-
-fn inspect_group(name: &str, gid: u32) -> Option<String> {
-    if identity::group_has_gid(name, gid) {
-        None
-    } else {
-        Some("group is missing or has the wrong gid".to_string())
+/// Not being there is its own finding: everything else is the path refusing to be read.
+fn unreadable(e: std::io::Error) -> Finding {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => Finding::Missing,
+        kind => Finding::Unreadable { kind },
     }
 }
 
-fn inspect_group_member(group: &str, user: &str) -> Option<String> {
+fn inspect_owner(meta: &std::fs::Metadata, owner: Option<(u32, u32)>) -> Option<Finding> {
+    let expected = owner?;
+    let actual = (meta.uid(), meta.gid());
+    (actual != expected).then_some(Finding::Owner { actual, expected })
+}
+
+fn inspect_group(name: &str, gid: u32) -> Option<Finding> {
+    match identity::group_gid(name) {
+        None => Some(Finding::GroupMissing),
+        Some(actual) if actual != gid => Some(Finding::GroupGid {
+            actual,
+            expected: gid,
+        }),
+        Some(_) => None,
+    }
+}
+
+fn inspect_group_member(group: &'static str, user: &str) -> Option<Finding> {
     if identity::group_has_member(group, user) {
         None
+    } else if identity::user_exists(user) {
+        Some(Finding::NotAMember { group })
     } else {
-        Some(format!("not a member of the {group} group"))
+        // Enrolling an account that is gone is not something repair can do, so the inspection
+        // says which of the two it is rather than leaving the caller to look again.
+        Some(Finding::NoSuchUser)
     }
 }
 
-fn inspect_user(n: u32, uid: u32, gid: u32) -> Option<String> {
+fn inspect_user(n: u32, uid: u32, gid: u32) -> Option<Finding> {
     let name = identity::user_name(n);
-    if identity::user_matches(&name, uid, gid) {
-        None
-    } else {
-        Some("user is missing or has the wrong uid/gid".to_string())
+    let expected = (uid, gid);
+    match identity::user_ids(&name) {
+        None => Some(Finding::UserMissing),
+        Some(actual) if actual != expected => Some(Finding::UserIds { actual, expected }),
+        Some(_) => None,
     }
 }
 
@@ -167,25 +274,21 @@ async fn inspect_systemd_unit(
     src: &str,
     dest: &str,
     must_be_active: bool,
-) -> Option<String> {
+) -> Option<Finding> {
     if !path_exists(dest).await {
-        return Some("unit file missing".to_string());
+        return Some(Finding::UnitMissing);
     }
     if !files_match(src, dest).await {
-        return Some("unit file contents drifted from the installed default".to_string());
+        return Some(Finding::UnitDrift);
     }
     if must_be_active && !systemd_unit_is_active(name).await {
-        return Some("unit is not active".to_string());
+        return Some(Finding::UnitInactive);
     }
     None
 }
 
-async fn inspect_path_exists(path: &str) -> Option<String> {
-    if path_exists(path).await {
-        None
-    } else {
-        Some("missing".to_string())
-    }
+async fn inspect_path_exists(path: &str) -> Option<Finding> {
+    (!path_exists(path).await).then_some(Finding::RuntimeMissing)
 }
 
 #[cfg(test)]
@@ -235,19 +338,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn inspect_directory_passes_when_mode_matches() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-        let detail = inspect_directory(dir.path(), 0o755, None).await;
-        assert!(detail.is_none());
+    async fn a_report_is_healthy_exactly_when_nothing_was_found() {
+        let cfg = user_config();
+
+        for report in audit(Some(&cfg)).await {
+            assert_eq!(report.healthy(), report.finding.is_none());
+        }
     }
 
     #[tokio::test]
-    async fn inspect_directory_reports_a_mode_drift() {
+    async fn inspect_directory_passes_when_mode_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let finding = inspect_directory(dir.path(), 0o755, None).await;
+        assert!(finding.is_none());
+    }
+
+    #[tokio::test]
+    async fn inspect_directory_reports_the_mode_it_read_and_the_one_it_wanted() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        let detail = inspect_directory(dir.path(), 0o755, None).await;
-        assert!(detail.is_some());
+
+        let finding = inspect_directory(dir.path(), 0o755, None).await;
+
+        assert_eq!(
+            finding,
+            Some(Finding::Mode {
+                actual: 0o700,
+                expected: 0o755
+            })
+        );
     }
 
     #[tokio::test]
@@ -255,8 +375,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("not-a-dir");
         std::fs::write(&file, "x").unwrap();
-        let detail = inspect_directory(&file, 0o755, None).await;
-        assert_eq!(detail.as_deref(), Some("exists but is not a directory"));
+        let finding = inspect_directory(&file, 0o755, None).await;
+        assert_eq!(finding, Some(Finding::NotADirectory));
+    }
+
+    #[tokio::test]
+    async fn inspect_directory_reports_a_missing_directory_as_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let finding = inspect_directory(&dir.path().join("gone"), 0o755, None).await;
+        assert_eq!(finding, Some(Finding::Missing));
     }
 
     #[tokio::test]
@@ -265,16 +392,28 @@ mod tests {
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
         let uid = nix::unistd::Uid::current().as_raw();
         let gid = nix::unistd::Gid::current().as_raw();
-        let detail = inspect_directory(dir.path(), 0o755, Some((uid, gid))).await;
-        assert!(detail.is_none());
+        let finding = inspect_directory(dir.path(), 0o755, Some((uid, gid))).await;
+        assert!(finding.is_none());
     }
 
     #[tokio::test]
-    async fn inspect_directory_reports_an_owner_drift() {
+    async fn inspect_directory_reports_both_sides_of_an_owner_drift() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-        let detail = inspect_directory(dir.path(), 0o755, Some((999_999, 999_999))).await;
-        assert!(detail.is_some());
+        let owner = (
+            nix::unistd::Uid::current().as_raw(),
+            nix::unistd::Gid::current().as_raw(),
+        );
+
+        let finding = inspect_directory(dir.path(), 0o755, Some((999_999, 999_999))).await;
+
+        assert_eq!(
+            finding,
+            Some(Finding::Owner {
+                actual: owner,
+                expected: (999_999, 999_999)
+            })
+        );
     }
 
     #[tokio::test]
@@ -282,8 +421,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("f");
         std::fs::write(&file, "expected content").unwrap();
-        let detail = inspect_file(&file, Some("expected content"), None).await;
-        assert!(detail.is_none());
+        let finding = inspect_file(&file, Some("expected content"), None).await;
+        assert!(finding.is_none());
     }
 
     #[tokio::test]
@@ -291,8 +430,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("f");
         std::fs::write(&file, "modified").unwrap();
-        let detail = inspect_file(&file, Some("expected content"), None).await;
-        assert!(detail.is_some());
+        let finding = inspect_file(&file, Some("expected content"), None).await;
+        assert_eq!(finding, Some(Finding::ContentDrift));
     }
 
     #[tokio::test]
@@ -300,16 +439,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("f");
         std::fs::write(&file, "expected content").unwrap();
-        let detail = inspect_file(&file, Some("expected content"), Some((999_999, 999_999))).await;
-        assert!(detail.is_some());
+        let finding = inspect_file(&file, Some("expected content"), Some((999_999, 999_999))).await;
+        assert!(matches!(finding, Some(Finding::Owner { .. })));
     }
 
     #[tokio::test]
     async fn inspect_file_with_no_expected_content_is_healthy_when_missing() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("flake.lock");
-        let detail = inspect_file(&file, None, None).await;
-        assert!(detail.is_none());
+        let finding = inspect_file(&file, None, None).await;
+        assert!(finding.is_none());
     }
 
     #[tokio::test]
@@ -317,8 +456,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("flake.lock");
         std::fs::write(&file, "anything nix wrote").unwrap();
-        let detail = inspect_file(&file, None, None).await;
-        assert!(detail.is_none());
+        let finding = inspect_file(&file, None, None).await;
+        assert!(finding.is_none());
     }
 
     #[tokio::test]
@@ -326,16 +465,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("flake.lock");
         std::fs::write(&file, "anything nix wrote").unwrap();
-        let detail = inspect_file(&file, None, Some((999_999, 999_999))).await;
-        assert!(detail.is_some());
+        let finding = inspect_file(&file, None, Some((999_999, 999_999))).await;
+        assert!(matches!(finding, Some(Finding::Owner { .. })));
+    }
+
+    #[tokio::test]
+    async fn inspect_file_reports_a_file_mix_wrote_and_cannot_find() {
+        let dir = tempfile::tempdir().unwrap();
+        let finding = inspect_file(&dir.path().join("home.nix"), Some("content"), None).await;
+        assert_eq!(finding, Some(Finding::Missing));
     }
 
     #[tokio::test]
     async fn inspect_seeded_file_is_unhealthy_when_missing() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("state");
-        let detail = inspect_seeded_file(&file, None).await;
-        assert!(detail.is_some());
+        let finding = inspect_seeded_file(&file, None).await;
+        assert_eq!(finding, Some(Finding::Missing));
     }
 
     #[tokio::test]
@@ -343,8 +489,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("state");
         std::fs::write(&file, "whatever mix install has done to it since").unwrap();
-        let detail = inspect_seeded_file(&file, None).await;
-        assert!(detail.is_none());
+        let finding = inspect_seeded_file(&file, None).await;
+        assert!(finding.is_none());
     }
 
     #[tokio::test]
@@ -352,8 +498,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("state");
         std::fs::write(&file, "content").unwrap();
-        let detail = inspect_seeded_file(&file, Some((999_999, 999_999))).await;
-        assert!(detail.is_some());
+        let finding = inspect_seeded_file(&file, Some((999_999, 999_999))).await;
+        assert!(matches!(finding, Some(Finding::Owner { .. })));
+    }
+
+    /// A path that cannot be read is not the same fact as a path that is not there.
+    #[test]
+    fn a_refused_path_is_not_reported_as_a_missing_one() {
+        assert_eq!(
+            unreadable(std::io::Error::from(std::io::ErrorKind::NotFound)),
+            Finding::Missing
+        );
+        assert_eq!(
+            unreadable(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+            Finding::Unreadable {
+                kind: std::io::ErrorKind::PermissionDenied
+            }
+        );
     }
 
     #[test]
@@ -362,8 +523,22 @@ mod tests {
     }
 
     #[test]
-    fn inspect_group_reports_the_wrong_gid() {
-        assert!(inspect_group("root", 9999).is_some());
+    fn inspect_group_reports_the_gid_it_found() {
+        assert_eq!(
+            inspect_group("root", 9999),
+            Some(Finding::GroupGid {
+                actual: 0,
+                expected: 9999
+            })
+        );
+    }
+
+    #[test]
+    fn inspect_group_reports_a_group_that_is_not_there() {
+        assert_eq!(
+            inspect_group("mix-test-nonexistent-group-xyz", 30_000),
+            Some(Finding::GroupMissing)
+        );
     }
 
     #[test]
@@ -371,17 +546,82 @@ mod tests {
         assert!(inspect_group_member("root", "root").is_none());
     }
 
+    /// Repair can enrol a user that exists; it cannot enrol one that does not, so the two are
+    /// separate findings rather than one sentence covering both.
     #[test]
-    fn inspect_group_member_reports_a_user_outside_the_group() {
+    fn inspect_group_member_separates_an_unenrolled_user_from_a_missing_one() {
         assert_eq!(
-            inspect_group_member("root", "mix-test-nonexistent-user-xyz").as_deref(),
-            Some("not a member of the root group")
+            inspect_group_member("root", "mix-test-nonexistent-user-xyz"),
+            Some(Finding::NoSuchUser)
+        );
+        assert_eq!(
+            inspect_group_member("mix-test-nonexistent-group-xyz", "root"),
+            Some(Finding::NotAMember {
+                group: "mix-test-nonexistent-group-xyz"
+            })
         );
     }
 
+    #[test]
+    fn inspect_user_reports_a_build_user_that_is_not_there() {
+        assert_eq!(inspect_user(1, 30_000, 30_000), Some(Finding::UserMissing));
+    }
+
     #[tokio::test]
-    async fn inspect_path_exists_reports_a_missing_path() {
-        let detail = inspect_path_exists("/does/not/exist/nix-env").await;
-        assert_eq!(detail.as_deref(), Some("missing"));
+    async fn inspect_path_exists_reports_the_runtime_as_missing() {
+        let finding = inspect_path_exists("/does/not/exist/nix-env").await;
+        assert_eq!(finding, Some(Finding::RuntimeMissing));
+    }
+
+    /// The binding between what an inspection found and what repair can do about it.
+    #[test]
+    fn a_finding_says_whether_repair_can_reconcile_it() {
+        assert_eq!(
+            Finding::NotADirectory.unfixable(),
+            Some(Unfixable::NotADirectory)
+        );
+        assert_eq!(
+            Finding::NoSuchUser.unfixable(),
+            Some(Unfixable::MissingUser)
+        );
+        assert_eq!(
+            Finding::RuntimeMissing.unfixable(),
+            Some(Unfixable::MissingRuntime)
+        );
+    }
+
+    #[test]
+    fn everything_repair_reconciles_is_bound_to_no_reason() {
+        for finding in [
+            Finding::Missing,
+            Finding::Unreadable {
+                kind: std::io::ErrorKind::PermissionDenied,
+            },
+            Finding::Mode {
+                actual: 0o700,
+                expected: 0o755,
+            },
+            Finding::Owner {
+                actual: (0, 0),
+                expected: (1000, 1000),
+            },
+            Finding::ContentDrift,
+            Finding::GroupMissing,
+            Finding::GroupGid {
+                actual: 1,
+                expected: 30_000,
+            },
+            Finding::NotAMember { group: "mix-users" },
+            Finding::UserMissing,
+            Finding::UserIds {
+                actual: (1, 1),
+                expected: (30_000, 30_000),
+            },
+            Finding::UnitMissing,
+            Finding::UnitDrift,
+            Finding::UnitInactive,
+        ] {
+            assert_eq!(finding.unfixable(), None, "{finding:?}");
+        }
     }
 }
