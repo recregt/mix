@@ -1,25 +1,30 @@
 //! Showing a long-running command's output without turning the terminal into a flicker box.
 
 use std::borrow::Cow;
-use std::fmt::Write;
 use std::io::IsTerminal;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use mix_core::{ActivityReporter, BuildProgress, NoopActivity};
-use owo_colors::OwoColorize;
 use tracing_indicatif::span_ext::IndicatifSpanExt;
+use unicode_width::UnicodeWidthChar;
 
 /// One frame per 50 ms, matching the rate the progress bars are redrawn at: drawing faster only
 /// costs work the terminal throws away.
 const FRAME_INTERVAL_MS: u64 = 50;
 
-/// Longest activity line that is drawn, in characters. Anything past this is noise on a
-/// standard-width terminal, and truncating here keeps the step on a single line.
+/// Longest activity line that is drawn, in terminal columns. The step's own line is trimmed to
+/// the real terminal width when it is drawn; this is the upper bound that keeps a runaway line
+/// from being carried that far in the first place.
 pub const MAX_WIDTH: usize = 72;
 
 const ELLIPSIS: char = '…';
+
+/// Drawn text is dimmed so the step's own label stays the thing being read. Written out rather
+/// than styled through a formatter: this is on the frame path, and it is two constants.
+const DIM: &str = " \u{1b}[2m";
+const UNDIM: &str = "\u{1b}[0m";
 
 /// Sentinel for "nothing drawn yet", so the very first line shows up without waiting a frame.
 const NEVER: u64 = u64::MAX;
@@ -64,101 +69,141 @@ impl Throttle {
     }
 }
 
-/// Reduces a raw output line to something that fits on the step's line.
+/// Reduces a raw output line to something that can be drawn on the step's line: no control
+/// sequences, and no more than [`MAX_WIDTH`] columns of it.
 ///
-/// Borrows the input in the common case: a plain line that already fits is passed straight
-/// through, and only escape sequences or an overlong line force a copy.
+/// Borrows the input in the common case — a plain line that already fits is passed straight
+/// through — and never reads further than the line it is going to draw: whatever a flooding
+/// build puts on one line, the work here is bounded by the width of the terminal, not by the
+/// length of the line.
 pub fn display_line(raw: &str) -> Cow<'_, str> {
-    match strip_ansi(raw) {
-        Cow::Borrowed(plain) => truncate(plain),
-        Cow::Owned(stripped) => Cow::Owned(truncate(&stripped).into_owned()),
-    }
-}
-
-fn truncate(line: &str) -> Cow<'_, str> {
-    // Fast path: a byte length within the budget cannot exceed it in characters.
-    if line.len() <= MAX_WIDTH {
-        return Cow::Borrowed(line);
-    }
-    match line.char_indices().nth(MAX_WIDTH - 1) {
-        None => Cow::Borrowed(line),
-        Some((end, _)) => {
-            let mut out = String::with_capacity(end + ELLIPSIS.len_utf8());
-            out.push_str(&line[..end]);
-            out.push(ELLIPSIS);
-            Cow::Owned(out)
-        }
-    }
-}
-
-fn strip_ansi(raw: &str) -> Cow<'_, str> {
-    if !raw.as_bytes().contains(&0x1b) {
+    // Short and printable: nothing to rewrite. A line's byte length is never below its width in
+    // columns, so a line this short cannot be over budget either.
+    if raw.len() <= MAX_WIDTH && is_printable(raw.as_bytes()) {
         return Cow::Borrowed(raw);
     }
 
-    let mut out = String::with_capacity(raw.len());
-    let mut chars = raw.chars();
-    while let Some(c) = chars.next() {
-        if c != '\u{1b}' {
-            out.push(c);
-            continue;
-        }
-        match chars.next() {
-            // CSI: parameters and intermediates, then a final byte in @..~.
-            Some('[') => {
-                for c in chars.by_ref() {
-                    if matches!(c, '@'..='~') {
-                        break;
-                    }
-                }
-            }
-            // OSC: terminated by BEL or ESC \.
-            Some(']') => {
-                for c in chars.by_ref() {
-                    if c == '\u{7}' || c == '\u{1b}' {
-                        break;
-                    }
-                }
-            }
-            // Any other two-byte escape: both bytes are already consumed.
-            _ => {}
-        }
+    // Long, but printable ASCII for as far as it will be drawn: the cut is an index and the copy
+    // is one memcpy. Nothing past the cut is examined.
+    if raw.len() > MAX_WIDTH && is_printable_ascii(&raw.as_bytes()[..MAX_WIDTH]) {
+        let mut out = String::with_capacity(MAX_WIDTH - 1 + ELLIPSIS.len_utf8());
+        out.push_str(&raw[..MAX_WIDTH - 1]);
+        out.push(ELLIPSIS);
+        return Cow::Owned(out);
     }
-    Cow::Owned(out)
+
+    Cow::Owned(rewrite(raw))
 }
 
-/// Renders a snapshot of what the build is doing, e.g.
-/// `building 3/17 · downloading 12/37 · 48.2 MiB/91.0 MiB`.
+fn is_printable(bytes: &[u8]) -> bool {
+    !bytes.iter().any(u8::is_ascii_control)
+}
+
+fn is_printable_ascii(bytes: &[u8]) -> bool {
+    bytes.is_ascii() && is_printable(bytes)
+}
+
+/// Copies out the part of the line that will be drawn, dropping anything that would move the
+/// cursor rather than print — escape sequences, and the stray control bytes a build log carries,
+/// which would otherwise redraw over the line that is already there.
+///
+/// Stops as soon as the budget is full, so an escape-laden line costs the width of the terminal
+/// rather than its own length. Columns are counted rather than characters: a wide character
+/// takes two of them, and counting it as one is how a step line ends up wrapping.
+fn rewrite(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len().min(MAX_WIDTH * 2));
+    let mut columns = 0;
+    let mut chars = raw.chars();
+
+    while let Some(c) = chars.next() {
+        let c = match c {
+            '\u{1b}' => {
+                skip_escape(&mut chars);
+                continue;
+            }
+            // A tab still separates two words; every other control byte is dropped.
+            '\t' => ' ',
+            c if c.is_control() => continue,
+            c => c,
+        };
+
+        let width = c.width().unwrap_or(0);
+        // Leave a column for the ellipsis: there is more line than there is room for it.
+        if columns + width > MAX_WIDTH - 1 {
+            out.push(ELLIPSIS);
+            break;
+        }
+        out.push(c);
+        columns += width;
+    }
+
+    out
+}
+
+fn skip_escape(chars: &mut std::str::Chars<'_>) {
+    match chars.next() {
+        // CSI: parameters and intermediates, then a final byte in @..~.
+        Some('[') => {
+            for c in chars.by_ref() {
+                if matches!(c, '@'..='~') {
+                    break;
+                }
+            }
+        }
+        // OSC: terminated by BEL or ESC \.
+        Some(']') => {
+            for c in chars.by_ref() {
+                if c == '\u{7}' || c == '\u{1b}' {
+                    break;
+                }
+            }
+        }
+        // Any other two-byte escape: both bytes are already consumed.
+        _ => {}
+    }
+}
+
+/// Writes a snapshot of what the build is doing, e.g.
+/// `building 3/17 · downloading 12/37 · 48.2/91.0 MiB`.
 ///
 /// Counters are cheaper to draw than free-form output: the text is short, bounded, and only the
-/// numbers in it change from one frame to the next.
-pub fn render_progress(progress: &BuildProgress) -> String {
-    let mut out = String::with_capacity(64);
-
+/// numbers in it change from one frame to the next. It is written into the caller's buffer, and
+/// the numbers are written digit by digit, so a drawn frame does no formatting and — once the
+/// buffer has been used once — no allocation either.
+///
+/// What is drawn is also stable from frame to frame: a counter is padded to the width of the
+/// total it is counting towards, and both byte counts share the unit of the larger one, so the
+/// text keeps its shape as the numbers grow instead of shuffling sideways under the reader.
+pub fn write_progress(out: &mut String, progress: &BuildProgress) {
     if progress.builds_expected > 0 || progress.builds_done > 0 {
-        let _ = write!(
+        write_counter(
             out,
-            "building {}/{}",
-            progress.builds_done, progress.builds_expected
+            "building ",
+            progress.builds_done,
+            progress.builds_expected,
         );
     }
 
     if progress.downloads_expected > 0 || progress.downloads_done > 0 {
-        separate(&mut out);
-        let _ = write!(
+        separate(out);
+        write_counter(
             out,
-            "downloading {}/{}",
-            progress.downloads_done, progress.downloads_expected
+            "downloading ",
+            progress.downloads_done,
+            progress.downloads_expected,
         );
     }
 
     if progress.bytes_expected > 0 || progress.bytes_done > 0 {
-        separate(&mut out);
-        write_bytes(&mut out, progress.bytes_done);
-        out.push('/');
-        write_bytes(&mut out, progress.bytes_expected);
+        separate(out);
+        write_bytes(out, progress.bytes_done, progress.bytes_expected);
     }
+}
 
+/// [`write_progress`] into a buffer of its own, for a caller that has nothing to reuse.
+pub fn render_progress(progress: &BuildProgress) -> String {
+    let mut out = String::with_capacity(64);
+    write_progress(&mut out, progress);
     out
 }
 
@@ -168,32 +213,85 @@ fn separate(out: &mut String) {
     }
 }
 
-/// Writes a byte count with one decimal, e.g. `48.2 MiB`.
-///
-/// Integer maths only: formatting a float is an order of magnitude dearer than dividing, and
-/// this runs on every drawn frame.
-fn write_bytes(out: &mut String, bytes: u64) {
-    const UNIT: u64 = 1024;
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+fn write_counter(out: &mut String, label: &str, done: u64, expected: u64) {
+    out.push_str(label);
+    // Hold the column the counter ends in steady as it rolls over a power of ten.
+    for _ in digits(done)..digits(expected) {
+        out.push(' ');
+    }
+    write_u64(out, done);
+    out.push('/');
+    write_u64(out, expected);
+}
 
+const UNIT: u64 = 1024;
+const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+
+/// Writes both byte counts in the unit of the larger one, e.g. `48.2/91.0 MiB`.
+///
+/// A shared unit is what makes the pair readable — `900.0 KiB/91.0 MiB` invites the reader to
+/// compare two numbers that are not on the same scale — and it is also the cheaper thing to
+/// render: the unit is chosen once, and the unit's name is written once.
+fn write_bytes(out: &mut String, done: u64, expected: u64) {
+    let (divisor, unit) = scale(done.max(expected));
+    write_scaled(out, done, divisor);
+    out.push('/');
+    write_scaled(out, expected, divisor);
+    out.push(' ');
+    out.push_str(unit);
+}
+
+fn scale(bytes: u64) -> (u64, &'static str) {
     let mut divisor = 1u64;
     let mut unit = 0;
     while bytes / divisor >= UNIT && unit + 1 < UNITS.len() {
         divisor *= UNIT;
         unit += 1;
     }
+    (divisor, UNITS[unit])
+}
 
-    let _ = if unit == 0 {
-        write!(out, "{bytes} B")
-    } else {
-        let mut whole = bytes / divisor;
-        let mut tenths = ((bytes % divisor) * 10 + divisor / 2) / divisor;
-        if tenths == 10 {
-            whole += 1;
-            tenths = 0;
+/// Writes a byte count with one decimal, in the unit `divisor` stands for.
+///
+/// Integer maths only: formatting a float is an order of magnitude dearer than dividing, and
+/// this runs on every drawn frame.
+fn write_scaled(out: &mut String, bytes: u64, divisor: u64) {
+    if divisor == 1 {
+        write_u64(out, bytes);
+        return;
+    }
+
+    let mut whole = bytes / divisor;
+    let mut tenths = ((bytes % divisor) * 10 + divisor / 2) / divisor;
+    if tenths == 10 {
+        whole += 1;
+        tenths = 0;
+    }
+    write_u64(out, whole);
+    out.push('.');
+    out.push((b'0' + tenths as u8) as char);
+}
+
+/// Appends a number without going through a formatter: the counters are redrawn many times a
+/// second, and `core::fmt` costs more than the digits do.
+fn write_u64(out: &mut String, value: u64) {
+    let mut digits = [0u8; 20];
+    let mut at = digits.len();
+    let mut rest = value;
+    loop {
+        at -= 1;
+        digits[at] = b'0' + (rest % 10) as u8;
+        rest /= 10;
+        if rest == 0 {
+            break;
         }
-        write!(out, "{whole}.{tenths} {}", UNITS[unit])
-    };
+    }
+    // The bytes just written are ASCII digits.
+    out.push_str(std::str::from_utf8(&digits[at..]).unwrap_or_default());
+}
+
+fn digits(value: u64) -> u32 {
+    value.checked_ilog10().unwrap_or(0) + 1
 }
 
 struct SpanActivity {
@@ -201,6 +299,9 @@ struct SpanActivity {
     /// Whether nix is reporting counters. Once it is, they own the line: a stray log line must
     /// not fight them for it, and dropping those lines costs an atomic load.
     counting: AtomicBool,
+    /// The buffer the drawn frame is built in, reused from one frame to the next. Uncontended
+    /// in practice: one reader drains the process's output.
+    frame: Mutex<String>,
 }
 
 impl SpanActivity {
@@ -208,7 +309,20 @@ impl SpanActivity {
         Self {
             throttle: Throttle::new(),
             counting: AtomicBool::new(false),
+            frame: Mutex::new(String::with_capacity(128)),
         }
+    }
+
+    /// Builds a frame in the reporter's own buffer and hands it to the step's line.
+    fn draw(&self, fill: impl FnOnce(&mut String)) {
+        let Ok(mut frame) = self.frame.lock() else {
+            return;
+        };
+        frame.clear();
+        frame.push_str(DIM);
+        fill(&mut frame);
+        frame.push_str(UNDIM);
+        tracing::Span::current().pb_set_message(&frame);
     }
 }
 
@@ -218,20 +332,26 @@ impl ActivityReporter for SpanActivity {
             return;
         }
         let line = display_line(line);
-        tracing::Span::current().pb_set_message(&format!(" {}", line.dimmed()));
+        if line.is_empty() {
+            return;
+        }
+        self.draw(|frame| frame.push_str(&line));
     }
 
     fn progress(&self, progress: &BuildProgress) {
         if progress.is_idle() {
-            self.counting.store(false, Ordering::Relaxed);
+            // Counters that have gone back to nothing would otherwise stay on screen, frozen,
+            // for the rest of the step.
+            if self.counting.swap(false, Ordering::Relaxed) {
+                tracing::Span::current().pb_set_message("");
+            }
             return;
         }
         self.counting.store(true, Ordering::Relaxed);
         if !self.throttle.due() {
             return;
         }
-        let rendered = render_progress(progress);
-        tracing::Span::current().pb_set_message(&format!(" {}", rendered.dimmed()));
+        self.draw(|frame| write_progress(frame, progress));
     }
 
     fn clear(&self) {
@@ -303,6 +423,16 @@ mod tests {
     }
 
     #[test]
+    fn a_stray_control_byte_is_dropped() {
+        assert_eq!(display_line("buil\u{8}ding\u{7}"), "building");
+    }
+
+    #[test]
+    fn a_tab_is_kept_as_a_space() {
+        assert_eq!(display_line("building\tripgrep"), "building ripgrep");
+    }
+
+    #[test]
     fn a_long_line_is_truncated_with_an_ellipsis() {
         let line = "x".repeat(MAX_WIDTH * 2);
         let shown = display_line(&line);
@@ -321,6 +451,22 @@ mod tests {
         let line = "é".repeat(MAX_WIDTH * 2);
         let shown = display_line(&line);
         assert_eq!(shown.chars().count(), MAX_WIDTH);
+    }
+
+    /// Counting wide characters as one column each is how a step line ends up wrapping.
+    #[test]
+    fn a_line_of_wide_characters_is_truncated_by_column() {
+        let line = "パッケージ".repeat(MAX_WIDTH);
+        let shown = display_line(&line);
+        let columns: usize = shown.chars().map(|c| c.width().unwrap_or(0)).sum();
+        assert!(columns <= MAX_WIDTH, "{columns} columns");
+        assert!(shown.ends_with(ELLIPSIS));
+    }
+
+    /// A line of nothing but escape sequences draws as nothing, however long it is.
+    #[test]
+    fn a_line_of_escapes_renders_empty() {
+        assert_eq!(display_line(&"\u{1b}[2K\u{1b}[1G".repeat(64)), "");
     }
 
     #[test]
@@ -378,7 +524,7 @@ mod tests {
     fn a_full_snapshot_renders_builds_downloads_and_bytes() {
         assert_eq!(
             render_progress(&progress()),
-            "building 3/17 · downloading 12/37 · 48.2 MiB/91.0 MiB"
+            "building  3/17 · downloading 12/37 · 48.2/91.0 MiB"
         );
     }
 
@@ -391,10 +537,7 @@ mod tests {
             bytes_expected: 8_192,
             ..BuildProgress::default()
         };
-        assert_eq!(
-            render_progress(&progress),
-            "downloading 1/4 · 2.0 KiB/8.0 KiB"
-        );
+        assert_eq!(render_progress(&progress), "downloading 1/4 · 2.0/8.0 KiB");
     }
 
     #[test]
@@ -414,7 +557,7 @@ mod tests {
             bytes_expected: 900,
             ..BuildProgress::default()
         };
-        assert_eq!(render_progress(&progress), "12 B/900 B");
+        assert_eq!(render_progress(&progress), "12/900 B");
     }
 
     /// 48.185… MiB: truncating would report a tenth less than it should.
@@ -425,7 +568,7 @@ mod tests {
             bytes_expected: 50_525_798,
             ..BuildProgress::default()
         };
-        assert_eq!(render_progress(&progress), "48.2 MiB/48.2 MiB");
+        assert_eq!(render_progress(&progress), "48.2/48.2 MiB");
     }
 
     #[test]
@@ -435,7 +578,44 @@ mod tests {
             bytes_expected: 6_442_450_944,
             ..BuildProgress::default()
         };
-        assert_eq!(render_progress(&progress), "3.0 GiB/6.0 GiB");
+        assert_eq!(render_progress(&progress), "3.0/6.0 GiB");
+    }
+
+    /// The counters are read while they move, so a digit rolling over must not shift the text
+    /// that follows it sideways.
+    #[test]
+    fn a_counter_keeps_its_width_as_it_rolls_over() {
+        let at = |done| {
+            render_progress(&BuildProgress {
+                builds_done: done,
+                builds_expected: 120,
+                ..BuildProgress::default()
+            })
+        };
+        assert_eq!(at(9).len(), at(10).len());
+        assert_eq!(at(99).len(), at(100).len());
+        assert_eq!(at(9), "building   9/120");
+    }
+
+    /// Two counts on different scales are not a comparison a reader should have to do in their
+    /// head, and the shared unit is what keeps the pair the same width as it grows.
+    #[test]
+    fn both_byte_counts_share_the_unit_of_the_larger_one() {
+        let progress = BuildProgress {
+            bytes_done: 900 * 1024,
+            bytes_expected: 91 * 1024 * 1024,
+            ..BuildProgress::default()
+        };
+        assert_eq!(render_progress(&progress), "0.9/91.0 MiB");
+    }
+
+    #[test]
+    fn a_reused_buffer_renders_what_a_fresh_one_does() {
+        let mut buffer = String::new();
+        write_progress(&mut buffer, &progress());
+        buffer.clear();
+        write_progress(&mut buffer, &progress());
+        assert_eq!(buffer, render_progress(&progress()));
     }
 
     #[test]

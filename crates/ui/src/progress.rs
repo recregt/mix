@@ -13,11 +13,21 @@ use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-const DOWNLOAD_STYLE: &str = "{span_child_prefix}{spinner:.cyan} {span_fields} {bytes}/{total_bytes} ({binary_bytes_per_sec})";
+/// A download knows its total, so it gets the one thing a spinner cannot give: a bar that says
+/// how much of the wait is left. `{wide_bar}` takes exactly the columns the rest of the line
+/// leaves free, so the line fits whatever the terminal's width happens to be.
+const DOWNLOAD_STYLE: &str = "{span_child_prefix}{spinner:.cyan} {span_fields} {wide_bar:.cyan/dim} {bytes}/{total_bytes} ({binary_bytes_per_sec})";
 
-/// `{msg}` carries the live output of whatever the step is running; it stays empty until a
-/// command reports its first line, so a quiet step renders exactly as before.
-const STEP_STYLE: &str = "{span_child_prefix}{spinner:.cyan} {span_fields}{msg}";
+/// `{wide_msg}` carries the live output of whatever the step is running. It stays empty until a
+/// command reports its first line, so a quiet step renders exactly as before, and the width it
+/// is given is measured against the real terminal: the live text is trimmed to the columns that
+/// are actually free, so a narrow terminal or a long step name can never wrap the line and set
+/// the whole display scrolling.
+const STEP_STYLE: &str = "{span_child_prefix}{spinner:.cyan} {span_fields}{wide_msg}";
+
+/// Filled, leading edge, empty. A solid bar reads as one object at a glance, where a bar of
+/// blocks reads as a row of them.
+const PROGRESS_CHARS: &str = "━╸━";
 
 const OWN_CRATES: [&str; 4] = ["mix_core", "mix_app", "mix_cli", "mix_ui"];
 
@@ -78,7 +88,8 @@ impl DownloadProgress for IndicatifDownloadProgress {
         span.pb_set_style(
             &ProgressStyle::with_template(DOWNLOAD_STYLE)
                 .expect("progress bar template is valid")
-                .tick_chars(TICK_CHARS),
+                .tick_chars(TICK_CHARS)
+                .progress_chars(PROGRESS_CHARS),
         );
         span.pb_set_length(total);
     }
@@ -198,19 +209,40 @@ mod tests {
         }
     }
 
+    const TERM_WIDTH: usize = 80;
+
     fn render(style: &str, message: &str) -> String {
+        render_lines(style, message, None).join("")
+    }
+
+    /// Every line the bar drew, one entry per write the terminal saw.
+    fn render_lines(style: &str, message: &str, length: Option<u64>) -> Vec<String> {
         let recorded = Arc::new(Mutex::new(Vec::new()));
         let bar = ProgressBar::with_draw_target(
-            None,
+            length,
             ProgressDrawTarget::term_like(Box::new(RecordingTerm(Arc::clone(&recorded)))),
         )
-        .with_style(ProgressStyle::with_template(style).unwrap());
+        .with_style(
+            ProgressStyle::with_template(style)
+                .unwrap()
+                .progress_chars(PROGRESS_CHARS),
+        );
         bar.set_message(message.to_string());
         bar.tick();
         bar.finish_and_clear();
 
         let recorded = recorded.lock().unwrap();
-        recorded.join("")
+        recorded.clone()
+    }
+
+    /// The widest line the bar drew, in columns.
+    fn drawn_columns(lines: &[String]) -> usize {
+        lines.iter().map(|line| columns(line)).max().unwrap_or(0)
+    }
+
+    /// Columns the terminal would need for a drawn line, escape sequences excluded.
+    fn columns(line: &str) -> usize {
+        console::measure_text_width(line)
     }
 
     #[test]
@@ -224,5 +256,35 @@ mod tests {
             render(STEP_STYLE, ""),
             render("{span_child_prefix}{spinner:.cyan} {span_fields}", "")
         );
+    }
+
+    /// A step line that outgrows the terminal wraps, and a wrapped line is redrawn as two: the
+    /// display starts scrolling instead of staying put.
+    #[test]
+    fn a_long_line_is_trimmed_to_the_terminal_width() {
+        let drawn = render_lines(STEP_STYLE, &format!(" {}", "x".repeat(200)), None);
+        let widest = drawn_columns(&drawn);
+        assert!(widest <= TERM_WIDTH, "{widest} columns");
+    }
+
+    /// The live text is dimmed, so the trimming has to keep the escape sequences it is wrapped
+    /// in rather than cutting through one.
+    #[test]
+    fn trimming_keeps_the_styling_of_the_text_it_trims() {
+        let drawn = render_lines(
+            STEP_STYLE,
+            &format!(" \u{1b}[2m{}\u{1b}[0m", "x".repeat(200)),
+            None,
+        );
+        assert!(drawn_columns(&drawn) <= TERM_WIDTH);
+        assert!(drawn.iter().any(|line| line.ends_with("\u{1b}[0m")));
+    }
+
+    #[test]
+    fn the_download_style_fits_the_terminal_width() {
+        let drawn = render_lines(DOWNLOAD_STYLE, "", Some(91 * 1024 * 1024));
+        let widest = drawn_columns(&drawn);
+        assert!(widest <= TERM_WIDTH, "{widest} columns");
+        assert!(drawn.iter().any(|line| line.contains('━')));
     }
 }

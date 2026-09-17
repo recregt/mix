@@ -1146,12 +1146,14 @@ name = "mix-ui"
 version = "0.1.0"
 dependencies = [
  "codspeed-divan-compat",
+ "console",
  "indicatif",
  "mix-core",
  "owo-colors",
  "tracing",
  "tracing-indicatif",
  "tracing-subscriber",
+ "unicode-width",
 ]
 
 [[package]]

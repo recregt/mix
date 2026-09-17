@@ -1,4 +1,5 @@
 use std::io::IsTerminal;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use owo_colors::OwoColorize;
@@ -25,6 +26,41 @@ pub fn progress_enabled() -> bool {
 
 fn colors_enabled(is_terminal: bool) -> bool {
     is_terminal && std::env::var_os("NO_COLOR").is_none()
+}
+
+/// Neither answer can change while the process runs, and asking costs a `stat` of the stream
+/// plus a walk of the environment — per printed line, on a command that prints one line per
+/// check.
+fn stdout_colors() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| colors_enabled(std::io::stdout().is_terminal()))
+}
+
+fn stderr_colors() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| colors_enabled(std::io::stderr().is_terminal()))
+}
+
+/// Prints a finished line without letting it collide with whatever is being drawn in place.
+///
+/// A progress bar owns the last lines of the terminal, and a plain `println!` writes straight
+/// past it: the two end up interleaved on the same row, and the bar redraws over what was
+/// printed. Suspending the drawing for the write is what keeps the output readable. Nothing is
+/// suspended when nothing is being drawn, which costs one atomic load.
+fn print_line(line: &str, to_stderr: bool) {
+    let write = || {
+        if to_stderr {
+            eprintln!("{line}");
+        } else {
+            println!("{line}");
+        }
+    };
+
+    if progress_enabled() {
+        tracing_indicatif::suspend_tracing_indicatif(write);
+    } else {
+        write();
+    }
 }
 
 fn looks_like_an_identifier(message: &str) -> bool {
@@ -54,38 +90,38 @@ pub(crate) fn sentence_case(message: impl Into<String>) -> String {
 
 pub fn ok(message: impl std::fmt::Display) {
     let message = sentence_case(message.to_string());
-    if colors_enabled(std::io::stdout().is_terminal()) {
-        println!("{} {message}", "✓".fg::<Green>());
+    if stdout_colors() {
+        print_line(&format!("{} {message}", "✓".fg::<Green>()), false);
     } else {
-        println!("✓ {message}");
+        print_line(&format!("✓ {message}"), false);
     }
 }
 
 pub fn fail(message: impl std::fmt::Display) {
     let message = sentence_case(message.to_string());
-    if colors_enabled(std::io::stderr().is_terminal()) {
-        eprintln!("{} {message}", "✗".fg::<Red>());
+    if stderr_colors() {
+        print_line(&format!("{} {message}", "✗".fg::<Red>()), true);
     } else {
-        eprintln!("✗ {message}");
+        print_line(&format!("✗ {message}"), true);
     }
 }
 
 /// Reports something that was deliberately left alone, e.g. a package that is already installed.
 pub fn skipped(message: impl std::fmt::Display) {
     let message = sentence_case(message.to_string());
-    if colors_enabled(std::io::stderr().is_terminal()) {
-        eprintln!("{} {message}", "•".fg::<Yellow>());
+    if stderr_colors() {
+        print_line(&format!("{} {message}", "•".fg::<Yellow>()), true);
     } else {
-        eprintln!("• {message}");
+        print_line(&format!("• {message}"), true);
     }
 }
 
 pub fn info(message: impl std::fmt::Display) {
-    eprintln!("{}", sentence_case(message.to_string()));
+    print_line(&sentence_case(message.to_string()), true);
 }
 
 pub fn header(message: impl std::fmt::Display) {
-    eprintln!("{message}:");
+    print_line(&format!("{message}:"), true);
 }
 
 #[cfg(test)]
