@@ -186,11 +186,19 @@ pub fn header(message: impl std::fmt::Display) {
 /// failure printed from the top message alone loses the only line that explains it. The chain is
 /// walked here, and a cause is printed only if the message does not already say it.
 pub fn fail_error(error: &dyn std::error::Error) {
-    print_line(&failure(error, stderr_colors()), true);
+    print_line(&failure(&error.to_string(), error, stderr_colors()), true);
 }
 
-fn failure(error: &dyn std::error::Error, colour: bool) -> String {
-    let mut out = status_line(Status::Failed, &error.to_string(), colour);
+/// Reports a failure in words the caller has already chosen, with the causes behind it.
+///
+/// The message is the reader's — written where the command is known — and the chain is the
+/// library's: the two are printed as one block, and a cause the message already says is left out.
+pub fn fail_explained(message: &str, error: &dyn std::error::Error) {
+    print_line(&failure(message, error, stderr_colors()), true);
+}
+
+fn failure(message: &str, error: &dyn std::error::Error, colour: bool) -> String {
+    let mut out = status_line(Status::Failed, message, colour);
 
     let mut source = error.source();
     let mut printed = 0;
@@ -291,7 +299,7 @@ mod tests {
             "connection refused (os error 111)",
         ]);
 
-        let printed = failure(&error, false);
+        let printed = failure(&error.to_string(), &error, false);
 
         assert_eq!(
             printed,
@@ -311,8 +319,31 @@ mod tests {
         ]);
 
         assert_eq!(
-            failure(&error, false),
+            failure(&error.to_string(), &error, false),
             "✗ Running `nix build`: permission denied."
+        );
+    }
+
+    /// The words are the caller's — written where the command is known — and the chain is still
+    /// the library's: a cause those words do not already say belongs under them.
+    #[test]
+    fn an_explained_failure_keeps_the_causes_under_the_words_chosen_for_it() {
+        let error = chain(&[
+            "network request failed",
+            "connection refused (os error 111)",
+        ]);
+
+        let printed = failure(
+            "could not fetch the pinned nix archive\ncheck your network connection",
+            &error,
+            false,
+        );
+
+        assert_eq!(
+            printed,
+            "✗ Could not fetch the pinned nix archive\n  \
+             check your network connection.\n  \
+             caused by: connection refused (os error 111)"
         );
     }
 
@@ -320,7 +351,8 @@ mod tests {
     fn a_chain_that_never_ends_is_cut_off() {
         let messages: Vec<&'static str> =
             vec!["top", "one", "two", "three", "four", "five", "six", "seven"];
-        let printed = failure(&chain(&messages), false);
+        let chained = chain(&messages);
+        let printed = failure(&chained.to_string(), &chained, false);
 
         assert_eq!(printed.lines().count(), 1 + MAX_CAUSES);
     }

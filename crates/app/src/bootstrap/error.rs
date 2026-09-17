@@ -1,12 +1,24 @@
+//! What bootstrap could not do, and the context that makes it legible.
+//!
+//! A variant here says which artifact, which host, which derivations — the facts `mix-core` does
+//! not have and this crate does. What a reader should do about it depends on the command they
+//! ran, which this crate does not know, so the advice is written in `mix-cli` instead.
+
+/// Where systemd was looked for, which is what decides how it is turned on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Host {
+    /// An ordinary Linux distribution.
+    Native,
+    /// A WSL distro, where systemd is opt-in.
+    Wsl,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
     Core(#[from] mix_core::Error),
 
-    #[error(
-        "network request failed: {0}\n\
-         Please check your network connection, proxy settings, or --mirror URL."
-    )]
+    #[error("network request failed: {0}")]
     Network(#[source] Box<dyn std::error::Error + Send + Sync>),
 
     #[error("{artifact}: {detail}")]
@@ -24,42 +36,24 @@ pub enum Error {
     #[error("unexpected archive layout: {0}")]
     MalformedArchive(String),
 
-    #[error(
-        "root privileges required to {0}.\n\
-         Please re-run this command with sudo:\n\
-         \x20 sudo mix ..."
-    )]
+    #[error("root privileges are required to {0}")]
     NotRoot(&'static str),
 
-    #[error(
-        "this system already manages its own environment natively.\n\
-         `mix` is designed for standard Linux distributions and is not needed on NixOS."
-    )]
+    #[error("this host is NixOS, which manages its own environment natively")]
     UnsupportedHost,
 
-    #[error(
-        "a real Linux kernel is required for sandboxed builds (WSL1 is not supported).\n\
-         To upgrade this distro to WSL2, run from Windows PowerShell:\n\
-         \x20 wsl --set-version <distro> 2"
-    )]
+    #[error("WSL1 does not provide the real Linux kernel that sandboxed builds need")]
     UnsupportedKernel,
 
-    #[error("{hint}")]
-    SystemdNotReady { hint: &'static str },
+    #[error("systemd is not active: `/run/systemd/system` is missing or PID 1 is not systemd")]
+    SystemdNotReady { host: Host },
 
-    #[error(
-        "an existing, unmanaged runtime was detected on this system.\n\
-         `mix` requires a dedicated environment to manage its own reproducible runtime.\n\
-         To continue, uninstall the existing Nix installation or remove `/nix`:\n\
-         \x20 sudo rm -rf /nix"
-    )]
+    #[error("an existing, unmanaged Nix installation was found on this system")]
     AlreadyManaged,
 
     #[error(
-        "cannot move {path} into place: it is on a different filesystem than /nix.\n\
-         `mix` stages packages under /nix and moves them into /nix/store with an atomic \
-         rename, which requires both to be on the same filesystem. Remove any separate \
-         mount at /nix/store (e.g. a custom fstab entry) and retry."
+        "cannot move {} into /nix/store: it is on a different filesystem",
+        path.display()
     )]
     CrossDeviceStore { path: std::path::PathBuf },
 
@@ -70,37 +64,11 @@ pub enum Error {
         summary: String,
     },
 
-    #[error("{}", source_build_message(.0))]
+    #[error("the binary cache has nothing to download for: {}", .0.join(", "))]
     SourceBuildRequired(Vec<String>),
 
     #[error("interrupted; rolled back any partially applied changes")]
     Interrupted,
-}
-
-/// How many derivations are worth naming before the list stops being readable.
-const NAMED_SOURCE_BUILDS: usize = 5;
-
-fn source_build_message(derivations: &[String]) -> String {
-    let named: Vec<&str> = derivations
-        .iter()
-        .take(NAMED_SOURCE_BUILDS)
-        .map(String::as_str)
-        .collect();
-    let mut list = named.join(", ");
-    if let Some(rest) = derivations
-        .len()
-        .checked_sub(named.len())
-        .filter(|n| *n > 0)
-    {
-        list.push_str(&format!(" and {rest} more"));
-    }
-
-    format!(
-        "the binary cache has nothing to download for: {list}\n\
-         Installing this would compile it from source, which can take hours.\n\
-         To compile it anyway, re-run with --build:\n\
-         \x20 mix install --build ..."
-    )
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -110,56 +78,49 @@ mod tests {
     use super::*;
 
     #[test]
-    fn network_error_preserves_the_source_chain_and_the_mirror_hint() {
+    fn network_error_preserves_the_source_chain() {
         let boxed: Box<dyn std::error::Error + Send + Sync> = "connection reset".into();
         let err = Error::Network(boxed);
 
-        assert!(err.to_string().contains("--mirror"));
         let source = std::error::Error::source(&err).expect("source should be preserved");
         assert_eq!(source.to_string(), "connection reset");
     }
 
+    /// The path is the context this crate has; what to do about the mount it is on is the
+    /// command's business, not the library's.
     #[test]
-    fn cross_device_store_names_the_offending_path_and_the_fix() {
+    fn cross_device_store_names_the_offending_path() {
         let err = Error::CrossDeviceStore {
             path: "/nix/store/pkg-a".into(),
         };
 
-        let message = err.to_string();
-        assert!(message.contains("/nix/store/pkg-a"));
-        assert!(message.contains("fstab"));
+        assert_eq!(
+            err.to_string(),
+            "cannot move /nix/store/pkg-a into /nix/store: it is on a different filesystem"
+        );
     }
 
     #[test]
-    fn source_build_error_names_the_derivations_and_the_way_out() {
-        let err = Error::SourceBuildRequired(vec!["hello-2.12.3".to_string()]);
+    fn source_build_error_names_every_derivation_it_refused() {
+        let err = Error::SourceBuildRequired(vec!["hello-2.12.3".into(), "cowsay-3.8.4".into()]);
 
-        let message = err.to_string();
-        assert!(message.contains("hello-2.12.3"));
-        assert!(message.contains("mix install --build"));
-    }
-
-    #[test]
-    fn source_build_error_counts_the_derivations_it_does_not_name() {
-        let derivations: Vec<String> = (0..8).map(|i| format!("package-{i}")).collect();
-        let message = Error::SourceBuildRequired(derivations).to_string();
-
-        assert!(message.contains("package-4"));
-        assert!(!message.contains("package-5"));
-        assert!(message.contains("and 3 more"));
+        assert_eq!(
+            err.to_string(),
+            "the binary cache has nothing to download for: hello-2.12.3, cowsay-3.8.4"
+        );
     }
 
     #[test]
     fn rollback_error_reports_the_original_cause_and_the_cleanup_summary() {
         let err = Error::Rollback {
             cause: Box::new(Error::UnsupportedHost),
-            summary: "1 rollback step(s) failed, the system may need manual cleanup: nixbld group: exit 1".to_string(),
+            summary: "1 rollback step(s) failed: nixbld group: exit 1".to_string(),
         };
 
         let message = err.to_string();
-        assert!(message.contains("not needed on NixOS"));
-        assert!(message.contains("manual cleanup"));
+        assert!(message.contains("NixOS"));
+        assert!(message.contains("nixbld group: exit 1"));
         let source = std::error::Error::source(&err).expect("cause should be preserved");
-        assert!(source.to_string().contains("not needed on NixOS"));
+        assert!(source.to_string().contains("NixOS"));
     }
 }

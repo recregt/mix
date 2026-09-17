@@ -12,9 +12,7 @@ pub async fn run(verbose: u8) -> anyhow::Result<ExitCode> {
         mix_ui::ok("System health is intact.");
         Ok(ExitCode::SUCCESS)
     } else {
-        mix_ui::fail(
-            "System health check failed.\n\nRun `mix repair` to reconcile configuration drift.",
-        );
+        mix_ui::fail(crate::explain::doctor::unhealthy().message());
         Ok(ExitCode::FAILURE)
     }
 }
@@ -42,12 +40,7 @@ fn render(reports: &[HealthReport], verbose: bool) {
                 continue;
             }
 
-            let detail = report.detail.as_deref().unwrap_or("unhealthy");
-            mix_ui::fail(format!("{}: {detail}", report.name));
+            mix_ui::fail(crate::explain::doctor::check(report));
         }
     }
-}
-
-pub fn check_failed_message(e: impl std::fmt::Display) -> String {
-    format!("System health check failed: {e}\n\nRun `mix repair` to reconcile configuration drift.")
 }

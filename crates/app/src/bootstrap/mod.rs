@@ -9,7 +9,7 @@ pub mod preflight;
 #[doc(hidden)]
 pub mod tarball;
 
-pub use error::{Error, Result};
+pub use error::{Error, Host, Result};
 pub(crate) use steps::{BuildPolicy, activate};
 
 use std::sync::Arc;
@@ -82,7 +82,7 @@ async fn run_steps(
     Err(Error::Rollback {
         cause: Box::new(cause),
         summary: format!(
-            "{} rollback step(s) failed, the system may need manual cleanup: {}",
+            "{} rollback step(s) failed: {}",
             failed_rollbacks.len(),
             failed_rollbacks.join("; ")
         ),

@@ -31,12 +31,9 @@ pub async fn run() -> anyhow::Result<ExitCode> {
 
 fn render(reports: &[RepairReport]) {
     for report in reports {
-        if report.fixed {
-            mix_ui::ok(format!("repaired: {}", report.name));
-            continue;
+        match &report.error {
+            None => mix_ui::ok(format!("repaired: {}", report.name)),
+            Some(error) => mix_ui::fail(crate::explain::repair::report(&report.name, error)),
         }
-
-        let detail = report.detail.as_deref().unwrap_or("could not repair");
-        mix_ui::fail(format!("{}: {detail}", report.name));
     }
 }

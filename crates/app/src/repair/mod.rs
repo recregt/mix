@@ -12,16 +12,33 @@ use crate::shared::os::{
     DIR_MODE_MASK, files_match, path_exists, run, systemd_restart_if_active, systemd_unit_is_active,
 };
 
+/// Why an artifact is beyond repair's reach.
+///
+/// The reason is a value rather than a sentence: what a reader should do about it differs per
+/// command — `mix repair` offers a way out, the health gate in front of the other commands only
+/// says why it stopped — so the words are chosen where the command is known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum Unfixable {
+    /// Something is in the way that repair will not delete.
+    #[error("exists but is not a directory")]
+    NotADirectory,
+
+    /// The user the membership was for is gone.
+    #[error("the user no longer exists")]
+    MissingUser,
+
+    /// Part of the Nix runtime itself, which repair does not install.
+    #[error("missing, and it is produced by the Nix installation rather than by repair")]
+    MissingRuntime,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
     Core(#[from] CoreError),
 
-    #[error("{artifact}: {hint}")]
-    Unrepairable {
-        artifact: String,
-        hint: &'static str,
-    },
+    #[error("{artifact}: {reason}")]
+    Unrepairable { artifact: String, reason: Unfixable },
 }
 
 pub(crate) enum Outcome {
@@ -32,7 +49,9 @@ pub(crate) enum Outcome {
 pub struct RepairReport {
     pub name: String,
     pub fixed: bool,
-    pub detail: Option<String>,
+    /// What stopped the repair, handed over rather than rendered: the caller decides how it
+    /// should read, and a typed error is still there to be matched on.
+    pub error: Option<Error>,
 }
 
 pub async fn repair(user_config: Option<&UserConfig>) -> Vec<RepairReport> {
@@ -49,7 +68,7 @@ pub async fn repair(user_config: Option<&UserConfig>) -> Vec<RepairReport> {
                 reports.push(RepairReport {
                     name: name.into_owned(),
                     fixed: true,
-                    detail: None,
+                    error: None,
                 })
             }
             Err(e) => {
@@ -57,7 +76,7 @@ pub async fn repair(user_config: Option<&UserConfig>) -> Vec<RepairReport> {
                 reports.push(RepairReport {
                     name: name.into_owned(),
                     fixed: false,
-                    detail: Some(e.to_string()),
+                    error: Some(e),
                 })
             }
         }
@@ -69,12 +88,12 @@ pub async fn repair(user_config: Option<&UserConfig>) -> Vec<RepairReport> {
             Ok(true) => reports.push(RepairReport {
                 name: NIX_DAEMON_SERVICE_UNIT.to_string(),
                 fixed: true,
-                detail: None,
+                error: None,
             }),
             Err(e) => reports.push(RepairReport {
                 name: NIX_DAEMON_SERVICE_UNIT.to_string(),
                 fixed: false,
-                detail: Some(e.to_string()),
+                error: Some(e.into()),
             }),
         }
     }
@@ -88,7 +107,7 @@ pub async fn repair(user_config: Option<&UserConfig>) -> Vec<RepairReport> {
                 reports.push(RepairReport {
                     name: "git-tracked state".to_string(),
                     fixed: true,
-                    detail: None,
+                    error: None,
                 })
             }
             Ok(false) => {}
@@ -97,7 +116,7 @@ pub async fn repair(user_config: Option<&UserConfig>) -> Vec<RepairReport> {
                 reports.push(RepairReport {
                     name: "git-tracked state".to_string(),
                     fixed: false,
-                    detail: Some(e.to_string()),
+                    error: Some(e.into()),
                 })
             }
         }
@@ -152,7 +171,7 @@ async fn fix_directory(
         Ok(_) => {
             return Err(Error::Unrepairable {
                 artifact: path.display().to_string(),
-                hint: "exists but is not a directory; remove it manually and retry",
+                reason: Unfixable::NotADirectory,
             });
         }
         Err(_) => {
@@ -344,7 +363,7 @@ async fn fix_group_member(
     if !identity::user_exists(user) {
         return Err(Error::Unrepairable {
             artifact: user.to_string(),
-            hint: "the user no longer exists; nothing left to enrol",
+            reason: Unfixable::MissingUser,
         });
     }
     run("gpasswd", &["--add", user, group], token).await?;
@@ -432,7 +451,7 @@ async fn fix_path_exists(name: &str, path: &str) -> Result<Outcome, Error> {
     } else {
         Err(Error::Unrepairable {
             artifact: name.to_string(),
-            hint: "produced by the Nix installation itself; run `mix bootstrap` to restore it",
+            reason: Unfixable::MissingRuntime,
         })
     }
 }
@@ -678,7 +697,7 @@ mod tests {
         RepairReport {
             name: name.to_string(),
             fixed,
-            detail: None,
+            error: None,
         }
     }
 

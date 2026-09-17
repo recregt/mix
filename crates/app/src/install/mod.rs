@@ -23,12 +23,10 @@ pub enum Error {
     #[error(transparent)]
     InvalidPackage(#[from] mix_nixgen::InvalidInput),
 
-    #[error(
-        "`mix install` cannot be run as root.\nRun it as the user whose profile it installs into."
-    )]
+    #[error("this command installs into the invoking user's profile, and it was run as root")]
     NotRoot,
 
-    #[error("not bootstrapped yet.\nRun `mix bootstrap` first.")]
+    #[error("no managed environment was found for the invoking user")]
     NotBootstrapped,
 }
 
