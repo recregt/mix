@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::shared::os::path_exists;
+use crate::fs::exists;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Wsl {
@@ -72,7 +72,7 @@ pub async fn systemd_active() -> bool {
 }
 
 async fn systemd_active_at(marker: &Path, comm_path: &Path) -> bool {
-    path_exists(marker).await
+    exists(marker).await
         && tokio::fs::read_to_string(comm_path)
             .await
             .map(|s| s.trim() == "systemd")

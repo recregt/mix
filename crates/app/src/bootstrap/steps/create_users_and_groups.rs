@@ -5,9 +5,10 @@ use mix_core::identity::{
 };
 use mix_core::{CancellationToken, Step};
 
+use crate::bootstrap::cleanup::warn_on_failure;
 use crate::bootstrap::error::{Error, Result};
-use crate::bootstrap::util::{create_dir_all, is_dir, set_permissions, warn_on_failure};
-use crate::shared::os::run;
+use crate::exec::run;
+use crate::fs::{create_dir_all, is_dir, set_mode};
 
 #[derive(Default)]
 pub struct CreateUsersAndGroups {
@@ -32,7 +33,7 @@ impl Step for CreateUsersAndGroups {
     async fn execute(&mut self, token: &CancellationToken) -> Result<()> {
         if !is_dir(NIXBLD_HOME).await {
             create_dir_all(NIXBLD_HOME).await?;
-            set_permissions(NIXBLD_HOME, 0o555).await?;
+            set_mode(NIXBLD_HOME, 0o555).await?;
         }
 
         self.reconcile_group(NIXBLD_GROUP, NIXBLD_GID, token)

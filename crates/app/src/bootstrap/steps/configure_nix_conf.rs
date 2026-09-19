@@ -6,11 +6,10 @@ use mix_core::{CancellationToken, Step};
 use mix_core::models::{NIX_CONF, PROFILE_SNIPPET};
 use mix_core::paths::{NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT, PROFILE_SNIPPET_DEST};
 
+use crate::bootstrap::cleanup::warn_on_failure;
 use crate::bootstrap::error::{Error, Result};
-use crate::bootstrap::util::{
-    create_dir_all, remove_dir_all, remove_file, warn_on_failure, write_file_atomic,
-};
-use crate::shared::os::{path_exists, systemd_restart_if_active};
+use crate::fs::{create_dir_all, exists, remove_dir_all, remove_file, write_atomic};
+use crate::systemd::restart_if_active;
 
 #[derive(Default)]
 pub struct ConfigureNixConf {
@@ -66,7 +65,7 @@ impl Step for ConfigureNixConf {
             warn_on_failure(
                 "restore runtime configuration file",
                 match written.previous {
-                    Some(contents) => write_file_atomic(written.path, contents).await,
+                    Some(contents) => write_atomic(written.path, contents).await,
                     None => remove_file(written.path).await,
                 },
             );
@@ -87,7 +86,7 @@ fn daemon_needs_the_new_config(previous: Option<&[u8]>) -> bool {
 async fn restart_running_daemon(token: &CancellationToken) {
     warn_on_failure(
         "restart nix-daemon",
-        systemd_restart_if_active(NIX_DAEMON_SERVICE_UNIT, token).await,
+        restart_if_active(NIX_DAEMON_SERVICE_UNIT, token).await,
     );
 }
 
@@ -111,14 +110,14 @@ async fn write(path: &str, contents: &str) -> Result<Option<PathBuf>> {
         }
         None => None,
     };
-    write_file_atomic(path, contents).await?;
+    write_atomic(path, contents).await?;
     Ok(created_dir)
 }
 
 async fn first_missing_ancestor(dir: &Path) -> Option<PathBuf> {
     let mut missing = None;
     let mut candidate = dir;
-    while !path_exists(candidate).await {
+    while !exists(candidate).await {
         missing = Some(candidate.to_path_buf());
         match candidate.parent() {
             Some(parent) => candidate = parent,

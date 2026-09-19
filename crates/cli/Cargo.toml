@@ -14,3 +14,10 @@ mix-core = { path = "../core" }
 mix-ui = { path = "../ui" }
 anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive", "env"] }
+
+[dev-dependencies]
+divan = { workspace = true }
+
+[[bench]]
+name = "explain"
+harness = false

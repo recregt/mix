@@ -10,7 +10,7 @@ use crate::paths::{
     NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SERVICE_UNIT,
     NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC, NIX_DAEMON_SOCKET_UNIT, NIX_OWNERSHIP_MARKER,
     NIX_PROFILES_DIR_MODE, NIX_STORE, NIX_TREE_MODE, NIX_TREE_PATHS, PROFILE_SNIPPET_DEST,
-    mix_state_dir, nix_profiles_dir,
+    STATE_FILE, mix_state_dir, nix_profiles_dir,
 };
 use crate::privilege::InvokingUser;
 
@@ -65,6 +65,11 @@ pub enum Target {
         expected: Option<String>,
         owner: Owner,
     },
+    SeededFile {
+        path: PathBuf,
+        seed: Cow<'static, str>,
+        owner: Owner,
+    },
     Group {
         name: &'static str,
         gid: u32,
@@ -95,6 +100,7 @@ impl Target {
         match self {
             Target::Directory { path, .. } => path.to_string_lossy(),
             Target::File { path, .. } => path.to_string_lossy(),
+            Target::SeededFile { path, .. } => path.to_string_lossy(),
             Target::Group { name, .. } => Cow::Borrowed(name),
             Target::GroupMember { user, .. } => Cow::Borrowed(user),
             Target::User { n, .. } => identity::user_name(*n),
@@ -113,6 +119,7 @@ impl Target {
                 Category::Configuration
             }
             Target::File { .. } => Category::Filesystem,
+            Target::SeededFile { .. } => Category::Filesystem,
             Target::Group { .. } | Target::GroupMember { .. } | Target::User { .. } => {
                 Category::Identity
             }
@@ -148,6 +155,11 @@ fn push_user_targets(items: &mut Vec<Target>, cfg: &UserConfig) {
     items.push(Target::File {
         path: state_dir.join(FLAKE_LOCK),
         expected: None,
+        owner,
+    });
+    items.push(Target::SeededFile {
+        path: state_dir.join(STATE_FILE),
+        seed: Cow::Borrowed(crate::state::StateManifest::seed_rendered()),
         owner,
     });
     items.push(Target::GroupMember {
@@ -472,9 +484,9 @@ mod tests {
     }
 
     #[test]
-    fn user_targets_returns_exactly_the_six_per_user_entries() {
+    fn user_targets_returns_exactly_the_seven_per_user_entries() {
         let cfg = sample_user_config();
-        assert_eq!(user_targets(&cfg).len(), 6);
+        assert_eq!(user_targets(&cfg).len(), 7);
     }
 
     #[test]
@@ -494,6 +506,17 @@ mod tests {
             t,
             Target::File { path, expected: None, owner: Some((1000, 1000)) }
                 if path.ends_with("flake.lock")
+        )));
+    }
+
+    #[test]
+    fn user_targets_includes_the_state_file_seeded_with_git() {
+        let cfg = sample_user_config();
+        assert!(user_targets(&cfg).iter().any(|t| matches!(
+            t,
+            Target::SeededFile { path, seed, owner: Some((1000, 1000)) }
+                if path.ends_with("state")
+                    && seed.as_ref() == crate::state::StateManifest::seed().render()
         )));
     }
 

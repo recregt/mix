@@ -18,6 +18,7 @@ pub async fn run(
         force,
         mix_ui::download_reporter(),
         mix_ui::step_observer(),
+        mix_ui::activity_reporter(),
     )
     .await?;
     mix_ui::ok("System environment initialized and ready.");

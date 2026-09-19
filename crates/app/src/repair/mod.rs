@@ -1,106 +1,86 @@
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+//! The reconciliation behind `mix repair`: every declared target measured, and the ones that
+//! drifted put back.
+//!
+//! What can be measured and what can be put back are [`crate::target`]'s, not this command's:
+//! `mix repair` decides the order it walks the environment in, what a change means for the
+//! nix-daemon and for the git-tracked state, and what it hands the caller to print.
 
-use mix_core::identity;
-use mix_core::models::{Target, UserConfig, targets};
+use mix_core::CancellationToken;
+use mix_core::models::{UserConfig, targets};
 use mix_core::paths::{NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT, mix_state_dir};
-use mix_core::{CancellationToken, Error as CoreError};
-use nix::unistd::{Gid, Uid, chown};
 
-use crate::shared::git;
-use crate::shared::os::{
-    DIR_MODE_MASK, files_match, path_exists, run, systemd_restart_if_active, systemd_unit_is_active,
-};
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error(transparent)]
-    Core(#[from] CoreError),
-
-    #[error("{artifact}: {hint}")]
-    Unrepairable {
-        artifact: String,
-        hint: &'static str,
-    },
-}
-
-pub(crate) enum Outcome {
-    Healthy,
-    Repaired,
-}
+use crate::git;
+use crate::systemd;
+use crate::target::{self, Error};
 
 pub struct RepairReport {
     pub name: String,
     pub fixed: bool,
-    pub detail: Option<String>,
+    /// What stopped the repair, handed over rather than rendered: the caller decides how it
+    /// should read, and a typed error is still there to be matched on.
+    pub error: Option<Error>,
+}
+
+impl RepairReport {
+    fn repaired(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            fixed: true,
+            error: None,
+        }
+    }
+
+    fn failed(name: impl Into<String>, error: impl Into<Error>) -> Self {
+        Self {
+            name: name.into(),
+            fixed: false,
+            error: Some(error.into()),
+        }
+    }
 }
 
 pub async fn repair(user_config: Option<&UserConfig>) -> Vec<RepairReport> {
     tracing::info!("repairing managed environment");
     let token = CancellationToken::new();
+    let items = targets(user_config);
+
+    // Measuring does not change anything, so every target is measured at once; putting them back
+    // is done in the order they are declared in, because a target can be what the next one needs.
+    let findings = futures_util::future::join_all(items.iter().map(target::inspect)).await;
+
     let mut reports = Vec::new();
-    for target in targets(user_config) {
-        let name = target.label();
-        tracing::debug!("checking: {name}");
-        match fix(&target, &token).await {
-            Ok(Outcome::Healthy) => {}
-            Ok(Outcome::Repaired) => {
+    for (item, finding) in items.iter().zip(findings) {
+        let Some(finding) = finding else { continue };
+        let name = item.label();
+        tracing::debug!("drifted: {name}: {finding:?}");
+
+        if let Some(reason) = finding.unfixable() {
+            let artifact = name.into_owned();
+            reports.push(RepairReport::failed(
+                artifact.clone(),
+                Error::Unrepairable { artifact, reason },
+            ));
+            continue;
+        }
+
+        match target::reconcile(item, finding, &token).await {
+            Ok(()) => {
                 tracing::debug!("repaired: {name}");
-                reports.push(RepairReport {
-                    name: name.into_owned(),
-                    fixed: true,
-                    detail: None,
-                })
+                reports.push(RepairReport::repaired(name.into_owned()));
             }
             Err(e) => {
                 tracing::debug!("failed to repair {name}: {e}");
-                reports.push(RepairReport {
-                    name: name.into_owned(),
-                    fixed: false,
-                    detail: Some(e.to_string()),
-                })
+                reports.push(RepairReport::failed(name.into_owned(), e));
             }
         }
     }
 
     if rewrote_nix_conf(&reports) {
-        match systemd_restart_if_active(NIX_DAEMON_SERVICE_UNIT, &token).await {
-            Ok(false) => {}
-            Ok(true) => reports.push(RepairReport {
-                name: NIX_DAEMON_SERVICE_UNIT.to_string(),
-                fixed: true,
-                detail: None,
-            }),
-            Err(e) => reports.push(RepairReport {
-                name: NIX_DAEMON_SERVICE_UNIT.to_string(),
-                fixed: false,
-                detail: Some(e.to_string()),
-            }),
-        }
+        restart_the_daemon(&token, &mut reports).await;
     }
 
     if let Some(cfg) = user_config {
-        let state_dir = mix_state_dir(&cfg.user.home);
-        let git = git::Git::resolve(&cfg.user).await;
-        match git.sync(&cfg.user, &state_dir, &token).await {
-            Ok(true) => {
-                tracing::debug!("committed drift in git-tracked state");
-                reports.push(RepairReport {
-                    name: "git-tracked state".to_string(),
-                    fixed: true,
-                    detail: None,
-                })
-            }
-            Ok(false) => {}
-            Err(e) => {
-                tracing::debug!("failed to commit git-tracked state: {e}");
-                reports.push(RepairReport {
-                    name: "git-tracked state".to_string(),
-                    fixed: false,
-                    detail: Some(e.to_string()),
-                })
-            }
-        }
+        commit_the_tracked_state(cfg, &token, &mut reports).await;
     }
 
     reports
@@ -113,302 +93,34 @@ fn rewrote_nix_conf(reports: &[RepairReport]) -> bool {
         .any(|report| report.fixed && report.name == NIX_CONF_DEST)
 }
 
-pub(crate) async fn fix(target: &Target, token: &CancellationToken) -> Result<Outcome, Error> {
-    match target {
-        Target::Directory { path, mode, owner } => fix_directory(path, *mode, *owner).await,
-        Target::File {
-            path,
-            expected,
-            owner,
-        } => fix_file(path, expected.as_deref(), *owner).await,
-        Target::Group { name, gid } => fix_group(name, *gid, token).await,
-        Target::GroupMember { group, user } => fix_group_member(group, user, token).await,
-        Target::User { n, uid, gid } => fix_user(*n, *uid, *gid, token).await,
-        Target::SystemdUnit {
-            name,
-            src,
-            dest,
-            must_be_active,
-        } => fix_systemd_unit(name, src, dest, *must_be_active, token).await,
-        Target::PathExists { name, path } => fix_path_exists(name, path).await,
+async fn restart_the_daemon(token: &CancellationToken, reports: &mut Vec<RepairReport>) {
+    match systemd::restart_if_active(NIX_DAEMON_SERVICE_UNIT, token).await {
+        Ok(false) => {}
+        Ok(true) => reports.push(RepairReport::repaired(NIX_DAEMON_SERVICE_UNIT)),
+        Err(e) => reports.push(RepairReport::failed(NIX_DAEMON_SERVICE_UNIT, e)),
     }
 }
 
-async fn fix_directory(
-    path: &Path,
-    mode: u32,
-    owner: Option<(u32, u32)>,
-) -> Result<Outcome, Error> {
-    let mut repaired = match tokio::fs::metadata(path).await {
-        Ok(meta) if meta.is_dir() => {
-            if meta.permissions().mode() & DIR_MODE_MASK == mode {
-                false
-            } else {
-                set_mode(path, mode).await?;
-                true
-            }
-        }
-        Ok(_) => {
-            return Err(Error::Unrepairable {
-                artifact: path.display().to_string(),
-                hint: "exists but is not a directory; remove it manually and retry",
-            });
-        }
-        Err(_) => {
-            create_dir_all_owned(path, mode, owner).await?;
-            true
-        }
-    };
-
-    if set_owner_if_needed(path, owner).await? {
-        repaired = true;
-    }
-
-    Ok(if repaired {
-        Outcome::Repaired
-    } else {
-        Outcome::Healthy
-    })
-}
-
-const INTERMEDIATE_DIR_MODE: u32 = 0o755;
-
-async fn create_dir_all_owned(
-    path: &Path,
-    mode: u32,
-    owner: Option<(u32, u32)>,
-) -> Result<(), Error> {
-    let mut missing = Vec::new();
-    let mut cur = path;
-    loop {
-        if tokio::fs::metadata(cur).await.is_ok() {
-            break;
-        }
-        missing.push(cur);
-        match cur.parent() {
-            Some(parent) => cur = parent,
-            None => break,
-        }
-    }
-
-    for dir in missing.into_iter().rev() {
-        tracing::debug!("creating directory: {}", dir.display());
-        match tokio::fs::create_dir(dir).await {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(io_error(dir, e).into()),
-        }
-        let dir_mode = if dir == path {
-            mode
-        } else {
-            INTERMEDIATE_DIR_MODE
-        };
-        set_mode(dir, dir_mode).await?;
-        set_owner_if_needed(dir, owner).await?;
-    }
-
-    Ok(())
-}
-
-async fn set_mode(path: &Path, mode: u32) -> Result<(), Error> {
-    tracing::debug!("setting permissions: {} ({mode:o})", path.display());
-    tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
-        .await
-        .map_err(|source| io_error(path, source))?;
-    Ok(())
-}
-
-async fn set_owner_if_needed(path: &Path, owner: Option<(u32, u32)>) -> Result<bool, Error> {
-    let Some((uid, gid)) = owner else {
-        return Ok(false);
-    };
-    let meta = tokio::fs::metadata(path)
-        .await
-        .map_err(|source| io_error(path, source))?;
-    if std::os::unix::fs::MetadataExt::uid(&meta) == uid
-        && std::os::unix::fs::MetadataExt::gid(&meta) == gid
-    {
-        return Ok(false);
-    }
-    tracing::debug!("setting owner: {} ({uid}:{gid})", path.display());
-    let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || {
-        chown(&path, Some(Uid::from_raw(uid)), Some(Gid::from_raw(gid)))
-            .map_err(|e| io_error(&path, std::io::Error::from(e)))
-    })
-    .await
-    .map_err(|e| CoreError::TaskPanicked(e.to_string()))??;
-    Ok(true)
-}
-
-async fn fix_file(
-    path: &Path,
-    expected: Option<&str>,
-    owner: Option<(u32, u32)>,
-) -> Result<Outcome, Error> {
-    let mut repaired = false;
-
-    match expected {
-        Some(expected) => {
-            let matches = matches!(
-                tokio::fs::read_to_string(path).await,
-                Ok(contents) if contents == expected
-            );
-            if !matches {
-                if let Some(parent) = path.parent() {
-                    tokio::fs::create_dir_all(parent)
-                        .await
-                        .map_err(|source| io_error(parent, source))?;
-                }
-                tracing::debug!("writing file: {}", path.display());
-                tokio::fs::write(path, expected)
-                    .await
-                    .map_err(|source| io_error(path, source))?;
-                repaired = true;
-            }
-        }
-        None if !path_exists(path).await => {
-            return Ok(Outcome::Healthy);
-        }
-        None => {}
-    }
-
-    if set_owner_if_needed(path, owner).await? {
-        repaired = true;
-    }
-
-    Ok(if repaired {
-        Outcome::Repaired
-    } else {
-        Outcome::Healthy
-    })
-}
-
-async fn fix_group(name: &str, gid: u32, token: &CancellationToken) -> Result<Outcome, Error> {
-    if identity::group_exists(name) {
-        if identity::group_has_gid(name, gid) {
-            return Ok(Outcome::Healthy);
-        }
-        run("groupmod", &["--gid", &gid.to_string(), name], token).await?;
-        return Ok(Outcome::Repaired);
-    }
-    run(
-        "groupadd",
-        &["--system", "--gid", &gid.to_string(), name],
-        token,
-    )
-    .await?;
-    Ok(Outcome::Repaired)
-}
-
-async fn fix_group_member(
-    group: &str,
-    user: &str,
+/// Configuration mix rewrote is drift the user should be able to see in git.
+async fn commit_the_tracked_state(
+    cfg: &UserConfig,
     token: &CancellationToken,
-) -> Result<Outcome, Error> {
-    if identity::group_has_member(group, user) {
-        return Ok(Outcome::Healthy);
-    }
-    if !identity::user_exists(user) {
-        return Err(Error::Unrepairable {
-            artifact: user.to_string(),
-            hint: "the user no longer exists; nothing left to enrol",
-        });
-    }
-    run("gpasswd", &["--add", user, group], token).await?;
-    Ok(Outcome::Repaired)
-}
+    reports: &mut Vec<RepairReport>,
+) {
+    const NAME: &str = "git-tracked state";
 
-async fn fix_user(n: u32, uid: u32, gid: u32, token: &CancellationToken) -> Result<Outcome, Error> {
-    let name = identity::user_name(n);
-
-    if identity::user_exists(&name) {
-        if identity::user_has_uid(&name, uid) && identity::user_has_gid(&name, gid) {
-            return Ok(Outcome::Healthy);
+    let state_dir = mix_state_dir(&cfg.user.home);
+    let git = git::Git::resolve(&cfg.user).await;
+    match git.sync(&cfg.user, &state_dir, token).await {
+        Ok(true) => {
+            tracing::debug!("committed drift in git-tracked state");
+            reports.push(RepairReport::repaired(NAME));
         }
-        if !identity::user_has_gid(&name, gid) {
-            run("usermod", &["--gid", &gid.to_string(), &name], token).await?;
+        Ok(false) => {}
+        Err(e) => {
+            tracing::debug!("failed to commit git-tracked state: {e}");
+            reports.push(RepairReport::failed(NAME, e));
         }
-        if !identity::user_has_uid(&name, uid) {
-            run("usermod", &["--uid", &uid.to_string(), &name], token).await?;
-        }
-        return Ok(Outcome::Repaired);
-    }
-
-    run(
-        "useradd",
-        &[
-            "--system",
-            "--no-create-home",
-            "--no-user-group",
-            "--home-dir",
-            identity::NIXBLD_HOME,
-            "--shell",
-            identity::NIXBLD_SHELL,
-            "--uid",
-            &uid.to_string(),
-            "--gid",
-            identity::NIXBLD_GROUP,
-            "--groups",
-            identity::NIXBLD_GROUP,
-            "--comment",
-            &format!("mix build user {n}"),
-            &name,
-        ],
-        token,
-    )
-    .await?;
-    Ok(Outcome::Repaired)
-}
-
-async fn fix_systemd_unit(
-    name: &str,
-    src: &str,
-    dest: &str,
-    must_be_active: bool,
-    token: &CancellationToken,
-) -> Result<Outcome, Error> {
-    let mut changed = false;
-
-    if !files_match(src, dest).await {
-        tracing::debug!("copying unit file: {src} -> {dest}");
-        let contents = tokio::fs::read(src)
-            .await
-            .map_err(|source| io_error(Path::new(src), source))?;
-        tokio::fs::write(dest, contents)
-            .await
-            .map_err(|source| io_error(Path::new(dest), source))?;
-        run("systemctl", &["daemon-reload"], token).await?;
-        changed = true;
-    }
-
-    if must_be_active && !systemd_unit_is_active(name).await {
-        run("systemctl", &["enable", "--now", name], token).await?;
-        changed = true;
-    }
-
-    Ok(if changed {
-        Outcome::Repaired
-    } else {
-        Outcome::Healthy
-    })
-}
-
-async fn fix_path_exists(name: &str, path: &str) -> Result<Outcome, Error> {
-    if path_exists(path).await {
-        Ok(Outcome::Healthy)
-    } else {
-        Err(Error::Unrepairable {
-            artifact: name.to_string(),
-            hint: "produced by the Nix installation itself; run `mix bootstrap` to restore it",
-        })
-    }
-}
-
-fn io_error(path: &Path, source: std::io::Error) -> CoreError {
-    CoreError::Io {
-        path: PathBuf::from(path),
-        source,
     }
 }
 
@@ -416,196 +128,11 @@ fn io_error(path: &Path, source: std::io::Error) -> CoreError {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn fix_directory_creates_a_missing_directory_with_the_right_mode() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("sticky");
-
-        let outcome = fix_directory(&path, 0o1777, None).await.unwrap();
-
-        assert!(matches!(outcome, Outcome::Repaired));
-        let meta = tokio::fs::metadata(&path).await.unwrap();
-        assert!(meta.is_dir());
-        assert_eq!(meta.permissions().mode() & 0o7777, 0o1777);
-    }
-
-    #[tokio::test]
-    async fn fix_directory_owns_every_intermediate_directory_it_creates() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("a/b/c");
-        let uid = Uid::current().as_raw();
-        let gid = Gid::current().as_raw();
-
-        let outcome = fix_directory(&path, 0o700, Some((uid, gid))).await.unwrap();
-
-        assert!(matches!(outcome, Outcome::Repaired));
-        for p in [root.path().join("a"), root.path().join("a/b"), path.clone()] {
-            let meta = tokio::fs::metadata(&p).await.unwrap();
-            assert_eq!(std::os::unix::fs::MetadataExt::uid(&meta), uid);
-            assert_eq!(std::os::unix::fs::MetadataExt::gid(&meta), gid);
-        }
-    }
-
-    #[tokio::test]
-    async fn fix_directory_gives_intermediate_directories_a_traversable_mode_and_the_leaf_its_own()
-    {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("a/b");
-
-        fix_directory(&path, 0o700, None).await.unwrap();
-
-        let intermediate = tokio::fs::metadata(root.path().join("a")).await.unwrap();
-        assert_eq!(intermediate.permissions().mode() & 0o7777, 0o755);
-        let leaf = tokio::fs::metadata(&path).await.unwrap();
-        assert_eq!(leaf.permissions().mode() & 0o7777, 0o700);
-    }
-
-    #[tokio::test]
-    async fn fix_directory_leaves_an_existing_ancestor_untouched() {
-        let root = tempfile::tempdir().unwrap();
-        let ancestor = root.path().join("a");
-        std::fs::create_dir(&ancestor).unwrap();
-        std::fs::set_permissions(&ancestor, std::fs::Permissions::from_mode(0o750)).unwrap();
-        let path = ancestor.join("b");
-
-        fix_directory(&path, 0o700, None).await.unwrap();
-
-        let meta = tokio::fs::metadata(&ancestor).await.unwrap();
-        assert_eq!(meta.permissions().mode() & 0o7777, 0o750);
-    }
-
-    #[tokio::test]
-    async fn fix_directory_repairs_a_drifted_mode_in_place() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-
-        let outcome = fix_directory(dir.path(), 0o755, None).await.unwrap();
-
-        assert!(matches!(outcome, Outcome::Repaired));
-        let meta = tokio::fs::metadata(dir.path()).await.unwrap();
-        assert_eq!(meta.permissions().mode() & 0o7777, 0o755);
-    }
-
-    #[tokio::test]
-    async fn fix_directory_is_a_noop_when_already_healthy() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-
-        let outcome = fix_directory(dir.path(), 0o755, None).await.unwrap();
-
-        assert!(matches!(outcome, Outcome::Healthy));
-    }
-
-    #[tokio::test]
-    async fn fix_directory_refuses_to_touch_a_regular_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("not-a-dir");
-        std::fs::write(&file, "x").unwrap();
-
-        let result = fix_directory(&file, 0o755, None).await;
-
-        assert!(matches!(result, Err(Error::Unrepairable { .. })));
-    }
-
-    #[tokio::test]
-    async fn fix_directory_is_healthy_when_owner_already_matches() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-        let uid = Uid::current().as_raw();
-        let gid = Gid::current().as_raw();
-
-        let outcome = fix_directory(dir.path(), 0o755, Some((uid, gid)))
-            .await
-            .unwrap();
-
-        assert!(matches!(outcome, Outcome::Healthy));
-    }
-
-    #[tokio::test]
-    async fn fix_file_writes_the_expected_content() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("f");
-
-        let outcome = fix_file(&file, Some("expected content"), None)
-            .await
-            .unwrap();
-
-        assert!(matches!(outcome, Outcome::Repaired));
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), "expected content");
-    }
-
-    #[tokio::test]
-    async fn fix_file_is_a_noop_when_content_already_matches() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("f");
-        std::fs::write(&file, "expected content").unwrap();
-
-        let outcome = fix_file(&file, Some("expected content"), None)
-            .await
-            .unwrap();
-
-        assert!(matches!(outcome, Outcome::Healthy));
-    }
-
-    #[tokio::test]
-    async fn fix_file_is_healthy_when_owner_already_matches() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("f");
-        std::fs::write(&file, "expected content").unwrap();
-        let uid = Uid::current().as_raw();
-        let gid = Gid::current().as_raw();
-
-        let outcome = fix_file(&file, Some("expected content"), Some((uid, gid)))
-            .await
-            .unwrap();
-
-        assert!(matches!(outcome, Outcome::Healthy));
-    }
-
-    #[tokio::test]
-    async fn fix_file_with_no_expected_content_is_healthy_when_missing() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("flake.lock");
-
-        let outcome = fix_file(&file, None, None).await.unwrap();
-
-        assert!(matches!(outcome, Outcome::Healthy));
-        assert!(!file.exists());
-    }
-
-    #[tokio::test]
-    async fn fix_file_with_no_expected_content_never_rewrites_present_content() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("flake.lock");
-        std::fs::write(&file, "whatever nix wrote").unwrap();
-
-        let outcome = fix_file(&file, None, None).await.unwrap();
-
-        assert!(matches!(outcome, Outcome::Healthy));
-        assert_eq!(
-            std::fs::read_to_string(&file).unwrap(),
-            "whatever nix wrote"
-        );
-    }
-
-    #[tokio::test]
-    async fn fix_file_with_no_expected_content_still_fixes_ownership_when_present() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("flake.lock");
-        std::fs::write(&file, "whatever nix wrote").unwrap();
-        let uid = Uid::current().as_raw();
-        let gid = Gid::current().as_raw();
-
-        let outcome = fix_file(&file, None, Some((uid, gid))).await.unwrap();
-
-        assert!(matches!(outcome, Outcome::Healthy));
-    }
-
     fn report(name: &str, fixed: bool) -> RepairReport {
         RepairReport {
             name: name.to_string(),
             fixed,
-            detail: None,
+            error: None,
         }
     }
 
@@ -621,44 +148,18 @@ mod tests {
         assert!(!rewrote_nix_conf(&[]));
     }
 
-    #[tokio::test]
-    async fn fix_group_member_is_a_noop_for_an_existing_member() {
-        let outcome = fix_group_member("root", "root", &CancellationToken::new())
-            .await
-            .unwrap();
+    #[test]
+    fn a_report_carries_either_a_repair_or_the_reason_there_was_none() {
+        let repaired = RepairReport::repaired("/nix");
+        assert!(repaired.fixed && repaired.error.is_none());
 
-        assert!(matches!(outcome, Outcome::Healthy));
-    }
-
-    #[tokio::test]
-    async fn fix_group_member_reports_unrepairable_for_a_user_that_is_gone() {
-        let result = fix_group_member(
-            "root",
-            "mix-test-nonexistent-user-xyz",
-            &CancellationToken::new(),
-        )
-        .await;
-
-        assert!(matches!(result, Err(Error::Unrepairable { .. })));
-    }
-
-    #[tokio::test]
-    async fn path_exists_target_reports_unrepairable_when_missing() {
-        let result = fix_path_exists("default profile", "/does/not/exist/nix-env").await;
-
-        assert!(matches!(result, Err(Error::Unrepairable { .. })));
-    }
-
-    #[tokio::test]
-    async fn path_exists_target_is_healthy_when_present() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("nix-env");
-        std::fs::write(&file, "x").unwrap();
-
-        let outcome = fix_path_exists("default profile", file.to_str().unwrap())
-            .await
-            .unwrap();
-
-        assert!(matches!(outcome, Outcome::Healthy));
+        let failed = RepairReport::failed(
+            "/nix",
+            Error::Unrepairable {
+                artifact: "/nix".to_string(),
+                reason: crate::target::Unfixable::NotADirectory,
+            },
+        );
+        assert!(!failed.fixed && failed.error.is_some());
     }
 }

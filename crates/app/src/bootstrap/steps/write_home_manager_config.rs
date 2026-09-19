@@ -4,9 +4,11 @@ use mix_core::models::{UserConfig, user_targets};
 use mix_core::paths::{FLAKE_NIX, HOME_NIX, mix_state_dir};
 use mix_core::{CancellationToken, Step};
 
+use crate::bootstrap::cleanup::warn_on_failure;
 use crate::bootstrap::error::{Error, Result};
-use crate::bootstrap::util::{remove_dir_all, remove_file, warn_on_failure};
-use crate::shared::os::{path_exists, run};
+use crate::exec::run;
+use crate::fs::{exists, remove_dir_all, remove_file};
+use crate::target;
 
 pub struct WriteHomeManagerConfig {
     user_config: Option<UserConfig>,
@@ -45,10 +47,10 @@ impl Step for WriteHomeManagerConfig {
         };
         let state_dir = mix_state_dir(&cfg.user.home);
 
-        self.created_dir = !path_exists(&state_dir).await;
+        self.created_dir = !exists(&state_dir).await;
         self.enrolled = !identity::group_has_member(MIX_USERS_GROUP, &cfg.user.name);
         for target in user_targets(cfg) {
-            crate::repair::fix(&target, token).await?;
+            target::apply(&target, token).await?;
         }
         Ok(())
     }

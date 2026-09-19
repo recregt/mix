@@ -1,3 +1,5 @@
+//! Where nix is fetched from: the archive, the flake inputs, and the binary cache.
+
 use std::time::Duration;
 
 use mix_pins::{HOME_MANAGER_REV, NIXPKGS_REV};

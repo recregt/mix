@@ -1,13 +1,19 @@
 use std::fs::{File, OpenOptions};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use nix::fcntl::{Flock, FlockArg};
+use nix::unistd::{Gid, Uid, chown};
 
 use crate::error::{Error, Result};
+use crate::identity::MIX_USERS_GID;
+use crate::privilege::is_root;
 
 pub struct LockGuard {
     _flock: Flock<File>,
 }
+
+const SHARED_LOCK_MODE: u32 = 0o664;
 
 pub fn acquire_exclusive(path: impl AsRef<Path>) -> Result<LockGuard> {
     let path = path.as_ref();
@@ -20,6 +26,8 @@ pub fn acquire_exclusive(path: impl AsRef<Path>) -> Result<LockGuard> {
         })?;
     }
 
+    let created = !path.exists();
+
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -29,6 +37,10 @@ pub fn acquire_exclusive(path: impl AsRef<Path>) -> Result<LockGuard> {
             path: path.to_path_buf(),
             source: e,
         })?;
+
+    if created && is_root() {
+        share_lock_with_managed_users(path);
+    }
 
     Flock::lock(file, FlockArg::LockExclusiveNonblock)
         .map(|flock| LockGuard { _flock: flock })
@@ -44,6 +56,25 @@ pub fn acquire_exclusive(path: impl AsRef<Path>) -> Result<LockGuard> {
                 }
             }
         })
+}
+
+fn share_lock_with_managed_users(path: &Path) {
+    if let Err(e) = chown(
+        path,
+        Some(Uid::from_raw(0)),
+        Some(Gid::from_raw(MIX_USERS_GID)),
+    ) {
+        tracing::warn!(
+            "chown {} to mix-users failed: {e}, continuing",
+            path.display()
+        );
+        return;
+    }
+    if let Err(e) =
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(SHARED_LOCK_MODE))
+    {
+        tracing::warn!("chmod {} failed: {e}, continuing", path.display());
+    }
 }
 
 #[cfg(test)]
