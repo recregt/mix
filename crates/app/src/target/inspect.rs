@@ -411,7 +411,10 @@ mod tests {
 
     #[test]
     fn inspect_user_reports_a_build_user_that_is_not_there() {
-        assert_eq!(inspect_user(1, 30_000, 30_000), Some(Finding::UserMissing));
+        assert_eq!(
+            inspect_user(999_999, 30_000, 30_000),
+            Some(Finding::UserMissing)
+        );
     }
 
     #[tokio::test]
