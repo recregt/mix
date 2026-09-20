@@ -30,6 +30,18 @@ mod tests {
     }
 
     #[test]
+    fn a_held_lock_tells_the_reader_to_run_install_again() {
+        let error = anyhow::Error::from(Error::Core(mix_core::Error::Locked {
+            path: "/run/mix.lock".into(),
+        }));
+
+        let message = explain(&error).message();
+
+        assert!(message.contains("another `mix` command is already running"));
+        assert!(message.contains("run `mix install` again"));
+    }
+
+    #[test]
     fn an_error_from_elsewhere_is_left_as_it_was_written() {
         let error = anyhow::anyhow!("something else broke");
 
