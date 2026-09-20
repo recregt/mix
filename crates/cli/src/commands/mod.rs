@@ -5,6 +5,10 @@ pub mod repair;
 
 use std::process::ExitCode;
 
+use mix_app::profile::change::Error;
+use mix_core::lock::LockGuard;
+use mix_core::models::UserConfig;
+
 pub enum RootStatus {
     AlreadyRoot,
     ReExecuted(ExitCode),
@@ -25,8 +29,21 @@ pub fn ensure_root() -> anyhow::Result<RootStatus> {
     )))
 }
 
-pub fn acquire_lock() -> anyhow::Result<mix_core::lock::LockGuard> {
+pub fn acquire_lock() -> anyhow::Result<LockGuard> {
     Ok(mix_core::lock::acquire_exclusive(
         mix_core::paths::LOCK_FILE,
     )?)
+}
+
+pub fn acquire_profile() -> anyhow::Result<(LockGuard, UserConfig)> {
+    if mix_core::privilege::is_root() {
+        return Err(Error::NotRoot.into());
+    }
+    let lock = acquire_lock()?;
+
+    let Some(user_config) = mix_app::resolve_existing_user_config() else {
+        return Err(Error::NotBootstrapped.into());
+    };
+
+    Ok((lock, user_config))
 }

@@ -5,6 +5,7 @@
 //! `mix install`, and both of them do it through here.
 
 mod activation;
+pub mod change;
 pub mod config;
 
 pub use activation::{BuildPolicy, activate};
