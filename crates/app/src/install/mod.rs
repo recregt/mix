@@ -1,36 +1,12 @@
-use std::future::Future;
-use std::path::Path;
 use std::sync::Arc;
 
+use mix_core::ActivityReporter;
 use mix_core::models::UserConfig;
-use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
 use mix_core::state::StateManifest;
-use mix_core::{ActivityReporter, CancellationToken};
-use tracing::Instrument;
 
-use crate::fs::write_atomic;
-use crate::profile::config::{read_state, render_home};
-use crate::profile::{self, BuildPolicy};
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error(transparent)]
-    Core(#[from] mix_core::Error),
-
-    #[error(transparent)]
-    Activation(#[from] crate::profile::Error),
-
-    #[error(transparent)]
-    InvalidPackage(#[from] mix_nixgen::InvalidInput),
-
-    #[error("this command installs into the invoking user's profile, and it was run as root")]
-    NotRoot,
-
-    #[error("no managed environment was found for the invoking user")]
-    NotBootstrapped,
-}
-
-pub type Result<T> = std::result::Result<T, Error>;
+use crate::profile::BuildPolicy;
+use crate::profile::change::{self, Result};
+use crate::profile::config::read_state;
 
 /// What a run of `install` actually did, so a caller can report an idempotent no-op as a
 /// success rather than a failure.
@@ -71,25 +47,22 @@ pub async fn install(
         return Ok(Installed { added, skipped });
     }
 
-    let (new_state, new_home) = render_candidate(cfg, &state, &added)?;
-
-    let state_dir = mix_state_dir(&cfg.user.home);
-    let state_path = state_dir.join(STATE_FILE);
-    let home_path = state_dir.join(HOME_NIX);
-    let token = CancellationToken::new();
-
     let label = install_label(&added);
-    let span = tracing::info_span!("step", name = label.as_str());
 
     // Nothing is compiled behind the user's back: unless they asked for it, a package the binary
     // cache cannot serve is refused before anything is built, with the files put back as they
     // were.
     let policy = BuildPolicy::from_allowing_source(allow_source_builds);
 
-    write_then_activate(&state_path, &home_path, &new_state, &new_home, || {
-        profile::activate(cfg, mirror, mirror_key, &activity, &token, policy)
-    })
-    .instrument(span)
+    change::apply(
+        cfg,
+        &with_added(&state, &added),
+        &label,
+        mirror,
+        mirror_key,
+        &activity,
+        policy,
+    )
     .await?;
 
     Ok(Installed { added, skipped })
@@ -103,64 +76,25 @@ fn install_label(added: &[String]) -> String {
     }
 }
 
-/// Renders the manifest and the `home.nix` the profile would have once `added` is installed.
-///
-/// Done before anything is written so an invalid package name fails with the profile untouched.
-fn render_candidate(
-    cfg: &UserConfig,
-    state: &StateManifest,
-    added: &[String],
-) -> Result<(String, String)> {
+fn with_added(state: &StateManifest, added: &[String]) -> StateManifest {
     let mut packages = Vec::with_capacity(state.packages.len() + added.len());
     packages.extend_from_slice(&state.packages);
     packages.extend_from_slice(added);
 
-    let home = render_home(&cfg.user, &packages)?;
-    let manifest = StateManifest {
+    StateManifest {
         version: state.version,
         packages,
     }
-    .render();
-
-    Ok((manifest, home))
-}
-
-async fn write_then_activate<F, Fut>(
-    state_path: &Path,
-    home_path: &Path,
-    new_state: &str,
-    new_home: &str,
-    activate: F,
-) -> Result<()>
-where
-    F: FnOnce() -> Fut,
-    Fut: Future<Output = profile::Result<bool>>,
-{
-    let previous_state = tokio::fs::read_to_string(state_path).await.ok();
-    let previous_home = tokio::fs::read_to_string(home_path).await.ok();
-
-    write_atomic(state_path, new_state).await?;
-    write_atomic(home_path, new_home).await?;
-
-    if let Err(e) = activate().await {
-        if let Some(previous) = previous_state {
-            let _ = write_atomic(state_path, &previous).await;
-        }
-        if let Some(previous) = previous_home {
-            let _ = write_atomic(home_path, &previous).await;
-        }
-        return Err(e.into());
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use mix_core::NoopActivity;
+    use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
     use mix_core::privilege::InvokingUser;
 
     use super::*;
+    use crate::profile::change::Error;
 
     fn noop() -> Arc<dyn ActivityReporter> {
         Arc::new(NoopActivity)
@@ -307,107 +241,27 @@ mod tests {
     }
 
     #[test]
-    fn render_candidate_keeps_the_installed_packages_and_appends_the_new_ones() {
-        let home = tempfile::tempdir().unwrap();
+    fn with_added_keeps_the_installed_packages_and_appends_the_new_ones() {
         let state = StateManifest {
             version: 1,
             packages: vec!["git".to_string()],
         };
 
-        let (manifest, home_nix) =
-            render_candidate(&user_config(home.path()), &state, &["ripgrep".to_string()]).unwrap();
+        let candidate = with_added(&state, &["ripgrep".to_string()]);
 
         assert_eq!(
-            StateManifest::parse(&manifest).unwrap().packages,
+            candidate.packages,
             vec!["git".to_string(), "ripgrep".to_string()]
         );
-        assert!(home_nix.contains("ripgrep"));
-        assert!(home_nix.contains("git"));
     }
 
     #[test]
-    fn render_candidate_keeps_the_manifest_version() {
-        let home = tempfile::tempdir().unwrap();
+    fn with_added_keeps_the_manifest_version() {
         let state = StateManifest {
             version: 7,
             packages: Vec::new(),
         };
 
-        let (manifest, _) =
-            render_candidate(&user_config(home.path()), &state, &["fd".to_string()]).unwrap();
-
-        assert_eq!(StateManifest::parse(&manifest).unwrap().version, 7);
-    }
-
-    #[test]
-    fn render_candidate_rejects_an_invalid_package_name() {
-        let home = tempfile::tempdir().unwrap();
-        let state = StateManifest::seed();
-
-        let err = render_candidate(
-            &user_config(home.path()),
-            &state,
-            &["not a valid ident".to_string()],
-        )
-        .unwrap_err();
-
-        assert!(matches!(err, Error::InvalidPackage(_)));
-    }
-
-    #[tokio::test]
-    async fn write_then_activate_restores_previous_content_when_activation_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let state_path = dir.path().join("state");
-        let home_path = dir.path().join("home.nix");
-        std::fs::write(&state_path, "old state").unwrap();
-        std::fs::write(&home_path, "old home").unwrap();
-
-        let err = write_then_activate(&state_path, &home_path, "new state", "new home", || {
-            std::future::ready(Err(profile::Error::Core(mix_core::Error::Cancelled {
-                command: "nix build".to_string(),
-            })))
-        })
-        .await
-        .unwrap_err();
-
-        assert!(matches!(err, Error::Activation(_)));
-        assert_eq!(std::fs::read_to_string(&state_path).unwrap(), "old state");
-        assert_eq!(std::fs::read_to_string(&home_path).unwrap(), "old home");
-    }
-
-    #[tokio::test]
-    async fn write_then_activate_leaves_nothing_behind_when_there_was_no_previous_content() {
-        let dir = tempfile::tempdir().unwrap();
-        let state_path = dir.path().join("state");
-        let home_path = dir.path().join("home.nix");
-
-        write_then_activate(&state_path, &home_path, "new state", "new home", || {
-            std::future::ready(Err(profile::Error::Core(mix_core::Error::Cancelled {
-                command: "nix build".to_string(),
-            })))
-        })
-        .await
-        .unwrap_err();
-
-        assert_eq!(std::fs::read_to_string(&state_path).unwrap(), "new state");
-        assert_eq!(std::fs::read_to_string(&home_path).unwrap(), "new home");
-    }
-
-    #[tokio::test]
-    async fn write_then_activate_keeps_the_new_content_when_activation_succeeds() {
-        let dir = tempfile::tempdir().unwrap();
-        let state_path = dir.path().join("state");
-        let home_path = dir.path().join("home.nix");
-        std::fs::write(&state_path, "old state").unwrap();
-        std::fs::write(&home_path, "old home").unwrap();
-
-        write_then_activate(&state_path, &home_path, "new state", "new home", || {
-            std::future::ready(Ok(false))
-        })
-        .await
-        .unwrap();
-
-        assert_eq!(std::fs::read_to_string(&state_path).unwrap(), "new state");
-        assert_eq!(std::fs::read_to_string(&home_path).unwrap(), "new home");
+        assert_eq!(with_added(&state, &["fd".to_string()]).version, 7);
     }
 }

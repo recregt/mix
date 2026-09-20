@@ -1,8 +1,5 @@
 use std::process::ExitCode;
 
-use mix_app::install::Error;
-use mix_core::privilege::is_root;
-
 pub async fn run(
     packages: Vec<String>,
     mirror: Option<String>,
@@ -10,14 +7,7 @@ pub async fn run(
     json: bool,
     build: bool,
 ) -> anyhow::Result<ExitCode> {
-    if is_root() {
-        return Err(Error::NotRoot.into());
-    }
-    let _lock = super::acquire_lock()?;
-
-    let Some(user_config) = mix_app::resolve_existing_user_config() else {
-        return Err(Error::NotBootstrapped.into());
-    };
+    let (_lock, user_config) = super::acquire_profile()?;
 
     let installed = mix_app::install::install(
         &user_config,

@@ -18,6 +18,7 @@ pub mod install;
 pub mod repair;
 
 mod activation;
+mod change;
 pub mod target;
 
 use std::borrow::Cow;

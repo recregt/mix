@@ -1,6 +1,6 @@
 use mix_app::doctor::HealthReport;
-use mix_app::install::Error as InstallError;
 use mix_app::profile::Error as ActivationError;
+use mix_app::profile::change::Error as InstallError;
 use mix_app::target::{Error as TargetError, Finding, Unfixable};
 use mix_cli::explain;
 use mix_core::Category;
