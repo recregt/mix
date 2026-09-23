@@ -449,6 +449,23 @@ def create_user(container: Container, name: str, sudo: bool = False) -> None:
         )
 
 
+def mirror_args(mock_nix_server, mirror_cache):
+    mirror_key = (mirror_cache / "mix-mirror.pub").read_text().strip()
+    return ["--mirror", mock_nix_server["url"], "--mirror-key", mirror_key]
+
+
+def bootstrap_as(container: Container, user: str, mock_nix_server, mirror_cache):
+    create_user(container, user, sudo=True)
+    result = container.exec(
+        "mix",
+        "bootstrap",
+        *mirror_args(mock_nix_server, mirror_cache),
+        user=user,
+    )
+    assert result.returncode == 0, result.stderr
+    return result
+
+
 def group_members(container: Container, group: str) -> list[str]:
     entry = container.exec("getent", "group", group, check=True).stdout.strip()
     members = entry.split(":")[3]

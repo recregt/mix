@@ -4,33 +4,17 @@ from conftest import (
     INSTALL_TEST_PACKAGE,
     MIRROR_TEST_USERS,
     UNCACHED_TEST_PACKAGE,
-    create_user,
+    bootstrap_as,
+    mirror_args,
 )
 
 USER = MIRROR_TEST_USERS[0]
 
 
-def _mirror_args(mock_nix_server, mirror_cache):
-    mirror_key = (mirror_cache / "mix-mirror.pub").read_text().strip()
-    return ["--mirror", mock_nix_server["url"], "--mirror-key", mirror_key]
-
-
-def _bootstrap_as(container, user, mock_nix_server, mirror_cache):
-    create_user(container, user, sudo=True)
-    result = container.exec(
-        "mix",
-        "bootstrap",
-        *_mirror_args(mock_nix_server, mirror_cache),
-        user=user,
-    )
-    assert result.returncode == 0, result.stderr
-    return result
-
-
 def test_install_adds_a_package_as_a_regular_user_with_no_sudo(
     container, mock_nix_server, mirror_cache
 ):
-    _bootstrap_as(container, USER, mock_nix_server, mirror_cache)
+    bootstrap_as(container, USER, mock_nix_server, mirror_cache)
     state_dir = f"/home/{USER}/.local/state/mix"
 
     result = container.exec("mix", "install", INSTALL_TEST_PACKAGE, user=USER)
@@ -65,7 +49,7 @@ def test_install_adds_a_package_as_a_regular_user_with_no_sudo(
 def test_install_skips_a_package_that_is_already_installed(
     container, mock_nix_server, mirror_cache
 ):
-    _bootstrap_as(container, USER, mock_nix_server, mirror_cache)
+    bootstrap_as(container, USER, mock_nix_server, mirror_cache)
     state_dir = f"/home/{USER}/.local/state/mix"
     state_before = container.exec("cat", f"{state_dir}/state", check=True).stdout
 
@@ -77,7 +61,7 @@ def test_install_skips_a_package_that_is_already_installed(
 
 
 def test_install_is_script_friendly(container, mock_nix_server, mirror_cache):
-    _bootstrap_as(container, USER, mock_nix_server, mirror_cache)
+    bootstrap_as(container, USER, mock_nix_server, mirror_cache)
 
     result = container.exec(
         "mix", "install", "--json", INSTALL_TEST_PACKAGE, "git", user=USER
@@ -107,7 +91,7 @@ def test_install_is_script_friendly(container, mock_nix_server, mirror_cache):
 
 
 def test_install_cannot_be_run_as_root(container, mock_nix_server, mirror_cache):
-    _bootstrap_as(container, USER, mock_nix_server, mirror_cache)
+    bootstrap_as(container, USER, mock_nix_server, mirror_cache)
 
     result = container.exec("mix", "install", INSTALL_TEST_PACKAGE)
 
@@ -119,7 +103,7 @@ def test_install_cannot_be_run_as_root(container, mock_nix_server, mirror_cache)
 def test_install_refuses_a_package_the_cache_cannot_serve(
     container, mock_nix_server, mirror_cache
 ):
-    _bootstrap_as(container, USER, mock_nix_server, mirror_cache)
+    bootstrap_as(container, USER, mock_nix_server, mirror_cache)
     state_dir = f"/home/{USER}/.local/state/mix"
     state_before = container.exec("cat", f"{state_dir}/state", check=True).stdout
     home_before = container.exec("cat", f"{state_dir}/home.nix", check=True).stdout
@@ -130,7 +114,7 @@ def test_install_refuses_a_package_the_cache_cannot_serve(
         "mix",
         "install",
         UNCACHED_TEST_PACKAGE,
-        *_mirror_args(mock_nix_server, mirror_cache),
+        *mirror_args(mock_nix_server, mirror_cache),
         user=USER,
     )
 
@@ -149,7 +133,7 @@ def test_install_refuses_a_package_the_cache_cannot_serve(
 def test_install_with_the_build_flag_installs_a_cached_package_as_usual(
     container, mock_nix_server, mirror_cache
 ):
-    _bootstrap_as(container, USER, mock_nix_server, mirror_cache)
+    bootstrap_as(container, USER, mock_nix_server, mirror_cache)
 
     result = container.exec("mix", "install", "--build", INSTALL_TEST_PACKAGE, user=USER)
 
@@ -160,7 +144,7 @@ def test_install_with_the_build_flag_installs_a_cached_package_as_usual(
 def test_install_rolls_back_state_and_home_nix_when_activation_fails(
     container, mock_nix_server, mirror_cache
 ):
-    _bootstrap_as(container, USER, mock_nix_server, mirror_cache)
+    bootstrap_as(container, USER, mock_nix_server, mirror_cache)
     state_dir = f"/home/{USER}/.local/state/mix"
     state_before = container.exec("cat", f"{state_dir}/state", check=True).stdout
     home_before = container.exec("cat", f"{state_dir}/home.nix", check=True).stdout
