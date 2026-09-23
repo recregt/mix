@@ -2,6 +2,7 @@ import ast
 import fcntl
 import hashlib
 import http.server
+import os
 import pathlib
 import re
 import subprocess
@@ -64,6 +65,20 @@ NIX_FILENAME = NIX_URL.rsplit("/", 1)[-1]
 NIXPKGS_REV = _source_rev("NIXPKGS_REV")
 HOME_MANAGER_REV = _source_rev("HOME_MANAGER_REV")
 
+NIXPKGS_TARBALL = CACHE_DIR / f"nixpkgs-{NIXPKGS_REV}.tar.gz"
+HOME_MANAGER_TARBALL = CACHE_DIR / f"home-manager-{HOME_MANAGER_REV}.tar.gz"
+
+ALLOW_NETWORK_ENV = "MIX_TEST_ALLOW_NETWORK"
+
+
+def _require_network(what: str, dest: pathlib.Path) -> None:
+    if os.environ.get(ALLOW_NETWORK_ENV, "").strip().lower() in ("1", "true", "yes"):
+        return
+    raise RuntimeError(
+        f"{dest} is not cached and fetching {what} would reach the real internet. "
+        f"This is a one-time, cached download: set {ALLOW_NETWORK_ENV}=1 to allow it."
+    )
+
 
 @pytest.fixture(scope="session")
 def nix_tarball():
@@ -73,6 +88,7 @@ def nix_tarball():
     with open(CACHE_DIR / f"{NIX_FILENAME}.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if not dest.exists():
+            _require_network("the pinned nix installer tarball", dest)
             subprocess.run(["curl", "-fsSL", "-o", str(dest), NIX_URL], check=True)
         digest = hashlib.sha256(dest.read_bytes()).hexdigest()
         assert digest == NIX_SHA256, f"cached tarball does not match the pin in pins.rs: got {digest}"
@@ -86,17 +102,18 @@ def mirror_sources():
     sources = {
         "nixpkgs": (
             f"https://github.com/NixOS/nixpkgs/archive/{NIXPKGS_REV}.tar.gz",
-            CACHE_DIR / f"nixpkgs-{NIXPKGS_REV}.tar.gz",
+            NIXPKGS_TARBALL,
         ),
         "home-manager": (
             f"https://github.com/nix-community/home-manager/archive/{HOME_MANAGER_REV}.tar.gz",
-            CACHE_DIR / f"home-manager-{HOME_MANAGER_REV}.tar.gz",
+            HOME_MANAGER_TARBALL,
         ),
     }
-    for url, dest in sources.values():
+    for name, (url, dest) in sources.items():
         with open(CACHE_DIR / f"{dest.name}.lock", "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             if not dest.exists():
+                _require_network(f"the {name} source archive", dest)
                 subprocess.run(["curl", "-fsSL", "-o", str(dest), url], check=True)
     return CACHE_DIR
 
@@ -207,6 +224,12 @@ def _seed_activation_package(
                 f'path:{tmp_path}#homeConfigurations."{user}".activationPackage',
                 "--no-link",
                 "--print-out-paths",
+                "--override-input",
+                "nixpkgs",
+                f"tarball+file://{NIXPKGS_TARBALL}",
+                "--override-input",
+                "home-manager",
+                f"tarball+file://{HOME_MANAGER_TARBALL}",
                 *NIX_ARGS,
             ],
             check=True,

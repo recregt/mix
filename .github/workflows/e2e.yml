@@ -40,4 +40,5 @@ jobs:
         env:
           MIX_TEST_IMAGE: ghcr.io/recregt/mix-bootstrap-test:latest
           MIX_TEST_WORKERS: 4
+          MIX_TEST_ALLOW_NETWORK: "1"
         run: bash tests/run.sh
