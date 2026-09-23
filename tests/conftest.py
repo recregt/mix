@@ -13,7 +13,7 @@ import time
 
 import pytest
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 CACHE_DIR = pathlib.Path(os.environ.get("XDG_CACHE_HOME", pathlib.Path.home() / ".cache")) / "mix-bootstrap-tests"
 IMAGE_TAG = "mix-bootstrap-test:latest"
 REMOTE_IMAGE = os.environ.get("MIX_TEST_IMAGE")

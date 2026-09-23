@@ -7,7 +7,7 @@ for tool in podman uv nix; do
             echo "$tool not found; required in CI" >&2
             exit 1
         fi
-        echo "$tool not found; skipping bootstrap integration tests" >&2
+        echo "$tool not found; skipping integration tests" >&2
         exit 0
     fi
 done
