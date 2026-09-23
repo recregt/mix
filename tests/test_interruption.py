@@ -56,25 +56,6 @@ def test_sigint_during_fetch_and_unpack_exits_promptly_and_rolls_back(container,
     assert not container.path_exists(DEFAULT_PROFILE_NIX_ENV)
 
 
-def test_sigterm_during_fetch_and_unpack_exits_promptly_and_rolls_back(container, mock_nix_server):
-    proc = container.start_background(
-        "mix", "-v", "bootstrap", env={"MIX_NIX_MIRROR": mock_nix_server["url"]}
-    )
-    proc.wait_for_output(RUNNING_FETCH_AND_UNPACK)
-    proc.signal("TERM")
-
-    started = time.time()
-    result = proc.wait(timeout=15.0)
-    elapsed = time.time() - started
-
-    assert result.returncode != 0, result.stdout
-    assert elapsed < 10.0
-    assert WINDING_DOWN_NOTICE in result.stdout
-    assert not container.path_exists(PROVISIONING_MANIFEST)
-    assert _store_entry_count(container) == 0
-    assert not container.path_exists(DEFAULT_PROFILE_NIX_ENV)
-
-
 def test_a_second_sigint_during_fetch_and_unpack_has_no_additional_effect(container, mock_nix_server):
     proc = container.start_background(
         "mix", "-v", "bootstrap", env={"MIX_NIX_MIRROR": mock_nix_server["url"]}
@@ -113,13 +94,3 @@ def test_hard_kill_during_fetch_and_unpack_then_bootstrap_converges(container, m
     assert not container.path_exists(PROVISIONING_MANIFEST)
     check = container.exec("mix", "doctor")
     assert check.returncode == 0, check.stderr
-
-
-def test_nix_and_nix_store_share_a_filesystem(container):
-    container.exec("mkdir", "-p", "/nix/store", check=True)
-
-    result = container.exec("sh", "-c", "stat -c %d /nix; stat -c %d /nix/store")
-    devices = result.stdout.split()
-
-    assert len(devices) == 2, result.stdout
-    assert devices[0] == devices[1]

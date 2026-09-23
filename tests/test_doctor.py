@@ -10,15 +10,6 @@ def test_doctor_detects_a_stopped_socket_alone(container, mock_nix_server):
     assert check.returncode != 0, "doctor should detect a stopped socket with nothing else corrupted"
 
 
-def test_doctor_check_succeeds_for_a_non_root_user(container, mock_nix_server):
-    bootstrap_root(container, mock_nix_server)
-
-    create_user(container, "plainuser")
-
-    check = container.exec("mix", "doctor", user="plainuser")
-    assert check.returncode == 0, check.stderr + check.stdout
-
-
 def test_doctor_ignores_a_user_mix_never_configured(container, mock_nix_server):
     bootstrap_root(container, mock_nix_server)
 

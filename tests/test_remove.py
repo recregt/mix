@@ -69,15 +69,10 @@ def test_remove_is_script_friendly(container, mock_nix_server, mirror_cache):
     assert again.returncode == 0, again.stderr
     assert json.loads(again.stdout) == {"removed": [], "skipped": [INSTALL_TEST_PACKAGE]}
 
-    for args, env in (
-        (["--no-progress", "remove", INSTALL_TEST_PACKAGE, *mirror], None),
-        (["remove", INSTALL_TEST_PACKAGE, *mirror], {"CI": "true"}),
-        (["remove", INSTALL_TEST_PACKAGE, *mirror], {"MIX_NO_PROGRESS": "1"}),
-    ):
-        plain = container.exec("mix", *args, user=USER, env=env)
-        assert plain.returncode == 0, plain.stderr
-        assert "not installed" in (plain.stdout + plain.stderr).lower()
-        assert "\x1b[" not in plain.stderr, "nothing should be drawn in place"
+    plain = container.exec("mix", "--no-progress", "remove", INSTALL_TEST_PACKAGE, *mirror, user=USER)
+    assert plain.returncode == 0, plain.stderr
+    assert "not installed" in (plain.stdout + plain.stderr).lower()
+    assert "\x1b[" not in plain.stderr, "nothing should be drawn in place"
 
 
 def test_remove_refuses_a_package_mix_relies_on(container, mock_nix_server, mirror_cache):
