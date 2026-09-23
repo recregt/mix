@@ -56,6 +56,13 @@ pub async fn apply(
     .await
 }
 
+pub fn label(verb: &str, packages: &[String]) -> String {
+    match packages.len() {
+        0..=3 => format!("{verb} {}", packages.join(", ")),
+        n => format!("{verb} {n} packages"),
+    }
+}
+
 fn render_candidate(cfg: &UserConfig, manifest: &StateManifest) -> Result<(String, String)> {
     let home = render_home(&cfg.user, &manifest.packages)?;
     Ok((manifest.render(), home))
@@ -115,6 +122,21 @@ mod tests {
             version,
             packages: packages.iter().map(|p| p.to_string()).collect(),
         }
+    }
+
+    #[test]
+    fn label_names_a_short_list_of_packages() {
+        assert_eq!(
+            label("Installing", &["git".to_string(), "fd".to_string()]),
+            "Installing git, fd"
+        );
+    }
+
+    #[test]
+    fn label_counts_a_long_list_of_packages() {
+        let packages: Vec<String> = (0..12).map(|i| format!("package-{i}")).collect();
+
+        assert_eq!(label("Removing", &packages), "Removing 12 packages");
     }
 
     #[test]

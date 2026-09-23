@@ -1,6 +1,6 @@
 //! What `mix` does, in three layers.
 //!
-//! At the top, one module per command — [`bootstrap`], [`install`], [`doctor`], [`repair`].
+//! At the top, one module per command — [`bootstrap`], [`install`], [`remove`], [`doctor`], [`repair`].
 //! A command decides what happens and in which order, and nothing else calls into it: the two
 //! that need the same work done reach for the same layer below rather than for each other.
 //!
@@ -22,6 +22,7 @@ pub mod bootstrap;
 pub mod doctor;
 pub mod install;
 pub mod profile;
+pub mod remove;
 pub mod repair;
 pub mod target;
 

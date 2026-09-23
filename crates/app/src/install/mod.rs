@@ -47,7 +47,7 @@ pub async fn install(
         return Ok(Installed { added, skipped });
     }
 
-    let label = install_label(&added);
+    let label = change::label("Installing", &added);
 
     // Nothing is compiled behind the user's back: unless they asked for it, a package the binary
     // cache cannot serve is refused before anything is built, with the files put back as they
@@ -66,14 +66,6 @@ pub async fn install(
     .await?;
 
     Ok(Installed { added, skipped })
-}
-
-/// Names the packages being installed, or counts them once the list stops fitting on a line.
-fn install_label(added: &[String]) -> String {
-    match added.len() {
-        0..=3 => format!("Installing {}", added.join(", ")),
-        n => format!("Installing {n} packages"),
-    }
 }
 
 fn with_added(state: &StateManifest, added: &[String]) -> StateManifest {
@@ -224,20 +216,6 @@ mod tests {
             Installed::default().to_json(),
             r#"{"added":[],"skipped":[]}"#
         );
-    }
-
-    #[test]
-    fn install_label_names_a_short_list_of_packages() {
-        assert_eq!(
-            install_label(&["git".to_string(), "fd".to_string()]),
-            "Installing git, fd"
-        );
-    }
-
-    #[test]
-    fn install_label_counts_a_long_list_of_packages() {
-        let packages: Vec<String> = (0..12).map(|i| format!("package-{i}")).collect();
-        assert_eq!(install_label(&packages), "Installing 12 packages");
     }
 
     #[test]

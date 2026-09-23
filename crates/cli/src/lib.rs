@@ -16,7 +16,11 @@ pub async fn run() -> ExitCode {
 
     if !matches!(
         cli.command,
-        Command::Doctor | Command::Repair | Command::Bootstrap { .. } | Command::Install { .. }
+        Command::Doctor
+            | Command::Repair
+            | Command::Bootstrap { .. }
+            | Command::Install { .. }
+            | Command::Remove { .. }
     ) {
         let user_config = mix_app::resolve_existing_user_config();
         if let Some(report) = mix_app::doctor::audit(user_config.as_ref())
@@ -35,6 +39,7 @@ pub async fn run() -> ExitCode {
     let explain: fn(&anyhow::Error) -> Diagnostic = match &cli.command {
         Command::Bootstrap { .. } => explain::bootstrap::explain,
         Command::Install { .. } => explain::install::explain,
+        Command::Remove { .. } => explain::remove::explain,
         Command::Doctor => explain::doctor::explain,
         Command::Repair => explain::repair::explain,
     };
@@ -52,6 +57,12 @@ pub async fn run() -> ExitCode {
             json,
             build,
         } => commands::install::run(packages, mirror, mirror_key, json, build).await,
+        Command::Remove {
+            packages,
+            mirror,
+            mirror_key,
+            json,
+        } => commands::remove::run(packages, mirror, mirror_key, json).await,
         Command::Doctor => commands::doctor::run(cli.verbose).await,
         Command::Repair => commands::repair::run().await,
     };
