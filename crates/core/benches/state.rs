@@ -41,3 +41,10 @@ fn partition_the_requested_packages(bencher: divan::Bencher, n: usize) {
     let requested = requested(n);
     bencher.bench(|| divan::black_box(&manifest).partition(divan::black_box(&requested)));
 }
+
+#[divan::bench(args = [1, 8, 64])]
+fn drop_the_requested_packages(bencher: divan::Bencher, n: usize) {
+    let manifest = manifest(n);
+    let removed: Vec<String> = (0..n).step_by(2).map(|i| format!("package-{i}")).collect();
+    bencher.bench(|| divan::black_box(&manifest).without(divan::black_box(&removed)));
+}

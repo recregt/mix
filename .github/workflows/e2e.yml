@@ -18,7 +18,7 @@ env:
 
 jobs:
   integration:
-    name: Bootstrap
+    name: Integration
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -36,8 +36,9 @@ jobs:
 
       - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
 
-      - name: Run bootstrap integration tests
+      - name: Run integration tests
         env:
           MIX_TEST_IMAGE: ghcr.io/recregt/mix-bootstrap-test:latest
           MIX_TEST_WORKERS: 4
-        run: bash tests/bootstrap/run.sh
+          MIX_TEST_ALLOW_NETWORK: "1"
+        run: bash tests/run.sh

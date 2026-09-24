@@ -36,6 +36,7 @@ sha2 = "0.11.0"
 divan = { workspace = true }
 mix-core = { path = "../core" }
 mockito = "=1.7.2"
+nix = { workspace = true, features = ["signal"] }
 
 [[bench]]
 name = "output"

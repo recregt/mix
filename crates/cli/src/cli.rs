@@ -63,6 +63,25 @@ pub enum Command {
         build: bool,
     },
 
+    /// Remove packages from your home-manager profile
+    Remove {
+        /// Packages to remove
+        #[arg(required = true)]
+        packages: Vec<String>,
+
+        /// Alternate URL to fetch the pinned Nix archive from
+        #[arg(long, env = "MIX_NIX_MIRROR")]
+        mirror: Option<String>,
+
+        /// Public key the mirror's binary cache is signed with
+        #[arg(long, env = "MIX_NIX_MIRROR_KEY")]
+        mirror_key: Option<String>,
+
+        /// Report the result as JSON on stdout, for scripts
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Inspect system health
     Doctor,
 
@@ -77,7 +96,10 @@ impl Cli {
     /// because build systems set it and nobody is watching a CI log live.
     pub fn draws_progress(&self) -> bool {
         !self.no_progress
-            && !matches!(self.command, Command::Install { json: true, .. })
+            && !matches!(
+                self.command,
+                Command::Install { json: true, .. } | Command::Remove { json: true, .. }
+            )
             && !ci_asks_for_plain_output(std::env::var("CI").ok().as_deref())
     }
 }
@@ -168,6 +190,38 @@ mod tests {
     #[test]
     fn json_output_implies_plain_output() {
         assert!(!parse(&["mix", "install", "--json", "ripgrep"]).draws_progress());
+    }
+
+    #[test]
+    fn remove_takes_the_packages_to_remove() {
+        let cli = parse(&["mix", "remove", "ripgrep", "fd"]);
+
+        assert!(matches!(
+            cli.command,
+            Command::Remove { ref packages, json: false, .. } if packages == &["ripgrep", "fd"]
+        ));
+    }
+
+    #[test]
+    fn remove_needs_at_least_one_package() {
+        assert!(Cli::try_parse_from(["mix", "remove"]).is_err());
+    }
+
+    #[test]
+    fn remove_json_can_be_asked_for() {
+        let cli = parse(&["mix", "remove", "--json", "ripgrep"]);
+
+        assert!(matches!(cli.command, Command::Remove { json: true, .. }));
+    }
+
+    #[test]
+    fn remove_json_output_implies_plain_output() {
+        assert!(!parse(&["mix", "remove", "--json", "ripgrep"]).draws_progress());
+    }
+
+    #[test]
+    fn remove_has_no_build_flag() {
+        assert!(Cli::try_parse_from(["mix", "remove", "--build", "ripgrep"]).is_err());
     }
 
     #[test]

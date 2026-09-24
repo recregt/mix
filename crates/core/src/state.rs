@@ -3,6 +3,8 @@ use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 
+pub const REQUIRED_PACKAGES: &[&str] = &["git"];
+
 static SEED_RENDERED: LazyLock<String> = LazyLock::new(|| StateManifest::seed().render());
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,7 +24,7 @@ impl StateManifest {
     pub fn seed() -> Self {
         Self {
             version: 1,
-            packages: vec!["git".to_string()],
+            packages: REQUIRED_PACKAGES.iter().map(|p| p.to_string()).collect(),
         }
     }
 
@@ -39,6 +41,29 @@ impl StateManifest {
 
     pub fn parse(raw: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(raw)
+    }
+
+    pub fn protected<S: AsRef<str>>(requested: &[S]) -> Vec<&str> {
+        let mut seen: HashSet<&str> = HashSet::new();
+        requested
+            .iter()
+            .map(AsRef::as_ref)
+            .filter(|package| REQUIRED_PACKAGES.contains(package) && seen.insert(package))
+            .collect()
+    }
+
+    pub fn without<S: AsRef<str>>(&self, removed: &[S]) -> Self {
+        let removed: HashSet<&str> = removed.iter().map(AsRef::as_ref).collect();
+
+        Self {
+            version: self.version,
+            packages: self
+                .packages
+                .iter()
+                .filter(|package| !removed.contains(package.as_str()))
+                .cloned()
+                .collect(),
+        }
     }
 
     pub fn partition<'a, S: AsRef<str>>(&self, requested: &'a [S]) -> PackagePartition<'a> {
@@ -176,6 +201,87 @@ mod tests {
         assert!(installed.is_disjoint(&missing));
         assert_eq!(&installed | &missing, deduped);
         assert_eq!(partition.installed.len() + partition.missing.len(), 3);
+    }
+
+    #[test]
+    fn the_seed_holds_exactly_the_required_packages() {
+        assert_eq!(
+            StateManifest::seed().packages,
+            REQUIRED_PACKAGES
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn protected_names_the_required_packages_in_a_request() {
+        let requested = ["fd".to_string(), "git".to_string(), "bat".to_string()];
+
+        assert_eq!(StateManifest::protected(&requested), vec!["git"]);
+    }
+
+    #[test]
+    fn protected_names_a_repeated_package_once() {
+        let requested = ["git".to_string(), "git".to_string()];
+
+        assert_eq!(StateManifest::protected(&requested), vec!["git"]);
+    }
+
+    #[test]
+    fn protected_is_empty_when_nothing_required_is_requested() {
+        let requested = ["fd".to_string(), "bat".to_string()];
+
+        assert!(StateManifest::protected(&requested).is_empty());
+        assert!(StateManifest::protected::<String>(&[]).is_empty());
+    }
+
+    #[test]
+    fn without_drops_the_named_packages_and_keeps_the_order_of_the_rest() {
+        let manifest = manifest(&["git", "ripgrep", "fd", "bat"]);
+
+        let remaining = manifest.without(&["fd".to_string(), "git".to_string()]);
+
+        assert_eq!(
+            remaining.packages,
+            vec!["ripgrep".to_string(), "bat".to_string()]
+        );
+    }
+
+    #[test]
+    fn without_ignores_packages_that_are_not_installed() {
+        let manifest = manifest(&["git", "ripgrep"]);
+
+        assert_eq!(manifest.without(&["fd".to_string()]), manifest);
+    }
+
+    #[test]
+    fn without_keeps_the_manifest_version() {
+        let manifest = StateManifest {
+            version: 7,
+            packages: vec!["git".to_string()],
+        };
+
+        assert_eq!(manifest.without(&["git".to_string()]).version, 7);
+    }
+
+    #[test]
+    fn without_can_empty_the_manifest() {
+        let manifest = manifest(&["ripgrep"]);
+
+        assert!(
+            manifest
+                .without(&["ripgrep".to_string()])
+                .packages
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn without_an_empty_request_changes_nothing() {
+        let manifest = manifest(&["git"]);
+
+        assert_eq!(manifest.without::<String>(&[]), manifest);
     }
 
     #[test]

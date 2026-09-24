@@ -5,6 +5,8 @@ from conftest import (
     MIX_USERS_GROUP,
     NIX_CONF_CONTENT,
     NIX_CONF_DEST,
+    bootstrap_as,
+    bootstrap_root,
     create_user,
     daemon_trusts,
     group_members,
@@ -12,21 +14,6 @@ from conftest import (
 
 FIRST_USER, SECOND_USER = MIRROR_TEST_USERS
 UNMANAGED_USER = "plainuser"
-
-
-def _bootstrap_as(container, user, mock_nix_server, mirror_cache):
-    mirror_key = (mirror_cache / "mix-mirror.pub").read_text().strip()
-    result = container.exec(
-        "mix",
-        "bootstrap",
-        "--mirror",
-        mock_nix_server["url"],
-        "--mirror-key",
-        mirror_key,
-        user=user,
-    )
-    assert result.returncode == 0, result.stderr
-    return result
 
 
 def _nix_conf(container):
@@ -40,12 +27,12 @@ def test_every_managed_user_is_trusted_through_the_group(
     create_user(container, SECOND_USER, sudo=True)
     create_user(container, UNMANAGED_USER)
 
-    _bootstrap_as(container, FIRST_USER, mock_nix_server, mirror_cache)
+    bootstrap_as(container, FIRST_USER, mock_nix_server, mirror_cache)
     assert _nix_conf(container) == NIX_CONF_CONTENT
     assert group_members(container, MIX_USERS_GROUP) == [FIRST_USER]
     assert daemon_trusts(container, FIRST_USER)
 
-    _bootstrap_as(container, SECOND_USER, mock_nix_server, mirror_cache)
+    bootstrap_as(container, SECOND_USER, mock_nix_server, mirror_cache)
 
     assert _nix_conf(container) == NIX_CONF_CONTENT, (
         "enrolling a second user must not touch nix.conf"
@@ -76,7 +63,7 @@ def test_removing_a_user_from_the_group_revokes_trust_without_touching_nix_conf(
     container, mock_nix_server, mirror_cache
 ):
     create_user(container, FIRST_USER, sudo=True)
-    _bootstrap_as(container, FIRST_USER, mock_nix_server, mirror_cache)
+    bootstrap_as(container, FIRST_USER, mock_nix_server, mirror_cache)
     assert daemon_trusts(container, FIRST_USER)
 
     container.exec("gpasswd", "--delete", FIRST_USER, MIX_USERS_GROUP, check=True)
@@ -92,15 +79,14 @@ def test_removing_a_user_from_the_group_revokes_trust_without_touching_nix_conf(
         "an un-enrolled user is unmanaged, not drifted: " + doctor.stdout + doctor.stderr
     )
 
-    _bootstrap_as(container, FIRST_USER, mock_nix_server, mirror_cache)
+    bootstrap_as(container, FIRST_USER, mock_nix_server, mirror_cache)
 
     assert group_members(container, MIX_USERS_GROUP) == [FIRST_USER]
     assert daemon_trusts(container, FIRST_USER)
 
 
 def test_a_rewritten_nix_conf_reaches_the_running_daemon(container, mock_nix_server):
-    result = container.exec("mix", "bootstrap", "--mirror", mock_nix_server["url"])
-    assert result.returncode == 0, result.stderr
+    bootstrap_root(container, mock_nix_server)
     create_user(container, UNMANAGED_USER)
 
     legacy_conf = NIX_CONF_CONTENT.replace(
@@ -128,8 +114,7 @@ def test_a_rewritten_nix_conf_reaches_the_running_daemon(container, mock_nix_ser
 
 
 def test_bootstrapping_as_bare_root_enrols_nobody(container, mock_nix_server):
-    result = container.exec("mix", "bootstrap", "--mirror", mock_nix_server["url"])
-    assert result.returncode == 0, result.stderr
+    bootstrap_root(container, mock_nix_server)
 
     assert container.exec("getent", "group", MIX_USERS_GROUP).returncode == 0
     assert group_members(container, MIX_USERS_GROUP) == []

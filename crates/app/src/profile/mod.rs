@@ -2,7 +2,7 @@
 //!
 //! A profile is a home-manager generation built from the flake and `home.nix` mix renders into
 //! the user's state directory. Standing one up is `mix bootstrap`, changing one is
-//! `mix install`, and both of them do it through here.
+//! `mix install` or `mix remove`, and each of them does it through here.
 
 mod activation;
 pub mod change;

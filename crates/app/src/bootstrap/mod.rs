@@ -86,3 +86,33 @@ async fn run_steps(
         ),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use nix::sys::signal::{self, Signal};
+
+    use super::*;
+
+    async fn assert_interrupted_by(raise: Signal) {
+        let handle = tokio::spawn(interrupted());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        signal::raise(raise).unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), handle)
+            .await
+            .expect("interrupted() should resolve once the signal is raised")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn interrupted_resolves_on_sigint() {
+        assert_interrupted_by(Signal::SIGINT).await;
+    }
+
+    #[tokio::test]
+    async fn interrupted_resolves_on_sigterm() {
+        assert_interrupted_by(Signal::SIGTERM).await;
+    }
+}
