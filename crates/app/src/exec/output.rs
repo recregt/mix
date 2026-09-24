@@ -83,12 +83,7 @@ fn report(line: &str, log: &mut NixLog, decoded: &mut TailBuffer, activity: &dyn
             activity.line(&message);
         }
         Event::Transient(text) => activity.line(&text),
-        Event::Building { derivation, text } => {
-            activity.build_started(&derivation);
-            if !text.is_empty() {
-                activity.line(&text);
-            }
-        }
+        Event::Building(derivation) => activity.build_started(derivation),
         Event::Progress => activity.progress(&log.snapshot()),
         Event::Ignored => {}
     }

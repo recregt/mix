@@ -80,10 +80,7 @@ pub enum Event<'a> {
     /// A description of what nix just started doing: worth showing while it lasts, not worth
     /// keeping.
     Transient(Cow<'a, str>),
-    Building {
-        derivation: Cow<'a, str>,
-        text: Cow<'a, str>,
-    },
+    Building(&'a str),
     /// The counters moved; the caller should read [`NixLog::snapshot`].
     Progress,
     /// A record that changes nothing on screen.
@@ -195,10 +192,7 @@ impl NixLog {
         if record.activity_type == ACT_BUILD
             && let Some(derivation) = record.fields.text
         {
-            return Event::Building {
-                derivation,
-                text: record.text,
-            };
+            return Event::Building(derivation);
         }
 
         let Some(slot) = tracked(record.activity_type) else {
@@ -303,7 +297,7 @@ const MAX_FIELDS: usize = 4;
 #[derive(Debug, Default)]
 struct Fields<'a> {
     ints: [u64; MAX_FIELDS],
-    text: Option<Cow<'a, str>>,
+    text: Option<&'a str>,
 }
 
 impl Fields<'_> {
@@ -330,6 +324,7 @@ impl<'de: 'a, 'a> Deserialize<'de> for Fields<'a> {
                     match field {
                         Field::Int(value) if index < MAX_FIELDS => fields.ints[index] = value,
                         Field::Text(text) if index == 0 => fields.text = Some(text),
+                        Field::Escaped if index == 0 => fields.text = Some(""),
                         _ => {}
                     }
                     index += 1;
@@ -344,7 +339,8 @@ impl<'de: 'a, 'a> Deserialize<'de> for Fields<'a> {
 
 enum Field<'a> {
     Int(u64),
-    Text(Cow<'a, str>),
+    Text(&'a str),
+    Escaped,
     Other,
 }
 
@@ -376,11 +372,11 @@ impl<'de: 'a, 'a> Deserialize<'de> for Field<'a> {
             }
 
             fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Field<'a>, E> {
-                Ok(Field::Text(Cow::Borrowed(value)))
+                Ok(Field::Text(value))
             }
 
-            fn visit_str<E>(self, value: &str) -> Result<Field<'a>, E> {
-                Ok(Field::Text(Cow::Owned(value.to_string())))
+            fn visit_str<E>(self, _value: &str) -> Result<Field<'a>, E> {
+                Ok(Field::Escaped)
             }
 
             fn visit_unit<E>(self) -> Result<Field<'a>, E> {
@@ -494,13 +490,7 @@ mod tests {
             r#"@nix {"action":"start","fields":["/nix/store/x-a.drv","",1,1],"id":1,"level":3,"parent":0,"text":"building '/nix/store/x-a.drv'","type":105}"#,
         );
 
-        assert_eq!(
-            event,
-            Event::Building {
-                derivation: Cow::Borrowed("/nix/store/x-a.drv"),
-                text: Cow::Borrowed("building '/nix/store/x-a.drv'"),
-            }
-        );
+        assert_eq!(event, Event::Building("/nix/store/x-a.drv"));
     }
 
     #[test]
@@ -510,7 +500,7 @@ mod tests {
             r#"@nix {"action":"start","fields":["/nix/store/x-a.drv"],"id":1,"level":7,"text":"","type":105}"#,
         );
 
-        assert!(matches!(event, Event::Building { .. }));
+        assert!(matches!(event, Event::Building(_)));
     }
 
     #[test]
@@ -520,7 +510,7 @@ mod tests {
             r#"@nix {"action":"result","fields":["/nix/store/x-a.drv"],"id":1,"type":105}"#,
         );
 
-        assert!(!matches!(event, Event::Building { .. }));
+        assert!(!matches!(event, Event::Building(_)));
     }
 
     #[test]
@@ -529,7 +519,7 @@ mod tests {
         let builds: Vec<String> = include_str!("../fixtures/nix/build-log.txt")
             .lines()
             .filter_map(|line| match log.observe(line) {
-                Event::Building { derivation, .. } => Some(derivation.into_owned()),
+                Event::Building(derivation) => Some(derivation.to_string()),
                 _ => None,
             })
             .collect();
@@ -537,6 +527,24 @@ mod tests {
         assert_eq!(builds.len(), 1);
         assert!(builds[0].starts_with("/nix/store/"));
         assert!(builds[0].ends_with("-failing-5.0.drv"));
+    }
+
+    #[test]
+    fn a_build_whose_derivation_cannot_be_borrowed_is_still_reported() {
+        let mut log = NixLog::new();
+        let event = log.observe(
+            r#"@nix {"action":"start","fields":["/nix/store/x\u002da.drv"],"id":1,"level":3,"text":"","type":105}"#,
+        );
+
+        assert_eq!(event, Event::Building(""));
+    }
+
+    #[test]
+    fn an_event_is_no_larger_than_a_borrowed_message() {
+        assert_eq!(
+            std::mem::size_of::<Event>(),
+            std::mem::size_of::<Cow<str>>() + std::mem::size_of::<usize>()
+        );
     }
 
     #[test]

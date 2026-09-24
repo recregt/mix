@@ -5,11 +5,10 @@
 //! *when* a profile is activated and what a failure should read like, and neither has to reach
 //! into the other to do it.
 
-use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
 use mix_core::models::UserConfig;
-use mix_core::nix_plan;
+use mix_core::nix_plan::{self, Approved};
 use mix_core::paths::{
     DEFAULT_PROFILE_NIX, HOME_MANAGER_PROFILE_NAME, mix_state_dir, nix_profiles_dir,
 };
@@ -101,10 +100,6 @@ fn nix_dry_run_args(installable: &str, options: &[String]) -> Vec<String> {
     args
 }
 
-fn derivation_show_input(paths: &[String]) -> Vec<u8> {
-    paths.join("\n").into_bytes()
-}
-
 fn as_refs(args: &[String]) -> Vec<&str> {
     args.iter().map(String::as_str).collect()
 }
@@ -114,49 +109,59 @@ async fn refuse_source_builds(
     installable: &str,
     options: &[String],
     token: &CancellationToken,
-) -> Result<HashSet<String>> {
+) -> Result<Approved> {
     let args = nix_dry_run_args(installable, options);
-    let plan = match plan_as(&cfg.user, DEFAULT_PROFILE_NIX, &as_refs(&args), token).await? {
-        Ok(plan) => plan,
-        Err(error) => {
-            tracing::info!("refusing a build plan nix printed in an unexpected shape: {error}");
-            return Err(Error::SourceBuildRequired { packages: None });
+    let dry_run = plan_as(&cfg.user, DEFAULT_PROFILE_NIX, &as_refs(&args), token).await?;
+
+    let spans = {
+        let plan = match dry_run.plan() {
+            Ok(plan) => plan,
+            Err(error) => {
+                tracing::info!("refusing a build plan nix printed in an unexpected shape: {error}");
+                return Err(Error::SourceBuildRequired { packages: None });
+            }
+        };
+        if plan.is_empty() {
+            return Ok(Approved::none());
         }
+
+        let shown = run_as_with_input(
+            &cfg.user,
+            DEFAULT_PROFILE_NIX,
+            &DERIVATION_SHOW_ARGS,
+            plan.to_build().join("\n").into_bytes(),
+            token,
+        )
+        .await?;
+        let classified = nix_plan::classify(plan.to_build(), &shown);
+
+        if !classified.source.is_empty() {
+            let packages = match classified.packages {
+                Ok(packages) if !packages.is_empty() => {
+                    Some(packages.into_iter().map(str::to_string).collect())
+                }
+                Ok(_) => None,
+                Err(error) => {
+                    tracing::info!("cannot name the packages behind a refused build: {error}");
+                    None
+                }
+            };
+            return Err(Error::SourceBuildRequired { packages });
+        }
+
+        classified
+            .local
+            .iter()
+            .filter_map(|path| dry_run.span(path))
+            .collect()
     };
-    if plan.is_empty() {
-        return Ok(HashSet::new());
-    }
 
-    let shown = run_as_with_input(
-        &cfg.user,
-        DEFAULT_PROFILE_NIX,
-        &DERIVATION_SHOW_ARGS,
-        derivation_show_input(plan.to_build()),
-        token,
-    )
-    .await?;
-    let classified = nix_plan::classify(plan.to_build(), &shown);
-
-    if classified.source.is_empty() {
-        return Ok(classified.local.into_iter().map(str::to_string).collect());
-    }
-
-    let packages = match classified.packages {
-        Ok(packages) if !packages.is_empty() => {
-            Some(packages.into_iter().map(str::to_string).collect())
-        }
-        Ok(_) => None,
-        Err(error) => {
-            tracing::info!("cannot name the packages behind a refused build: {error}");
-            None
-        }
-    };
-    Err(Error::SourceBuildRequired { packages })
+    Ok(Approved::new(dry_run, spans))
 }
 
 struct SourceBuildGuard {
     inner: Arc<dyn ActivityReporter>,
-    approved: HashSet<String>,
+    approved: Approved,
     refused: OnceLock<String>,
     token: CancellationToken,
 }
@@ -362,17 +367,7 @@ mod tests {
     }
 
     #[test]
-    fn every_planned_derivation_is_asked_about_one_per_line() {
-        let planned = [
-            "/nix/store/00000000000000000000000000000001-options.json.drv".to_string(),
-            "/nix/store/00000000000000000000000000000002-hello-2.12.3.drv".to_string(),
-        ];
-
-        assert_eq!(
-            derivation_show_input(&planned),
-            b"/nix/store/00000000000000000000000000000001-options.json.drv\n\
-              /nix/store/00000000000000000000000000000002-hello-2.12.3.drv"
-        );
+    fn every_planned_derivation_is_asked_about_through_stdin() {
         assert_eq!(DERIVATION_SHOW_ARGS, ["derivation", "show", "--stdin"]);
     }
 
@@ -390,11 +385,44 @@ mod tests {
         }
     }
 
+    fn approved_set(paths: &[&str]) -> Approved {
+        let dry_run = mix_core::nix_plan::DryRun::new(paths.join("\n"));
+        let mut spans = Vec::new();
+        let mut start = 0;
+        for path in paths {
+            let end = start + path.len();
+            spans.push((start as u32, end as u32));
+            start = end + 1;
+        }
+        Approved::new(dry_run, spans)
+    }
+
+    #[test]
+    fn the_approved_set_finds_every_path_it_was_given_and_nothing_else() {
+        let approved = approved_set(&[
+            "/nix/store/c-c.drv",
+            "/nix/store/a-a.drv",
+            "/nix/store/b-b.drv",
+        ]);
+
+        assert_eq!(approved.len(), 3);
+        for path in [
+            "/nix/store/a-a.drv",
+            "/nix/store/b-b.drv",
+            "/nix/store/c-c.drv",
+        ] {
+            assert!(approved.contains(path), "{path}");
+        }
+        assert!(!approved.contains("/nix/store/d-d.drv"));
+        assert!(!approved.contains("/nix/store/a-a"));
+        assert!(!Approved::none().contains("/nix/store/a-a.drv"));
+    }
+
     fn guard(approved: &[&str]) -> (SourceBuildGuard, Arc<Recorded>) {
         let recorded = Arc::new(Recorded::default());
         let guard = SourceBuildGuard {
             inner: Arc::clone(&recorded) as Arc<dyn ActivityReporter>,
-            approved: approved.iter().map(|path| path.to_string()).collect(),
+            approved: approved_set(approved),
             refused: OnceLock::new(),
             token: CancellationToken::new(),
         };

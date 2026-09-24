@@ -14,10 +14,11 @@ members = [
 async-trait = "0.1.92"
 divan = { version = "=5.0.2", package = "codspeed-divan-compat" }
 futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
+memchr = "2.8.3"
 nix = { version = "0.31.3", features = ["user", "fs"] }
 proptest = "1.11.0"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.145"
+serde_json = { version = "1.0.145", features = ["raw_value"] }
 tempfile = "3.27.0"
 thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "process", "fs", "io-util", "sync", "time"] }

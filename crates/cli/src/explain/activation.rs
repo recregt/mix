@@ -8,7 +8,16 @@ use mix_app::profile::Error;
 
 use super::{Diagnostic, core_error};
 
+const ONE_MISSING: &str = "package ";
+const ONE_MISSING_END: &str = " is not available as a pre-built binary\ninstalling it ";
+const SOME_MISSING: &str = "pre-built binaries are not available for: ";
+const SOME_MISSING_END: &str = "\ninstalling them ";
+const UNNAMED_MISSING: &str =
+    "some packages are not available as pre-built binaries\ninstalling them ";
+const SEPARATOR: &str = ", ";
 const COMPILING: &str = "requires compiling from source, which may take a long time";
+const RERUN: &str = "\n\nto proceed anyway, run: ";
+const RERUN_FLAG: &str = "\n\nto proceed anyway, re-run with --build";
 
 pub(crate) fn describe(error: &Error, command: &str, rerun: Option<&str>) -> Diagnostic {
     match error {
@@ -18,24 +27,48 @@ pub(crate) fn describe(error: &Error, command: &str, rerun: Option<&str>) -> Dia
 }
 
 pub(crate) fn source_build(packages: Option<&[String]>, rerun: Option<&str>) -> Diagnostic {
-    let summary = match packages {
-        Some([package]) => format!(
-            "package {package} is not available as a pre-built binary\ninstalling it {COMPILING}"
-        ),
-        Some(packages) if !packages.is_empty() => format!(
-            "pre-built binaries are not available for: {}\ninstalling them {COMPILING}",
-            packages.join(", ")
-        ),
-        _ => format!(
-            "some packages are not available as pre-built binaries\ninstalling them {COMPILING}"
-        ),
+    Diagnostic::new(render(packages.unwrap_or_default(), rerun))
+}
+
+fn render(packages: &[String], rerun: Option<&str>) -> String {
+    let names: usize = packages.iter().map(String::len).sum();
+    let opening = match packages {
+        [] => UNNAMED_MISSING.len(),
+        [_] => ONE_MISSING.len() + ONE_MISSING_END.len(),
+        _ => SOME_MISSING.len() + SEPARATOR.len() * (packages.len() - 1) + SOME_MISSING_END.len(),
     };
-    let hint = match rerun {
-        Some(rerun) => format!("\nto proceed anyway, run: {rerun}"),
-        None => "\nto proceed anyway, re-run with --build".to_string(),
+    let closing = match rerun {
+        Some(rerun) => RERUN.len() + rerun.len(),
+        None => RERUN_FLAG.len(),
     };
 
-    Diagnostic::hinting(summary, hint)
+    let mut message = String::with_capacity(opening + names + COMPILING.len() + closing);
+    match packages {
+        [] => message.push_str(UNNAMED_MISSING),
+        [package] => {
+            message.push_str(ONE_MISSING);
+            message.push_str(package);
+            message.push_str(ONE_MISSING_END);
+        }
+        [first, rest @ ..] => {
+            message.push_str(SOME_MISSING);
+            message.push_str(first);
+            for package in rest {
+                message.push_str(SEPARATOR);
+                message.push_str(package);
+            }
+            message.push_str(SOME_MISSING_END);
+        }
+    }
+    message.push_str(COMPILING);
+    match rerun {
+        Some(rerun) => {
+            message.push_str(RERUN);
+            message.push_str(rerun);
+        }
+        None => message.push_str(RERUN_FLAG),
+    }
+    message
 }
 
 #[cfg(test)]
@@ -126,6 +159,21 @@ mod tests {
             .message();
 
             assert!(message.contains(&format!("run `{command}` again")));
+        }
+    }
+
+    #[test]
+    fn the_message_is_written_into_exactly_the_space_it_needs() {
+        let packages = ["cowsay-3.8.4".to_string(), "ripgrep-14.1".to_string()];
+        for (packages, rerun) in [
+            (&packages[..0], RERUN),
+            (&packages[..1], RERUN),
+            (&packages[..], RERUN),
+            (&packages[..], None),
+        ] {
+            let message = render(packages, rerun);
+
+            assert_eq!(message.capacity(), message.len(), "{message:?}");
         }
     }
 }

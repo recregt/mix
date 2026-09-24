@@ -16,9 +16,11 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasherDefault, Hasher};
 
 use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
+use serde_json::value::RawValue;
 
 use crate::build_graph::Graph;
 
@@ -30,10 +32,16 @@ const WILL_FETCH_END: &str = "):";
 const MANY_OPENER: &str = "these ";
 const CANNOT_BUILD: &str = "don't know how to build these paths";
 
-const ENTRY_INDENT: &str = "  ";
-
+const ENTRY_INDENT: usize = 2;
+const ENTRY_PREFIX: &str = "  /nix/store/";
 const STORE_PREFIX: &str = "/nix/store/";
+const ENTRY_HEAD: u64 = u64::from_ne_bytes(*ENTRY_PREFIX.as_bytes().first_chunk::<8>().unwrap());
+const ENTRY_TAIL: u64 = u64::from_ne_bytes(*ENTRY_PREFIX.as_bytes().last_chunk::<8>().unwrap());
+const HEADER_OPENERS: [char; 2] = ['t', 'd'];
+
+const SPREAD: u64 = 0x9E37_79B9_7F4A_7C15;
 const DRV_SUFFIX: &str = ".drv";
+const DRV_SUFFIX_BYTES: &[u8; 4] = b".drv";
 
 /// Length of the hash nix puts at the front of a store path name, plus its dash.
 const HASH_PREFIX_LEN: usize = 33;
@@ -70,63 +78,113 @@ impl Open {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PlanError {
-    #[error("{entry} is listed under no header this version of nix is known to print")]
-    Unannounced { entry: String },
+    #[error("{0} is listed under no header this version of nix is known to print")]
+    Unannounced(String),
 
-    #[error("nix does not know how to build {entry}")]
-    CannotBuild { entry: String },
+    #[error("nix does not know how to build {0}")]
+    CannotBuild(String),
 
-    #[error("{entry} is listed as a build but is not a derivation")]
-    NotADerivation { entry: String },
+    #[error("{0} is listed as a build but is not a derivation")]
+    NotADerivation(String),
 
     #[error("nix announced {announced} entries in a list and printed {listed}")]
     Miscounted { announced: usize, listed: usize },
 }
 
-/// The derivations `nix build --dry-run` says it would build, in the order nix listed them.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct BuildPlan {
-    to_build: Vec<String>,
+#[derive(Debug)]
+pub struct DryRun {
+    output: String,
 }
 
-impl BuildPlan {
-    pub fn parse(output: &str) -> Result<Self, PlanError> {
+impl DryRun {
+    pub fn new(output: String) -> Self {
+        Self { output }
+    }
+
+    pub fn plan(&self) -> Result<BuildPlan<'_>, PlanError> {
+        BuildPlan::parse(&self.output)
+    }
+
+    pub fn span(&self, part: &str) -> Option<(u32, u32)> {
+        let start = (part.as_ptr() as usize).checked_sub(self.output.as_ptr() as usize)?;
+        let end = start.checked_add(part.len())?;
+        if end > self.output.len() {
+            return None;
+        }
+        Some((u32::try_from(start).ok()?, u32::try_from(end).ok()?))
+    }
+
+    fn slice(&self, (start, end): (u32, u32)) -> &str {
+        &self.output[start as usize..end as usize]
+    }
+}
+
+pub struct Approved {
+    dry_run: DryRun,
+    spans: Vec<(u32, u32)>,
+}
+
+impl Approved {
+    pub fn none() -> Self {
+        Self {
+            dry_run: DryRun::new(String::new()),
+            spans: Vec::new(),
+        }
+    }
+
+    pub fn new(dry_run: DryRun, mut spans: Vec<(u32, u32)>) -> Self {
+        spans.sort_unstable_by(|a, b| dry_run.slice(*a).cmp(dry_run.slice(*b)));
+        Self { dry_run, spans }
+    }
+
+    pub fn contains(&self, derivation: &str) -> bool {
+        self.spans
+            .binary_search_by(|span| self.dry_run.slice(*span).cmp(derivation))
+            .is_ok()
+    }
+
+    pub fn len(&self) -> usize {
+        self.spans.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.spans.is_empty()
+    }
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct BuildPlan<'a> {
+    to_build: Vec<&'a str>,
+}
+
+impl<'a> BuildPlan<'a> {
+    pub fn parse(output: &'a str) -> Result<Self, PlanError> {
         let mut to_build = Vec::new();
         let mut open: Option<Open> = None;
 
-        for line in output.lines() {
-            if let Some(entry) = entry(line) {
-                let Some(list) = open.as_mut() else {
-                    return Err(PlanError::Unannounced {
-                        entry: entry.to_string(),
-                    });
-                };
-                match list.list {
-                    List::CannotBuild => {
-                        return Err(PlanError::CannotBuild {
-                            entry: entry.to_string(),
-                        });
-                    }
-                    List::Build => {
-                        let path = entry.trim_end();
-                        if !path.ends_with(DRV_SUFFIX) {
-                            return Err(PlanError::NotADerivation {
-                                entry: path.to_string(),
-                            });
-                        }
-                        to_build.push(path.to_string());
-                    }
-                    List::Fetch => {}
+        let mut start = 0;
+        for end in memchr::memchr_iter(b'\n', output.as_bytes()).chain([output.len()]) {
+            let line = &output[start..end];
+            start = end + 1;
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            let Some(entry) = entry(line) else {
+                if line.starts_with(HEADER_OPENERS) {
+                    open_list(line, output, &mut open, &mut to_build)?;
                 }
-                list.listed += 1;
                 continue;
+            };
+            let Some(list) = open.as_mut() else {
+                return Err(refused(PlanError::Unannounced, entry));
+            };
+            match list.list {
+                List::Fetch => {}
+                List::Build if entry.as_bytes().last_chunk() == Some(DRV_SUFFIX_BYTES) => {
+                    to_build.push(entry)
+                }
+                List::Build => return Err(refused(PlanError::NotADerivation, entry)),
+                List::CannotBuild => return Err(refused(PlanError::CannotBuild, entry)),
             }
-
-            if let Some(next) = header(line)
-                && let Some(done) = open.replace(next)
-            {
-                done.close()?;
-            }
+            list.listed += 1;
         }
 
         if let Some(done) = open {
@@ -135,7 +193,7 @@ impl BuildPlan {
         Ok(Self { to_build })
     }
 
-    pub fn to_build(&self) -> &[String] {
+    pub fn to_build(&self) -> &[&'a str] {
         &self.to_build
     }
 
@@ -144,9 +202,37 @@ impl BuildPlan {
     }
 }
 
+#[cold]
+#[inline(never)]
+fn open_list(
+    line: &str,
+    output: &str,
+    open: &mut Option<Open>,
+    to_build: &mut Vec<&str>,
+) -> Result<(), PlanError> {
+    let Some(next) = header(line) else {
+        return Ok(());
+    };
+    if let (List::Build, Some(announced)) = (next.list, next.announced) {
+        to_build.reserve(announced.min(output.len() / ENTRY_PREFIX.len()));
+    }
+    match open.replace(next) {
+        Some(done) => done.close(),
+        None => Ok(()),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn refused(error: fn(String) -> PlanError, entry: &str) -> PlanError {
+    error(entry.to_string())
+}
+
 fn entry(line: &str) -> Option<&str> {
-    line.strip_prefix(ENTRY_INDENT)
-        .filter(|path| path.starts_with(STORE_PREFIX))
+    let prefix = line.as_bytes().first_chunk::<{ ENTRY_PREFIX.len() }>()?;
+    let head = u64::from_ne_bytes(*prefix.first_chunk::<8>()?);
+    let tail = u64::from_ne_bytes(*prefix.last_chunk::<8>()?);
+    (head == ENTRY_HEAD && tail == ENTRY_TAIL).then(|| &line[ENTRY_INDENT..])
 }
 
 fn header(line: &str) -> Option<Open> {
@@ -206,7 +292,7 @@ pub fn is_always_local(name: &str) -> bool {
 
 /// The readable part of a store path: no directory, no hash, no `.drv`.
 pub fn derivation_name(path: &str) -> &str {
-    let file = path.rsplit('/').next().unwrap_or(path);
+    let file = file_name(path);
     let name = file.strip_suffix(DRV_SUFFIX).unwrap_or(file);
     match name.as_bytes().get(HASH_PREFIX_LEN - 1) {
         Some(b'-') => &name[HASH_PREFIX_LEN..],
@@ -239,38 +325,44 @@ pub struct Classified<'a> {
 }
 
 pub fn classify<'a, P: AsRef<str>>(planned: &'a [P], derivations: &str) -> Classified<'a> {
-    let paths: Vec<&'a str> = planned.iter().map(AsRef::as_ref).collect();
-    let document = read_document(derivations);
-
-    let is_local: Vec<bool> = paths
-        .iter()
-        .map(|path| {
-            is_always_local(derivation_name(path))
-                || document.as_ref().is_ok_and(|derivations| {
-                    derivations
-                        .get(file_name(path))
-                        .is_some_and(Derivation::is_local)
-                })
-        })
-        .collect();
-
+    let mut document = read_document(derivations);
+    let mut is_local = Vec::with_capacity(planned.len());
     let mut local = Vec::new();
     let mut source = Vec::new();
-    for (path, &built_here) in paths.iter().zip(&is_local) {
+    let mut undescribed = None;
+
+    for (position, path) in planned.iter().map(AsRef::as_ref).enumerate() {
+        let described = match &mut document {
+            Ok(derivations) => derivations.get_mut(file_name(path)),
+            Err(_) => None,
+        };
+        let built_here = match described {
+            Some(derivation) => {
+                derivation.position = position as u32;
+                derivation.is_local()
+            }
+            None => {
+                undescribed.get_or_insert(path);
+                false
+            }
+        } || is_always_local(derivation_name(path));
+
+        is_local.push(built_here);
         if built_here {
-            local.push(*path);
+            local.push(path);
         } else {
-            source.push(*path);
+            source.push(path);
         }
     }
 
-    let packages = document.and_then(|derivations| {
-        let met = frontier(&paths, &derivations, &is_local)?;
-        Ok(met
-            .into_iter()
-            .map(|index| derivation_name(paths[index]))
-            .collect())
-    });
+    let packages = if source.is_empty() {
+        Ok(Vec::new())
+    } else {
+        document.and_then(|derivations| match undescribed {
+            Some(path) => Err(Unexplained::Undescribed(path.to_string())),
+            None => explain(planned, &derivations, &is_local),
+        })
+    };
 
     Classified {
         local,
@@ -279,49 +371,50 @@ pub fn classify<'a, P: AsRef<str>>(planned: &'a [P], derivations: &str) -> Class
     }
 }
 
-fn frontier(
-    paths: &[&str],
-    derivations: &HashMap<&str, Derivation>,
+fn explain<'a, P: AsRef<str>>(
+    planned: &'a [P],
+    derivations: &Derivations,
     is_local: &[bool],
-) -> Result<Vec<usize>, Unexplained> {
-    let index: HashMap<&str, u32> = paths
-        .iter()
-        .enumerate()
-        .map(|(position, path)| (file_name(path), position as u32))
-        .collect();
+) -> Result<Vec<&'a str>, Unexplained> {
+    let name = |node: usize| derivation_name(planned[node].as_ref());
+    let compiled = |node: usize| !is_local[node];
 
-    let mut edges = Vec::new();
-    for (position, path) in paths.iter().enumerate() {
-        let derivation = derivations
-            .get(file_name(path))
-            .ok_or_else(|| Unexplained::Undescribed((*path).to_string()))?;
+    let packages = profile_packages(planned, derivations, compiled);
+    if !packages.is_empty() {
+        return Ok(packages.into_iter().map(name).collect());
+    }
+
+    let dependencies = planned
+        .iter()
+        .map(|path| derivations[file_name(path.as_ref())].dependencies())
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut edges = Vec::with_capacity(dependencies.iter().map(Keys::len).sum());
+    for (position, keys) in dependencies.iter().enumerate() {
         edges.extend(
-            derivation
-                .inputs
-                .drvs
-                .iter()
-                .filter_map(|input| index.get(file_name(input)))
-                .map(|&dependency| (position as u32, dependency)),
+            keys.iter()
+                .filter_map(|input| derivations.get(file_name(input)))
+                .filter(|dependency| dependency.position != UNPLANNED)
+                .map(|dependency| (position as u32, dependency.position)),
         );
     }
 
-    let graph = Graph::new(paths.len(), &edges);
+    let graph = Graph::new(planned.len(), &edges);
     let order = graph.dependents_first().ok_or(Unexplained::Cycle)?;
-    let compiled = |node: usize| !is_local[node];
-
-    let packages: Vec<usize> = profile_packages(paths, derivations)
+    Ok(graph
+        .frontier(&order, compiled)
         .into_iter()
-        .filter(|&node| compiled(node))
-        .collect();
-    if !packages.is_empty() {
-        return Ok(packages);
-    }
-    Ok(graph.frontier(&order, compiled))
+        .map(name)
+        .collect())
 }
 
-fn profile_packages(paths: &[&str], derivations: &HashMap<&str, Derivation>) -> Vec<usize> {
-    let chosen: HashSet<&str> = paths
+fn profile_packages<P: AsRef<str>>(
+    planned: &[P],
+    derivations: &Derivations,
+    compiled: impl Fn(usize) -> bool,
+) -> Vec<usize> {
+    let chosen: StoreSet = planned
         .iter()
+        .map(AsRef::as_ref)
         .filter(|path| derivation_name(path) == PROFILE_PACKAGES)
         .filter_map(|path| derivations.get(file_name(path)))
         .flat_map(|profile| profile.chosen_outputs().iter().map(|path| file_name(path)))
@@ -330,26 +423,70 @@ fn profile_packages(paths: &[&str], derivations: &HashMap<&str, Derivation>) -> 
         return Vec::new();
     }
 
-    paths
+    planned
         .iter()
         .enumerate()
-        .filter(|(_, path)| {
-            derivations.get(file_name(path)).is_some_and(|derivation| {
-                derivation
-                    .outputs
-                    .iter()
-                    .any(|output| chosen.contains(file_name(output)))
-            })
+        .filter(|&(position, path)| {
+            compiled(position)
+                && derivations
+                    .get(file_name(path.as_ref()))
+                    .is_some_and(|derivation| {
+                        derivation
+                            .output_paths()
+                            .iter()
+                            .any(|output| chosen.contains(file_name(output)))
+                    })
         })
         .map(|(position, _)| position)
         .collect()
 }
 
 fn file_name(path: &str) -> &str {
+    if let Some(file) = path.strip_prefix(STORE_PREFIX) {
+        return file;
+    }
+    if !path.starts_with('/') {
+        return path;
+    }
     path.rsplit('/').next().unwrap_or(path)
 }
 
-fn read_document(raw: &str) -> Result<HashMap<&str, Derivation<'_>>, Unexplained> {
+#[derive(Default)]
+struct StoreHasher(u64);
+
+impl StoreHasher {
+    fn mix(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(SPREAD);
+    }
+}
+
+impl Hasher for StoreHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        let (words, rest) = bytes.as_chunks::<8>();
+        for word in words {
+            self.mix(u64::from_le_bytes(*word));
+        }
+        if !rest.is_empty() {
+            let mut last = [0u8; 8];
+            last[..rest.len()].copy_from_slice(rest);
+            self.mix(u64::from_le_bytes(last));
+        }
+    }
+
+    fn write_u8(&mut self, _byte: u8) {}
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+type StoreHash = BuildHasherDefault<StoreHasher>;
+type StoreSet<'a> = HashSet<&'a str, StoreHash>;
+type Derivations<'a> = HashMap<&'a str, Derivation<'a>, StoreHash>;
+
+const UNPLANNED: u32 = u32::MAX;
+
+fn read_document(raw: &str) -> Result<Derivations<'_>, Unexplained> {
     match serde_json::from_str::<Document>(raw) {
         Ok(document) if KNOWN_DOCUMENT_VERSIONS.contains(&document.version) => {
             Ok(document.derivations)
@@ -373,7 +510,7 @@ struct Versioned {
 struct Document<'a> {
     version: u64,
     #[serde(borrow)]
-    derivations: HashMap<&'a str, Derivation<'a>>,
+    derivations: Derivations<'a>,
 }
 
 #[derive(Deserialize)]
@@ -383,13 +520,34 @@ struct Derivation<'a> {
     // Derivations built with `__structuredAttrs` carry their attributes here instead.
     #[serde(default, rename = "structuredAttrs")]
     structured_attrs: Option<BuildFlags>,
-    #[serde(borrow)]
-    inputs: Inputs<'a>,
     #[serde(default, borrow)]
-    outputs: Outputs<'a>,
+    inputs: Option<&'a RawValue>,
+    #[serde(default, borrow)]
+    outputs: Option<&'a RawValue>,
+    #[serde(skip, default = "unplanned")]
+    position: u32,
 }
 
-impl Derivation<'_> {
+fn unplanned() -> u32 {
+    UNPLANNED
+}
+
+impl<'a> Derivation<'a> {
+    fn dependencies(&self) -> Result<Keys<'a>, Unexplained> {
+        let inputs = self
+            .inputs
+            .ok_or_else(|| Unexplained::Unreadable("a derivation lists no inputs".to_string()))?;
+        serde_json::from_str::<Inputs>(inputs.get())
+            .map(|inputs| inputs.drvs)
+            .map_err(|error| Unexplained::Unreadable(error.to_string()))
+    }
+
+    fn output_paths(&self) -> Outputs<'a> {
+        self.outputs
+            .and_then(|outputs| serde_json::from_str(outputs.get()).ok())
+            .unwrap_or_default()
+    }
+
     fn chosen_outputs(&self) -> &[String] {
         match &self.structured_attrs {
             Some(attrs) if !attrs.chosen_outputs.is_empty() => &attrs.chosen_outputs,
@@ -421,6 +579,10 @@ struct Keys<'a>(Vec<Cow<'a, str>>);
 impl<'a> Keys<'a> {
     fn iter(&self) -> impl Iterator<Item = &str> {
         self.0.iter().map(AsRef::as_ref)
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
@@ -658,16 +820,63 @@ these 2 paths will be fetched (1.5 MiB download, 4.0 MiB unpacked):
     fn a_single_planned_derivation_nix_printed_is_read() {
         let plan = BuildPlan::parse(DRY_RUN_ONE).unwrap();
 
-        assert_eq!(
-            names(
-                &plan
-                    .to_build()
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<Vec<_>>()
-            ),
-            ["leaf-1.0"]
+        assert_eq!(names(plan.to_build()), ["leaf-1.0"]);
+    }
+
+    #[test]
+    fn a_span_is_only_given_for_a_slice_of_the_dry_run_itself() {
+        let dry_run = DryRun::new(DRY_RUN_ONE.to_string());
+        let plan = dry_run.plan().unwrap();
+
+        let span = dry_run.span(plan.to_build()[0]).unwrap();
+        assert_eq!(dry_run.slice(span), plan.to_build()[0]);
+        assert_eq!(dry_run.span("/nix/store/elsewhere.drv"), None);
+    }
+
+    #[test]
+    fn a_garbled_count_cannot_reserve_more_than_the_output_could_hold() {
+        let plan = BuildPlan::parse(
+            "these 18446744073709551615 derivations will be built:\n  /nix/store/a-a.drv\n",
         );
+
+        assert!(matches!(plan, Err(PlanError::Miscounted { .. })));
+    }
+
+    #[test]
+    fn a_plan_with_windows_line_endings_or_no_final_newline_is_read_the_same() {
+        let plan = BuildPlan::parse(
+            "these 2 derivations will be built:\r\n  /nix/store/a-a.drv\r\n  /nix/store/b-b.drv",
+        )
+        .unwrap();
+
+        assert_eq!(
+            plan.to_build(),
+            ["/nix/store/a-a.drv", "/nix/store/b-b.drv"]
+        );
+    }
+
+    fn hash(key: &str) -> u64 {
+        let mut hasher = StoreHasher::default();
+        hasher.write(key.as_bytes());
+        hasher.finish()
+    }
+
+    #[test]
+    fn keys_that_share_a_long_prefix_still_hash_apart() {
+        let hashes: HashSet<u64> = (0..1000)
+            .map(|index| hash(&format!("{index:032}-package-{index}.drv")))
+            .collect();
+
+        assert_eq!(hashes.len(), 1000);
+    }
+
+    #[test]
+    fn keys_that_differ_only_in_their_last_bytes_hash_apart() {
+        assert_ne!(
+            hash("0000000000000000-a.drv"),
+            hash("0000000000000000-b.drv")
+        );
+        assert_ne!(hash("abcdefgh"), hash("abcdefgh\0"));
     }
 
     #[test]
@@ -713,7 +922,7 @@ these 2 paths will be fetched (1.5 MiB download, 4.0 MiB unpacked):
         )
         .unwrap_err();
 
-        assert!(matches!(error, PlanError::Unannounced { .. }));
+        assert!(matches!(error, PlanError::Unannounced(_)));
     }
 
     #[test]
@@ -760,7 +969,7 @@ these 2 paths will be fetched (1.5 MiB download, 4.0 MiB unpacked):
         )
         .unwrap_err();
 
-        assert!(matches!(error, PlanError::CannotBuild { .. }));
+        assert!(matches!(error, PlanError::CannotBuild(_)));
     }
 
     #[test]
@@ -770,7 +979,7 @@ these 2 paths will be fetched (1.5 MiB download, 4.0 MiB unpacked):
         )
         .unwrap_err();
 
-        assert!(matches!(error, PlanError::NotADerivation { .. }));
+        assert!(matches!(error, PlanError::NotADerivation(_)));
     }
 
     #[test]
@@ -797,7 +1006,7 @@ these 2 paths will be fetched (1.5 MiB download, 4.0 MiB unpacked):
         assert_eq!(derivation_name(""), "");
     }
 
-    fn fixture_plan() -> Vec<String> {
+    fn fixture_plan() -> Vec<&'static str> {
         BuildPlan::parse(DRY_RUN_MANY).unwrap().to_build().to_vec()
     }
 
@@ -1271,6 +1480,37 @@ these 2 paths will be fetched (1.5 MiB download, 4.0 MiB unpacked):
         let classified = classify(&planned, &derivations);
         assert_eq!(names(&classified.source), ["home-manager-path"]);
         assert!(classified.packages.is_err());
+    }
+
+    #[test]
+    fn unreadable_dependencies_only_cost_the_explanation() {
+        let planned = vec![path(1, "home-manager-path"), path(2, "hello-2.12.3")];
+        let derivations = shown(&[
+            (
+                &key(1, "home-manager-path"),
+                r#"{"env":{"preferLocalBuild":"1"},"inputs":"not a map"}"#,
+            ),
+            (&key(2, "hello-2.12.3"), r#"{"env":{}}"#),
+        ]);
+
+        let classified = classify(&planned, &derivations);
+        assert_eq!(names(&classified.local), ["home-manager-path"]);
+        assert_eq!(names(&classified.source), ["hello-2.12.3"]);
+        assert!(matches!(
+            classified.packages,
+            Err(Unexplained::Unreadable(_))
+        ));
+    }
+
+    #[test]
+    fn a_plan_nothing_is_refused_in_is_never_explained() {
+        let planned = vec![path(1, "home-manager-path")];
+        let derivations = shown(&[(
+            &key(1, "home-manager-path"),
+            r#"{"env":{"preferLocalBuild":"1"},"inputs":"not a map"}"#,
+        )]);
+
+        assert_eq!(classify(&planned, &derivations).packages, Ok(Vec::new()));
     }
 
     #[test]

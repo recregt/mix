@@ -9,10 +9,10 @@ pub mod output;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use mix_core::nix_plan::PlanError;
+use mix_core::nix_plan::DryRun;
 use mix_core::paths::DEFAULT_PROFILE_BIN;
 use mix_core::privilege::InvokingUser;
-use mix_core::{ActivityReporter, BuildPlan, CancellationToken, Error, Result};
+use mix_core::{ActivityReporter, CancellationToken, Error, Result};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tracing::Instrument;
@@ -217,14 +217,16 @@ pub async fn plan_as(
     command: &str,
     args: &[&str],
     token: &CancellationToken,
-) -> Result<std::result::Result<BuildPlan, PlanError>> {
+) -> Result<DryRun> {
     let command_line = format_command(command, args);
     let cmd = command_as(user, command, args);
     let output = run_command(cmd, &command_line, token).await?;
     if !output.status.success() {
         return Err(command_error(command_line, &output));
     }
-    Ok(BuildPlan::parse(&String::from_utf8_lossy(&output.stderr)))
+    let stderr = String::from_utf8(output.stderr)
+        .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned());
+    Ok(DryRun::new(stderr))
 }
 
 pub async fn status_as(
@@ -302,12 +304,11 @@ mod tests {
             &CancellationToken::new(),
         )
         .await
-        .unwrap()
         .unwrap();
 
         assert_eq!(
-            plan.to_build(),
-            ["/nix/store/00000000000000000000000000000001-hello.drv".to_string()]
+            plan.plan().unwrap().to_build(),
+            ["/nix/store/00000000000000000000000000000001-hello.drv"]
         );
     }
 
@@ -326,7 +327,10 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(matches!(plan, Err(PlanError::Unannounced { .. })));
+        assert!(matches!(
+            plan.plan(),
+            Err(mix_core::nix_plan::PlanError::Unannounced(_))
+        ));
     }
 
     #[tokio::test]

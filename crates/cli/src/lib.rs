@@ -38,10 +38,9 @@ pub async fn run() -> ExitCode {
     // into a sentence.
     let explain: Box<dyn Fn(&anyhow::Error) -> Diagnostic> = match &cli.command {
         Command::Bootstrap { .. } => Box::new(explain::bootstrap::explain),
-        Command::Install { .. } => {
-            let rerun = explain::install::rerun_with_build(std::env::args());
-            Box::new(move |error| explain::install::explain(error, &rerun))
-        }
+        Command::Install { .. } => Box::new(|error| {
+            explain::install::explain(error, &explain::install::rerun_with_build(std::env::args()))
+        }),
         Command::Remove { .. } => Box::new(explain::remove::explain),
         Command::Doctor => Box::new(explain::doctor::explain),
         Command::Repair => Box::new(explain::repair::explain),

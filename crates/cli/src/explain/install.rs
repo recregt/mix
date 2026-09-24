@@ -21,22 +21,30 @@ pub fn rerun_with_build(args: impl IntoIterator<Item = String>) -> String {
     let mut rerun = String::from(PROGRAM);
     for arg in args.into_iter().skip(1) {
         rerun.push(' ');
-        rerun.push_str(&quoted(&arg));
+        push_quoted(&mut rerun, &arg);
     }
     rerun.push(' ');
     rerun.push_str(BUILD_FLAG);
     rerun
 }
 
-fn quoted(arg: &str) -> String {
+fn push_quoted(out: &mut String, arg: &str) {
     let plain = !arg.is_empty()
         && arg
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"@%+=:,./_-".contains(&b));
     if plain {
-        return arg.to_string();
+        out.push_str(arg);
+        return;
     }
-    format!("'{}'", arg.replace('\'', r"'\''"))
+    out.push('\'');
+    for (index, part) in arg.split('\'').enumerate() {
+        if index > 0 {
+            out.push_str(r"'\''");
+        }
+        out.push_str(part);
+    }
+    out.push('\'');
 }
 
 #[cfg(test)]
