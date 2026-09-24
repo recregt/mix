@@ -124,9 +124,12 @@ def test_install_refuses_a_package_the_cache_cannot_serve(
 
     assert result.returncode != 0
     output = (result.stdout + result.stderr).lower()
-    assert "binary cache" in output
-    assert "--build" in output
-    assert UNCACHED_TEST_PACKAGE in output
+    assert f"package {UNCACHED_TEST_PACKAGE}-" in output
+    assert "not available as a pre-built binary" in output
+    assert f"to proceed anyway, run: mix install {UNCACHED_TEST_PACKAGE} --mirror" in output
+    assert output.rstrip().endswith("--build")
+    assert "hex0" not in output
+    assert "bash-" not in output
 
     # Refusing costs the user nothing: the profile and the files that describe it are untouched.
     assert container.exec("cat", f"{state_dir}/state", check=True).stdout == state_before

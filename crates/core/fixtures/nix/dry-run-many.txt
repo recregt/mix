@@ -1,0 +1,10 @@
+these 9 derivations will be built:
+  /nix/store/7ywxh91mq5lv7d97isilyinrvzg7ljvj-shell-5.3.drv
+  /nix/store/rwxrg1q87482zz0z742zkc5wsrys0jyq-tool-4.0.drv
+  /nix/store/d38dsblf1pg7kw6vnadbx65bn3fgxpvr-tool-wrapper.drv
+  /nix/store/mgaw1ywi755dbb8n4fpph3if9zqzzv75-leaf-1.0.drv
+  /nix/store/y7az9l0jxvkjlzsrhscr7pv6f2brlcpj-library-2.1.drv
+  /nix/store/k6jlvbym39ajflszidd2yv9f90ygsnyz-package-3.2.drv
+  /nix/store/77cb6d26ccjlvfnb6kr1v2lzhhfay08z-home-manager-path.drv
+  /nix/store/jcymx5d2nmqa3kv3zc41wsmv7faz68ll-options.json.drv
+  /nix/store/c4glsr8spifsldr42mjbfcln2r5xndxp-home-manager-generation.drv

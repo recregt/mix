@@ -9,7 +9,7 @@ const COMMAND: &str = "mix remove";
 
 pub fn explain(error: &anyhow::Error) -> Diagnostic {
     match error.downcast_ref::<Error>() {
-        Some(Error::Change(error)) => change::describe(error, COMMAND),
+        Some(Error::Change(error)) => change::describe(error, COMMAND, None),
         Some(Error::Protected(packages)) => protected(packages),
         None => Diagnostic::new(error.to_string()),
     }

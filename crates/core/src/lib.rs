@@ -1,3 +1,4 @@
+pub mod build_graph;
 pub mod constants;
 pub mod error;
 pub mod lock;

@@ -24,6 +24,7 @@ const ACT_COPY_PATH: u64 = 100;
 const ACT_FILE_TRANSFER: u64 = 101;
 const ACT_COPY_PATHS: u64 = 103;
 const ACT_BUILDS: u64 = 104;
+const ACT_BUILD: u64 = 105;
 
 /// Result types, from nix's `logging.hh`.
 const RES_PROGRESS: u64 = 105;
@@ -79,6 +80,10 @@ pub enum Event<'a> {
     /// A description of what nix just started doing: worth showing while it lasts, not worth
     /// keeping.
     Transient(Cow<'a, str>),
+    Building {
+        derivation: Cow<'a, str>,
+        text: Cow<'a, str>,
+    },
     /// The counters moved; the caller should read [`NixLog::snapshot`].
     Progress,
     /// A record that changes nothing on screen.
@@ -187,6 +192,15 @@ impl NixLog {
     }
 
     fn start<'a>(&mut self, record: Record<'a>) -> Event<'a> {
+        if record.activity_type == ACT_BUILD
+            && let Some(derivation) = record.fields.text
+        {
+            return Event::Building {
+                derivation,
+                text: record.text,
+            };
+        }
+
         let Some(slot) = tracked(record.activity_type) else {
             if record.level <= LVL_INFO && !record.text.is_empty() {
                 return Event::Transient(record.text);
@@ -276,8 +290,8 @@ struct Record<'a> {
     text: Cow<'a, str>,
     #[serde(default, borrow)]
     msg: Cow<'a, str>,
-    #[serde(default)]
-    fields: Fields,
+    #[serde(default, borrow)]
+    fields: Fields<'a>,
 }
 
 /// The leading integers of a record's `fields` array.
@@ -286,34 +300,37 @@ struct Record<'a> {
 /// a fixed array: no record ever allocates a vector, whatever nix decides to put in there.
 const MAX_FIELDS: usize = 4;
 
-#[derive(Debug, Default, Clone, Copy)]
-struct Fields {
+#[derive(Debug, Default)]
+struct Fields<'a> {
     ints: [u64; MAX_FIELDS],
+    text: Option<Cow<'a, str>>,
 }
 
-impl Fields {
+impl Fields<'_> {
     fn int(&self, index: usize) -> u64 {
         self.ints.get(index).copied().unwrap_or(0)
     }
 }
 
-impl<'de> Deserialize<'de> for Fields {
+impl<'de: 'a, 'a> Deserialize<'de> for Fields<'a> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct FieldsVisitor;
+        struct FieldsVisitor<'a>(std::marker::PhantomData<&'a ()>);
 
-        impl<'de> Visitor<'de> for FieldsVisitor {
-            type Value = Fields;
+        impl<'de: 'a, 'a> Visitor<'de> for FieldsVisitor<'a> {
+            type Value = Fields<'a>;
 
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 f.write_str("an array of activity fields")
             }
 
-            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Fields, A::Error> {
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Fields<'a>, A::Error> {
                 let mut fields = Fields::default();
                 let mut index = 0;
-                while let Some(field) = seq.next_element::<MaybeInt>()? {
-                    if index < MAX_FIELDS {
-                        fields.ints[index] = field.0;
+                while let Some(field) = seq.next_element::<Field<'de>>()? {
+                    match field {
+                        Field::Int(value) if index < MAX_FIELDS => fields.ints[index] = value,
+                        Field::Text(text) if index == 0 => fields.text = Some(text),
+                        _ => {}
                     }
                     index += 1;
                 }
@@ -321,66 +338,73 @@ impl<'de> Deserialize<'de> for Fields {
             }
         }
 
-        deserializer.deserialize_seq(FieldsVisitor)
+        deserializer.deserialize_seq(FieldsVisitor(std::marker::PhantomData))
     }
 }
 
-/// A field read as an integer, or zero for the string fields the counters do not use.
-struct MaybeInt(u64);
+enum Field<'a> {
+    Int(u64),
+    Text(Cow<'a, str>),
+    Other,
+}
 
-impl<'de> Deserialize<'de> for MaybeInt {
+impl<'de: 'a, 'a> Deserialize<'de> for Field<'a> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct MaybeIntVisitor;
+        struct FieldVisitor<'a>(std::marker::PhantomData<&'a ()>);
 
-        impl<'de> Visitor<'de> for MaybeIntVisitor {
-            type Value = MaybeInt;
+        impl<'de: 'a, 'a> Visitor<'de> for FieldVisitor<'a> {
+            type Value = Field<'a>;
 
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 f.write_str("an activity field")
             }
 
-            fn visit_u64<E>(self, value: u64) -> Result<MaybeInt, E> {
-                Ok(MaybeInt(value))
+            fn visit_u64<E>(self, value: u64) -> Result<Field<'a>, E> {
+                Ok(Field::Int(value))
             }
 
-            fn visit_i64<E>(self, value: i64) -> Result<MaybeInt, E> {
-                Ok(MaybeInt(value.max(0) as u64))
+            fn visit_i64<E>(self, value: i64) -> Result<Field<'a>, E> {
+                Ok(Field::Int(value.max(0) as u64))
             }
 
-            fn visit_f64<E>(self, value: f64) -> Result<MaybeInt, E> {
-                Ok(MaybeInt(value.max(0.0) as u64))
+            fn visit_f64<E>(self, value: f64) -> Result<Field<'a>, E> {
+                Ok(Field::Int(value.max(0.0) as u64))
             }
 
-            fn visit_bool<E>(self, _value: bool) -> Result<MaybeInt, E> {
-                Ok(MaybeInt(0))
+            fn visit_bool<E>(self, _value: bool) -> Result<Field<'a>, E> {
+                Ok(Field::Other)
             }
 
-            fn visit_str<E>(self, _value: &str) -> Result<MaybeInt, E> {
-                Ok(MaybeInt(0))
+            fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Field<'a>, E> {
+                Ok(Field::Text(Cow::Borrowed(value)))
             }
 
-            fn visit_unit<E>(self) -> Result<MaybeInt, E> {
-                Ok(MaybeInt(0))
+            fn visit_str<E>(self, value: &str) -> Result<Field<'a>, E> {
+                Ok(Field::Text(Cow::Owned(value.to_string())))
             }
 
-            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<MaybeInt, A::Error> {
+            fn visit_unit<E>(self) -> Result<Field<'a>, E> {
+                Ok(Field::Other)
+            }
+
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Field<'a>, A::Error> {
                 while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
-                Ok(MaybeInt(0))
+                Ok(Field::Other)
             }
 
             fn visit_map<A: serde::de::MapAccess<'de>>(
                 self,
                 mut map: A,
-            ) -> Result<MaybeInt, A::Error> {
+            ) -> Result<Field<'a>, A::Error> {
                 while map
                     .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
                     .is_some()
                 {}
-                Ok(MaybeInt(0))
+                Ok(Field::Other)
             }
         }
 
-        deserializer.deserialize_any(MaybeIntVisitor)
+        deserializer.deserialize_any(FieldVisitor(std::marker::PhantomData))
     }
 }
 
@@ -461,6 +485,58 @@ mod tests {
             Event::Transient(Cow::Borrowed("building '/nix/store/x.drv'"))
         );
         assert!(log.snapshot().is_idle());
+    }
+
+    #[test]
+    fn a_build_starting_names_the_derivation_being_built() {
+        let mut log = NixLog::new();
+        let event = log.observe(
+            r#"@nix {"action":"start","fields":["/nix/store/x-a.drv","",1,1],"id":1,"level":3,"parent":0,"text":"building '/nix/store/x-a.drv'","type":105}"#,
+        );
+
+        assert_eq!(
+            event,
+            Event::Building {
+                derivation: Cow::Borrowed("/nix/store/x-a.drv"),
+                text: Cow::Borrowed("building '/nix/store/x-a.drv'"),
+            }
+        );
+    }
+
+    #[test]
+    fn a_build_is_reported_whatever_its_verbosity() {
+        let mut log = NixLog::new();
+        let event = log.observe(
+            r#"@nix {"action":"start","fields":["/nix/store/x-a.drv"],"id":1,"level":7,"text":"","type":105}"#,
+        );
+
+        assert!(matches!(event, Event::Building { .. }));
+    }
+
+    #[test]
+    fn progress_on_a_build_is_not_mistaken_for_a_build_starting() {
+        let mut log = NixLog::new();
+        let event = log.observe(
+            r#"@nix {"action":"result","fields":["/nix/store/x-a.drv"],"id":1,"type":105}"#,
+        );
+
+        assert!(!matches!(event, Event::Building { .. }));
+    }
+
+    #[test]
+    fn every_build_in_a_real_log_is_reported_once() {
+        let mut log = NixLog::new();
+        let builds: Vec<String> = include_str!("../fixtures/nix/build-log.txt")
+            .lines()
+            .filter_map(|line| match log.observe(line) {
+                Event::Building { derivation, .. } => Some(derivation.into_owned()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(builds.len(), 1);
+        assert!(builds[0].starts_with("/nix/store/"));
+        assert!(builds[0].ends_with("-failing-5.0.drv"));
     }
 
     #[test]

@@ -8,70 +8,108 @@ use mix_app::profile::Error;
 
 use super::{Diagnostic, core_error};
 
-/// How many derivations are worth naming before the list stops being readable.
-const NAMED_SOURCE_BUILDS: usize = 5;
+const COMPILING: &str = "requires compiling from source, which may take a long time";
 
-pub(crate) fn describe(error: &Error, command: &str) -> Diagnostic {
+pub(crate) fn describe(error: &Error, command: &str, rerun: Option<&str>) -> Diagnostic {
     match error {
         Error::Core(e) => core_error(e, command),
-        Error::SourceBuildRequired(derivations) => source_build(derivations),
+        Error::SourceBuildRequired { packages } => source_build(packages.as_deref(), rerun),
     }
 }
 
-/// What the cache-only gate refused, and the flag that overrides it.
-///
-/// The plan can be long, and a plan longer than a few names stops being readable: the library
-/// hands over every derivation it refused, and how many of them are worth printing is decided
-/// here, where the printing happens.
-pub(crate) fn source_build(derivations: &[String]) -> Diagnostic {
-    let named: Vec<&str> = derivations
-        .iter()
-        .take(NAMED_SOURCE_BUILDS)
-        .map(String::as_str)
-        .collect();
-    let mut list = named.join(", ");
-    if let Some(rest) = derivations
-        .len()
-        .checked_sub(named.len())
-        .filter(|n| *n > 0)
-    {
-        list.push_str(&format!(" and {rest} more"));
-    }
+pub(crate) fn source_build(packages: Option<&[String]>, rerun: Option<&str>) -> Diagnostic {
+    let summary = match packages {
+        Some([package]) => format!(
+            "package {package} is not available as a pre-built binary\ninstalling it {COMPILING}"
+        ),
+        Some(packages) if !packages.is_empty() => format!(
+            "pre-built binaries are not available for: {}\ninstalling them {COMPILING}",
+            packages.join(", ")
+        ),
+        _ => format!(
+            "some packages are not available as pre-built binaries\ninstalling them {COMPILING}"
+        ),
+    };
+    let hint = match rerun {
+        Some(rerun) => format!("\nto proceed anyway, run: {rerun}"),
+        None => "\nto proceed anyway, re-run with --build".to_string(),
+    };
 
-    Diagnostic::hinting(
-        format!("the binary cache has nothing to download for: {list}"),
-        "Installing this would compile it from source, which can take hours.\n\
-         To compile it anyway, re-run with `--build`:\n\
-         \x20 mix install --build ...",
-    )
+    Diagnostic::hinting(summary, hint)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_refused_source_build_names_it_and_offers_the_flag() {
-        let message = describe(
-            &Error::SourceBuildRequired(vec!["cowsay-3.8.4".to_string()]),
-            "mix install",
-        )
-        .message();
+    fn refused(packages: Option<&[&str]>) -> Error {
+        Error::SourceBuildRequired {
+            packages: packages.map(|packages| packages.iter().map(|p| p.to_string()).collect()),
+        }
+    }
 
-        assert!(message.contains("binary cache"));
-        assert!(message.contains("cowsay-3.8.4"));
-        assert!(message.contains("mix install --build"));
+    const RERUN: Option<&str> = Some("mix install cowsay ripgrep --build");
+
+    #[test]
+    fn a_single_package_is_named_on_its_own() {
+        let message = describe(&refused(Some(&["cowsay-3.8.4"])), "mix install", RERUN).message();
+
+        assert_eq!(
+            message,
+            "package cowsay-3.8.4 is not available as a pre-built binary\n\
+             installing it requires compiling from source, which may take a long time\n\
+             \n\
+             to proceed anyway, run: mix install cowsay ripgrep --build"
+        );
     }
 
     #[test]
-    fn a_long_list_of_refusals_is_counted_rather_than_printed() {
-        let derivations: Vec<String> = (0..8).map(|i| format!("package-{i}")).collect();
+    fn several_packages_are_listed_together() {
+        let message = describe(
+            &refused(Some(&["cowsay-3.8.4", "ripgrep-14.1"])),
+            "mix install",
+            RERUN,
+        )
+        .message();
 
-        let message = source_build(&derivations).message();
+        assert_eq!(
+            message,
+            "pre-built binaries are not available for: cowsay-3.8.4, ripgrep-14.1\n\
+             installing them requires compiling from source, which may take a long time\n\
+             \n\
+             to proceed anyway, run: mix install cowsay ripgrep --build"
+        );
+    }
 
-        assert!(message.contains("package-4"));
-        assert!(!message.contains("package-5"));
-        assert!(message.contains("and 3 more"));
+    #[test]
+    fn a_refusal_with_no_names_still_offers_the_way_out() {
+        for packages in [None, Some(&[] as &[&str])] {
+            let message = describe(&refused(packages), "mix install", RERUN).message();
+
+            assert_eq!(
+                message,
+                "some packages are not available as pre-built binaries\n\
+                 installing them requires compiling from source, which may take a long time\n\
+                 \n\
+                 to proceed anyway, run: mix install cowsay ripgrep --build"
+            );
+        }
+    }
+
+    #[test]
+    fn with_no_command_to_repeat_the_flag_is_named_instead() {
+        let message = describe(&refused(Some(&["cowsay-3.8.4"])), "mix install", None).message();
+
+        assert!(message.ends_with("\n\nto proceed anyway, re-run with --build"));
+    }
+
+    #[test]
+    fn nothing_from_nix_reaches_the_reader() {
+        let message = describe(&refused(Some(&["cowsay-3.8.4"])), "mix install", RERUN).message();
+
+        for word in ["derivation", "nix", "cache", "store"] {
+            assert!(!message.contains(word), "{word:?} leaked into {message:?}");
+        }
     }
 
     /// The same failure, and the command the reader should try again, is the one they ran.
@@ -83,6 +121,7 @@ mod tests {
                     path: "/run/mix.lock".into(),
                 }),
                 command,
+                None,
             )
             .message();
 

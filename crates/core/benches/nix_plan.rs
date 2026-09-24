@@ -1,6 +1,4 @@
-use mix_core::nix_plan::{
-    ALWAYS_LOCAL, BuildPlan, derivation_name, is_always_local, source_builds,
-};
+use mix_core::nix_plan::{BuildPlan, classify};
 
 fn main() {
     divan::main();
@@ -26,17 +24,12 @@ fn dry_run_output(builds: usize) -> String {
 }
 
 /// Reading the plan out of a dry run: one pass over the output, copying only the paths.
-#[divan::bench(args = [1, 8, 64])]
+#[divan::bench(args = [1, 64, 609])]
 fn read_the_build_plan(bencher: divan::Bencher, builds: usize) {
     let output = dry_run_output(builds);
     bencher.bench(|| BuildPlan::parse(divan::black_box(&output)));
 }
 
-/// A `nix derivation show` document for the planned derivations.
-///
-/// The attribute set of a real derivation is tens of kilobytes of environment and structured
-/// attributes that the answer does not depend on, so the shape matters as much as the count:
-/// what is measured here is mostly the cost of skipping.
 fn shown_derivations(builds: usize) -> String {
     let filler: Vec<String> = (0..64)
         .map(|i| format!("\"attribute-{i}\":\"/nix/store/{i:032}-input-{i}\""))
@@ -46,12 +39,23 @@ fn shown_derivations(builds: usize) -> String {
     let entries: Vec<String> = (0..builds)
         .map(|build| {
             let local = build % 2 == 0;
+            let inputs: Vec<String> = [build + 1, build * 2 + 1, build * 3 + 1]
+                .into_iter()
+                .filter(|&input| input < builds)
+                .map(|input| {
+                    format!(
+                        "\"{input:032}-package-{input}.drv\":{{\"dynamicOutputs\":{{}},\"outputs\":[\"out\"]}}"
+                    )
+                })
+                .collect();
             format!(
                 "\"{index:032}-package-{build}.drv\":{{\"name\":\"package-{build}\",\
                  \"env\":{{{filler},\"out\":\"/nix/store/{index:032}-package-{build}\"}},\
+                 \"inputs\":{{\"drvs\":{{{inputs}}},\"srcs\":[]}},\
                  \"structuredAttrs\":{{{filler},\"preferLocalBuild\":{local},\
                  \"allowSubstitutes\":{substitutes}}}}}",
                 index = build,
+                inputs = inputs.join(","),
                 substitutes = !local,
             )
         })
@@ -63,42 +67,12 @@ fn shown_derivations(builds: usize) -> String {
     )
 }
 
-/// Telling home-manager's own generation apart from a package that would be compiled.
-#[divan::bench(args = [1, 8, 64])]
+#[divan::bench(args = [1, 64, 609])]
 fn classify_the_planned_derivations(bencher: divan::Bencher, builds: usize) {
     let planned: Vec<String> = (0..builds)
         .map(|build| store_path(build, &format!("package-{build}"), ".drv"))
         .collect();
     let shown = shown_derivations(builds);
 
-    bencher.bench(|| source_builds(divan::black_box(&planned), divan::black_box(&shown)));
-}
-
-/// Dropping the derivations home-manager always renders here, which is what a clean store — or
-/// one after a garbage collection — plans on top of the packages being installed.
-///
-/// This runs before `nix derivation show` is called, so what it saves is not its own cost but
-/// the attributes of every entry it removes from that call.
-#[divan::bench(args = [1, 8, 64])]
-fn drop_the_always_local_derivations(bencher: divan::Bencher, builds: usize) {
-    let mut planned: Vec<String> = ALWAYS_LOCAL
-        .iter()
-        .enumerate()
-        .map(|(index, name)| store_path(index, name, ".drv"))
-        .collect();
-    planned.extend((0..builds).map(|build| {
-        store_path(
-            build + ALWAYS_LOCAL.len(),
-            &format!("package-{build}"),
-            ".drv",
-        )
-    }));
-
-    bencher.bench(|| {
-        divan::black_box(&planned)
-            .iter()
-            .map(String::as_str)
-            .filter(|path| !is_always_local(derivation_name(path)))
-            .collect::<Vec<&str>>()
-    });
+    bencher.bench(|| classify(divan::black_box(&planned), divan::black_box(&shown)));
 }

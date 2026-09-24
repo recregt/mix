@@ -83,6 +83,12 @@ fn report(line: &str, log: &mut NixLog, decoded: &mut TailBuffer, activity: &dyn
             activity.line(&message);
         }
         Event::Transient(text) => activity.line(&text),
+        Event::Building { derivation, text } => {
+            activity.build_started(&derivation);
+            if !text.is_empty() {
+                activity.line(&text);
+            }
+        }
         Event::Progress => activity.progress(&log.snapshot()),
         Event::Ignored => {}
     }
@@ -315,5 +321,31 @@ mod tests {
             tail.extend(&[b'y'; 64]);
             assert!(tail.buf.len() <= 64);
         }
+    }
+
+    #[derive(Default)]
+    struct Builds(std::sync::Mutex<Vec<String>>);
+
+    impl ActivityReporter for Builds {
+        fn line(&self, _line: &str) {}
+        fn progress(&self, _progress: &mix_core::BuildProgress) {}
+        fn clear(&self) {}
+        fn build_started(&self, derivation: &str) {
+            self.0.lock().unwrap().push(derivation.to_string());
+        }
+    }
+
+    #[test]
+    fn a_build_starting_in_the_stream_is_handed_to_the_reporter() {
+        let builds = Builds::default();
+        let mut drain = StreamDrain::new(1024);
+
+        drain.push(
+            b"@nix {\"action\":\"start\",\"fields\":[\"/nix/store/x-a.drv\",\"\",1,1],\"id\":1,\"level\":3,\"text\":\"building\",\"type\":105}\n",
+            &builds,
+        );
+        drain.finish(&builds);
+
+        assert_eq!(*builds.0.lock().unwrap(), ["/nix/store/x-a.drv"]);
     }
 }
