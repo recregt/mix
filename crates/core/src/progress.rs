@@ -36,6 +36,8 @@ pub trait ActivityReporter: Send + Sync {
 
     /// Called once the process has exited, to drop whatever the last line left on screen.
     fn clear(&self);
+
+    fn build_started(&self, _derivation: &str) {}
 }
 
 pub struct NoopActivity;

@@ -436,6 +436,10 @@ impl ActivityReporter for LoggedActivity {
     fn progress(&self, _progress: &BuildProgress) {}
 
     fn clear(&self) {}
+
+    fn build_started(&self, derivation: &str) {
+        tracing::debug!("building {derivation}");
+    }
 }
 
 /// The reporter to hand to a long-running command, chosen once for the process.

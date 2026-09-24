@@ -21,8 +21,20 @@ pub enum Error {
     #[error(transparent)]
     Core(#[from] mix_core::Error),
 
-    #[error("the binary cache has nothing to download for: {}", .0.join(", "))]
-    SourceBuildRequired(Vec<String>),
+    #[error("{}", refusal(packages.as_deref()))]
+    SourceBuildRequired { packages: Option<Vec<String>> },
+}
+
+fn refusal(packages: Option<&[String]>) -> String {
+    match packages {
+        Some(packages) if !packages.is_empty() => {
+            format!(
+                "the binary cache has nothing to download for: {}",
+                packages.join(", ")
+            )
+        }
+        _ => "the binary cache cannot serve everything this build needs".to_string(),
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

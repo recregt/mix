@@ -105,15 +105,26 @@ mod tests {
     /// the same fact reaches a reader who ran `mix install` too.
     #[test]
     fn an_activation_failure_keeps_the_words_the_profile_layer_raised() {
-        let err = Error::Activation(crate::profile::Error::SourceBuildRequired(vec![
-            "hello-2.12.3".into(),
-            "cowsay-3.8.4".into(),
-        ]));
+        let err = Error::Activation(crate::profile::Error::SourceBuildRequired {
+            packages: Some(vec!["hello-2.12.3".into(), "cowsay-3.8.4".into()]),
+        });
 
         assert_eq!(
             err.to_string(),
             "the binary cache has nothing to download for: hello-2.12.3, cowsay-3.8.4"
         );
+    }
+
+    #[test]
+    fn a_refusal_with_nothing_to_name_still_says_what_was_refused() {
+        for packages in [None, Some(Vec::new())] {
+            let err = Error::Activation(crate::profile::Error::SourceBuildRequired { packages });
+
+            assert_eq!(
+                err.to_string(),
+                "the binary cache cannot serve everything this build needs"
+            );
+        }
     }
 
     #[test]

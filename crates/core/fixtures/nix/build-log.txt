@@ -1,0 +1,68 @@
+@nix {"action":"start","id":1786706395136,"level":6,"parent":0,"text":"querying info about missing paths","type":0}
+@nix {"action":"start","fields":["https://cache.nixos.org/nix-cache-info"],"id":1786706395137,"level":4,"parent":0,"text":"downloading 'https://cache.nixos.org/nix-cache-info'","type":101}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395137,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395137,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395137,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395137,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395137,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395137,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395137,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395137,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395137,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395137,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395137,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395137,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395137,"type":105}
+@nix {"action":"result","fields":[51,51,0,0],"id":1786706395137,"type":105}
+@nix {"action":"result","fields":[51,51,0,0],"id":1786706395137,"type":105}
+@nix {"action":"result","fields":[51,51,0,0],"id":1786706395137,"type":105}
+@nix {"action":"result","fields":[51,51,0,0],"id":1786706395137,"type":105}
+@nix {"action":"result","fields":[51,51,0,0],"id":1786706395137,"type":105}
+@nix {"action":"stop","id":1786706395137}
+@nix {"action":"start","fields":["/nix/store/apzj0p8ygqbdrdkxhnh291fij9i2im9f-failing-5.0","https://cache.nixos.org"],"id":1786706395138,"level":4,"parent":0,"text":"querying info about '/nix/store/apzj0p8ygqbdrdkxhnh291fij9i2im9f-failing-5.0' on 'https://cache.nixos.org'","type":109}
+@nix {"action":"start","fields":["https://cache.nixos.org/apzj0p8ygqbdrdkxhnh291fij9i2im9f.narinfo"],"id":1786706395139,"level":4,"parent":1786706395138,"text":"downloading 'https://cache.nixos.org/apzj0p8ygqbdrdkxhnh291fij9i2im9f.narinfo'","type":101}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395139,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395139,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395139,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395139,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395139,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395139,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395139,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395139,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395139,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395139,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395139,"type":105}
+@nix {"action":"result","fields":[3,3,0,0],"id":1786706395139,"type":105}
+@nix {"action":"result","fields":[3,3,0,0],"id":1786706395139,"type":105}
+@nix {"action":"result","fields":[3,3,0,0],"id":1786706395139,"type":105}
+@nix {"action":"result","fields":[3,3,0,0],"id":1786706395139,"type":105}
+@nix {"action":"stop","id":1786706395138}
+@nix {"action":"stop","id":1786706395139}
+@nix {"action":"stop","id":1786706395136}
+@nix {"action":"msg","level":3,"msg":"this derivation will be built:"}
+@nix {"action":"msg","level":3,"msg":"  /nix/store/bbx79xgf89bvd25i1sivdcykhy39bz14-failing-5.0.drv"}
+@nix {"action":"start","id":1786706395140,"level":0,"parent":0,"text":"","type":102}
+@nix {"action":"start","id":1786706395141,"level":0,"parent":0,"text":"","type":104}
+@nix {"action":"start","id":1786706395142,"level":0,"parent":0,"text":"","type":103}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395141,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395142,"type":105}
+@nix {"action":"result","fields":[101,0],"id":1786706395140,"type":106}
+@nix {"action":"result","fields":[100,0],"id":1786706395140,"type":106}
+@nix {"action":"result","fields":[0,1,0,0],"id":1786706395141,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395142,"type":105}
+@nix {"action":"result","fields":[101,0],"id":1786706395140,"type":106}
+@nix {"action":"result","fields":[100,0],"id":1786706395140,"type":106}
+@nix {"action":"start","fields":["/nix/store/bbx79xgf89bvd25i1sivdcykhy39bz14-failing-5.0.drv","",1,1],"id":1786706395143,"level":3,"parent":0,"text":"building '/nix/store/bbx79xgf89bvd25i1sivdcykhy39bz14-failing-5.0.drv'","type":105}
+@nix {"action":"result","fields":[0,1,1,0],"id":1786706395141,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395142,"type":105}
+@nix {"action":"result","fields":[101,0],"id":1786706395140,"type":106}
+@nix {"action":"result","fields":[100,0],"id":1786706395140,"type":106}
+@nix {"action":"result","fields":[0,1,0,1],"id":1786706395141,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":1786706395142,"type":105}
+@nix {"action":"result","fields":[101,0],"id":1786706395140,"type":106}
+@nix {"action":"result","fields":[100,0],"id":1786706395140,"type":106}
+@nix {"action":"stop","id":1786706395143}
+@nix {"action":"stop","id":1786706395142}
+@nix {"action":"stop","id":1786706395141}
+@nix {"action":"stop","id":1786706395140}
+@nix {"action":"msg","column":null,"file":null,"level":0,"line":null,"msg":"\u001b[31;1merror:\u001b[0m Cannot build '\u001b[35;1m/nix/store/bbx79xgf89bvd25i1sivdcykhy39bz14-failing-5.0.drv\u001b[0m'.\n       Reason: \u001b[31;1mbuilder failed with exit code 1\u001b[0m.\n       Output paths:\n         \u001b[35;1m/nix/store/apzj0p8ygqbdrdkxhnh291fij9i2im9f-failing-5.0\u001b[0m","raw_msg":"Cannot build '\u001b[35;1m/nix/store/bbx79xgf89bvd25i1sivdcykhy39bz14-failing-5.0.drv\u001b[0m'.\nReason: \u001b[31;1mbuilder failed with exit code 1\u001b[0m.\nOutput paths:\n  \u001b[35;1m/nix/store/apzj0p8ygqbdrdkxhnh291fij9i2im9f-failing-5.0\u001b[0m"}

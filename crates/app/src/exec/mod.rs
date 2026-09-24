@@ -9,10 +9,11 @@ pub mod output;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
+use mix_core::nix_plan::DryRun;
 use mix_core::paths::DEFAULT_PROFILE_BIN;
 use mix_core::privilege::InvokingUser;
-use mix_core::{ActivityReporter, BuildPlan, CancellationToken, Error, Result};
-use tokio::io::{AsyncRead, AsyncReadExt};
+use mix_core::{ActivityReporter, CancellationToken, Error, Result};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tracing::Instrument;
 
@@ -64,7 +65,7 @@ async fn run_command(
     command_line: &str,
     token: &CancellationToken,
 ) -> Result<std::process::Output> {
-    run_command_reporting(command, command_line, token, None).await
+    run_command_reporting(command, command_line, token, None, None).await
 }
 
 /// The command line is borrowed rather than handed over: it is only ever needed as an owned
@@ -74,9 +75,13 @@ async fn run_command_reporting(
     command_line: &str,
     token: &CancellationToken,
     activity: Option<Arc<dyn ActivityReporter>>,
+    input: Option<Vec<u8>>,
 ) -> Result<std::process::Output> {
     tracing::debug!("running command: {command_line}");
 
+    if input.is_some() {
+        command.stdin(std::process::Stdio::piped());
+    }
     let mut child = command
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -85,6 +90,13 @@ async fn run_command_reporting(
             command: command_line.to_string(),
             source: e,
         })?;
+
+    let stdin_task = input.map(|input| {
+        let mut stdin = child.stdin.take().expect("stdin was piped");
+        tokio::spawn(async move {
+            let _ = stdin.write_all(&input).await;
+        })
+    });
 
     let mut stdout_pipe = child.stdout.take().expect("stdout was piped");
     let mut stderr_pipe = child.stderr.take().expect("stderr was piped");
@@ -116,10 +128,16 @@ async fn run_command_reporting(
             })?;
             stdout_task.abort();
             stderr_task.abort();
+            if let Some(stdin_task) = &stdin_task {
+                stdin_task.abort();
+            }
             return Err(Error::Cancelled { command: command_line.to_string() });
         }
     };
 
+    if let Some(stdin_task) = stdin_task {
+        let _ = stdin_task.await;
+    }
     let stdout = stdout_task.await.unwrap_or_default();
     let stderr = stderr_task.await.unwrap_or_default();
 
@@ -166,7 +184,23 @@ pub async fn run_as_reporting(
 ) -> Result<String> {
     let command_line = format_command(command, args);
     let cmd = command_as(user, command, args);
-    let output = run_command_reporting(cmd, &command_line, token, activity).await?;
+    let output = run_command_reporting(cmd, &command_line, token, activity, None).await?;
+    if !output.status.success() {
+        return Err(command_error(command_line, &output));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+pub async fn run_as_with_input(
+    user: &InvokingUser,
+    command: &str,
+    args: &[&str],
+    input: Vec<u8>,
+    token: &CancellationToken,
+) -> Result<String> {
+    let command_line = format_command(command, args);
+    let cmd = command_as(user, command, args);
+    let output = run_command_reporting(cmd, &command_line, token, None, Some(input)).await?;
     if !output.status.success() {
         return Err(command_error(command_line, &output));
     }
@@ -183,14 +217,16 @@ pub async fn plan_as(
     command: &str,
     args: &[&str],
     token: &CancellationToken,
-) -> Result<BuildPlan> {
+) -> Result<DryRun> {
     let command_line = format_command(command, args);
     let cmd = command_as(user, command, args);
     let output = run_command(cmd, &command_line, token).await?;
     if !output.status.success() {
         return Err(command_error(command_line, &output));
     }
-    Ok(BuildPlan::parse(&String::from_utf8_lossy(&output.stderr)))
+    let stderr = String::from_utf8(output.stderr)
+        .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned());
+    Ok(DryRun::new(stderr))
 }
 
 pub async fn status_as(
@@ -271,9 +307,70 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            plan.to_build(),
-            ["/nix/store/00000000000000000000000000000001-hello.drv".to_string()]
+            plan.plan().unwrap().to_build(),
+            ["/nix/store/00000000000000000000000000000001-hello.drv"]
         );
+    }
+
+    #[tokio::test]
+    async fn plan_as_hands_back_a_plan_it_could_not_read_rather_than_an_empty_one() {
+        let plan = plan_as(
+            &current_user(),
+            "/bin/sh",
+            &[
+                "-c",
+                "printf 'these 1 derivations are going to be built:\\n  \
+                 /nix/store/00000000000000000000000000000001-hello.drv\\n' >&2",
+            ],
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            plan.plan(),
+            Err(mix_core::nix_plan::PlanError::Unannounced(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn input_larger_than_a_pipe_buffer_is_written_while_the_output_is_read() {
+        let input = vec![b'x'; 1024 * 1024];
+
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            run_as_with_input(
+                &current_user(),
+                "/bin/cat",
+                &[],
+                input.clone(),
+                &CancellationToken::new(),
+            ),
+        )
+        .await
+        .expect("writing stdin must not wait for the output to be read")
+        .unwrap();
+
+        assert_eq!(output.len(), input.len());
+    }
+
+    #[tokio::test]
+    async fn a_command_that_ignores_its_input_still_finishes() {
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            run_as_with_input(
+                &current_user(),
+                "/bin/sh",
+                &["-c", "echo done"],
+                vec![b'x'; 1024 * 1024],
+                &CancellationToken::new(),
+            ),
+        )
+        .await
+        .expect("a reader that never reads must not hang the writer")
+        .unwrap();
+
+        assert_eq!(output, "done");
     }
 
     #[tokio::test]
@@ -559,6 +656,7 @@ mod tests {
             "sh",
             &token,
             Some(Arc::clone(&recorder) as Arc<dyn ActivityReporter>),
+            None,
         )
         .await
         .unwrap();
@@ -593,6 +691,7 @@ mod tests {
             "sh",
             &token,
             Some(Arc::clone(&recorder) as Arc<dyn ActivityReporter>),
+            None,
         )
         .await
         .unwrap();
@@ -624,6 +723,7 @@ mod tests {
                 "sh",
                 &token,
                 Some(Arc::clone(&recorder) as Arc<dyn ActivityReporter>),
+                None,
             ),
         )
         .await

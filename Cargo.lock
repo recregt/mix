@@ -1117,6 +1117,7 @@ dependencies = [
  "async-trait",
  "codspeed-divan-compat",
  "futures-util",
+ "memchr",
  "nix",
  "serde",
  "serde_json",

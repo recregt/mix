@@ -22,7 +22,7 @@ pub(crate) fn describe(error: &Error, command: &str) -> Diagnostic {
     match error {
         Error::Core(e) => core_error(e, command),
 
-        Error::Activation(e) => super::activation::describe(e, command),
+        Error::Activation(e) => super::activation::describe(e, command, None),
 
         Error::Network(_) => Diagnostic::hinting(
             "could not fetch the pinned nix archive",

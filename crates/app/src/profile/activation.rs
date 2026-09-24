@@ -5,26 +5,22 @@
 //! *when* a profile is activated and what a failure should read like, and neither has to reach
 //! into the other to do it.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use mix_core::models::UserConfig;
-use mix_core::nix_plan;
+use mix_core::nix_plan::{self, Approved};
 use mix_core::paths::{
     DEFAULT_PROFILE_NIX, HOME_MANAGER_PROFILE_NAME, mix_state_dir, nix_profiles_dir,
 };
-use mix_core::{ActivityReporter, CancellationToken};
+use mix_core::{ActivityReporter, BuildProgress, CancellationToken};
 
-use crate::exec::{plan_as, run_as, run_as_reporting};
+use crate::exec::{plan_as, run_as_reporting, run_as_with_input};
 use crate::fs;
 use crate::git;
 use crate::mirror;
 use crate::profile::{Error, Result};
 
-/// How many planned derivations are worth asking nix about.
-///
-/// A plan longer than this is a source build many times over, so reading the attributes of every
-/// entry would mean parsing megabytes of JSON to reach an answer that is already known.
-const CLASSIFY_LIMIT: usize = 64;
+const DERIVATION_SHOW_ARGS: [&str; 3] = ["derivation", "show", "--stdin"];
 
 /// Whether a package the binary cache cannot provide may be compiled on this machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,66 +100,91 @@ fn nix_dry_run_args(installable: &str, options: &[String]) -> Vec<String> {
     args
 }
 
-fn nix_derivation_show_args(paths: &[&str]) -> Vec<String> {
-    let mut args = vec!["derivation".to_string(), "show".to_string()];
-    args.extend(paths.iter().map(|path| (*path).to_string()));
-    args
-}
-
 fn as_refs(args: &[String]) -> Vec<&str> {
     args.iter().map(String::as_str).collect()
 }
 
-/// Refuses an activation that would compile a package instead of fetching it.
-///
-/// home-manager's own generation is always built here — the profile is assembled on the machine
-/// it is for, and no cache can hold it — so the plan is classified rather than merely counted:
-/// only the entries nix would not have built locally anyway are a source build. The
-/// documentation home-manager renders from its own sources is allowed by name, so a store that
-/// has never built it — a clean install, or one after a garbage collection — installs as usual.
 async fn refuse_source_builds(
     cfg: &UserConfig,
     installable: &str,
     options: &[String],
     token: &CancellationToken,
-) -> Result<()> {
+) -> Result<Approved> {
     let args = nix_dry_run_args(installable, options);
-    let plan = plan_as(&cfg.user, DEFAULT_PROFILE_NIX, &as_refs(&args), token).await?;
-    if plan.is_empty() {
-        return Ok(());
+    let dry_run = plan_as(&cfg.user, DEFAULT_PROFILE_NIX, &as_refs(&args), token).await?;
+
+    let spans = {
+        let plan = match dry_run.plan() {
+            Ok(plan) => plan,
+            Err(error) => {
+                tracing::info!("refusing a build plan nix printed in an unexpected shape: {error}");
+                return Err(Error::SourceBuildRequired { packages: None });
+            }
+        };
+        if plan.is_empty() {
+            return Ok(Approved::none());
+        }
+
+        let shown = run_as_with_input(
+            &cfg.user,
+            DEFAULT_PROFILE_NIX,
+            &DERIVATION_SHOW_ARGS,
+            plan.to_build().join("\n").into_bytes(),
+            token,
+        )
+        .await?;
+        let classified = nix_plan::classify(plan.to_build(), &shown);
+
+        if !classified.source.is_empty() {
+            let packages = match classified.packages {
+                Ok(packages) if !packages.is_empty() => {
+                    Some(packages.into_iter().map(str::to_string).collect())
+                }
+                Ok(_) => None,
+                Err(error) => {
+                    tracing::info!("cannot name the packages behind a refused build: {error}");
+                    None
+                }
+            };
+            return Err(Error::SourceBuildRequired { packages });
+        }
+
+        classified
+            .local
+            .iter()
+            .filter_map(|path| dry_run.span(path))
+            .collect()
+    };
+
+    Ok(Approved::new(dry_run, spans))
+}
+
+struct SourceBuildGuard {
+    inner: Arc<dyn ActivityReporter>,
+    approved: Approved,
+    refused: OnceLock<String>,
+    token: CancellationToken,
+}
+
+impl ActivityReporter for SourceBuildGuard {
+    fn line(&self, line: &str) {
+        self.inner.line(line);
     }
 
-    // home-manager renders its own documentation here whatever a cache holds, and on a store
-    // that has never built it — a clean install, or one after a garbage collection — it is
-    // planned like anything else. Those entries are dropped before nix is asked about them, so a
-    // clean install neither pays for their attributes nor counts them against the limit below.
-    let candidates: Vec<&str> = plan
-        .to_build()
-        .iter()
-        .map(String::as_str)
-        .filter(|path| !nix_plan::is_always_local(nix_plan::derivation_name(path)))
-        .collect();
-    if candidates.is_empty() {
-        return Ok(());
+    fn progress(&self, progress: &BuildProgress) {
+        self.inner.progress(progress);
     }
 
-    let classified = candidates.len().min(CLASSIFY_LIMIT);
-    let show = nix_derivation_show_args(&candidates[..classified]);
-    let shown = run_as(&cfg.user, DEFAULT_PROFILE_NIX, &as_refs(&show), token).await?;
-
-    let mut source_builds: Vec<String> = nix_plan::source_builds(&candidates[..classified], &shown)
-        .into_iter()
-        .map(str::to_string)
-        .collect();
-    source_builds.extend(candidates[classified..].iter().map(|p| {
-        // Beyond the classification limit nothing is assumed: an unclassified build is refused.
-        nix_plan::derivation_name(p).to_string()
-    }));
-
-    if source_builds.is_empty() {
-        return Ok(());
+    fn clear(&self) {
+        self.inner.clear();
     }
-    Err(Error::SourceBuildRequired(source_builds))
+
+    fn build_started(&self, derivation: &str) {
+        if !self.approved.contains(derivation) && self.refused.set(derivation.to_string()).is_ok() {
+            self.token.cancel();
+        }
+        self.inner.build_started(derivation);
+    }
 }
 
 pub async fn activate(
@@ -185,19 +206,44 @@ pub async fn activate(
     let profile_str = profile.to_string_lossy().into_owned();
     let options = nix_options(mirror, mirror_key).await;
 
-    if policy == BuildPolicy::CacheOnly {
-        refuse_source_builds(cfg, &flake_attr, &options, token).await?;
-    }
+    let guard = match policy {
+        BuildPolicy::CacheOnly => Some(Arc::new(SourceBuildGuard {
+            inner: Arc::clone(activity),
+            approved: refuse_source_builds(cfg, &flake_attr, &options, token).await?,
+            refused: OnceLock::new(),
+            token: token.child_token(),
+        })),
+        BuildPolicy::AllowSource => None,
+    };
 
     let args = nix_build_args(&flake_attr, &profile_str, &options);
-    let store_path = run_as_reporting(
-        &cfg.user,
-        DEFAULT_PROFILE_NIX,
-        &as_refs(&args),
-        token,
-        Some(Arc::clone(activity)),
-    )
-    .await?;
+    let built = match &guard {
+        Some(guard) => {
+            run_as_reporting(
+                &cfg.user,
+                DEFAULT_PROFILE_NIX,
+                &as_refs(&args),
+                &guard.token,
+                Some(Arc::clone(guard) as Arc<dyn ActivityReporter>),
+            )
+            .await
+        }
+        None => {
+            run_as_reporting(
+                &cfg.user,
+                DEFAULT_PROFILE_NIX,
+                &as_refs(&args),
+                token,
+                Some(Arc::clone(activity)),
+            )
+            .await
+        }
+    };
+    if let Some(derivation) = guard.as_ref().and_then(|guard| guard.refused.get()) {
+        tracing::info!("stopped a build the plan did not announce: {derivation}");
+        return Err(Error::SourceBuildRequired { packages: None });
+    }
+    let store_path = built?;
 
     let activate = format!("{store_path}/activate");
     run_as_reporting(&cfg.user, &activate, &[], token, Some(Arc::clone(activity))).await?;
@@ -321,38 +367,136 @@ mod tests {
     }
 
     #[test]
-    fn nix_derivation_show_args_name_every_planned_derivation() {
-        let args = nix_derivation_show_args(&["/nix/store/a.drv", "/nix/store/b.drv"]);
+    fn every_planned_derivation_is_asked_about_through_stdin() {
+        assert_eq!(DERIVATION_SHOW_ARGS, ["derivation", "show", "--stdin"]);
+    }
 
+    #[derive(Default)]
+    struct Recorded(std::sync::Mutex<Vec<String>>);
+
+    impl ActivityReporter for Recorded {
+        fn line(&self, line: &str) {
+            self.0.lock().unwrap().push(line.to_string());
+        }
+        fn progress(&self, _progress: &BuildProgress) {}
+        fn clear(&self) {}
+        fn build_started(&self, derivation: &str) {
+            self.0.lock().unwrap().push(format!("build {derivation}"));
+        }
+    }
+
+    fn approved_set(paths: &[&str]) -> Approved {
+        let dry_run = mix_core::nix_plan::DryRun::new(paths.join("\n"));
+        let mut spans = Vec::new();
+        let mut start = 0;
+        for path in paths {
+            let end = start + path.len();
+            spans.push((start as u32, end as u32));
+            start = end + 1;
+        }
+        Approved::new(dry_run, spans)
+    }
+
+    #[test]
+    fn the_approved_set_finds_every_path_it_was_given_and_nothing_else() {
+        let approved = approved_set(&[
+            "/nix/store/c-c.drv",
+            "/nix/store/a-a.drv",
+            "/nix/store/b-b.drv",
+        ]);
+
+        assert_eq!(approved.len(), 3);
+        for path in [
+            "/nix/store/a-a.drv",
+            "/nix/store/b-b.drv",
+            "/nix/store/c-c.drv",
+        ] {
+            assert!(approved.contains(path), "{path}");
+        }
+        assert!(!approved.contains("/nix/store/d-d.drv"));
+        assert!(!approved.contains("/nix/store/a-a"));
+        assert!(!Approved::none().contains("/nix/store/a-a.drv"));
+    }
+
+    fn guard(approved: &[&str]) -> (SourceBuildGuard, Arc<Recorded>) {
+        let recorded = Arc::new(Recorded::default());
+        let guard = SourceBuildGuard {
+            inner: Arc::clone(&recorded) as Arc<dyn ActivityReporter>,
+            approved: approved_set(approved),
+            refused: OnceLock::new(),
+            token: CancellationToken::new(),
+        };
+        (guard, recorded)
+    }
+
+    #[test]
+    fn the_guard_lets_an_approved_build_run() {
+        let (guard, _) = guard(&["/nix/store/a-home-manager-path.drv"]);
+
+        guard.build_started("/nix/store/a-home-manager-path.drv");
+
+        assert!(!guard.token.is_cancelled());
+        assert!(guard.refused.get().is_none());
+    }
+
+    #[test]
+    fn the_guard_stops_a_build_the_plan_did_not_approve() {
+        let (guard, _) = guard(&["/nix/store/a-home-manager-path.drv"]);
+
+        guard.build_started("/nix/store/b-cowsay-3.8.4.drv");
+
+        assert!(guard.token.is_cancelled());
         assert_eq!(
-            args,
-            ["derivation", "show", "/nix/store/a.drv", "/nix/store/b.drv"]
+            guard.refused.get().map(String::as_str),
+            Some("/nix/store/b-cowsay-3.8.4.drv")
         );
     }
 
-    /// The plan a clean store produces carries home-manager's own documentation, and none of it
-    /// is worth asking nix about.
     #[test]
-    fn the_documentation_a_clean_store_plans_is_not_asked_about() {
-        let planned = [
-            "/nix/store/00000000000000000000000000000001-options.json.drv",
-            "/nix/store/00000000000000000000000000000002-hm-modules-messages.drv",
-            "/nix/store/00000000000000000000000000000003-home-configuration-reference-manpage.drv",
-            "/nix/store/00000000000000000000000000000004-hello-2.12.3.drv",
-        ];
-        let candidates: Vec<&str> = planned
-            .into_iter()
-            .filter(|path| !nix_plan::is_always_local(nix_plan::derivation_name(path)))
-            .collect();
+    fn the_guard_stops_any_build_when_the_plan_approved_none() {
+        let (guard, _) = guard(&[]);
+
+        guard.build_started("/nix/store/a-home-manager-path.drv");
+
+        assert!(guard.token.is_cancelled());
+    }
+
+    #[test]
+    fn the_guard_keeps_the_first_build_it_stopped() {
+        let (guard, _) = guard(&[]);
+
+        guard.build_started("/nix/store/a-first.drv");
+        guard.build_started("/nix/store/b-second.drv");
 
         assert_eq!(
-            nix_derivation_show_args(&candidates),
-            [
-                "derivation",
-                "show",
-                "/nix/store/00000000000000000000000000000004-hello-2.12.3.drv"
-            ]
+            guard.refused.get().map(String::as_str),
+            Some("/nix/store/a-first.drv")
         );
+    }
+
+    #[test]
+    fn the_guard_passes_everything_through_to_the_screen() {
+        let (guard, recorded) = guard(&["/nix/store/a.drv"]);
+
+        guard.line("building");
+        guard.build_started("/nix/store/a.drv");
+
+        assert_eq!(
+            *recorded.0.lock().unwrap(),
+            ["building", "build /nix/store/a.drv"]
+        );
+    }
+
+    #[test]
+    fn stopping_a_build_does_not_cancel_the_run_it_belongs_to() {
+        let parent = CancellationToken::new();
+        let (mut guard, _) = guard(&[]);
+        guard.token = parent.child_token();
+
+        guard.build_started("/nix/store/a.drv");
+
+        assert!(guard.token.is_cancelled());
+        assert!(!parent.is_cancelled());
     }
 
     #[test]

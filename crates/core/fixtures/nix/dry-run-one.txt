@@ -1,0 +1,2 @@
+this derivation will be built:
+  /nix/store/mgaw1ywi755dbb8n4fpph3if9zqzzv75-leaf-1.0.drv

@@ -2,11 +2,11 @@ use mix_app::profile::change::Error;
 
 use super::{Diagnostic, core_error};
 
-pub(crate) fn describe(error: &Error, command: &str) -> Diagnostic {
+pub(crate) fn describe(error: &Error, command: &str, rerun: Option<&str>) -> Diagnostic {
     match error {
         Error::Core(e) => core_error(e, command),
 
-        Error::Activation(e) => super::activation::describe(e, command),
+        Error::Activation(e) => super::activation::describe(e, command, rerun),
 
         Error::InvalidPackage(e) => Diagnostic::hinting(
             format!("that is not a package `mix` can install: {e}"),
@@ -32,7 +32,7 @@ mod tests {
     #[test]
     fn running_as_root_names_the_command_and_says_who_should_run_it_instead() {
         for command in ["mix install", "mix remove"] {
-            let message = describe(&Error::NotRoot, command).message();
+            let message = describe(&Error::NotRoot, command, None).message();
 
             assert!(message.contains(&format!("`{command}` cannot be run as root")));
             assert!(message.contains("the user whose profile"));
@@ -42,7 +42,7 @@ mod tests {
     #[test]
     fn an_unbootstrapped_user_is_sent_to_bootstrap() {
         assert!(
-            describe(&Error::NotBootstrapped, "mix install")
+            describe(&Error::NotBootstrapped, "mix install", None)
                 .message()
                 .contains("mix bootstrap")
         );
@@ -56,6 +56,7 @@ mod tests {
                     path: "/run/mix.lock".into(),
                 }),
                 command,
+                None,
             )
             .message();
 

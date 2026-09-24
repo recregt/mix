@@ -8,70 +8,141 @@ use mix_app::profile::Error;
 
 use super::{Diagnostic, core_error};
 
-/// How many derivations are worth naming before the list stops being readable.
-const NAMED_SOURCE_BUILDS: usize = 5;
+const ONE_MISSING: &str = "package ";
+const ONE_MISSING_END: &str = " is not available as a pre-built binary\ninstalling it ";
+const SOME_MISSING: &str = "pre-built binaries are not available for: ";
+const SOME_MISSING_END: &str = "\ninstalling them ";
+const UNNAMED_MISSING: &str =
+    "some packages are not available as pre-built binaries\ninstalling them ";
+const SEPARATOR: &str = ", ";
+const COMPILING: &str = "requires compiling from source, which may take a long time";
+const RERUN: &str = "\n\nto proceed anyway, run: ";
+const RERUN_FLAG: &str = "\n\nto proceed anyway, re-run with --build";
 
-pub(crate) fn describe(error: &Error, command: &str) -> Diagnostic {
+pub(crate) fn describe(error: &Error, command: &str, rerun: Option<&str>) -> Diagnostic {
     match error {
         Error::Core(e) => core_error(e, command),
-        Error::SourceBuildRequired(derivations) => source_build(derivations),
+        Error::SourceBuildRequired { packages } => source_build(packages.as_deref(), rerun),
     }
 }
 
-/// What the cache-only gate refused, and the flag that overrides it.
-///
-/// The plan can be long, and a plan longer than a few names stops being readable: the library
-/// hands over every derivation it refused, and how many of them are worth printing is decided
-/// here, where the printing happens.
-pub(crate) fn source_build(derivations: &[String]) -> Diagnostic {
-    let named: Vec<&str> = derivations
-        .iter()
-        .take(NAMED_SOURCE_BUILDS)
-        .map(String::as_str)
-        .collect();
-    let mut list = named.join(", ");
-    if let Some(rest) = derivations
-        .len()
-        .checked_sub(named.len())
-        .filter(|n| *n > 0)
-    {
-        list.push_str(&format!(" and {rest} more"));
-    }
+pub(crate) fn source_build(packages: Option<&[String]>, rerun: Option<&str>) -> Diagnostic {
+    Diagnostic::new(render(packages.unwrap_or_default(), rerun))
+}
 
-    Diagnostic::hinting(
-        format!("the binary cache has nothing to download for: {list}"),
-        "Installing this would compile it from source, which can take hours.\n\
-         To compile it anyway, re-run with `--build`:\n\
-         \x20 mix install --build ...",
-    )
+fn render(packages: &[String], rerun: Option<&str>) -> String {
+    let names: usize = packages.iter().map(String::len).sum();
+    let opening = match packages {
+        [] => UNNAMED_MISSING.len(),
+        [_] => ONE_MISSING.len() + ONE_MISSING_END.len(),
+        _ => SOME_MISSING.len() + SEPARATOR.len() * (packages.len() - 1) + SOME_MISSING_END.len(),
+    };
+    let closing = match rerun {
+        Some(rerun) => RERUN.len() + rerun.len(),
+        None => RERUN_FLAG.len(),
+    };
+
+    let mut message = String::with_capacity(opening + names + COMPILING.len() + closing);
+    match packages {
+        [] => message.push_str(UNNAMED_MISSING),
+        [package] => {
+            message.push_str(ONE_MISSING);
+            message.push_str(package);
+            message.push_str(ONE_MISSING_END);
+        }
+        [first, rest @ ..] => {
+            message.push_str(SOME_MISSING);
+            message.push_str(first);
+            for package in rest {
+                message.push_str(SEPARATOR);
+                message.push_str(package);
+            }
+            message.push_str(SOME_MISSING_END);
+        }
+    }
+    message.push_str(COMPILING);
+    match rerun {
+        Some(rerun) => {
+            message.push_str(RERUN);
+            message.push_str(rerun);
+        }
+        None => message.push_str(RERUN_FLAG),
+    }
+    message
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_refused_source_build_names_it_and_offers_the_flag() {
-        let message = describe(
-            &Error::SourceBuildRequired(vec!["cowsay-3.8.4".to_string()]),
-            "mix install",
-        )
-        .message();
+    fn refused(packages: Option<&[&str]>) -> Error {
+        Error::SourceBuildRequired {
+            packages: packages.map(|packages| packages.iter().map(|p| p.to_string()).collect()),
+        }
+    }
 
-        assert!(message.contains("binary cache"));
-        assert!(message.contains("cowsay-3.8.4"));
-        assert!(message.contains("mix install --build"));
+    const RERUN: Option<&str> = Some("mix install cowsay ripgrep --build");
+
+    #[test]
+    fn a_single_package_is_named_on_its_own() {
+        let message = describe(&refused(Some(&["cowsay-3.8.4"])), "mix install", RERUN).message();
+
+        assert_eq!(
+            message,
+            "package cowsay-3.8.4 is not available as a pre-built binary\n\
+             installing it requires compiling from source, which may take a long time\n\
+             \n\
+             to proceed anyway, run: mix install cowsay ripgrep --build"
+        );
     }
 
     #[test]
-    fn a_long_list_of_refusals_is_counted_rather_than_printed() {
-        let derivations: Vec<String> = (0..8).map(|i| format!("package-{i}")).collect();
+    fn several_packages_are_listed_together() {
+        let message = describe(
+            &refused(Some(&["cowsay-3.8.4", "ripgrep-14.1"])),
+            "mix install",
+            RERUN,
+        )
+        .message();
 
-        let message = source_build(&derivations).message();
+        assert_eq!(
+            message,
+            "pre-built binaries are not available for: cowsay-3.8.4, ripgrep-14.1\n\
+             installing them requires compiling from source, which may take a long time\n\
+             \n\
+             to proceed anyway, run: mix install cowsay ripgrep --build"
+        );
+    }
 
-        assert!(message.contains("package-4"));
-        assert!(!message.contains("package-5"));
-        assert!(message.contains("and 3 more"));
+    #[test]
+    fn a_refusal_with_no_names_still_offers_the_way_out() {
+        for packages in [None, Some(&[] as &[&str])] {
+            let message = describe(&refused(packages), "mix install", RERUN).message();
+
+            assert_eq!(
+                message,
+                "some packages are not available as pre-built binaries\n\
+                 installing them requires compiling from source, which may take a long time\n\
+                 \n\
+                 to proceed anyway, run: mix install cowsay ripgrep --build"
+            );
+        }
+    }
+
+    #[test]
+    fn with_no_command_to_repeat_the_flag_is_named_instead() {
+        let message = describe(&refused(Some(&["cowsay-3.8.4"])), "mix install", None).message();
+
+        assert!(message.ends_with("\n\nto proceed anyway, re-run with --build"));
+    }
+
+    #[test]
+    fn nothing_from_nix_reaches_the_reader() {
+        let message = describe(&refused(Some(&["cowsay-3.8.4"])), "mix install", RERUN).message();
+
+        for word in ["derivation", "nix", "cache", "store"] {
+            assert!(!message.contains(word), "{word:?} leaked into {message:?}");
+        }
     }
 
     /// The same failure, and the command the reader should try again, is the one they ran.
@@ -83,10 +154,26 @@ mod tests {
                     path: "/run/mix.lock".into(),
                 }),
                 command,
+                None,
             )
             .message();
 
             assert!(message.contains(&format!("run `{command}` again")));
+        }
+    }
+
+    #[test]
+    fn the_message_is_written_into_exactly_the_space_it_needs() {
+        let packages = ["cowsay-3.8.4".to_string(), "ripgrep-14.1".to_string()];
+        for (packages, rerun) in [
+            (&packages[..0], RERUN),
+            (&packages[..1], RERUN),
+            (&packages[..], RERUN),
+            (&packages[..], None),
+        ] {
+            let message = render(packages, rerun);
+
+            assert_eq!(message.capacity(), message.len(), "{message:?}");
         }
     }
 }
