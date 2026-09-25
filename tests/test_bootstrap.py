@@ -20,6 +20,8 @@ def test_bootstrap_is_silent_by_default(container, mock_nix_server):
 
     assert result.returncode == 0, result.stderr
     assert "running command" not in result.stderr.lower()
+    assert "mix is ready!" in result.stdout
+    assert "source /etc/profile.d/mix-nix.sh" in result.stderr
 
 
 def test_bootstrap_verbose_shows_command_execution(container, mock_nix_server):
@@ -109,3 +111,4 @@ def test_bootstrap_auto_escalates_for_a_sudo_user(container, mock_nix_server, mi
 
     doctor = container.exec("mix", "doctor", user="ciuser")
     assert doctor.returncode == 0, doctor.stdout + doctor.stderr
+

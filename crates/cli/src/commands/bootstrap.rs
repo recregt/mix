@@ -1,5 +1,7 @@
 use std::process::ExitCode;
 
+use mix_core::paths::PROFILE_SNIPPET_DEST;
+
 use super::RootStatus;
 
 pub async fn run(
@@ -21,6 +23,10 @@ pub async fn run(
         mix_ui::activity_reporter(),
     )
     .await?;
-    mix_ui::ok("System environment initialized and ready.");
+    mix_ui::ok("mix is ready!");
+    mix_ui::info("");
+    mix_ui::info(format!(
+        "to use installed packages in this terminal session, run:\n  source {PROFILE_SNIPPET_DEST}"
+    ));
     Ok(ExitCode::SUCCESS)
 }
