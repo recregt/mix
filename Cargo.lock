@@ -1108,6 +1108,7 @@ dependencies = [
  "codspeed-divan-compat",
  "mix-app",
  "mix-core",
+ "mix-nixgen",
  "mix-ui",
 ]
 

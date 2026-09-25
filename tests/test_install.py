@@ -100,7 +100,7 @@ def test_install_cannot_be_run_as_root(container, mock_nix_server, mirror_cache)
     result = container.exec("mix", "install", INSTALL_TEST_PACKAGE)
 
     assert result.returncode != 0
-    assert "cannot be run as root" in (result.stdout + result.stderr).lower()
+    assert "can't be run as root" in (result.stdout + result.stderr).lower()
     assert not container.path_exists(f"/home/{USER}/.nix-profile/bin/{INSTALL_TEST_PACKAGE}")
 
 
@@ -124,9 +124,9 @@ def test_install_refuses_a_package_the_cache_cannot_serve(
 
     assert result.returncode != 0
     output = (result.stdout + result.stderr).lower()
-    assert f"package {UNCACHED_TEST_PACKAGE}-" in output
-    assert "not available as a pre-built binary" in output
-    assert f"to proceed anyway, run: mix install {UNCACHED_TEST_PACKAGE} --mirror" in output
+    assert f"✗ {UNCACHED_TEST_PACKAGE}-" in output
+    assert "must be built from source, which can take a long time" in output
+    assert f"to build it anyway, run: mix install {UNCACHED_TEST_PACKAGE} --mirror" in output
     assert output.rstrip().endswith("--build")
     assert "hex0" not in output
     assert "bash-" not in output

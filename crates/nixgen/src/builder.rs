@@ -18,6 +18,15 @@ pub enum InvalidInput {
     Value(#[from] NulByte),
 }
 
+impl InvalidInput {
+    pub fn rejected(&self) -> Option<&str> {
+        match self {
+            InvalidInput::Segment(ident) => Some(ident.input()),
+            InvalidInput::EmptyPath | InvalidInput::Value(_) => None,
+        }
+    }
+}
+
 impl HomeManagerConfig {
     pub fn new() -> Self {
         Self::default()
@@ -140,6 +149,14 @@ mod tests {
             "{ pkgs, ... }:\n{\n  home = {\n    packages = with pkgs; [ git ];\n    \
              extraBuilderCommands = \"cp ${./state} $out/mix-state\";\n  };\n}\n"
         ));
+    }
+
+    #[test]
+    fn a_rejected_package_name_is_handed_back() {
+        let mut cfg = HomeManagerConfig::new();
+        let error = cfg.packages(["git", "rip grep"]).unwrap_err();
+
+        assert_eq!(error.rejected(), Some("rip grep"));
     }
 
     #[test]

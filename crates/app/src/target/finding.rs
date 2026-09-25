@@ -21,7 +21,7 @@ pub enum Unfixable {
     MissingUser,
 
     /// Part of the Nix runtime itself, which repair does not install.
-    #[error("missing, and it is produced by the Nix installation rather than by repair")]
+    #[error("missing, and `mix repair` can't restore it")]
     MissingRuntime,
 }
 

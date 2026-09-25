@@ -68,36 +68,50 @@ impl Diagnostic {
     }
 }
 
+const REPORT_BUG: &str =
+    "This is a bug in `mix`; please report it at https://github.com/recregt/mix/issues";
+
 /// What a raw `mix-core` failure means to somebody who ran `command`.
 ///
 /// These are the errors every command can hit — the lock, a file, a process that would not
 /// start. The fact is the library's; naming the command to run again is not something it could
 /// have done.
-pub(crate) fn core_error(error: &mix_core::Error, command: &str) -> Diagnostic {
+pub(crate) fn core_error(error: &mix_core::Error, command: &str, action: &str) -> Diagnostic {
     use mix_core::Error;
 
     match error {
-        Error::Locked { path } => Diagnostic::hinting(
-            "another `mix` command is already running".to_string(),
-            format!(
-                "It holds {}; wait for it to finish, then run `{command}` again",
-                path.display()
-            ),
+        Error::Locked { .. } => Diagnostic::hinting(
+            "another `mix` command is already running",
+            format!("Wait for it to finish, then run `{command}` again"),
         ),
         Error::Cancelled { .. } => Diagnostic::new("interrupted before it could finish"),
         Error::Io { path, source } if source.kind() == std::io::ErrorKind::PermissionDenied => {
             Diagnostic::hinting(
-                format!("not allowed to use {}", path.display()),
+                format!("no permission to use {}", path.display()),
                 format!("Check who owns it, then run `{command}` again"),
             )
         }
-        Error::Io { .. } | Error::Command { .. } | Error::Exec { .. } => {
-            Diagnostic::new(error.to_string())
-        }
-        Error::TaskPanicked(_) => Diagnostic::hinting(
-            error.to_string(),
-            "This is a bug in `mix`; please report it with the output above",
-        ),
+        Error::Io { .. } | Error::Command { .. } | Error::Exec { .. } => failed(action),
+        Error::TaskPanicked(_) => bug(),
+    }
+}
+
+pub(crate) fn failed(action: &str) -> Diagnostic {
+    Diagnostic::hinting(
+        format!("couldn't {action}"),
+        "Run it again with `-v` to see what went wrong",
+    )
+}
+
+pub(crate) fn bug() -> Diagnostic {
+    Diagnostic::hinting("something went wrong inside `mix`", REPORT_BUG)
+}
+
+pub(crate) fn packages_action(verb: &str, packages: &[String]) -> String {
+    match packages.len() {
+        0 => format!("{verb} the packages"),
+        1..=3 => format!("{verb} {}", packages.join(", ")),
+        n => format!("{verb} {n} packages"),
     }
 }
 
@@ -124,10 +138,10 @@ mod tests {
             path: "/run/mix.lock".into(),
         };
 
-        let install = core_error(&error, "mix install").message();
-        let repair = core_error(&error, "mix repair").message();
+        let install = core_error(&error, "mix install", "install ripgrep").message();
+        let repair = core_error(&error, "mix repair", "finish the repair").message();
 
-        assert!(install.contains("/run/mix.lock"));
+        assert!(!install.contains("/run/mix.lock"));
         assert!(install.contains("run `mix install` again"));
         assert!(repair.contains("run `mix repair` again"));
     }
@@ -139,9 +153,50 @@ mod tests {
             source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
         };
 
-        let message = core_error(&error, "mix doctor").message();
+        let message = core_error(&error, "mix doctor", "finish the health check").message();
 
-        assert!(message.starts_with("not allowed to use /nix/store"));
+        assert!(message.starts_with("no permission to use /nix/store"));
         assert!(message.contains("Check who owns it"));
+    }
+
+    #[test]
+    fn a_failed_step_says_what_could_not_be_done_and_keeps_the_internals_out() {
+        let error = mix_core::Error::Command {
+            command: "/nix/var/nix/profiles/default/bin/nix build path:/home/ada".to_string(),
+            detail: "error: out of disk space".to_string(),
+        };
+
+        let message = core_error(&error, "mix install", "install ripgrep").message();
+
+        assert_eq!(
+            message,
+            "couldn't install ripgrep\nRun it again with `-v` to see what went wrong"
+        );
+    }
+
+    #[test]
+    fn a_bug_is_called_a_bug_and_says_where_to_report_it() {
+        let message = core_error(
+            &mix_core::Error::TaskPanicked("oops".to_string()),
+            "mix install",
+            "install ripgrep",
+        )
+        .message();
+
+        assert!(message.contains("bug in `mix`"));
+        assert!(message.contains("github.com/recregt/mix/issues"));
+        assert!(!message.contains("oops"));
+    }
+
+    #[test]
+    fn a_long_list_of_packages_is_counted() {
+        let packages: Vec<String> = ["a", "b", "c", "d"].map(String::from).to_vec();
+
+        assert_eq!(packages_action("install", &packages[..1]), "install a");
+        assert_eq!(
+            packages_action("install", &packages[..3]),
+            "install a, b, c"
+        );
+        assert_eq!(packages_action("install", &packages), "install 4 packages");
     }
 }

@@ -5,6 +5,9 @@ use mix_app::target::{Error as TargetError, Finding, Unfixable};
 use mix_cli::explain;
 use mix_core::Category;
 
+static PACKAGES: std::sync::LazyLock<Vec<String>> =
+    std::sync::LazyLock::new(|| vec!["package".to_string()]);
+
 fn main() {
     divan::main();
 }
@@ -22,7 +25,12 @@ fn explain_a_refused_source_build(bencher: divan::Bencher, n: usize) {
     ));
 
     bencher.bench(|| {
-        explain::install::explain(divan::black_box(&error), "mix install package --build").message()
+        explain::install::explain(
+            divan::black_box(&error),
+            &PACKAGES,
+            "mix install package --build",
+        )
+        .message()
     });
 }
 
@@ -35,7 +43,12 @@ fn explain_a_held_lock(bencher: divan::Bencher) {
     }));
 
     bencher.bench(|| {
-        explain::install::explain(divan::black_box(&error), "mix install package --build").message()
+        explain::install::explain(
+            divan::black_box(&error),
+            &PACKAGES,
+            "mix install package --build",
+        )
+        .message()
     });
 }
 

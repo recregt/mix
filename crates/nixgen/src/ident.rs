@@ -30,6 +30,12 @@ impl Ident {
 #[error("`{0}` is not a valid Nix identifier")]
 pub struct InvalidIdent(String);
 
+impl InvalidIdent {
+    pub fn input(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileName(String);
 

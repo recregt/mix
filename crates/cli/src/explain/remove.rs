@@ -2,23 +2,29 @@
 
 use mix_app::remove::Error;
 
-use super::{Diagnostic, change};
+use super::{Diagnostic, change, failed, packages_action};
 
 /// How the command is spelled when the reader is told to run it again.
 const COMMAND: &str = "mix remove";
 
-pub fn explain(error: &anyhow::Error) -> Diagnostic {
+pub fn explain(error: &anyhow::Error, packages: &[String]) -> Diagnostic {
+    let action = packages_action("remove", packages);
     match error.downcast_ref::<Error>() {
-        Some(Error::Change(error)) => change::describe(error, COMMAND, None),
+        Some(Error::Change(error)) => change::describe(error, COMMAND, &action, None),
         Some(Error::Protected(packages)) => protected(packages),
-        None => Diagnostic::new(error.to_string()),
+        None => failed(&action),
     }
 }
 
 fn protected(packages: &[String]) -> Diagnostic {
+    let hint = if packages.len() == 1 {
+        "`mix` needs it to work"
+    } else {
+        "`mix` needs them to work"
+    };
     Diagnostic::hinting(
-        format!("`{}` cannot be removed", packages.join("`, `")),
-        "Packages that `mix` relies on always stay in the profile",
+        format!("`{}` can't be removed", packages.join("`, `")),
+        hint,
     )
 }
 
@@ -32,10 +38,10 @@ mod tests {
     fn a_protected_package_is_named_and_explained() {
         let error = anyhow::Error::from(Error::Protected(vec!["git".to_string()]));
 
-        let message = explain(&error).message();
+        let message = explain(&error, &["git".to_string()]).message();
 
-        assert!(message.contains("`git` cannot be removed"));
-        assert!(message.contains("always stay in the profile"));
+        assert!(message.contains("`git` can't be removed"));
+        assert!(message.contains("`mix` needs it to work"));
     }
 
     #[test]
@@ -46,9 +52,9 @@ mod tests {
         ]));
 
         assert!(
-            explain(&error)
+            explain(&error, &["git".to_string()])
                 .message()
-                .contains("`git`, `curl` cannot be removed")
+                .contains("`git`, `curl` can't be removed")
         );
     }
 
@@ -57,9 +63,9 @@ mod tests {
         let error = anyhow::Error::from(Error::Change(change::Error::NotRoot));
 
         assert!(
-            explain(&error)
+            explain(&error, &["git".to_string()])
                 .message()
-                .contains("`mix remove` cannot be run as root")
+                .contains("`mix remove` can't be run as root")
         );
     }
 
@@ -71,13 +77,20 @@ mod tests {
             },
         )));
 
-        assert!(explain(&error).message().contains("run `mix remove` again"));
+        assert!(
+            explain(&error, &["git".to_string()])
+                .message()
+                .contains("run `mix remove` again")
+        );
     }
 
     #[test]
-    fn an_error_from_elsewhere_is_left_as_it_was_written() {
+    fn an_error_from_elsewhere_says_what_could_not_be_done() {
         let error = anyhow::anyhow!("something else broke");
 
-        assert_eq!(explain(&error).message(), "something else broke");
+        assert_eq!(
+            explain(&error, &["git".to_string()]).message(),
+            "couldn't remove git\nRun it again with `-v` to see what went wrong"
+        );
     }
 }

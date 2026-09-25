@@ -48,7 +48,9 @@ def test_bootstrap_fails_cleanly_with_an_unreachable_mirror(container):
     result = container.exec("mix", "bootstrap", "--mirror", "http://127.0.0.1:1")
 
     assert result.returncode != 0
-    assert "network" in (result.stdout + result.stderr).lower()
+    output = (result.stdout + result.stderr).lower()
+    assert "couldn't download required setup files" in output
+    assert "internet connection" in output
     assert not container.path_exists("/nix/var/nix/profiles/default/bin/nix-env")
 
 

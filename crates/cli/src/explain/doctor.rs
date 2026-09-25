@@ -9,15 +9,17 @@ use std::borrow::Cow;
 use mix_app::doctor::HealthReport;
 use mix_app::target::Finding;
 
-use super::Diagnostic;
+use super::{Diagnostic, failed};
 
 /// How the command is spelled when the reader is told to run it again.
 const COMMAND: &str = "mix doctor";
 
+const ACTION: &str = "finish the health check";
+
 pub fn explain(error: &anyhow::Error) -> Diagnostic {
     match error.downcast_ref::<mix_core::Error>() {
-        Some(error) => super::core_error(error, COMMAND),
-        None => Diagnostic::new(error.to_string()),
+        Some(error) => super::core_error(error, COMMAND, ACTION),
+        None => failed(ACTION),
     }
 }
 
@@ -39,7 +41,7 @@ pub fn finding(finding: Finding) -> Cow<'static, str> {
             actual: (uid, gid),
             expected: (want_uid, want_gid),
         } => format!("owned by {uid}:{gid}, expected {want_uid}:{want_gid}").into(),
-        Finding::ContentDrift => "contents no longer match the ones `mix` wrote".into(),
+        Finding::ContentDrift => "was changed outside `mix`".into(),
         Finding::GroupMissing => "the group does not exist".into(),
         Finding::GroupGid { actual, expected } => {
             format!("gid is {actual}, expected {expected}").into()
@@ -52,11 +54,9 @@ pub fn finding(finding: Finding) -> Cow<'static, str> {
             expected: (want_uid, want_gid),
         } => format!("uid/gid is {uid}/{gid}, expected {want_uid}/{want_gid}").into(),
         Finding::UnitMissing => "unit file missing".into(),
-        Finding::UnitDrift => "unit file contents drifted from the installed default".into(),
+        Finding::UnitDrift => "unit file was changed".into(),
         Finding::UnitInactive => "unit is not active".into(),
-        Finding::RuntimeMissing => {
-            "missing, and it is produced by the Nix installation rather than by repair".into()
-        }
+        Finding::RuntimeMissing => "missing, and `mix repair` can't restore it".into(),
     }
 }
 
@@ -105,20 +105,14 @@ pub fn unhealthy(reports: &[HealthReport]) -> Diagnostic {
         match report.finding.and_then(Finding::unfixable) {
             Some(reason) => unfixable = unfixable.or(Some(reason)),
             None => {
-                return Diagnostic::hinting(
-                    "system health check failed",
-                    "Run `mix repair` to reconcile configuration drift",
-                );
+                return Diagnostic::hinting("some checks failed", "Run `mix repair` to fix them");
             }
         }
     }
 
     match unfixable {
-        Some(reason) => Diagnostic::hinting(
-            "system health check failed",
-            super::target::unfixable(reason),
-        ),
-        None => Diagnostic::new("system health check failed"),
+        Some(reason) => Diagnostic::hinting("some checks failed", super::target::unfixable(reason)),
+        None => Diagnostic::new("some checks failed"),
     }
 }
 
@@ -128,13 +122,10 @@ pub fn unhealthy(reports: &[HealthReport]) -> Diagnostic {
 /// would have printed it, and they are told where to look — unless the finding has a way out of
 /// its own, which is more use than being sent to a command that cannot fix it.
 pub fn blocked(report: &HealthReport) -> Diagnostic {
-    let summary = format!("system health check failed: {}", measured(report));
+    let summary = format!("`mix` found a problem: {}", measured(report));
     match report.finding.and_then(Finding::unfixable) {
         Some(reason) => Diagnostic::hinting(summary, super::target::unfixable(reason)),
-        None => Diagnostic::hinting(
-            summary,
-            "Run `mix doctor` to see what drifted, and `mix repair` to reconcile it",
-        ),
+        None => Diagnostic::hinting(summary, "Run `mix repair` to fix it"),
     }
 }
 
@@ -193,7 +184,7 @@ mod tests {
 
         assert_eq!(
             line,
-            "exists but is not a directory\nRemove it by hand, then run `mix repair` again"
+            "exists but is not a directory\nRemove it, then run `mix repair` again"
         );
     }
 
@@ -216,7 +207,7 @@ mod tests {
         .message();
 
         assert!(message.contains("/nix: mode is 700, expected 755"));
-        assert!(message.contains("mix doctor"));
+        assert!(message.starts_with("`mix` found a problem"));
         assert!(message.contains("mix repair"));
     }
 
@@ -257,10 +248,7 @@ mod tests {
     fn a_healthy_report_is_not_read_as_a_finding() {
         let reports = [report("/nix", None)];
 
-        assert_eq!(
-            unhealthy(&reports),
-            Diagnostic::new("system health check failed")
-        );
+        assert_eq!(unhealthy(&reports), Diagnostic::new("some checks failed"));
     }
 
     /// Every measurement the audit can make has words of its own.

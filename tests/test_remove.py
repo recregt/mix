@@ -85,7 +85,7 @@ def test_remove_refuses_a_package_mix_relies_on(container, mock_nix_server, mirr
 
         assert result.returncode != 0
         output = (result.stdout + result.stderr).lower()
-        assert "cannot be removed" in output
+        assert "can't be removed" in output
         assert "git" in output
         assert _read(container, "state") == state_before
         assert _read(container, "home.nix") == home_before
@@ -99,5 +99,5 @@ def test_remove_cannot_be_run_as_root(container, mock_nix_server, mirror_cache):
     result = container.exec("mix", "remove", INSTALL_TEST_PACKAGE)
 
     assert result.returncode != 0
-    assert "cannot be run as root" in (result.stdout + result.stderr).lower()
+    assert "can't be run as root" in (result.stdout + result.stderr).lower()
     assert container.path_exists(f"{PROFILE_BIN}/{INSTALL_TEST_PACKAGE}")

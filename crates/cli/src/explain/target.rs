@@ -8,9 +8,9 @@ use mix_app::target::{Error, Unfixable};
 
 use super::{Diagnostic, core_error};
 
-pub(crate) fn describe(error: &Error, command: &str) -> Diagnostic {
+pub(crate) fn describe(error: &Error, command: &str, action: &str) -> Diagnostic {
     match error {
-        Error::Core(e) => core_error(e, command),
+        Error::Core(e) => core_error(e, command, action),
         Error::Unrepairable { artifact, reason } => Diagnostic::hinting(
             format!("{artifact}: {reason}"),
             unfixable(*reason).to_string(),
@@ -36,9 +36,9 @@ pub fn report(error: &Error) -> String {
 /// repair cannot reconcile as `mix repair` says when it meets it.
 pub(crate) fn unfixable(reason: Unfixable) -> &'static str {
     match reason {
-        Unfixable::NotADirectory => "Remove it by hand, then run `mix repair` again",
-        Unfixable::MissingUser => "Nothing is left to enrol; the user has to exist first",
-        Unfixable::MissingRuntime => "Run `mix bootstrap` to restore the nix installation",
+        Unfixable::NotADirectory => "Remove it, then run `mix repair` again",
+        Unfixable::MissingUser => "Recreate the user, or ignore this if it was removed on purpose",
+        Unfixable::MissingRuntime => "Run `mix bootstrap` to reinstall it",
     }
 }
 
@@ -55,7 +55,7 @@ mod tests {
 
         let line = report(&error);
 
-        assert!(line.contains("produced by the Nix installation"));
+        assert!(line.contains("`mix repair` can't restore it"));
         assert!(line.contains("mix bootstrap"));
     }
 
@@ -67,11 +67,12 @@ mod tests {
                 reason: Unfixable::NotADirectory,
             },
             "mix repair",
+            "finish the repair",
         )
         .message();
 
         assert!(message.contains("/nix: exists but is not a directory"));
-        assert!(message.contains("Remove it by hand"));
+        assert!(message.contains("Remove it, then run `mix repair` again"));
     }
 
     #[test]
