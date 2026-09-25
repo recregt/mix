@@ -19,6 +19,13 @@ pub async fn run(
     )
     .await?;
 
+    if let Some(note) = installed
+        .restored
+        .and_then(crate::explain::change::restored)
+    {
+        mix_ui::info(note);
+    }
+
     // One line of JSON on stdout and nothing else, so a script never has to parse prose.
     if json {
         println!("{}", installed.to_json());

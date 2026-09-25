@@ -6,7 +6,7 @@ use mix_core::state::StateManifest;
 
 use crate::profile::BuildPolicy;
 use crate::profile::change::{self, Result};
-use crate::profile::config::read_state;
+use crate::profile::state::Source;
 
 /// What a run of `install` actually did, so a caller can report an idempotent no-op as a
 /// success rather than a failure.
@@ -16,6 +16,8 @@ pub struct Installed {
     pub added: Vec<String>,
     /// Packages that were already in the profile and were left alone.
     pub skipped: Vec<String>,
+    #[serde(skip)]
+    pub restored: Option<Source>,
 }
 
 impl Installed {
@@ -37,14 +39,18 @@ pub async fn install(
     activity: Arc<dyn ActivityReporter>,
     allow_source_builds: bool,
 ) -> Result<Installed> {
-    let state = read_state(&cfg.user.home);
+    let (state, restored) = change::settled(cfg).await?;
     let partition = state.partition(packages);
     let skipped: Vec<String> = partition.installed.iter().map(|p| p.to_string()).collect();
     let added: Vec<String> = partition.missing.iter().map(|p| p.to_string()).collect();
 
     // Everything requested is already there: nothing to render, write or build.
     if added.is_empty() {
-        return Ok(Installed { added, skipped });
+        return Ok(Installed {
+            added,
+            skipped,
+            restored,
+        });
     }
 
     let label = change::label("Installing", &added);
@@ -65,7 +71,11 @@ pub async fn install(
     )
     .await?;
 
-    Ok(Installed { added, skipped })
+    Ok(Installed {
+        added,
+        skipped,
+        restored,
+    })
 }
 
 fn with_added(state: &StateManifest, added: &[String]) -> StateManifest {
@@ -113,6 +123,7 @@ mod tests {
             },
             flake: "flake-content".to_string(),
             home: "home-content".to_string(),
+            restored_state: None,
         }
     }
 
@@ -202,6 +213,7 @@ mod tests {
         let installed = Installed {
             added: vec!["ripgrep".to_string(), "fd".to_string()],
             skipped: vec!["git".to_string()],
+            restored: None,
         };
 
         assert_eq!(

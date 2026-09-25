@@ -19,6 +19,10 @@ pub async fn run(
     )
     .await?;
 
+    if let Some(note) = removed.restored.and_then(crate::explain::change::restored) {
+        mix_ui::info(note);
+    }
+
     if json {
         println!("{}", removed.to_json());
         return Ok(ExitCode::SUCCESS);

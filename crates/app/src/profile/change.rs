@@ -8,8 +8,9 @@ use mix_core::state::StateManifest;
 use mix_core::{ActivityReporter, CancellationToken};
 use tracing::Instrument;
 
-use crate::fs::write_atomic;
+use crate::fs::{remove_file, write_atomic};
 use crate::profile::config::render_home;
+use crate::profile::state::{self, Invalid, Settled, Source};
 use crate::profile::{self, BuildPolicy};
 
 #[derive(Debug, thiserror::Error)]
@@ -23,6 +24,12 @@ pub enum Error {
     #[error(transparent)]
     InvalidPackage(#[from] mix_nixgen::InvalidInput),
 
+    #[error("the package list would not be valid: {0}")]
+    InvalidState(#[from] Invalid),
+
+    #[error("the package list was written by a newer version of mix (format {0})")]
+    NewerState(u32),
+
     #[error("this command changes the invoking user's profile, and it was run as root")]
     NotRoot,
 
@@ -31,6 +38,23 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+pub async fn settled(cfg: &UserConfig) -> Result<(StateManifest, Option<Source>)> {
+    match state::settle(&cfg.user.home) {
+        Settled::Newer(version) => Err(Error::NewerState(version)),
+        Settled::Current {
+            manifest,
+            source: Source::File,
+        } => Ok((manifest, None)),
+        Settled::Current { manifest, source } => {
+            let (new_state, new_home) = render_candidate(cfg, &manifest)?;
+            let state_dir = mix_state_dir(&cfg.user.home);
+            write_atomic(&state_dir.join(STATE_FILE), &new_state).await?;
+            write_atomic(&state_dir.join(HOME_NIX), &new_home).await?;
+            Ok((manifest, Some(source)))
+        }
+    }
+}
 
 pub async fn apply(
     cfg: &UserConfig,
@@ -49,9 +73,14 @@ pub async fn apply(
     let token = CancellationToken::new();
     let span = tracing::info_span!("step", name = label);
 
-    write_then_activate(&state_path, &home_path, &new_state, &new_home, || {
-        profile::activate(cfg, mirror, mirror_key, activity, &token, policy)
-    })
+    async {
+        let generation = write_then_switch(&state_path, &home_path, &new_state, &new_home, || {
+            profile::switch(cfg, mirror, mirror_key, activity, &token, policy)
+        })
+        .await?;
+        profile::finish(cfg, &generation, activity, &token).await?;
+        Ok(())
+    }
     .instrument(span)
     .await
 }
@@ -65,19 +94,21 @@ pub fn label(verb: &str, packages: &[String]) -> String {
 
 fn render_candidate(cfg: &UserConfig, manifest: &StateManifest) -> Result<(String, String)> {
     let home = render_home(&cfg.user, &manifest.packages)?;
-    Ok((manifest.render(), home))
+    let rendered = manifest.render();
+    state::validate(&rendered)?;
+    Ok((rendered, home))
 }
 
-async fn write_then_activate<F, Fut>(
+async fn write_then_switch<F, Fut>(
     state_path: &Path,
     home_path: &Path,
     new_state: &str,
     new_home: &str,
-    activate: F,
-) -> Result<()>
+    switch: F,
+) -> Result<String>
 where
     F: FnOnce() -> Fut,
-    Fut: Future<Output = profile::Result<bool>>,
+    Fut: Future<Output = profile::Result<String>>,
 {
     let previous_state = tokio::fs::read_to_string(state_path).await.ok();
     let previous_home = tokio::fs::read_to_string(home_path).await.ok();
@@ -85,17 +116,24 @@ where
     write_atomic(state_path, new_state).await?;
     write_atomic(home_path, new_home).await?;
 
-    if let Err(e) = activate().await {
-        if let Some(previous) = previous_state {
-            let _ = write_atomic(state_path, &previous).await;
+    match switch().await {
+        Ok(generation) => Ok(generation),
+        Err(e) => {
+            put_back(state_path, previous_state.as_deref()).await;
+            put_back(home_path, previous_home.as_deref()).await;
+            Err(e.into())
         }
-        if let Some(previous) = previous_home {
-            let _ = write_atomic(home_path, &previous).await;
-        }
-        return Err(e.into());
     }
+}
 
-    Ok(())
+async fn put_back(path: &Path, previous: Option<&str>) {
+    let restored = match previous {
+        Some(previous) => write_atomic(path, previous).await,
+        None => remove_file(path).await,
+    };
+    if let Err(error) = restored {
+        tracing::info!("could not put {} back as it was: {error}", path.display());
+    }
 }
 
 #[cfg(test)]
@@ -114,6 +152,7 @@ mod tests {
             },
             flake: "flake-content".to_string(),
             home: "home-content".to_string(),
+            restored_state: None,
         }
     }
 
@@ -155,24 +194,21 @@ mod tests {
     }
 
     #[test]
-    fn render_candidate_keeps_the_manifest_version() {
+    fn render_candidate_refuses_a_format_it_does_not_write() {
         let home = tempfile::tempdir().unwrap();
 
-        let (state, _) =
-            render_candidate(&user_config(home.path()), &manifest(7, &["fd"])).unwrap();
+        let err = render_candidate(&user_config(home.path()), &manifest(7, &["git"])).unwrap_err();
 
-        assert_eq!(StateManifest::parse(&state).unwrap().version, 7);
+        assert!(matches!(err, Error::InvalidState(Invalid::Newer(7))));
     }
 
     #[test]
-    fn render_candidate_renders_an_empty_package_list() {
+    fn render_candidate_refuses_a_list_without_git() {
         let home = tempfile::tempdir().unwrap();
 
-        let (state, home_nix) =
-            render_candidate(&user_config(home.path()), &manifest(1, &[])).unwrap();
+        let err = render_candidate(&user_config(home.path()), &manifest(1, &[])).unwrap_err();
 
-        assert!(StateManifest::parse(&state).unwrap().packages.is_empty());
-        assert!(home_nix.contains("[ ]"));
+        assert!(matches!(err, Error::InvalidState(Invalid::Missing("git"))));
     }
 
     #[test]
@@ -189,14 +225,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn write_then_activate_restores_previous_content_when_activation_fails() {
+    async fn write_then_switch_restores_previous_content_when_the_switch_fails() {
         let dir = tempfile::tempdir().unwrap();
         let state_path = dir.path().join("state");
         let home_path = dir.path().join("home.nix");
         std::fs::write(&state_path, "old state").unwrap();
         std::fs::write(&home_path, "old home").unwrap();
 
-        let err = write_then_activate(&state_path, &home_path, "new state", "new home", || {
+        let err = write_then_switch(&state_path, &home_path, "new state", "new home", || {
             std::future::ready(Err(profile::Error::Core(mix_core::Error::Cancelled {
                 command: "nix build".to_string(),
             })))
@@ -210,12 +246,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn write_then_activate_leaves_nothing_behind_when_there_was_no_previous_content() {
+    async fn write_then_switch_leaves_nothing_behind_when_there_was_no_previous_content() {
         let dir = tempfile::tempdir().unwrap();
         let state_path = dir.path().join("state");
         let home_path = dir.path().join("home.nix");
 
-        write_then_activate(&state_path, &home_path, "new state", "new home", || {
+        write_then_switch(&state_path, &home_path, "new state", "new home", || {
             std::future::ready(Err(profile::Error::Core(mix_core::Error::Cancelled {
                 command: "nix build".to_string(),
             })))
@@ -223,20 +259,20 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert_eq!(std::fs::read_to_string(&state_path).unwrap(), "new state");
-        assert_eq!(std::fs::read_to_string(&home_path).unwrap(), "new home");
+        assert!(!state_path.exists());
+        assert!(!home_path.exists());
     }
 
     #[tokio::test]
-    async fn write_then_activate_keeps_the_new_content_when_activation_succeeds() {
+    async fn write_then_switch_keeps_the_new_content_when_the_switch_succeeds() {
         let dir = tempfile::tempdir().unwrap();
         let state_path = dir.path().join("state");
         let home_path = dir.path().join("home.nix");
         std::fs::write(&state_path, "old state").unwrap();
         std::fs::write(&home_path, "old home").unwrap();
 
-        write_then_activate(&state_path, &home_path, "new state", "new home", || {
-            std::future::ready(Ok(false))
+        write_then_switch(&state_path, &home_path, "new state", "new home", || {
+            std::future::ready(Ok("/nix/store/generation".to_string()))
         })
         .await
         .unwrap();

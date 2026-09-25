@@ -17,6 +17,7 @@ fn user_config() -> UserConfig {
         },
         flake: "f".repeat(512),
         home: "h".repeat(256),
+        restored_state: None,
     }
 }
 

@@ -101,6 +101,7 @@ mod tests {
             },
             flake: "flake-content".to_string(),
             home: "home-content".to_string(),
+            restored_state: None,
         }
     }
 

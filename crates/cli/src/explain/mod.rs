@@ -19,7 +19,7 @@ pub mod remove;
 pub mod repair;
 
 mod activation;
-mod change;
+pub(crate) mod change;
 pub mod target;
 
 use std::borrow::Cow;

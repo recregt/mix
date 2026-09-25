@@ -2,9 +2,11 @@ import ast
 import fcntl
 import hashlib
 import http.server
+import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -148,19 +150,26 @@ _MIRROR_HOME_NIX = """
   home.homeDirectory = "/home/__USER__";
   home.stateVersion = "24.05";
   home.packages = [ pkgs.git __EXTRA_PACKAGES__ ];
+  home.extraBuilderCommands = "cp ${./state} $out/mix-state";
 }
 """
+
+
+def rendered_state(packages: list[str]) -> str:
+    return json.dumps({"version": 1, "packages": packages}, indent=2) + "\n"
 
 
 @pytest.fixture(scope="session")
 def mirror_cache(mirror_sources):
     cache_dir = CACHE_DIR / "cache"
     users = "-".join(MIRROR_TEST_USERS)
-    marker = CACHE_DIR / f"cache-{NIXPKGS_REV}-{HOME_MANAGER_REV}-{users}.built"
+    template = hashlib.sha256((_MIRROR_FLAKE_NIX + _MIRROR_HOME_NIX).encode()).hexdigest()[:12]
+    marker = CACHE_DIR / f"cache-{NIXPKGS_REV}-{HOME_MANAGER_REV}-{users}-{template}.built"
 
     with open(CACHE_DIR / "mirror-cache.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if not marker.exists():
+            shutil.rmtree(cache_dir, ignore_errors=True)
             secret_key, public_key = _signing_key()
             store_paths = [
                 _seed_activation_package(user, secret_key, cache_dir)
@@ -216,6 +225,7 @@ def _seed_activation_package(
             "__EXTRA_PACKAGES__", extra
         )
         (tmp_path / "home.nix").write_text(home_nix)
+        (tmp_path / "state").write_text(rendered_state(["git", *(extra_packages or [])]))
 
         store_path = subprocess.run(
             [

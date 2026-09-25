@@ -30,11 +30,61 @@ impl Ident {
 #[error("`{0}` is not a valid Nix identifier")]
 pub struct InvalidIdent(String);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileName(String);
+
+impl FileName {
+    pub fn new(s: impl Into<String>) -> Result<Self, InvalidIdent> {
+        let s = s.into();
+        let valid = s
+            .bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+            && s.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        if valid {
+            Ok(Self(s))
+        } else {
+            Err(InvalidIdent(s))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+pub fn is_identifier(s: &str) -> bool {
+    Ident::new(s).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use proptest::collection::vec;
     use proptest::prelude::*;
+
+    #[test]
+    fn a_file_name_is_lowercase_letters_digits_and_dashes() {
+        for name in ["state", "mix-state", "a1", "9"] {
+            assert!(FileName::new(name).is_ok(), "{name}");
+        }
+        for name in [
+            "", "-state", "State", "a b", "a/b", "a$b", "a'b", "..", "a.b", "a}",
+        ] {
+            assert!(FileName::new(name).is_err(), "{name:?}");
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn a_file_name_never_holds_a_character_nix_or_a_shell_would_read(s in ".*") {
+            if let Ok(name) = FileName::new(s) {
+                prop_assert!(name.as_str().bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'));
+                prop_assert!(!name.as_str().starts_with('-'));
+            }
+        }
+    }
 
     #[test]
     fn accepts_a_plain_identifier() {

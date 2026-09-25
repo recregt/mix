@@ -10,6 +10,7 @@ use proptest::prelude::*;
 fn a_realistic_config_is_syntactically_valid_nix() {
     let mut cfg = HomeManagerConfig::new();
     cfg.packages(["firefox", "git", "node-sass"]).unwrap();
+    cfg.copy_into_generation("state", "mix-state").unwrap();
     cfg.set_bool("programs.git.enable", true).unwrap();
     cfg.set_str("programs.git.userName", "mix").unwrap();
     cfg.set_str("programs.git.userEmail", "user@example.com")

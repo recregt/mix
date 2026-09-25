@@ -1,6 +1,6 @@
 use crate::GENERATED_HEADER;
 use crate::escape::NulByte;
-use crate::ident::{Ident, InvalidIdent};
+use crate::ident::{FileName, Ident, InvalidIdent};
 use crate::value::Nix;
 
 #[derive(Debug, Default)]
@@ -33,6 +33,19 @@ impl HomeManagerConfig {
             .map(|p| Ident::new(p.as_ref()))
             .collect::<Result<Vec<_>, _>>()?;
         self.set_at(&["home", "packages"], Nix::PackageList(idents))?;
+        Ok(self)
+    }
+
+    pub fn copy_into_generation(
+        &mut self,
+        source: &str,
+        target: &str,
+    ) -> Result<&mut Self, InvalidInput> {
+        let value = Nix::CopyIntoGeneration {
+            source: FileName::new(source)?,
+            target: FileName::new(target)?,
+        };
+        self.set_at(&["home", "extraBuilderCommands"], value)?;
         Ok(self)
     }
 
@@ -116,6 +129,24 @@ mod tests {
         assert!(cfg.render().ends_with(
             "{ pkgs, ... }:\n{\n  home = {\n    packages = with pkgs; [ firefox git ];\n  };\n}\n"
         ));
+    }
+
+    #[test]
+    fn copy_into_generation_renders_beside_the_packages() {
+        let mut cfg = HomeManagerConfig::new();
+        cfg.packages(["git"]).unwrap();
+        cfg.copy_into_generation("state", "mix-state").unwrap();
+        assert!(cfg.render().ends_with(
+            "{ pkgs, ... }:\n{\n  home = {\n    packages = with pkgs; [ git ];\n    \
+             extraBuilderCommands = \"cp ${./state} $out/mix-state\";\n  };\n}\n"
+        ));
+    }
+
+    #[test]
+    fn copy_into_generation_refuses_a_name_that_could_escape() {
+        let mut cfg = HomeManagerConfig::new();
+        assert!(cfg.copy_into_generation("state} $(rm -rf)", "x").is_err());
+        assert!(cfg.copy_into_generation("state", "x; rm -rf ~").is_err());
     }
 
     #[test]

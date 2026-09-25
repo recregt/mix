@@ -47,6 +47,8 @@ pub mod paths {
     pub const FLAKE_LOCK: &str = "flake.lock";
     pub const STATE_FILE: &str = "state";
 
+    pub const GENERATION_STATE_FILE: &str = "mix-state";
+
     pub const NIX_PROFILES_DIR: &str = ".local/state/nix/profiles";
     pub const NIX_PROFILES_DIR_MODE: u32 = 0o755;
     pub const HOME_MANAGER_PROFILE_NAME: &str = "home-manager";
