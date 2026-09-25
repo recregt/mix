@@ -39,7 +39,7 @@ fn explain_a_refused_source_build(bencher: divan::Bencher, n: usize) {
 #[divan::bench]
 fn explain_a_held_lock(bencher: divan::Bencher) {
     let error = anyhow::Error::from(InstallError::Core(mix_core::Error::Locked {
-        path: "/run/mix.lock".into(),
+        path: "/var/lib/mix/lock".into(),
     }));
 
     bencher.bench(|| {

@@ -330,8 +330,8 @@ mod tests {
     #[test]
     fn a_sentence_ending_in_a_path_is_left_open() {
         assert_eq!(
-            polished("already locked: /run/mix.lock"),
-            "Already locked: /run/mix.lock"
+            polished("already locked: /var/lib/mix/lock"),
+            "Already locked: /var/lib/mix/lock"
         );
     }
 

@@ -84,6 +84,9 @@ pub(crate) fn core_error(error: &mix_core::Error, command: &str, action: &str) -
             "another `mix` command is already running",
             format!("Wait for it to finish, then run `{command}` again"),
         ),
+        Error::LockMissing { .. } => {
+            Diagnostic::hinting("`mix` isn't set up yet", "Run `mix bootstrap` first")
+        }
         Error::Cancelled { .. } => Diagnostic::new("interrupted before it could finish"),
         Error::Io { path, source } if source.kind() == std::io::ErrorKind::PermissionDenied => {
             Diagnostic::hinting(
@@ -135,13 +138,13 @@ mod tests {
     #[test]
     fn a_held_lock_names_the_command_the_reader_ran() {
         let error = mix_core::Error::Locked {
-            path: "/run/mix.lock".into(),
+            path: "/var/lib/mix/lock".into(),
         };
 
         let install = core_error(&error, "mix install", "install ripgrep").message();
         let repair = core_error(&error, "mix repair", "finish the repair").message();
 
-        assert!(!install.contains("/run/mix.lock"));
+        assert!(!install.contains("/var/lib/mix/lock"));
         assert!(install.contains("run `mix install` again"));
         assert!(repair.contains("run `mix repair` again"));
     }
@@ -198,5 +201,17 @@ mod tests {
             "install a, b, c"
         );
         assert_eq!(packages_action("install", &packages), "install 4 packages");
+    }
+
+    #[test]
+    fn a_missing_lock_sends_the_reader_to_bootstrap() {
+        let error = mix_core::Error::LockMissing {
+            path: "/var/lib/mix/lock".into(),
+        };
+
+        assert_eq!(
+            core_error(&error, "mix install", "install ripgrep").message(),
+            "`mix` isn't set up yet\nRun `mix bootstrap` first"
+        );
     }
 }

@@ -162,7 +162,7 @@ mod tests {
         for command in ["mix bootstrap", "mix install"] {
             let message = describe(
                 &Error::Core(mix_core::Error::Locked {
-                    path: "/run/mix.lock".into(),
+                    path: "/var/lib/mix/lock".into(),
                 }),
                 command,
                 "finish",

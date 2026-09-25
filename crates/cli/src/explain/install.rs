@@ -66,7 +66,7 @@ mod tests {
     #[test]
     fn a_held_lock_tells_the_reader_to_run_install_again() {
         let error = anyhow::Error::from(Error::Core(mix_core::Error::Locked {
-            path: "/run/mix.lock".into(),
+            path: "/var/lib/mix/lock".into(),
         }));
 
         let message = explain(&error, &["x".to_string()], "mix install x --build").message();

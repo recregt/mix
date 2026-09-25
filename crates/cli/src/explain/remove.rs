@@ -73,7 +73,7 @@ mod tests {
     fn a_held_lock_tells_the_reader_to_run_remove_again() {
         let error = anyhow::Error::from(Error::Change(change::Error::Core(
             mix_core::Error::Locked {
-                path: "/run/mix.lock".into(),
+                path: "/var/lib/mix/lock".into(),
             },
         )));
 

@@ -1,4 +1,6 @@
 import json
+import socket
+import threading
 
 from conftest import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS, mirror_args
 from test_install import _bootstrapped
@@ -33,14 +35,33 @@ def _packages(raw: str) -> list[str]:
     return json.loads(raw)["packages"]
 
 
-def _kill_during(container, mock_nix_server, mirror_cache, marker: str, env=None) -> None:
+def _silent_mirror():
+    listener = socket.create_server(("0.0.0.0", 0))
+    held = []
+
+    def accept():
+        while True:
+            try:
+                connection, _ = listener.accept()
+            except OSError:
+                return
+            held.append(connection)
+
+    threading.Thread(target=accept, daemon=True).start()
+    return listener, f"http://host.containers.internal:{listener.getsockname()[1]}"
+
+
+def _kill_during(container, mock_nix_server, mirror_cache, marker: str, env=None, mirror=None) -> None:
+    args = mirror_args(mock_nix_server, mirror_cache)
+    if mirror is not None:
+        args[1] = mirror
     proc = container.start_background(
         "mix",
         "-vv",
         "--no-progress",
         "install",
         INSTALL_TEST_PACKAGE,
-        *mirror_args(mock_nix_server, mirror_cache),
+        *args,
         env=env,
         user=USER,
     )
@@ -74,8 +95,12 @@ def test_a_command_killed_before_the_switch_is_undone_by_the_next_one(
     container, mock_nix_server, mirror_cache
 ):
     _bootstrapped(container, mock_nix_server, mirror_cache)
+    listener, silent = _silent_mirror()
 
-    _kill_during(container, mock_nix_server, mirror_cache, "--dry-run")
+    try:
+        _kill_during(container, mock_nix_server, mirror_cache, "--dry-run", mirror=silent)
+    finally:
+        listener.close()
     assert INSTALL_TEST_PACKAGE in _packages(_state(container))
     assert not container.path_exists(PACKAGE_BIN)
 

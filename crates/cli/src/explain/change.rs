@@ -131,7 +131,7 @@ mod tests {
         for command in ["mix install", "mix remove"] {
             let message = describe(
                 &Error::Core(mix_core::Error::Locked {
-                    path: "/run/mix.lock".into(),
+                    path: "/var/lib/mix/lock".into(),
                 }),
                 command,
                 "install ripgrep",
