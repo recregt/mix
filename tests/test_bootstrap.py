@@ -1,10 +1,12 @@
 from conftest import (
+    MIRROR_TEST_USERS,
     MIX_USERS_GROUP,
     NIX_CONF_CONTENT,
     bootstrap_root,
     create_user,
     daemon_trusts,
     group_members,
+    mirror_args,
 )
 
 
@@ -112,3 +114,25 @@ def test_bootstrap_auto_escalates_for_a_sudo_user(container, mock_nix_server, mi
     doctor = container.exec("mix", "doctor", user="ciuser")
     assert doctor.returncode == 0, doctor.stdout + doctor.stderr
 
+
+def test_a_mirror_set_only_in_the_environment_survives_the_sudo_re_run(
+    container, mock_nix_server, mirror_cache
+):
+    user = MIRROR_TEST_USERS[0]
+    create_user(container, user, sudo=True)
+    _, url, _, key = mirror_args(mock_nix_server, mirror_cache)
+
+    result = container.exec(
+        "mix",
+        "-v",
+        "--no-progress",
+        "bootstrap",
+        env={"MIX_NIX_MIRROR": url, "MIX_NIX_MIRROR_KEY": key},
+        user=user,
+    )
+
+    assert result.returncode == 0, result.stderr
+    output = result.stdout + result.stderr
+    assert "re-running with sudo" in output.lower()
+    assert f"fetching runtime archive: {url}/" in output
+    assert "releases.nixos.org" not in output

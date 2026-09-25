@@ -71,24 +71,47 @@ fn allowed_env_vars(get: impl Fn(&str) -> Option<String>) -> Vec<(&'static str, 
         .collect()
 }
 
+const SUDO_LOOKUP_ONLY: &str = "PATH";
+
+fn sudo_command(
+    exe: &std::path::Path,
+    args: &[String],
+    allowed: &[(&'static str, String)],
+) -> std::process::Command {
+    let mut command = std::process::Command::new("sudo");
+    command.arg("--set-home");
+
+    let preserved: Vec<&str> = allowed
+        .iter()
+        .map(|(key, _)| *key)
+        .filter(|key| *key != SUDO_LOOKUP_ONLY)
+        .collect();
+    if !preserved.is_empty() {
+        command.arg(format!("--preserve-env={}", preserved.join(",")));
+    }
+
+    command.arg(exe).args(args);
+    command.env_clear();
+    for (key, value) in allowed {
+        command.env(key, value);
+    }
+    command
+}
+
 pub fn escalate() -> Result<EscalationOutcome> {
     let current_exe = std::env::current_exe().map_err(|e| Error::Io {
         path: "/proc/self/exe".into(),
         source: e,
     })?;
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let allowed = allowed_env_vars(|key| std::env::var(key).ok());
 
-    let mut command = std::process::Command::new("sudo");
-    command.arg("--set-home").arg(&current_exe).args(&args);
-    command.env_clear();
-    for (key, value) in allowed_env_vars(|key| std::env::var(key).ok()) {
-        command.env(key, value);
-    }
-
-    let status = command.status().map_err(|e| Error::Exec {
-        command: "sudo".into(),
-        source: e,
-    })?;
+    let status = sudo_command(&current_exe, &args, &allowed)
+        .status()
+        .map_err(|e| Error::Exec {
+            command: "sudo".into(),
+            source: e,
+        })?;
 
     Ok(EscalationOutcome::ReExecuted {
         exit_code: status.code().unwrap_or(1),
@@ -254,5 +277,82 @@ mod tests {
                 ("WSL_INTEROP", "/run/WSL/1_interop".to_string()),
             ]
         );
+    }
+
+    fn arguments(command: &std::process::Command) -> Vec<String> {
+        command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn environment(command: &std::process::Command) -> Vec<(String, String)> {
+        command
+            .get_envs()
+            .filter_map(|(key, value)| {
+                Some((
+                    key.to_string_lossy().into_owned(),
+                    value?.to_string_lossy().into_owned(),
+                ))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sudo_is_told_to_keep_every_allowed_variable_that_is_set() {
+        let allowed = vec![
+            ("PATH", "/usr/bin".to_string()),
+            ("HTTPS_PROXY", "http://proxy:8080".to_string()),
+            ("MIX_NIX_MIRROR", "http://mirror.internal".to_string()),
+        ];
+
+        let command = sudo_command(
+            std::path::Path::new("/usr/local/bin/mix"),
+            &["bootstrap".to_string()],
+            &allowed,
+        );
+
+        assert_eq!(
+            arguments(&command),
+            [
+                "--set-home",
+                "--preserve-env=HTTPS_PROXY,MIX_NIX_MIRROR",
+                "/usr/local/bin/mix",
+                "bootstrap"
+            ]
+        );
+        let mut env = environment(&command);
+        env.sort();
+        assert_eq!(
+            env,
+            [
+                ("HTTPS_PROXY".to_string(), "http://proxy:8080".to_string()),
+                (
+                    "MIX_NIX_MIRROR".to_string(),
+                    "http://mirror.internal".to_string()
+                ),
+                ("PATH".to_string(), "/usr/bin".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_callers_path_is_only_used_to_find_sudo() {
+        let command = sudo_command(
+            std::path::Path::new("/usr/local/bin/mix"),
+            &[],
+            &[("PATH", "/home/user/bin:/usr/bin".to_string())],
+        );
+
+        assert!(!arguments(&command).iter().any(|arg| arg.contains("PATH")));
+        assert_eq!(arguments(&command), ["--set-home", "/usr/local/bin/mix"]);
+    }
+
+    #[test]
+    fn nothing_else_from_the_callers_environment_reaches_sudo() {
+        let command = sudo_command(std::path::Path::new("/usr/local/bin/mix"), &[], &[]);
+
+        assert!(environment(&command).is_empty());
+        assert_eq!(arguments(&command), ["--set-home", "/usr/local/bin/mix"]);
     }
 }
