@@ -6,7 +6,7 @@
 //! nix-daemon and for the git-tracked state, and what it hands the caller to print.
 
 use mix_core::CancellationToken;
-use mix_core::models::{UserConfig, targets};
+use mix_core::models::{Target, UserConfig, targets};
 use mix_core::paths::{NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT, mix_state_dir};
 
 use crate::git;
@@ -39,10 +39,33 @@ impl RepairReport {
     }
 }
 
-pub async fn repair(user_config: Option<&UserConfig>) -> Vec<RepairReport> {
+pub struct Repair {
+    pub reports: Vec<RepairReport>,
+    pub interrupted: bool,
+}
+
+pub async fn repair(user_config: Option<&UserConfig>, cancel: &CancellationToken) -> Repair {
     tracing::info!("repairing managed environment");
-    let token = CancellationToken::new();
     let items = targets(user_config);
+    let (mut reports, interrupted) = put_back(&items, cancel).await;
+
+    let token = CancellationToken::new();
+    if rewrote_nix_conf(&reports) {
+        restart_the_daemon(&token, &mut reports).await;
+    }
+
+    if let Some(cfg) = user_config {
+        commit_the_tracked_state(cfg, &token, &mut reports).await;
+    }
+
+    Repair {
+        reports,
+        interrupted,
+    }
+}
+
+async fn put_back(items: &[Target], cancel: &CancellationToken) -> (Vec<RepairReport>, bool) {
+    let token = CancellationToken::new();
 
     // Measuring does not change anything, so every target is measured at once; putting them back
     // is done in the order they are declared in, because a target can be what the next one needs.
@@ -52,6 +75,10 @@ pub async fn repair(user_config: Option<&UserConfig>) -> Vec<RepairReport> {
     for (item, finding) in items.iter().zip(findings) {
         let Some(finding) = finding else { continue };
         let name = item.label();
+        if cancel.is_cancelled() {
+            tracing::info!("stopped before repairing {name}");
+            return (reports, true);
+        }
         tracing::debug!("drifted: {name}: {finding:?}");
 
         if let Some(reason) = finding.unfixable() {
@@ -75,15 +102,7 @@ pub async fn repair(user_config: Option<&UserConfig>) -> Vec<RepairReport> {
         }
     }
 
-    if rewrote_nix_conf(&reports) {
-        restart_the_daemon(&token, &mut reports).await;
-    }
-
-    if let Some(cfg) = user_config {
-        commit_the_tracked_state(cfg, &token, &mut reports).await;
-    }
-
-    reports
+    (reports, false)
 }
 
 /// A rewritten nix.conf only reaches a running nix-daemon when it restarts.
@@ -161,5 +180,70 @@ mod tests {
             },
         );
         assert!(!failed.fixed && failed.error.is_some());
+    }
+
+    fn drifted_files(dir: &std::path::Path) -> Vec<Target> {
+        ["one", "two"]
+            .into_iter()
+            .map(|name| {
+                let path = dir.join(name);
+                std::fs::write(&path, "drifted").unwrap();
+                Target::File {
+                    path,
+                    expected: Some("expected".to_string()),
+                    owner: None,
+                }
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn every_drifted_target_is_put_back_when_nothing_stops_it() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let (reports, interrupted) =
+            put_back(&drifted_files(dir.path()), &CancellationToken::new()).await;
+
+        assert!(!interrupted);
+        assert_eq!(reports.len(), 2);
+        assert!(reports.iter().all(|report| report.fixed));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("two")).unwrap(),
+            "expected"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stopped_repair_starts_nothing_new_and_says_it_was_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        let (reports, interrupted) = put_back(&drifted_files(dir.path()), &cancel).await;
+
+        assert!(interrupted);
+        assert!(reports.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("one")).unwrap(),
+            "drifted"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stop_with_nothing_left_to_repair_is_not_an_interruption() {
+        let dir = tempfile::tempdir().unwrap();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let healthy = Target::File {
+            path: dir.path().join("healthy"),
+            expected: Some("expected".to_string()),
+            owner: None,
+        };
+        std::fs::write(dir.path().join("healthy"), "expected").unwrap();
+
+        let (reports, interrupted) = put_back(&[healthy], &cancel).await;
+
+        assert!(!interrupted);
+        assert!(reports.is_empty());
     }
 }

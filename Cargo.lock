@@ -1308,6 +1308,7 @@ dependencies = [
  "mix-nixgen",
  "mix-rpc",
  "mix-ui",
+ "nix",
  "tokio",
  "tracing",
  "tracing-subscriber",

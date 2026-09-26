@@ -67,7 +67,10 @@ pub enum Event {
 #[derive(Debug)]
 pub enum Outcome {
     BootstrapDone,
-    RepairDone(Vec<RepairReport>),
+    RepairDone {
+        reports: Vec<RepairReport>,
+        interrupted: bool,
+    },
     Failure(Failure),
 }
 

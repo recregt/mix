@@ -49,19 +49,22 @@ impl Worker for Scripted {
     }
 
     async fn repair(&self, _caller: Caller, _request: RepairRequest, _events: Events) -> Outcome {
-        Outcome::RepairDone(vec![
-            RepairReport {
-                name: "/nix".into(),
-                failure: Some(TargetFailure::Unrepairable {
-                    artifact: "/nix".into(),
-                    reason: Unfixable::NotADirectory,
-                }),
-            },
-            RepairReport {
-                name: "/etc/nix/nix.conf".into(),
-                failure: None,
-            },
-        ])
+        Outcome::RepairDone {
+            interrupted: false,
+            reports: vec![
+                RepairReport {
+                    name: "/nix".into(),
+                    failure: Some(TargetFailure::Unrepairable {
+                        artifact: "/nix".into(),
+                        reason: Unfixable::NotADirectory,
+                    }),
+                },
+                RepairReport {
+                    name: "/etc/nix/nix.conf".into(),
+                    failure: None,
+                },
+            ],
+        }
     }
 }
 
@@ -177,7 +180,7 @@ async fn repair_reports_every_item_it_looked_at() {
         .collect()
         .await;
 
-    let [Event::Finished(Outcome::RepairDone(reports))] = events.as_slice() else {
+    let [Event::Finished(Outcome::RepairDone { reports, .. })] = events.as_slice() else {
         panic!("expected only the outcome, got {events:?}");
     };
     assert_eq!(reports.len(), 2);
@@ -223,7 +226,10 @@ impl Worker for CleansUpWhenAbandoned {
     }
 
     async fn repair(&self, _caller: Caller, _request: RepairRequest, _events: Events) -> Outcome {
-        Outcome::RepairDone(Vec::new())
+        Outcome::RepairDone {
+            reports: Vec::new(),
+            interrupted: false,
+        }
     }
 }
 
@@ -275,7 +281,10 @@ impl Worker for WaitsForRelease {
     }
 
     async fn repair(&self, _caller: Caller, _request: RepairRequest, _events: Events) -> Outcome {
-        Outcome::RepairDone(Vec::new())
+        Outcome::RepairDone {
+            reports: Vec::new(),
+            interrupted: false,
+        }
     }
 }
 

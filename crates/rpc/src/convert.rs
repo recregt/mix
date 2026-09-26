@@ -202,7 +202,11 @@ fn outcome_to_wire(outcome: Outcome) -> proto::Finished {
 
     let outcome = match outcome {
         Outcome::BootstrapDone => Wire::BootstrapDone(proto::BootstrapDone {}),
-        Outcome::RepairDone(reports) => Wire::RepairDone(proto::RepairDone {
+        Outcome::RepairDone {
+            reports,
+            interrupted,
+        } => Wire::RepairDone(proto::RepairDone {
+            interrupted,
             reports: reports
                 .into_iter()
                 .map(|report| proto::RepairReport {
@@ -224,8 +228,10 @@ fn outcome_from_wire(finished: proto::Finished) -> Result<Outcome, Malformed> {
     Ok(
         match finished.outcome.ok_or_else(|| missing("an outcome"))? {
             Wire::BootstrapDone(_) => Outcome::BootstrapDone,
-            Wire::RepairDone(done) => Outcome::RepairDone(
-                done.reports
+            Wire::RepairDone(done) => Outcome::RepairDone {
+                interrupted: done.interrupted,
+                reports: done
+                    .reports
                     .into_iter()
                     .map(|report| {
                         Ok(RepairReport {
@@ -234,7 +240,7 @@ fn outcome_from_wire(finished: proto::Finished) -> Result<Outcome, Malformed> {
                         })
                     })
                     .collect::<Result<_, Malformed>>()?,
-            ),
+            },
             Wire::Failure(failure) => Outcome::Failure(failure_from_wire(failure)?),
         },
     )
@@ -678,19 +684,22 @@ mod tests {
             }),
             Event::ActivityCleared,
             Event::Finished(Outcome::BootstrapDone),
-            Event::Finished(Outcome::RepairDone(vec![
-                RepairReport {
-                    name: "/nix".into(),
-                    failure: None,
-                },
-                RepairReport {
-                    name: "/etc/nix/nix.conf".into(),
-                    failure: Some(TargetFailure::Core(mix_core::Error::Command {
-                        command: "chmod".into(),
-                        detail: "denied".into(),
-                    })),
-                },
-            ])),
+            Event::Finished(Outcome::RepairDone {
+                interrupted: true,
+                reports: vec![
+                    RepairReport {
+                        name: "/nix".into(),
+                        failure: None,
+                    },
+                    RepairReport {
+                        name: "/etc/nix/nix.conf".into(),
+                        failure: Some(TargetFailure::Core(mix_core::Error::Command {
+                            command: "chmod".into(),
+                            detail: "denied".into(),
+                        })),
+                    },
+                ],
+            }),
         ];
         for event in events {
             let before = format!("{event:?}");

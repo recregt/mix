@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures_util::{Stream, StreamExt};
-use mix_app::repair::RepairReport;
+use mix_app::repair::Repair;
 use mix_app::target::Error as TargetError;
 use mix_core::{ActivityReporter, DownloadProgress, StepObserver};
 use mix_rpc::{BootstrapRequest, Client, Event, Failure, Level, Mirror, Outcome, RepairRequest};
@@ -159,11 +159,11 @@ pub async fn bootstrap(
     match outcome {
         Outcome::BootstrapDone => Ok(()),
         Outcome::Failure(failure) => Err(bootstrap_error_from(failure).into()),
-        Outcome::RepairDone(_) => Err(mix_rpc::Error::Ended.into()),
+        Outcome::RepairDone { .. } => Err(mix_rpc::Error::Ended.into()),
     }
 }
 
-pub async fn repair(verbosity: u8) -> anyhow::Result<Vec<RepairReport>> {
+pub async fn repair(verbosity: u8) -> anyhow::Result<Repair> {
     let mut client = start().await?;
     let request = RepairRequest {
         log_level: level_for(verbosity),
@@ -171,7 +171,13 @@ pub async fn repair(verbosity: u8) -> anyhow::Result<Vec<RepairReport>> {
     let outcome = replay(client.repair(&request).await?).await?;
     let _ = client.wait();
     match outcome {
-        Outcome::RepairDone(reports) => Ok(reports.into_iter().map(report_from_wire).collect()),
+        Outcome::RepairDone {
+            reports,
+            interrupted,
+        } => Ok(Repair {
+            reports: reports.into_iter().map(report_from_wire).collect(),
+            interrupted,
+        }),
         Outcome::Failure(Failure::Core(error)) => Err(TargetError::Core(error).into()),
         Outcome::Failure(Failure::Target(failure)) => Err(target_error_from(failure).into()),
         Outcome::Failure(failure) => Err(bootstrap_error_from(failure).into()),
