@@ -18,8 +18,8 @@ const ACTION: &str = "finish the health check";
 
 pub fn explain(error: &anyhow::Error) -> Diagnostic {
     match error.downcast_ref::<mix_core::Error>() {
-        Some(error) => super::core_error(error, COMMAND, ACTION),
-        None => failed(ACTION),
+        Some(error) => super::core_error(error, COMMAND, &ACTION),
+        None => failed(&ACTION),
     }
 }
 

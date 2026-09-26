@@ -19,7 +19,7 @@ const BUILD_FLAG: &str = "To build anyway, run it again with `--build`";
 pub(crate) fn describe(
     error: &Error,
     command: &str,
-    action: &str,
+    action: &dyn std::fmt::Display,
     rerun: Option<&str>,
 ) -> Diagnostic {
     match error {
@@ -31,24 +31,12 @@ pub(crate) fn describe(
 }
 
 pub(crate) fn source_build(packages: &[String], rerun: Option<&str>) -> Diagnostic {
-    let hint: std::borrow::Cow<'static, str> = match rerun {
-        Some(rerun) => {
-            let lead = if packages.len() == 1 {
-                BUILD_IT
-            } else {
-                BUILD_THEM
-            };
-            let mut hint = String::with_capacity(lead.len() + rerun.len());
-            hint.push_str(lead);
-            hint.push_str(rerun);
-            hint.into()
-        }
-        None => BUILD_FLAG.into(),
+    let lead = match (rerun, packages.len()) {
+        (None, _) => BUILD_FLAG,
+        (Some(_), 1) => BUILD_IT,
+        (Some(_), _) => BUILD_THEM,
     };
-    Diagnostic::hinting(summary(packages), hint)
-}
-
-fn summary(packages: &[String]) -> String {
+    let rerun = rerun.unwrap_or_default();
     let names: usize = packages.iter().map(String::len).sum();
     let separators = match packages.len() {
         0 => SOME_PACKAGES.len(),
@@ -56,23 +44,29 @@ fn summary(packages: &[String]) -> String {
         n => SEPARATOR.len() * (n - 2) + LAST_SEPARATOR.len(),
     };
 
-    let mut summary = String::with_capacity(names + separators + FROM_SOURCE.len());
+    let mut text = String::with_capacity(
+        names + separators + FROM_SOURCE.len() + 1 + lead.len() + rerun.len(),
+    );
     match packages {
-        [] => summary.push_str(SOME_PACKAGES),
-        [only] => summary.push_str(only),
+        [] => text.push_str(SOME_PACKAGES),
+        [only] => text.push_str(only),
         [init @ .., last] => {
             for (index, package) in init.iter().enumerate() {
                 if index > 0 {
-                    summary.push_str(SEPARATOR);
+                    text.push_str(SEPARATOR);
                 }
-                summary.push_str(package);
+                text.push_str(package);
             }
-            summary.push_str(LAST_SEPARATOR);
-            summary.push_str(last);
+            text.push_str(LAST_SEPARATOR);
+            text.push_str(last);
         }
     }
-    summary.push_str(FROM_SOURCE);
-    summary
+    text.push_str(FROM_SOURCE);
+    let summary_len = text.len();
+    text.push('\n');
+    text.push_str(lead);
+    text.push_str(rerun);
+    Diagnostic::written(text, summary_len)
 }
 
 #[cfg(test)]
@@ -88,7 +82,7 @@ mod tests {
     const RERUN: Option<&str> = Some("mix install cowsay --build");
 
     fn message(packages: Option<&[&str]>, rerun: Option<&str>) -> String {
-        describe(&refused(packages), "mix install", "install cowsay", rerun).message()
+        describe(&refused(packages), "mix install", &"install cowsay", rerun).message()
     }
 
     #[test]
@@ -146,14 +140,16 @@ mod tests {
     }
 
     #[test]
-    fn the_summary_is_written_into_exactly_the_space_it_needs() {
+    fn the_message_is_written_into_exactly_the_space_it_needs() {
         let packages: Vec<String> = ["cowsay-3.8.4", "ripgrep-14.1", "fd-10"]
             .map(String::from)
             .to_vec();
         for count in 0..=packages.len() {
-            let summary = summary(&packages[..count]);
+            for rerun in [RERUN, None] {
+                let message = source_build(&packages[..count], rerun).message();
 
-            assert_eq!(summary.capacity(), summary.len(), "{summary:?}");
+                assert_eq!(message.capacity(), message.len(), "{message:?}");
+            }
         }
     }
 
@@ -165,7 +161,7 @@ mod tests {
                     path: "/var/lib/mix/lock".into(),
                 }),
                 command,
-                "finish",
+                &"finish",
                 None,
             )
             .message();

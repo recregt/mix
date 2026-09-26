@@ -13,19 +13,19 @@ const DAMAGED: &str = "the downloaded setup files are damaged";
 
 pub fn explain(error: &anyhow::Error) -> Diagnostic {
     if let Some(error) = error.downcast_ref::<mix_rpc::Error>() {
-        return super::privileged(error, ACTION);
+        return super::privileged(error, &ACTION);
     }
     match error.downcast_ref::<Error>() {
         Some(error) => describe(error, COMMAND),
-        None => failed(ACTION),
+        None => failed(&ACTION),
     }
 }
 
 pub(crate) fn describe(error: &Error, command: &str) -> Diagnostic {
     match error {
-        Error::Core(e) => core_error(e, command, ACTION),
+        Error::Core(e) => core_error(e, command, &ACTION),
 
-        Error::Activation(e) => super::activation::describe(e, command, ACTION, None),
+        Error::Activation(e) => super::activation::describe(e, command, &ACTION, None),
 
         Error::Network(_) => Diagnostic::hinting(
             "couldn't download required setup files",
@@ -47,7 +47,7 @@ pub(crate) fn describe(error: &Error, command: &str) -> Diagnostic {
             "It runs on 64-bit Intel, AMD and ARM Linux",
         ),
 
-        Error::Target(e) => super::target::describe(e, command, ACTION),
+        Error::Target(e) => super::target::describe(e, command, &ACTION),
 
         Error::NotRoot(_) => Diagnostic::hinting(
             "setting up `mix` needs administrator rights",
@@ -89,7 +89,7 @@ pub(crate) fn describe(error: &Error, command: &str) -> Diagnostic {
         ),
 
         Error::Rollback { cause, .. } => Diagnostic::hinting(
-            describe(cause, command).summary,
+            describe(cause, command).summary(),
             "Some changes couldn't be undone. Run `mix doctor` to see what's left",
         ),
 

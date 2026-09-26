@@ -23,20 +23,22 @@ pub(crate) mod change;
 pub mod target;
 
 use std::borrow::Cow;
+use std::fmt::{self, Display};
 
 /// A failure in the words the reader should see: what happened, and what to do next.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Diagnostic {
-    summary: Cow<'static, str>,
-    hint: Option<Cow<'static, str>>,
+    text: Cow<'static, str>,
+    summary_len: usize,
 }
 
 impl Diagnostic {
     /// A failure that speaks for itself.
     pub fn new(summary: impl Into<Cow<'static, str>>) -> Self {
+        let text = summary.into();
         Self {
-            summary: summary.into(),
-            hint: None,
+            summary_len: text.len(),
+            text,
         }
     }
 
@@ -45,9 +47,24 @@ impl Diagnostic {
         summary: impl Into<Cow<'static, str>>,
         hint: impl Into<Cow<'static, str>>,
     ) -> Self {
+        let hint = hint.into();
+        let mut text = match summary.into() {
+            Cow::Owned(mut summary) => {
+                summary.reserve_exact(1 + hint.len());
+                summary
+            }
+            Cow::Borrowed(summary) => {
+                let mut text = String::with_capacity(summary.len() + 1 + hint.len());
+                text.push_str(summary);
+                text
+            }
+        };
+        let summary_len = text.len();
+        text.push('\n');
+        text.push_str(&hint);
         Self {
-            summary: summary.into(),
-            hint: Some(hint.into()),
+            text: text.into(),
+            summary_len,
         }
     }
 
@@ -55,16 +72,25 @@ impl Diagnostic {
     ///
     /// The hint is a line of its own: the printer indents continuation lines under the marker, so
     /// a failure reads as one block rather than as a line and an afterthought.
-    pub fn message(&self) -> String {
-        let Some(hint) = &self.hint else {
-            return self.summary.as_ref().to_owned();
-        };
+    pub(crate) fn written(text: String, summary_len: usize) -> Self {
+        Self {
+            text: text.into(),
+            summary_len,
+        }
+    }
 
-        let mut out = String::with_capacity(self.summary.len() + hint.len() + 1);
-        out.push_str(&self.summary);
-        out.push('\n');
-        out.push_str(hint);
-        out
+    pub fn message(self) -> String {
+        self.text.into_owned()
+    }
+
+    pub(crate) fn summary(self) -> Cow<'static, str> {
+        match self.text {
+            Cow::Borrowed(text) => Cow::Borrowed(&text[..self.summary_len]),
+            Cow::Owned(mut text) => {
+                text.truncate(self.summary_len);
+                Cow::Owned(text)
+            }
+        }
     }
 }
 
@@ -76,7 +102,11 @@ const REPORT_BUG: &str =
 /// These are the errors every command can hit — the lock, a file, a process that would not
 /// start. The fact is the library's; naming the command to run again is not something it could
 /// have done.
-pub(crate) fn core_error(error: &mix_core::Error, command: &str, action: &str) -> Diagnostic {
+pub(crate) fn core_error(
+    error: &mix_core::Error,
+    command: &str,
+    action: &dyn Display,
+) -> Diagnostic {
     use mix_core::Error;
 
     match error {
@@ -99,7 +129,7 @@ pub(crate) fn core_error(error: &mix_core::Error, command: &str, action: &str) -
     }
 }
 
-pub(crate) fn failed(action: &str) -> Diagnostic {
+pub(crate) fn failed(action: &dyn Display) -> Diagnostic {
     Diagnostic::hinting(
         format!("couldn't {action}"),
         "Run it again with `-v` to see what went wrong",
@@ -110,7 +140,7 @@ pub(crate) fn bug() -> Diagnostic {
     Diagnostic::hinting("something went wrong inside `mix`", REPORT_BUG)
 }
 
-pub(crate) fn privileged(error: &mix_rpc::Error, action: &str) -> Diagnostic {
+pub(crate) fn privileged(error: &mix_rpc::Error, action: &dyn Display) -> Diagnostic {
     use mix_rpc::Error;
 
     match error {
@@ -123,12 +153,34 @@ pub(crate) fn privileged(error: &mix_rpc::Error, action: &str) -> Diagnostic {
     }
 }
 
-pub(crate) fn packages_action(verb: &str, packages: &[String]) -> String {
-    match packages.len() {
-        0 => format!("{verb} the packages"),
-        1..=3 => format!("{verb} {}", packages.join(", ")),
-        n => format!("{verb} {n} packages"),
+pub(crate) struct PackagesAction<'a> {
+    verb: &'static str,
+    packages: &'a [String],
+}
+
+impl Display for PackagesAction<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.verb)?;
+        match self.packages {
+            [] => f.write_str(" the packages"),
+            [first, rest @ ..] if rest.len() < 3 => {
+                f.write_str(" ")?;
+                f.write_str(first)?;
+                rest.iter().try_for_each(|package| {
+                    f.write_str(", ")?;
+                    f.write_str(package)
+                })
+            }
+            packages => write!(f, " {} packages", packages.len()),
+        }
     }
+}
+
+pub(crate) fn packages_action<'a>(
+    verb: &'static str,
+    packages: &'a [String],
+) -> PackagesAction<'a> {
+    PackagesAction { verb, packages }
 }
 
 #[cfg(test)]
@@ -154,8 +206,8 @@ mod tests {
             path: "/var/lib/mix/lock".into(),
         };
 
-        let install = core_error(&error, "mix install", "install ripgrep").message();
-        let repair = core_error(&error, "mix repair", "finish the repair").message();
+        let install = core_error(&error, "mix install", &"install ripgrep").message();
+        let repair = core_error(&error, "mix repair", &"finish the repair").message();
 
         assert!(!install.contains("/var/lib/mix/lock"));
         assert!(install.contains("run `mix install` again"));
@@ -169,7 +221,7 @@ mod tests {
             source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
         };
 
-        let message = core_error(&error, "mix doctor", "finish the health check").message();
+        let message = core_error(&error, "mix doctor", &"finish the health check").message();
 
         assert!(message.starts_with("no permission to use /nix/store"));
         assert!(message.contains("Check who owns it"));
@@ -182,7 +234,7 @@ mod tests {
             detail: "error: out of disk space".to_string(),
         };
 
-        let message = core_error(&error, "mix install", "install ripgrep").message();
+        let message = core_error(&error, "mix install", &"install ripgrep").message();
 
         assert_eq!(
             message,
@@ -195,7 +247,7 @@ mod tests {
         let message = core_error(
             &mix_core::Error::TaskPanicked("oops".to_string()),
             "mix install",
-            "install ripgrep",
+            &"install ripgrep",
         )
         .message();
 
@@ -208,12 +260,18 @@ mod tests {
     fn a_long_list_of_packages_is_counted() {
         let packages: Vec<String> = ["a", "b", "c", "d"].map(String::from).to_vec();
 
-        assert_eq!(packages_action("install", &packages[..1]), "install a");
         assert_eq!(
-            packages_action("install", &packages[..3]),
+            packages_action("install", &packages[..1]).to_string(),
+            "install a"
+        );
+        assert_eq!(
+            packages_action("install", &packages[..3]).to_string(),
             "install a, b, c"
         );
-        assert_eq!(packages_action("install", &packages), "install 4 packages");
+        assert_eq!(
+            packages_action("install", &packages).to_string(),
+            "install 4 packages"
+        );
     }
 
     #[test]
@@ -223,7 +281,7 @@ mod tests {
         };
 
         assert_eq!(
-            core_error(&error, "mix install", "install ripgrep").message(),
+            core_error(&error, "mix install", &"install ripgrep").message(),
             "`mix` isn't set up yet\nRun `mix bootstrap` first"
         );
     }
@@ -232,7 +290,7 @@ mod tests {
     fn a_refused_sudo_is_about_administrator_rights() {
         let message = privileged(
             &mix_rpc::Error::Refused("connection closed".into()),
-            "finish the repair",
+            &"finish the repair",
         )
         .message();
 
@@ -246,7 +304,7 @@ mod tests {
     #[test]
     fn a_worker_that_stopped_mid_way_points_at_the_details() {
         assert!(
-            privileged(&mix_rpc::Error::Ended, "finish the repair")
+            privileged(&mix_rpc::Error::Ended, &"finish the repair")
                 .message()
                 .contains("with `-v`")
         );

@@ -8,7 +8,7 @@ use mix_app::target::{Error, Unfixable};
 
 use super::{Diagnostic, core_error};
 
-pub(crate) fn describe(error: &Error, command: &str, action: &str) -> Diagnostic {
+pub(crate) fn describe(error: &Error, command: &str, action: &dyn std::fmt::Display) -> Diagnostic {
     match error {
         Error::Core(e) => core_error(e, command, action),
         Error::Unrepairable { artifact, reason } => Diagnostic::hinting(
@@ -67,7 +67,7 @@ mod tests {
                 reason: Unfixable::NotADirectory,
             },
             "mix repair",
-            "finish the repair",
+            &"finish the repair",
         )
         .message();
 
