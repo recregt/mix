@@ -110,6 +110,19 @@ pub(crate) fn bug() -> Diagnostic {
     Diagnostic::hinting("something went wrong inside `mix`", REPORT_BUG)
 }
 
+pub(crate) fn privileged(error: &mix_rpc::Error, action: &str) -> Diagnostic {
+    use mix_rpc::Error;
+
+    match error {
+        Error::Spawn(_) | Error::Connect(_) | Error::Refused(_) => Diagnostic::hinting(
+            format!("couldn't get administrator rights to {action}"),
+            "Make sure your account can use sudo, then try again",
+        ),
+        Error::Ended => failed(action),
+        Error::Malformed(_) | Error::NotAConnection(_) => bug(),
+    }
+}
+
 pub(crate) fn packages_action(verb: &str, packages: &[String]) -> String {
     match packages.len() {
         0 => format!("{verb} the packages"),
@@ -212,6 +225,30 @@ mod tests {
         assert_eq!(
             core_error(&error, "mix install", "install ripgrep").message(),
             "`mix` isn't set up yet\nRun `mix bootstrap` first"
+        );
+    }
+
+    #[test]
+    fn a_refused_sudo_is_about_administrator_rights() {
+        let message = privileged(
+            &mix_rpc::Error::Refused("connection closed".into()),
+            "finish the repair",
+        )
+        .message();
+
+        assert_eq!(
+            message,
+            "couldn't get administrator rights to finish the repair\n\
+             Make sure your account can use sudo, then try again"
+        );
+    }
+
+    #[test]
+    fn a_worker_that_stopped_mid_way_points_at_the_details() {
+        assert!(
+            privileged(&mix_rpc::Error::Ended, "finish the repair")
+                .message()
+                .contains("with `-v`")
         );
     }
 }

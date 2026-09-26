@@ -10,6 +10,9 @@ const COMMAND: &str = "mix repair";
 const ACTION: &str = "finish the repair";
 
 pub fn explain(error: &anyhow::Error) -> Diagnostic {
+    if let Some(error) = error.downcast_ref::<mix_rpc::Error>() {
+        return super::privileged(error, ACTION);
+    }
     match error.downcast_ref::<Error>() {
         Some(error) => super::target::describe(error, COMMAND, ACTION),
         None => failed(ACTION),

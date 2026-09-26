@@ -1,0 +1,212 @@
+syntax = "proto3";
+
+package mix.worker.v1;
+
+service Worker {
+  rpc Bootstrap(BootstrapRequest) returns (stream Event);
+  rpc Repair(RepairRequest) returns (stream Event);
+}
+
+message Mirror {
+  string url = 1;
+  optional string key = 2;
+}
+
+message BootstrapRequest {
+  optional Mirror mirror = 1;
+  bool force = 2;
+  Level log_level = 3;
+}
+
+message RepairRequest {
+  Level log_level = 1;
+}
+
+message Event {
+  oneof kind {
+    SpanOpened span_opened = 1;
+    SpanClosed span_closed = 2;
+    Log log = 3;
+    DownloadStarted download_started = 4;
+    DownloadAdvanced download_advanced = 5;
+    ActivityLine activity_line = 6;
+    ActivityProgress activity_progress = 7;
+    ActivityCleared activity_cleared = 8;
+    Finished finished = 9;
+  }
+}
+
+message SpanOpened {
+  uint64 id = 1;
+  optional uint64 parent = 2;
+  string name = 3;
+  map<string, string> fields = 4;
+}
+
+message SpanClosed {
+  uint64 id = 1;
+  bool failed = 2;
+}
+
+enum Level {
+  LEVEL_UNSPECIFIED = 0;
+  LEVEL_ERROR = 1;
+  LEVEL_WARN = 2;
+  LEVEL_INFO = 3;
+  LEVEL_DEBUG = 4;
+  LEVEL_TRACE = 5;
+}
+
+message Log {
+  Level level = 1;
+  optional uint64 span = 2;
+  string message = 3;
+}
+
+message DownloadStarted {
+  uint64 total = 1;
+}
+
+message DownloadAdvanced {
+  uint64 delta = 1;
+}
+
+message ActivityLine {
+  string line = 1;
+}
+
+message ActivityProgress {
+  uint64 builds_done = 1;
+  uint64 builds_expected = 2;
+  uint64 builds_running = 3;
+  uint64 downloads_done = 4;
+  uint64 downloads_expected = 5;
+  uint64 downloads_running = 6;
+  uint64 bytes_done = 7;
+  uint64 bytes_expected = 8;
+}
+
+message ActivityCleared {}
+
+message Finished {
+  oneof outcome {
+    BootstrapDone bootstrap_done = 1;
+    RepairDone repair_done = 2;
+    Failure failure = 3;
+  }
+}
+
+message BootstrapDone {}
+
+message RepairDone {
+  repeated RepairReport reports = 1;
+}
+
+message RepairReport {
+  string name = 1;
+  optional TargetFailure failure = 2;
+}
+
+message Failure {
+  oneof kind {
+    CoreFailure core = 1;
+    SourceBuildRequired source_build_required = 2;
+    Detail network = 3;
+    Integrity integrity = 4;
+    Detail unsupported_target = 5;
+    TargetFailure target = 6;
+    Detail decompression = 7;
+    Detail malformed_archive = 8;
+    Detail not_root = 9;
+    Empty unsupported_host = 10;
+    Empty unsupported_kernel = 11;
+    SystemdNotReady systemd_not_ready = 12;
+    Empty already_managed = 13;
+    Path cross_device_store = 14;
+    Rollback rollback = 15;
+    Empty interrupted = 16;
+  }
+}
+
+message Empty {}
+
+message Detail {
+  string detail = 1;
+}
+
+message Path {
+  string path = 1;
+}
+
+message Integrity {
+  string artifact = 1;
+  string detail = 2;
+}
+
+message SourceBuildRequired {
+  repeated string packages = 1;
+  bool named = 2;
+}
+
+enum Host {
+  HOST_UNSPECIFIED = 0;
+  HOST_NATIVE = 1;
+  HOST_WSL = 2;
+}
+
+message SystemdNotReady {
+  Host host = 1;
+}
+
+message Rollback {
+  Failure cause = 1;
+  string summary = 2;
+}
+
+message TargetFailure {
+  oneof kind {
+    CoreFailure core = 1;
+    Unrepairable unrepairable = 2;
+  }
+}
+
+enum Unfixable {
+  UNFIXABLE_UNSPECIFIED = 0;
+  UNFIXABLE_NOT_A_DIRECTORY = 1;
+  UNFIXABLE_MISSING_USER = 2;
+  UNFIXABLE_MISSING_RUNTIME = 3;
+}
+
+message Unrepairable {
+  string artifact = 1;
+  Unfixable reason = 2;
+}
+
+message CoreFailure {
+  oneof kind {
+    Io io = 1;
+    Command command = 2;
+    Exec exec = 3;
+    Detail task_panicked = 4;
+    Detail cancelled = 5;
+    Path locked = 6;
+    Path lock_missing = 7;
+  }
+}
+
+message Io {
+  string path = 1;
+  string kind = 2;
+  string message = 3;
+}
+
+message Command {
+  string command = 1;
+  string detail = 2;
+}
+
+message Exec {
+  string command = 1;
+  string kind = 2;
+  string message = 3;
+}

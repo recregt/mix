@@ -40,7 +40,10 @@ pub(crate) fn render_home<S: AsRef<str>>(
 }
 
 pub fn resolve_user_config() -> Option<UserConfig> {
-    let user = invoking_user()?;
+    user_config_for(invoking_user()?)
+}
+
+pub fn user_config_for(user: InvokingUser) -> Option<UserConfig> {
     let system = nix_system_double(Arch::current()?, Os::current()?);
     let flake = FlakeConfig::new(system, &user.name, NIXPKGS_REV, HOME_MANAGER_REV)
         .expect("system is a hardcoded literal and a real username cannot contain a null byte")
@@ -70,7 +73,11 @@ pub fn resolve_user_config() -> Option<UserConfig> {
 }
 
 pub fn resolve_existing_user_config() -> Option<UserConfig> {
-    let cfg = resolve_user_config()?;
+    existing_user_config_for(invoking_user()?)
+}
+
+pub fn existing_user_config_for(user: InvokingUser) -> Option<UserConfig> {
+    let cfg = user_config_for(user)?;
     mix_core::identity::group_has_member(MIX_USERS_GROUP, &cfg.user.name).then_some(cfg)
 }
 

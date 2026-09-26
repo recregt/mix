@@ -12,6 +12,7 @@ pub use error::{Error, Host, Result};
 
 use std::sync::Arc;
 
+use mix_core::privilege::InvokingUser;
 use mix_core::{ActivityReporter, DownloadProgress, Outcome, Plan, StepObserver, privilege};
 
 pub struct Environment(());
@@ -34,6 +35,7 @@ async fn interrupted() {
 }
 
 pub async fn bootstrap(
+    user: Option<InvokingUser>,
     mirror: Option<&str>,
     mirror_key: Option<&str>,
     force: bool,
@@ -52,7 +54,17 @@ pub async fn bootstrap(
         preflight::check_nix_not_installed().await?;
     }
 
-    run_steps(mirror, mirror_key, force, progress, step_observer, activity).await
+    let user_config = user.and_then(crate::profile::user_config_for);
+    run_steps(
+        mirror,
+        mirror_key,
+        force,
+        progress,
+        step_observer,
+        activity,
+        user_config,
+    )
+    .await
 }
 
 async fn run_steps(
@@ -62,9 +74,15 @@ async fn run_steps(
     progress: Arc<dyn DownloadProgress>,
     step_observer: Arc<dyn StepObserver>,
     activity: Arc<dyn ActivityReporter>,
+    user_config: Option<mix_core::models::UserConfig>,
 ) -> Result<Environment> {
     let mut plan = Plan::new(planner::bootstrap_steps(
-        mirror, mirror_key, force, progress, activity,
+        mirror,
+        mirror_key,
+        force,
+        progress,
+        activity,
+        user_config,
     ))
     .with_step_observer(step_observer);
     let cause = match plan.run_cancellable(interrupted()).await {

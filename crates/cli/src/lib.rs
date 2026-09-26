@@ -1,6 +1,7 @@
 mod cli;
 mod commands;
 pub mod explain;
+mod remote;
 
 use std::process::ExitCode;
 
@@ -11,6 +12,9 @@ use explain::Diagnostic;
 
 pub async fn run() -> ExitCode {
     let cli = Cli::parse();
+    if matches!(cli.command, Command::Worker) {
+        return remote::worker::run().await;
+    }
 
     mix_ui::init_tracing(cli.verbose, cli.draws_progress());
 
@@ -49,7 +53,7 @@ pub async fn run() -> ExitCode {
             Box::new(|error| explain::remove::explain(error, packages))
         }
         Command::Doctor => Box::new(explain::doctor::explain),
-        Command::Repair => Box::new(explain::repair::explain),
+        Command::Repair | Command::Worker => Box::new(explain::repair::explain),
     };
 
     let result = match &cli.command {
@@ -57,7 +61,15 @@ pub async fn run() -> ExitCode {
             mirror,
             mirror_key,
             force,
-        } => commands::bootstrap::run(mirror.as_deref(), mirror_key.as_deref(), *force).await,
+        } => {
+            commands::bootstrap::run(
+                mirror.as_deref(),
+                mirror_key.as_deref(),
+                *force,
+                cli.verbose,
+            )
+            .await
+        }
         Command::Install {
             packages,
             mirror,
@@ -81,7 +93,7 @@ pub async fn run() -> ExitCode {
             json,
         } => commands::remove::run(packages, mirror.as_deref(), mirror_key.as_deref(), *json).await,
         Command::Doctor => commands::doctor::run(cli.verbose).await,
-        Command::Repair => commands::repair::run().await,
+        Command::Repair | Command::Worker => commands::repair::run(cli.verbose).await,
     };
 
     match result {
