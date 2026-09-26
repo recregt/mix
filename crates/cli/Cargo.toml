@@ -23,6 +23,7 @@ tracing-subscriber = "0.3.23"
 [dev-dependencies]
 mix-nixgen = { path = "../nixgen" }
 divan = { workspace = true }
+nix = { workspace = true, features = ["signal"] }
 
 [[bench]]
 name = "explain"

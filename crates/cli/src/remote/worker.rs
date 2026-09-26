@@ -4,7 +4,9 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use mix_core::paths::LOCK_FILE;
-use mix_core::{ActivityReporter, BuildProgress, DownloadProgress, StepObserver};
+use mix_core::{
+    ActivityReporter, BuildProgress, CancellationToken, DownloadProgress, StepObserver,
+};
 use mix_rpc::{BootstrapRequest, Caller, Event, Events, Failure, Level, Outcome, RepairRequest};
 use tracing::Subscriber;
 use tracing::field::{Field, Visit};
@@ -12,6 +14,8 @@ use tracing::span::{Attributes, Id};
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
+
+use crate::interrupt;
 
 use super::convert::{failure_from_bootstrap, report_to_wire};
 
@@ -220,6 +224,11 @@ impl ActivityReporter for Activity {
     }
 }
 
+fn client_gone(events: &Events) -> impl Future<Output = ()> + Send + 'static {
+    let events = events.clone();
+    async move { events.closed().await }
+}
+
 struct CliWorker(Shared);
 
 impl mix_rpc::Worker for CliWorker {
@@ -234,14 +243,19 @@ impl mix_rpc::Worker for CliWorker {
             Err(error) => Outcome::Failure(Failure::Core(error)),
             Ok(_lock) => {
                 let mirror = request.mirror.as_ref();
+                let cancel = CancellationToken::new();
+                let _watch = interrupt::watch(&cancel, interrupt::UNDOING, client_gone(&events));
                 let result = mix_app::bootstrap::bootstrap(
                     mix_core::privilege::user_by_uid(caller.uid),
                     mirror.map(|mirror| mirror.url.as_str()),
                     mirror.and_then(|mirror| mirror.key.as_deref()),
                     request.force,
-                    Arc::new(Downloads(events.clone())),
-                    Arc::new(Steps(self.0.clone())),
-                    Arc::new(Activity(events.clone())),
+                    mix_app::bootstrap::Reporters {
+                        downloads: Arc::new(Downloads(events.clone())),
+                        steps: Arc::new(Steps(self.0.clone())),
+                        activity: Arc::new(Activity(events.clone())),
+                    },
+                    &cancel,
                 )
                 .await;
                 match result {
@@ -255,14 +269,19 @@ impl mix_rpc::Worker for CliWorker {
     }
 
     async fn repair(&self, caller: Caller, request: RepairRequest, events: Events) -> Outcome {
-        self.0.start(events, request.log_level);
+        self.0.start(events.clone(), request.log_level);
         let outcome = match mix_core::lock::acquire_exclusive(LOCK_FILE) {
             Err(error) => Outcome::Failure(Failure::Core(error)),
             Ok(_lock) => {
                 let user_config = mix_core::privilege::user_by_uid(caller.uid)
                     .and_then(mix_app::profile::existing_user_config_for);
-                let reports = mix_app::repair::repair(user_config.as_ref()).await;
-                Outcome::RepairDone(reports.into_iter().map(report_to_wire).collect())
+                let cancel = CancellationToken::new();
+                let _watch = interrupt::watch(&cancel, interrupt::FINISHING, client_gone(&events));
+                let repair = mix_app::repair::repair(user_config.as_ref(), &cancel).await;
+                Outcome::RepairDone {
+                    reports: repair.reports.into_iter().map(report_to_wire).collect(),
+                    interrupted: repair.interrupted,
+                }
             }
         };
         self.0.stop();

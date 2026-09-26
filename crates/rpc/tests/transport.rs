@@ -1,4 +1,6 @@
 use std::os::unix::fs::MetadataExt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -47,19 +49,22 @@ impl Worker for Scripted {
     }
 
     async fn repair(&self, _caller: Caller, _request: RepairRequest, _events: Events) -> Outcome {
-        Outcome::RepairDone(vec![
-            RepairReport {
-                name: "/nix".into(),
-                failure: Some(TargetFailure::Unrepairable {
-                    artifact: "/nix".into(),
-                    reason: Unfixable::NotADirectory,
-                }),
-            },
-            RepairReport {
-                name: "/etc/nix/nix.conf".into(),
-                failure: None,
-            },
-        ])
+        Outcome::RepairDone {
+            interrupted: false,
+            reports: vec![
+                RepairReport {
+                    name: "/nix".into(),
+                    failure: Some(TargetFailure::Unrepairable {
+                        artifact: "/nix".into(),
+                        reason: Unfixable::NotADirectory,
+                    }),
+                },
+                RepairReport {
+                    name: "/etc/nix/nix.conf".into(),
+                    failure: None,
+                },
+            ],
+        }
     }
 }
 
@@ -175,7 +180,7 @@ async fn repair_reports_every_item_it_looked_at() {
         .collect()
         .await;
 
-    let [Event::Finished(Outcome::RepairDone(reports))] = events.as_slice() else {
+    let [Event::Finished(Outcome::RepairDone { reports, .. })] = events.as_slice() else {
         panic!("expected only the outcome, got {events:?}");
     };
     assert_eq!(reports.len(), 2);
@@ -200,4 +205,119 @@ async fn the_worker_stops_once_its_client_is_gone() {
         .expect("the worker must shut down once its only client disconnects")
         .unwrap()
         .unwrap();
+}
+
+struct CleansUpWhenAbandoned {
+    cleaned_up: Arc<AtomicBool>,
+}
+
+impl Worker for CleansUpWhenAbandoned {
+    async fn bootstrap(
+        &self,
+        _caller: Caller,
+        _request: BootstrapRequest,
+        events: Events,
+    ) -> Outcome {
+        let _ = events.send(Event::ActivityLine("started".into()));
+        events.closed().await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        self.cleaned_up.store(true, Ordering::SeqCst);
+        Outcome::Failure(Failure::Interrupted)
+    }
+
+    async fn repair(&self, _caller: Caller, _request: RepairRequest, _events: Events) -> Outcome {
+        Outcome::RepairDone {
+            reports: Vec::new(),
+            interrupted: false,
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_worker_waits_for_a_request_its_client_left() {
+    let cleaned_up = Arc::new(AtomicBool::new(false));
+    let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
+    let server = tokio::spawn(serve_connection(
+        CleansUpWhenAbandoned {
+            cleaned_up: Arc::clone(&cleaned_up),
+        },
+        theirs,
+    ));
+    let mut client = Client::connect(ours).await.unwrap();
+    let mut events = client.bootstrap(&request(false)).await.unwrap();
+    assert!(matches!(
+        events.next().await,
+        Some(Ok(Event::ActivityLine(line))) if line == "started"
+    ));
+
+    drop(events);
+    drop(client);
+
+    tokio::time::timeout(Duration::from_secs(10), server)
+        .await
+        .expect("the worker must shut down once the request is over")
+        .unwrap()
+        .unwrap();
+    assert!(
+        cleaned_up.load(Ordering::SeqCst),
+        "the worker returned before the abandoned request cleaned up"
+    );
+}
+
+struct WaitsForRelease {
+    release: Arc<tokio::sync::Notify>,
+}
+
+impl Worker for WaitsForRelease {
+    async fn bootstrap(
+        &self,
+        _caller: Caller,
+        _request: BootstrapRequest,
+        events: Events,
+    ) -> Outcome {
+        let _ = events.send(Event::ActivityLine("started".into()));
+        self.release.notified().await;
+        Outcome::BootstrapDone
+    }
+
+    async fn repair(&self, _caller: Caller, _request: RepairRequest, _events: Events) -> Outcome {
+        Outcome::RepairDone {
+            reports: Vec::new(),
+            interrupted: false,
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_second_request_is_refused_while_the_first_is_running() {
+    let release = Arc::new(tokio::sync::Notify::new());
+    let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
+    let _server = tokio::spawn(serve_connection(
+        WaitsForRelease {
+            release: Arc::clone(&release),
+        },
+        theirs,
+    ));
+    let mut client = Client::connect(ours).await.unwrap();
+    let mut first = client.bootstrap(&request(false)).await.unwrap();
+    assert!(matches!(
+        first.next().await,
+        Some(Ok(Event::ActivityLine(line))) if line == "started"
+    ));
+
+    let second = client
+        .repair(&RepairRequest {
+            log_level: Level::Warn,
+        })
+        .await;
+
+    let Err(mix_rpc::Error::Refused(reason)) = second else {
+        panic!("a second request must be refused while the first is running");
+    };
+    assert!(reason.contains("already"), "{reason}");
+    release.notify_one();
+    assert!(matches!(
+        first.next().await,
+        Some(Ok(Event::Finished(Outcome::BootstrapDone)))
+    ));
 }

@@ -108,6 +108,7 @@ message BootstrapDone {}
 
 message RepairDone {
   repeated RepairReport reports = 1;
+  bool interrupted = 2;
 }
 
 message RepairReport {

@@ -12,6 +12,7 @@ hyper-util = { version = "0.1.21", features = ["tokio"] }
 prost = "0.14.4"
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["net"] }
+tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
 tonic = "0.14.6"
 tonic-prost = "0.14.6"
 tower = { version = "0.5.3", features = ["util"] }
