@@ -25,6 +25,7 @@ const RESET: &str = "\u{1b}[0m";
 const DONE: &str = "✓";
 const FAILED: &str = "✗";
 const LEFT_ALONE: &str = "•";
+const WARNING: &str = "!";
 const MARKER_WIDTH: usize = 2;
 
 /// How many causes are worth printing under a failure. A chain longer than this is a library
@@ -97,6 +98,7 @@ pub enum Status {
     LeftAlone,
     /// Neither: something the user is being told.
     Plain,
+    Warning,
 }
 
 impl Status {
@@ -106,6 +108,7 @@ impl Status {
             Status::Done => Some((DONE, GREEN)),
             Status::Failed => Some((FAILED, RED)),
             Status::LeftAlone => Some((LEFT_ALONE, YELLOW)),
+            Status::Warning => Some((WARNING, YELLOW)),
             Status::Plain => None,
         }
     }
@@ -192,6 +195,10 @@ pub fn skipped(message: impl std::fmt::Display) {
     print_status(Status::LeftAlone, &message.to_string(), true);
 }
 
+pub fn warn(message: impl std::fmt::Display) {
+    print_status(Status::Warning, &message.to_string(), true);
+}
+
 pub fn info(message: impl std::fmt::Display) {
     print_status(Status::Plain, &message.to_string(), true);
 }
@@ -229,10 +236,18 @@ pub fn fail_explained(message: &str, error: &dyn std::error::Error) {
     print_line(&failure(message, error, stderr_colors()), true);
 }
 
+pub fn fail_in_detail(message: &str, error: &dyn std::error::Error) {
+    print_line(&causes(message, Some(error), stderr_colors()), true);
+}
+
 fn failure(message: &str, error: &dyn std::error::Error, colour: bool) -> String {
+    causes(message, error.source(), colour)
+}
+
+fn causes(message: &str, first: Option<&dyn std::error::Error>, colour: bool) -> String {
     let mut out = status_line(Status::Failed, message, colour);
 
-    let mut source = error.source();
+    let mut source = first;
     let mut printed = 0;
     while let Some(cause) = source.filter(|_| printed < MAX_CAUSES) {
         let text = cause.to_string();
@@ -410,5 +425,25 @@ mod tests {
         let printed = failure(&chained.to_string(), &chained, false);
 
         assert_eq!(printed.lines().count(), 1 + MAX_CAUSES);
+    }
+
+    #[test]
+    fn a_warning_is_marked_apart_from_a_failure() {
+        assert_eq!(
+            status_line(Status::Warning, "your list was reset", false),
+            "! Your list was reset."
+        );
+    }
+
+    #[test]
+    fn the_detailed_view_starts_with_the_error_itself() {
+        let error = std::io::Error::other("nix build failed: out of disk space");
+
+        let printed = causes("couldn't install ripgrep", Some(&error), false);
+
+        assert_eq!(
+            printed,
+            "✗ Couldn't install ripgrep.\n  caused by: nix build failed: out of disk space"
+        );
     }
 }

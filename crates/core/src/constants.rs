@@ -38,7 +38,7 @@ pub mod paths {
     pub const NIX_CONF_DEST: &str = "/etc/nix/nix.conf";
     pub const PROFILE_SNIPPET_DEST: &str = "/etc/profile.d/mix-nix.sh";
 
-    pub const LOCK_FILE: &str = "/run/mix.lock";
+    pub const LOCK_FILE: &str = "/var/lib/mix/lock";
 
     pub const MIX_STATE_DIR: &str = ".local/state/mix";
     pub const MIX_STATE_DIR_MODE: u32 = 0o700;
@@ -46,6 +46,8 @@ pub mod paths {
     pub const HOME_NIX: &str = "home.nix";
     pub const FLAKE_LOCK: &str = "flake.lock";
     pub const STATE_FILE: &str = "state";
+
+    pub const GENERATION_STATE_FILE: &str = "mix-state";
 
     pub const NIX_PROFILES_DIR: &str = ".local/state/nix/profiles";
     pub const NIX_PROFILES_DIR_MODE: u32 = 0o755;

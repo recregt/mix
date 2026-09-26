@@ -12,3 +12,4 @@ pub(crate) const GENERATED_HEADER: &str = "\
 
 pub use builder::{HomeManagerConfig, InvalidInput};
 pub use flake::FlakeConfig;
+pub use ident::is_identifier;

@@ -195,6 +195,18 @@ pub async fn activate(
     token: &CancellationToken,
     policy: BuildPolicy,
 ) -> Result<bool> {
+    let generation = switch(cfg, mirror, mirror_key, activity, token, policy).await?;
+    finish(cfg, &generation, activity, token).await
+}
+
+pub async fn switch(
+    cfg: &UserConfig,
+    mirror: Option<&str>,
+    mirror_key: Option<&str>,
+    activity: &Arc<dyn ActivityReporter>,
+    token: &CancellationToken,
+    policy: BuildPolicy,
+) -> Result<String> {
     let state_dir = mix_state_dir(&cfg.user.home);
     let state_dir_str = state_dir.to_string_lossy().into_owned();
 
@@ -243,19 +255,32 @@ pub async fn activate(
         tracing::info!("stopped a build the plan did not announce: {derivation}");
         return Err(Error::SourceBuildRequired { packages: None });
     }
-    let store_path = built?;
+    Ok(built?)
+}
 
-    let activate = format!("{store_path}/activate");
+pub async fn finish(
+    cfg: &UserConfig,
+    generation: &str,
+    activity: &Arc<dyn ActivityReporter>,
+    token: &CancellationToken,
+) -> Result<bool> {
+    let activate = format!("{generation}/activate");
     run_as_reporting(&cfg.user, &activate, &[], token, Some(Arc::clone(activity))).await?;
+    Ok(record(cfg, token).await)
+}
 
+async fn record(cfg: &UserConfig, token: &CancellationToken) -> bool {
+    let state_dir = mix_state_dir(&cfg.user.home);
     let git = git::Git::resolve(&cfg.user).await;
     let created_git_dir = !fs::exists(state_dir.join(".git")).await;
-    if created_git_dir {
-        git.init(&cfg.user, &state_dir, token).await?;
+    if created_git_dir && let Err(error) = git.init(&cfg.user, &state_dir, token).await {
+        tracing::info!("could not record the change in git: {error}");
+        return false;
     }
-    git.sync(&cfg.user, &state_dir, token).await?;
-
-    Ok(created_git_dir)
+    if let Err(error) = git.sync(&cfg.user, &state_dir, token).await {
+        tracing::info!("could not record the change in git: {error}");
+    }
+    created_git_dir
 }
 
 #[cfg(test)]

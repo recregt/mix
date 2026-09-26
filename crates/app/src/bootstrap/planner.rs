@@ -9,7 +9,6 @@ use crate::bootstrap::steps::{
     CreateNixTree, CreateUsersAndGroups, FetchAndUnpack, RemoveExistingInstallation,
     WriteHomeManagerConfig,
 };
-use crate::profile::config::resolve_user_config;
 
 pub fn bootstrap_steps(
     mirror: Option<&str>,
@@ -17,15 +16,9 @@ pub fn bootstrap_steps(
     force: bool,
     progress: Arc<dyn DownloadProgress>,
     activity: Arc<dyn ActivityReporter>,
+    user_config: Option<UserConfig>,
 ) -> Vec<Box<dyn Step<Error = Error>>> {
-    steps_for(
-        mirror,
-        mirror_key,
-        force,
-        progress,
-        activity,
-        resolve_user_config(),
-    )
+    steps_for(mirror, mirror_key, force, progress, activity, user_config)
 }
 
 fn steps_for(
@@ -75,6 +68,7 @@ mod tests {
             },
             flake: "flake-content".to_string(),
             home: "home-content".to_string(),
+            restored_state: None,
         }
     }
 

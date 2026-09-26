@@ -9,12 +9,15 @@ pub enum Wsl {
     V2,
 }
 
+const WSL_INTEROP_HANDLER: &str = "/proc/sys/fs/binfmt_misc/WSLInterop";
+const WSL_RUNTIME_DIR: &str = "/run/WSL";
+
 pub async fn detect() -> Wsl {
     detect_at(
         Path::new("/proc/sys/kernel/osrelease"),
         Path::new("/sys/fs/cgroup/cgroup.controllers"),
-        std::env::var_os("WSL_DISTRO_NAME").is_some(),
-        std::env::var_os("WSL_INTEROP").is_some(),
+        exists(WSL_INTEROP_HANDLER).await,
+        exists(WSL_RUNTIME_DIR).await,
     )
     .await
 }
@@ -22,8 +25,8 @@ pub async fn detect() -> Wsl {
 async fn detect_at(
     osrelease_path: &Path,
     cgroup_controllers_path: &Path,
-    has_distro_name: bool,
-    has_interop: bool,
+    has_interop_handler: bool,
+    has_runtime_dir: bool,
 ) -> Wsl {
     match tokio::fs::read_to_string(osrelease_path).await {
         Ok(release) => {
@@ -34,9 +37,9 @@ async fn detect_at(
                 detected
             }
         }
-        Err(_) => detect_from_env(
-            has_distro_name,
-            has_interop,
+        Err(_) => detect_from_markers(
+            has_interop_handler,
+            has_runtime_dir,
             has_real_cgroup2_at(cgroup_controllers_path).await,
         ),
     }
@@ -60,8 +63,12 @@ fn detect_from_kernel_release(release: &str) -> Wsl {
     }
 }
 
-fn detect_from_env(has_distro_name: bool, has_interop: bool, has_real_cgroup2: bool) -> Wsl {
-    if !has_distro_name && !has_interop {
+fn detect_from_markers(
+    has_interop_handler: bool,
+    has_runtime_dir: bool,
+    has_real_cgroup2: bool,
+) -> Wsl {
+    if !has_interop_handler && !has_runtime_dir {
         return Wsl::No;
     }
     if has_real_cgroup2 { Wsl::V2 } else { Wsl::V1 }
@@ -84,21 +91,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn detect_from_env_no_wsl_signal_is_no_regardless_of_cgroup2() {
-        assert_eq!(detect_from_env(false, false, true), Wsl::No);
-        assert_eq!(detect_from_env(false, false, false), Wsl::No);
+    fn detect_from_markers_no_wsl_signal_is_no_regardless_of_cgroup2() {
+        assert_eq!(detect_from_markers(false, false, true), Wsl::No);
+        assert_eq!(detect_from_markers(false, false, false), Wsl::No);
     }
 
     #[test]
-    fn detect_from_env_wsl_signal_with_real_cgroup2_is_v2() {
-        assert_eq!(detect_from_env(true, false, true), Wsl::V2);
-        assert_eq!(detect_from_env(false, true, true), Wsl::V2);
+    fn detect_from_markers_wsl_signal_with_real_cgroup2_is_v2() {
+        assert_eq!(detect_from_markers(true, false, true), Wsl::V2);
+        assert_eq!(detect_from_markers(false, true, true), Wsl::V2);
     }
 
     #[test]
-    fn detect_from_env_wsl_signal_without_real_cgroup2_is_v1() {
-        assert_eq!(detect_from_env(true, false, false), Wsl::V1);
-        assert_eq!(detect_from_env(true, true, false), Wsl::V1);
+    fn detect_from_markers_wsl_signal_without_real_cgroup2_is_v1() {
+        assert_eq!(detect_from_markers(true, false, false), Wsl::V1);
+        assert_eq!(detect_from_markers(true, true, false), Wsl::V1);
     }
 
     #[test]
@@ -123,7 +130,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn detect_at_ignores_env_when_kernel_release_is_readable() {
+    async fn detect_at_ignores_the_markers_when_kernel_release_is_readable() {
         let dir = tempfile::tempdir().unwrap();
         let osrelease = dir.path().join("osrelease");
         std::fs::write(&osrelease, "5.15.167.4-microsoft-standard-WSL2\n").unwrap();
@@ -132,7 +139,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn detect_at_falls_back_to_env_when_kernel_release_is_unreadable() {
+    async fn detect_at_falls_back_to_the_markers_when_kernel_release_is_unreadable() {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("missing");
         let cgroup = dir.path().join("missing-cgroup");
@@ -141,7 +148,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn detect_at_fallback_trusts_cgroup2_over_stripped_interop_var() {
+    async fn detect_at_fallback_trusts_cgroup2_over_a_missing_runtime_dir() {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("missing");
         let cgroup = dir.path().join("cgroup.controllers");

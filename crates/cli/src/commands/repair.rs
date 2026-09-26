@@ -2,16 +2,14 @@ use std::process::ExitCode;
 
 use mix_app::repair::RepairReport;
 
-use super::RootStatus;
-
-pub async fn run() -> anyhow::Result<ExitCode> {
-    if let RootStatus::ReExecuted(code) = super::ensure_root()? {
-        return Ok(code);
-    }
-    let _lock = super::acquire_lock()?;
-
-    let user_config = mix_app::resolve_existing_user_config();
-    let reports = mix_app::repair::repair(user_config.as_ref()).await;
+pub async fn run(verbosity: u8) -> anyhow::Result<ExitCode> {
+    let reports = if mix_core::privilege::is_root() {
+        let _lock = super::acquire_lock()?;
+        let user_config = mix_app::resolve_existing_user_config();
+        mix_app::repair::repair(user_config.as_ref()).await
+    } else {
+        crate::remote::client::repair(verbosity).await?
+    };
 
     if reports.is_empty() {
         mix_ui::ok("Nothing to repair, system health is intact.");

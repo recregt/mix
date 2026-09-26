@@ -23,6 +23,7 @@ pub struct UserConfig {
     pub user: InvokingUser,
     pub flake: String,
     pub home: String,
+    pub restored_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,11 +158,18 @@ fn push_user_targets(items: &mut Vec<Target>, cfg: &UserConfig) {
         expected: None,
         owner,
     });
-    items.push(Target::SeededFile {
-        path: state_dir.join(STATE_FILE),
-        seed: Cow::Borrowed(crate::state::StateManifest::seed_rendered()),
-        owner,
-    });
+    match &cfg.restored_state {
+        Some(restored) => items.push(Target::File {
+            path: state_dir.join(STATE_FILE),
+            expected: Some(restored.clone()),
+            owner,
+        }),
+        None => items.push(Target::SeededFile {
+            path: state_dir.join(STATE_FILE),
+            seed: Cow::Borrowed(crate::state::StateManifest::seed_rendered()),
+            owner,
+        }),
+    }
     items.push(Target::GroupMember {
         group: MIX_USERS_GROUP,
         user: cfg.user.name.clone(),
@@ -258,6 +266,7 @@ mod tests {
             },
             flake: "flake-content".to_string(),
             home: "home-content".to_string(),
+            restored_state: None,
         }
     }
 

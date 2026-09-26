@@ -1,5 +1,5 @@
 use crate::escape::{NulByte, nix_string_literal};
-use crate::ident::Ident;
+use crate::ident::{FileName, Ident};
 
 #[derive(Debug, Clone)]
 pub enum Nix {
@@ -7,6 +7,7 @@ pub enum Nix {
     Bool(bool),
     PackageList(Vec<Ident>),
     Attrs(Vec<(Ident, Nix)>),
+    CopyIntoGeneration { source: FileName, target: FileName },
 }
 
 impl Nix {
@@ -32,6 +33,13 @@ impl Nix {
                 }
                 out.push_str(" ]");
             }
+            Nix::CopyIntoGeneration { source, target } => {
+                out.push_str("\"cp ${./");
+                out.push_str(source.as_str());
+                out.push_str("} $out/");
+                out.push_str(target.as_str());
+                out.push('"');
+            }
             Nix::Attrs(entries) => {
                 out.push_str("{\n");
                 let indent = "  ".repeat(depth + 1);
@@ -55,6 +63,15 @@ mod tests {
 
     fn ident(s: &str) -> Ident {
         Ident::new(s).unwrap()
+    }
+
+    #[test]
+    fn renders_a_copy_of_a_file_into_the_generation() {
+        let copy = Nix::CopyIntoGeneration {
+            source: FileName::new("state").unwrap(),
+            target: FileName::new("mix-state").unwrap(),
+        };
+        assert_eq!(copy.render(), r#""cp ${./state} $out/mix-state""#);
     }
 
     #[test]

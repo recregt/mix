@@ -1,0 +1,24 @@
+[package]
+name = "mix-rpc"
+version = "0.1.0"
+edition = "2024"
+authors = ["Ömer Tekin"]
+license = "MPL-2.0"
+
+[dependencies]
+mix-core = { path = "../core" }
+futures-util = { workspace = true }
+hyper-util = { version = "0.1.21", features = ["tokio"] }
+prost = "0.14.4"
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
+tonic = "0.14.6"
+tonic-prost = "0.14.6"
+tower = { version = "0.5.3", features = ["util"] }
+
+[build-dependencies]
+protox = "0.9.1"
+tonic-prost-build = "0.14.6"
+
+[package.metadata.cargo-machete]
+ignored = ["tonic-prost"]

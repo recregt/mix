@@ -8,67 +8,65 @@ use mix_app::profile::Error;
 
 use super::{Diagnostic, core_error};
 
-const ONE_MISSING: &str = "package ";
-const ONE_MISSING_END: &str = " is not available as a pre-built binary\ninstalling it ";
-const SOME_MISSING: &str = "pre-built binaries are not available for: ";
-const SOME_MISSING_END: &str = "\ninstalling them ";
-const UNNAMED_MISSING: &str =
-    "some packages are not available as pre-built binaries\ninstalling them ";
+const SOME_PACKAGES: &str = "some packages";
 const SEPARATOR: &str = ", ";
-const COMPILING: &str = "requires compiling from source, which may take a long time";
-const RERUN: &str = "\n\nto proceed anyway, run: ";
-const RERUN_FLAG: &str = "\n\nto proceed anyway, re-run with --build";
+const LAST_SEPARATOR: &str = " and ";
+const FROM_SOURCE: &str = " must be built from source, which can take a long time";
+const BUILD_IT: &str = "To build it anyway, run: ";
+const BUILD_THEM: &str = "To build them anyway, run: ";
+const BUILD_FLAG: &str = "To build anyway, run it again with `--build`";
 
-pub(crate) fn describe(error: &Error, command: &str, rerun: Option<&str>) -> Diagnostic {
+pub(crate) fn describe(
+    error: &Error,
+    command: &str,
+    action: &dyn std::fmt::Display,
+    rerun: Option<&str>,
+) -> Diagnostic {
     match error {
-        Error::Core(e) => core_error(e, command),
-        Error::SourceBuildRequired { packages } => source_build(packages.as_deref(), rerun),
+        Error::Core(e) => core_error(e, command, action),
+        Error::SourceBuildRequired { packages } => {
+            source_build(packages.as_deref().unwrap_or_default(), rerun)
+        }
     }
 }
 
-pub(crate) fn source_build(packages: Option<&[String]>, rerun: Option<&str>) -> Diagnostic {
-    Diagnostic::new(render(packages.unwrap_or_default(), rerun))
-}
-
-fn render(packages: &[String], rerun: Option<&str>) -> String {
+pub(crate) fn source_build(packages: &[String], rerun: Option<&str>) -> Diagnostic {
+    let lead = match (rerun, packages.len()) {
+        (None, _) => BUILD_FLAG,
+        (Some(_), 1) => BUILD_IT,
+        (Some(_), _) => BUILD_THEM,
+    };
+    let rerun = rerun.unwrap_or_default();
     let names: usize = packages.iter().map(String::len).sum();
-    let opening = match packages {
-        [] => UNNAMED_MISSING.len(),
-        [_] => ONE_MISSING.len() + ONE_MISSING_END.len(),
-        _ => SOME_MISSING.len() + SEPARATOR.len() * (packages.len() - 1) + SOME_MISSING_END.len(),
-    };
-    let closing = match rerun {
-        Some(rerun) => RERUN.len() + rerun.len(),
-        None => RERUN_FLAG.len(),
+    let separators = match packages.len() {
+        0 => SOME_PACKAGES.len(),
+        1 => 0,
+        n => SEPARATOR.len() * (n - 2) + LAST_SEPARATOR.len(),
     };
 
-    let mut message = String::with_capacity(opening + names + COMPILING.len() + closing);
+    let mut text = String::with_capacity(
+        names + separators + FROM_SOURCE.len() + 1 + lead.len() + rerun.len(),
+    );
     match packages {
-        [] => message.push_str(UNNAMED_MISSING),
-        [package] => {
-            message.push_str(ONE_MISSING);
-            message.push_str(package);
-            message.push_str(ONE_MISSING_END);
-        }
-        [first, rest @ ..] => {
-            message.push_str(SOME_MISSING);
-            message.push_str(first);
-            for package in rest {
-                message.push_str(SEPARATOR);
-                message.push_str(package);
+        [] => text.push_str(SOME_PACKAGES),
+        [only] => text.push_str(only),
+        [init @ .., last] => {
+            for (index, package) in init.iter().enumerate() {
+                if index > 0 {
+                    text.push_str(SEPARATOR);
+                }
+                text.push_str(package);
             }
-            message.push_str(SOME_MISSING_END);
+            text.push_str(LAST_SEPARATOR);
+            text.push_str(last);
         }
     }
-    message.push_str(COMPILING);
-    match rerun {
-        Some(rerun) => {
-            message.push_str(RERUN);
-            message.push_str(rerun);
-        }
-        None => message.push_str(RERUN_FLAG),
-    }
-    message
+    text.push_str(FROM_SOURCE);
+    let summary_len = text.len();
+    text.push('\n');
+    text.push_str(lead);
+    text.push_str(rerun);
+    Diagnostic::written(text, summary_len)
 }
 
 #[cfg(test)]
@@ -81,99 +79,94 @@ mod tests {
         }
     }
 
-    const RERUN: Option<&str> = Some("mix install cowsay ripgrep --build");
+    const RERUN: Option<&str> = Some("mix install cowsay --build");
+
+    fn message(packages: Option<&[&str]>, rerun: Option<&str>) -> String {
+        describe(&refused(packages), "mix install", &"install cowsay", rerun).message()
+    }
 
     #[test]
     fn a_single_package_is_named_on_its_own() {
-        let message = describe(&refused(Some(&["cowsay-3.8.4"])), "mix install", RERUN).message();
-
         assert_eq!(
-            message,
-            "package cowsay-3.8.4 is not available as a pre-built binary\n\
-             installing it requires compiling from source, which may take a long time\n\
-             \n\
-             to proceed anyway, run: mix install cowsay ripgrep --build"
+            message(Some(&["cowsay-3.8.4"]), RERUN),
+            "cowsay-3.8.4 must be built from source, which can take a long time\n\
+             To build it anyway, run: mix install cowsay --build"
         );
     }
 
     #[test]
-    fn several_packages_are_listed_together() {
-        let message = describe(
-            &refused(Some(&["cowsay-3.8.4", "ripgrep-14.1"])),
-            "mix install",
-            RERUN,
-        )
-        .message();
-
+    fn two_packages_are_joined_with_and() {
         assert_eq!(
-            message,
-            "pre-built binaries are not available for: cowsay-3.8.4, ripgrep-14.1\n\
-             installing them requires compiling from source, which may take a long time\n\
-             \n\
-             to proceed anyway, run: mix install cowsay ripgrep --build"
+            message(Some(&["cowsay-3.8.4", "ripgrep-14.1"]), RERUN),
+            "cowsay-3.8.4 and ripgrep-14.1 must be built from source, which can take a long \
+             time\nTo build them anyway, run: mix install cowsay --build"
+        );
+    }
+
+    #[test]
+    fn a_longer_list_puts_and_before_the_last_one() {
+        assert!(
+            message(Some(&["a-1", "b-2", "c-3"]), RERUN)
+                .starts_with("a-1, b-2 and c-3 must be built from source")
         );
     }
 
     #[test]
     fn a_refusal_with_no_names_still_offers_the_way_out() {
         for packages in [None, Some(&[] as &[&str])] {
-            let message = describe(&refused(packages), "mix install", RERUN).message();
-
             assert_eq!(
-                message,
-                "some packages are not available as pre-built binaries\n\
-                 installing them requires compiling from source, which may take a long time\n\
-                 \n\
-                 to proceed anyway, run: mix install cowsay ripgrep --build"
+                message(packages, RERUN),
+                "some packages must be built from source, which can take a long time\n\
+                 To build them anyway, run: mix install cowsay --build"
             );
         }
     }
 
     #[test]
     fn with_no_command_to_repeat_the_flag_is_named_instead() {
-        let message = describe(&refused(Some(&["cowsay-3.8.4"])), "mix install", None).message();
-
-        assert!(message.ends_with("\n\nto proceed anyway, re-run with --build"));
+        assert!(
+            message(Some(&["cowsay-3.8.4"]), None)
+                .ends_with("To build anyway, run it again with `--build`")
+        );
     }
 
     #[test]
     fn nothing_from_nix_reaches_the_reader() {
-        let message = describe(&refused(Some(&["cowsay-3.8.4"])), "mix install", RERUN).message();
+        let message = message(Some(&["cowsay-3.8.4"]), RERUN);
 
-        for word in ["derivation", "nix", "cache", "store"] {
+        for word in ["derivation", "nix", "cache", "store", "binary"] {
             assert!(!message.contains(word), "{word:?} leaked into {message:?}");
-        }
-    }
-
-    /// The same failure, and the command the reader should try again, is the one they ran.
-    #[test]
-    fn a_shared_failure_names_the_command_that_hit_it() {
-        for command in ["mix bootstrap", "mix install"] {
-            let message = describe(
-                &Error::Core(mix_core::Error::Locked {
-                    path: "/run/mix.lock".into(),
-                }),
-                command,
-                None,
-            )
-            .message();
-
-            assert!(message.contains(&format!("run `{command}` again")));
         }
     }
 
     #[test]
     fn the_message_is_written_into_exactly_the_space_it_needs() {
-        let packages = ["cowsay-3.8.4".to_string(), "ripgrep-14.1".to_string()];
-        for (packages, rerun) in [
-            (&packages[..0], RERUN),
-            (&packages[..1], RERUN),
-            (&packages[..], RERUN),
-            (&packages[..], None),
-        ] {
-            let message = render(packages, rerun);
+        let packages: Vec<String> = ["cowsay-3.8.4", "ripgrep-14.1", "fd-10"]
+            .map(String::from)
+            .to_vec();
+        for count in 0..=packages.len() {
+            for rerun in [RERUN, None] {
+                let message = source_build(&packages[..count], rerun).message();
 
-            assert_eq!(message.capacity(), message.len(), "{message:?}");
+                assert_eq!(message.capacity(), message.len(), "{message:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_shared_failure_names_the_command_that_hit_it() {
+        for command in ["mix bootstrap", "mix install"] {
+            let message = describe(
+                &Error::Core(mix_core::Error::Locked {
+                    path: "/var/lib/mix/lock".into(),
+                }),
+                command,
+                &"finish",
+                None,
+            )
+            .message();
+
+            assert!(message.contains(&format!("run `{command}` again")));
         }
     }
 }

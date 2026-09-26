@@ -128,12 +128,17 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
                         Either::Right((result, _)) => (result, false),
                     }
                 };
-                if let Err(e) = executed {
-                    tracing::debug!("step failed: {name} ({e})");
-                    break 'run Some(StopReason::Failed(e));
-                }
-                if interrupted {
-                    break 'run Some(StopReason::Interrupted);
+                match executed {
+                    Err(e) if interrupted => {
+                        tracing::debug!("step stopped by the interrupt: {name} ({e})");
+                        break 'run Some(StopReason::Interrupted);
+                    }
+                    Err(e) => {
+                        tracing::debug!("step failed: {name} ({e})");
+                        break 'run Some(StopReason::Failed(e));
+                    }
+                    Ok(()) if interrupted => break 'run Some(StopReason::Interrupted),
+                    Ok(()) => {}
                 }
             }
 
@@ -662,6 +667,57 @@ mod tests {
             log.len()
         );
         assert!(log.last().unwrap().starts_with("cancelled-at:"));
+    }
+
+    struct FailsWhenCancelled {
+        log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl Step for FailsWhenCancelled {
+        type Error = ProbeError;
+
+        fn name(&self) -> &'static str {
+            "fails-when-cancelled"
+        }
+
+        async fn check(&self) -> Result<bool, ProbeError> {
+            Ok(false)
+        }
+
+        async fn execute(&mut self, token: &CancellationToken) -> Result<(), ProbeError> {
+            self.log.lock().unwrap().push("execute".to_string());
+            token.cancelled().await;
+            Err(ProbeError)
+        }
+
+        async fn rollback(&mut self) -> Result<(), ProbeError> {
+            self.log.lock().unwrap().push("rollback".to_string());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_step_that_errors_because_it_was_cancelled_reports_the_interrupt() {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let steps: Vec<Box<dyn Step<Error = ProbeError>>> =
+            vec![Box::new(FailsWhenCancelled { log: log.clone() })];
+        let mut plan = Plan::new(steps);
+
+        let started = log.clone();
+        let cancel = std::future::poll_fn(move |cx| {
+            if started.lock().unwrap().is_empty() {
+                cx.waker().wake_by_ref();
+                std::task::Poll::Pending
+            } else {
+                std::task::Poll::Ready(())
+            }
+        });
+
+        let outcome = plan.run_cancellable(cancel).await;
+
+        assert!(matches!(outcome, Outcome::Interrupted));
+        assert_eq!(*log.lock().unwrap(), vec!["execute", "rollback"]);
     }
 
     #[tokio::test]

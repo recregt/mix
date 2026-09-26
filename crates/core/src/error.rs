@@ -34,6 +34,9 @@ pub enum Error {
 
     #[error("already locked: {}", path.display())]
     Locked { path: PathBuf },
+
+    #[error("the lock at {} does not exist and cannot be created", path.display())]
+    LockMissing { path: PathBuf },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -59,9 +62,9 @@ mod tests {
     #[test]
     fn a_raw_error_states_the_fact_without_advising_anything() {
         let err = Error::Locked {
-            path: "/run/mix.lock".into(),
+            path: "/var/lib/mix/lock".into(),
         };
 
-        assert_eq!(err.to_string(), "already locked: /run/mix.lock");
+        assert_eq!(err.to_string(), "already locked: /var/lib/mix/lock");
     }
 }

@@ -1,9 +1,9 @@
 use std::process::ExitCode;
 
 pub async fn run(
-    packages: Vec<String>,
-    mirror: Option<String>,
-    mirror_key: Option<String>,
+    packages: &[String],
+    mirror: Option<&str>,
+    mirror_key: Option<&str>,
     json: bool,
     build: bool,
 ) -> anyhow::Result<ExitCode> {
@@ -11,13 +11,20 @@ pub async fn run(
 
     let installed = mix_app::install::install(
         &user_config,
-        &packages,
-        mirror.as_deref(),
-        mirror_key.as_deref(),
+        packages,
+        mirror,
+        mirror_key,
         mix_ui::activity_reporter(),
         build,
     )
     .await?;
+
+    if let Some(note) = installed
+        .restored
+        .and_then(crate::explain::change::restored)
+    {
+        mix_ui::warn(note.message());
+    }
 
     // One line of JSON on stdout and nothing else, so a script never has to parse prose.
     if json {

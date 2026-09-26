@@ -87,6 +87,12 @@ pub enum Command {
 
     /// Repair configuration drift
     Repair,
+
+    #[command(
+        hide = true,
+        about = "Carry out privileged operations for another mix process"
+    )]
+    Worker,
 }
 
 impl Cli {

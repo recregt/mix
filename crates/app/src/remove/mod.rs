@@ -6,7 +6,7 @@ use mix_core::state::StateManifest;
 
 use crate::profile::BuildPolicy;
 use crate::profile::change;
-use crate::profile::config::read_state;
+use crate::profile::state::Source;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -23,6 +23,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct Removed {
     pub removed: Vec<String>,
     pub skipped: Vec<String>,
+    #[serde(skip)]
+    pub restored: Option<Source>,
 }
 
 impl Removed {
@@ -49,13 +51,17 @@ pub async fn remove(
         ));
     }
 
-    let state = read_state(&cfg.user.home);
+    let (state, restored) = change::settled(cfg).await?;
     let partition = state.partition(packages);
     let removed: Vec<String> = partition.installed.iter().map(|p| p.to_string()).collect();
     let skipped: Vec<String> = partition.missing.iter().map(|p| p.to_string()).collect();
 
     if removed.is_empty() {
-        return Ok(Removed { removed, skipped });
+        return Ok(Removed {
+            removed,
+            skipped,
+            restored,
+        });
     }
 
     change::apply(
@@ -69,7 +75,11 @@ pub async fn remove(
     )
     .await?;
 
-    Ok(Removed { removed, skipped })
+    Ok(Removed {
+        removed,
+        skipped,
+        restored,
+    })
 }
 
 #[cfg(test)]
@@ -109,6 +119,7 @@ mod tests {
             },
             flake: "flake-content".to_string(),
             home: "home-content".to_string(),
+            restored_state: None,
         }
     }
 
@@ -198,6 +209,7 @@ mod tests {
         let removed = Removed {
             removed: vec!["ripgrep".to_string(), "fd".to_string()],
             skipped: vec!["bat".to_string()],
+            restored: None,
         };
 
         assert_eq!(

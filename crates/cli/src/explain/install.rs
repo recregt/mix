@@ -2,7 +2,7 @@
 
 use mix_app::profile::change::Error;
 
-use super::{Diagnostic, change};
+use super::{Diagnostic, change, failed, packages_action};
 
 /// How the command is spelled when the reader is told to run it again.
 const COMMAND: &str = "mix install";
@@ -10,10 +10,11 @@ const COMMAND: &str = "mix install";
 const PROGRAM: &str = "mix";
 const BUILD_FLAG: &str = "--build";
 
-pub fn explain(error: &anyhow::Error, rerun: &str) -> Diagnostic {
+pub fn explain(error: &anyhow::Error, packages: &[String], rerun: &str) -> Diagnostic {
+    let action = packages_action("install", packages);
     match error.downcast_ref::<Error>() {
-        Some(error) => change::describe(error, COMMAND, Some(rerun)),
-        None => Diagnostic::new(error.to_string()),
+        Some(error) => change::describe(error, COMMAND, &action, Some(rerun)),
+        None => failed(&action),
     }
 }
 
@@ -56,31 +57,31 @@ mod tests {
         let error = anyhow::Error::from(Error::NotRoot);
 
         assert!(
-            explain(&error, "mix install x --build")
+            explain(&error, &["x".to_string()], "mix install x --build")
                 .message()
-                .contains("`mix install` cannot be run as root")
+                .contains("`mix install` can't be run as root")
         );
     }
 
     #[test]
     fn a_held_lock_tells_the_reader_to_run_install_again() {
         let error = anyhow::Error::from(Error::Core(mix_core::Error::Locked {
-            path: "/run/mix.lock".into(),
+            path: "/var/lib/mix/lock".into(),
         }));
 
-        let message = explain(&error, "mix install x --build").message();
+        let message = explain(&error, &["x".to_string()], "mix install x --build").message();
 
         assert!(message.contains("another `mix` command is already running"));
         assert!(message.contains("run `mix install` again"));
     }
 
     #[test]
-    fn an_error_from_elsewhere_is_left_as_it_was_written() {
+    fn an_error_from_elsewhere_says_what_could_not_be_done() {
         let error = anyhow::anyhow!("something else broke");
 
         assert_eq!(
-            explain(&error, "mix install x --build").message(),
-            "something else broke"
+            explain(&error, &["x".to_string()], "mix install x --build").message(),
+            "couldn't install x\nRun it again with `-v` to see what went wrong"
         );
     }
 
@@ -135,9 +136,14 @@ mod tests {
             },
         ));
 
-        let message = explain(&error, "mix install cowsay --build").message();
+        let message = explain(
+            &error,
+            &["cowsay".to_string()],
+            "mix install cowsay --build",
+        )
+        .message();
 
-        assert!(message.starts_with("package cowsay-3.8.4 is not available"));
-        assert!(message.ends_with("to proceed anyway, run: mix install cowsay --build"));
+        assert!(message.starts_with("cowsay-3.8.4 must be built from source"));
+        assert!(message.ends_with("To build it anyway, run: mix install cowsay --build"));
     }
 }

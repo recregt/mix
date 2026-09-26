@@ -2,115 +2,98 @@
 
 use mix_app::bootstrap::{Error, Host};
 
-use super::{Diagnostic, core_error};
+use super::{Diagnostic, core_error, failed};
 
 /// How the command is spelled when the reader is told to run it again.
 const COMMAND: &str = "mix bootstrap";
 
+const ACTION: &str = "finish setting up `mix`";
+
+const DAMAGED: &str = "the downloaded setup files are damaged";
+
 pub fn explain(error: &anyhow::Error) -> Diagnostic {
+    if let Some(error) = error.downcast_ref::<mix_rpc::Error>() {
+        return super::privileged(error, &ACTION);
+    }
     match error.downcast_ref::<Error>() {
         Some(error) => describe(error, COMMAND),
-        None => Diagnostic::new(error.to_string()),
+        None => failed(&ACTION),
     }
 }
 
-/// The words for a bootstrap failure, whichever command hit it.
-///
-/// `mix install` activates a profile through the same machinery, so it reads most of these too;
-/// what changes is the command the reader is told to run again.
 pub(crate) fn describe(error: &Error, command: &str) -> Diagnostic {
     match error {
-        Error::Core(e) => core_error(e, command),
+        Error::Core(e) => core_error(e, command, &ACTION),
 
-        Error::Activation(e) => super::activation::describe(e, command, None),
+        Error::Activation(e) => super::activation::describe(e, command, &ACTION, None),
 
         Error::Network(_) => Diagnostic::hinting(
-            "could not fetch the pinned nix archive",
-            "Check your network connection and proxy settings, or point `--mirror` at a \
-             reachable URL",
+            "couldn't download required setup files",
+            format!("Check your internet connection, then run `{command}` again"),
         ),
 
-        Error::Integrity { artifact, detail } => Diagnostic::hinting(
-            format!("{artifact} is not what it was pinned to be: {detail}"),
-            "The download was corrupted or the mirror is serving something else; retry, and \
-             use the default mirror to rule it out",
+        Error::Integrity { .. } | Error::Decompression(_) => Diagnostic::hinting(
+            DAMAGED,
+            format!("Run `{command}` again to download them again"),
+        ),
+
+        Error::MalformedArchive(_) => Diagnostic::hinting(
+            "the downloaded setup files aren't in the expected format",
+            "If you use `--mirror`, check that it serves the right files",
         ),
 
         Error::UnsupportedTarget(target) => Diagnostic::hinting(
-            format!("no pinned nix build exists for {target}"),
-            "`mix` bootstraps x86_64 and aarch64 Linux",
+            format!("`mix` doesn't support this system ({target}) yet"),
+            "It runs on 64-bit Intel, AMD and ARM Linux",
         ),
 
-        Error::Target(e) => super::target::describe(e, command),
+        Error::Target(e) => super::target::describe(e, command, &ACTION),
 
-        Error::Decompression(detail) => Diagnostic::hinting(
-            format!("the nix archive could not be decompressed: {detail}"),
-            format!("The download was truncated or corrupted; run `{command}` again"),
-        ),
-
-        Error::MalformedArchive(detail) => Diagnostic::hinting(
-            format!("the nix archive is not laid out as expected: {detail}"),
-            "The mirror is serving an archive `mix` does not know how to unpack",
-        ),
-
-        Error::NotRoot(what) => Diagnostic::hinting(
-            format!("root privileges are required to {what}"),
-            format!("Re-run it with sudo:\n\x20 sudo {command}"),
+        Error::NotRoot(_) => Diagnostic::hinting(
+            "setting up `mix` needs administrator rights",
+            format!("Run it again with sudo:\n\x20 sudo {command}"),
         ),
 
         Error::UnsupportedHost => Diagnostic::hinting(
-            "this system already manages its own environment natively",
-            "`mix` is designed for standard Linux distributions and is not needed on NixOS",
+            "this system is NixOS, which already does what `mix` does",
+            "You don't need `mix` here",
         ),
 
         Error::UnsupportedKernel => Diagnostic::hinting(
-            "WSL1 does not provide the real Linux kernel that sandboxed builds need",
-            "To upgrade this distro to WSL2, run from Windows PowerShell:\n\
-             \x20 wsl --set-version <distro> 2",
+            "`mix` needs WSL 2, and this is WSL 1",
+            "Upgrade it from Windows PowerShell:\n\x20 wsl --set-version <distro> 2",
         ),
 
         Error::SystemdNotReady { host: Host::Wsl } => Diagnostic::hinting(
-            "systemd is not active, and `mix` needs it to run the nix daemon",
-            "On WSL2 systemd is off by default: add `[boot]` with `systemd=true` to \
-             `/etc/wsl.conf`, run `wsl.exe --shutdown` from Windows, then reopen the distro",
+            "`mix` needs systemd, and it isn't running",
+            "Turn it on: add `[boot]` with `systemd=true` to `/etc/wsl.conf`, run \
+             `wsl.exe --shutdown` from Windows, then reopen the distro",
         ),
 
         Error::SystemdNotReady { host: Host::Native } => Diagnostic::hinting(
-            "systemd is not active, and `mix` needs it to run the nix daemon",
-            format!(
-                "`/run/systemd/system` is missing or PID 1 is not systemd; check that systemd \
-                 is installed and set as your init system, then run `{command}` again"
-            ),
+            "`mix` needs systemd, and it isn't running",
+            format!("Make sure systemd is your init system, then run `{command}` again"),
         ),
 
         Error::AlreadyManaged => Diagnostic::hinting(
-            "an existing, unmanaged nix installation was detected on this system",
-            "`mix` requires a dedicated environment to manage its own reproducible runtime; \
-             uninstall the existing installation or remove `/nix`, then retry:\n\
-             \x20 sudo rm -rf /nix",
-        ),
-
-        Error::CrossDeviceStore { path } => Diagnostic::hinting(
+            "Nix is already installed on this system, and `mix` needs to set up its own",
             format!(
-                "{} cannot be moved into `/nix/store`: the two are on different filesystems",
-                path.display()
+                "Uninstall it first, then run `{command}` again. Uninstalling removes everything \
+                 you installed with it"
             ),
-            "`mix` stages packages under /nix and renames them into /nix/store, which requires \
-             one filesystem; remove any separate mount at /nix/store (e.g. a custom fstab \
-             entry) and retry",
         ),
 
-        // The rollback is context the failure was wrapped in: the cause still decides what the
-        // reader is told, and the cleanup is what they are warned about instead of the usual way
-        // out.
-        Error::Rollback { cause, summary } => Diagnostic::hinting(
-            describe(cause, command).summary,
-            format!("{summary}\nThe system may need manual cleanup"),
+        Error::CrossDeviceStore { .. } => Diagnostic::hinting(
+            "`/nix/store` is on a different disk than `/nix`, and `mix` needs them on the same one",
+            format!("Remove the separate mount for `/nix/store`, then run `{command}` again"),
         ),
 
-        Error::Interrupted => {
-            Diagnostic::new("interrupted; every partially applied change was rolled back")
-        }
+        Error::Rollback { cause, .. } => Diagnostic::hinting(
+            describe(cause, command).summary(),
+            "Some changes couldn't be undone. Run `mix doctor` to see what's left",
+        ),
+
+        Error::Interrupted => Diagnostic::new("stopped; everything it had changed was undone"),
     }
 }
 
@@ -126,15 +109,29 @@ mod tests {
     fn a_missing_privilege_names_the_command_to_re_run() {
         let message = message(Error::NotRoot("bootstrap the managed environment"));
 
-        assert!(message.contains("root privileges are required to bootstrap"));
+        assert!(message.starts_with("setting up `mix` needs administrator rights"));
         assert!(message.contains("sudo mix bootstrap"));
     }
 
     #[test]
-    fn a_network_failure_points_at_the_mirror() {
+    fn a_network_failure_points_at_the_connection() {
         let message = message(Error::Network("connection reset".into()));
 
-        assert!(message.contains("--mirror"));
+        assert!(message.contains("couldn't download required setup files"));
+        assert!(message.contains("internet connection"));
+        assert!(!message.contains("connection reset"));
+    }
+
+    #[test]
+    fn a_damaged_download_reads_the_same_however_it_was_caught() {
+        let integrity = message(Error::Integrity {
+            artifact: "nix archive".into(),
+            detail: "sha256 mismatch".into(),
+        });
+        let decompression = message(Error::Decompression("unexpected end".into()));
+
+        assert_eq!(integrity, decompression);
+        assert!(integrity.starts_with(DAMAGED));
     }
 
     #[test]
@@ -144,25 +141,49 @@ mod tests {
     }
 
     #[test]
-    fn a_cross_device_store_explains_the_move_it_could_not_make() {
+    fn an_existing_nix_is_never_met_with_a_command_that_deletes_it() {
+        let message = message(Error::AlreadyManaged);
+
+        assert!(!message.contains("rm -rf"));
+        assert!(message.contains("removes everything you installed with it"));
+    }
+
+    #[test]
+    fn a_cross_device_store_names_the_mount_to_remove() {
         let message = message(Error::CrossDeviceStore {
             path: "/nix/store/pkg-a".into(),
         });
 
-        assert!(message.contains("/nix/store/pkg-a"));
-        assert!(message.contains("fstab"));
+        assert!(message.contains("different disk"));
+        assert!(message.contains("separate mount for `/nix/store`"));
     }
 
-    /// A rollback says what the failure was, and warns about the mess instead of the way out.
     #[test]
-    fn a_failed_rollback_keeps_the_cause_and_warns_about_the_cleanup() {
+    fn a_failed_rollback_keeps_the_cause_and_says_where_to_look() {
         let message = message(Error::Rollback {
             cause: Box::new(Error::UnsupportedHost),
             summary: "1 rollback step(s) failed: nixbld group: exit 1".to_string(),
         });
 
-        assert!(message.starts_with("this system already manages its own environment"));
-        assert!(message.contains("nixbld group: exit 1"));
-        assert!(message.contains("manual cleanup"));
+        assert!(message.starts_with("this system is NixOS"));
+        assert!(message.contains("mix doctor"));
+        assert!(!message.contains("nixbld group"));
+    }
+
+    #[test]
+    fn nothing_mix_does_internally_reaches_the_reader() {
+        let errors = [
+            Error::Network("x".into()),
+            Error::Decompression("x".into()),
+            Error::MalformedArchive("x".into()),
+            Error::UnsupportedTarget("armv7l-linux".into()),
+            Error::NotRoot("x"),
+        ];
+        for error in errors {
+            let message = message(error);
+            for word in ["pinned", "archive", "daemon", "nix store", "derivation"] {
+                assert!(!message.contains(word), "{word:?} leaked into {message:?}");
+            }
+        }
     }
 }

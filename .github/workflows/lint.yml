@@ -50,6 +50,34 @@ jobs:
 
       - run: cargo machete
 
+  protobuf:
+    name: Protobuf
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
+        with:
+          version: 1.73.0
+          setup_only: true
+
+      - run: buf lint crates/rpc/proto
+
+      - name: Check wire compatibility
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if git cat-file -e "$BASE:crates/rpc/proto/buf.yaml" 2>/dev/null; then
+            buf breaking crates/rpc/proto --against ".git#ref=$BASE,subdir=crates/rpc/proto"
+          else
+            echo "The base has no worker schema yet, nothing to compare against."
+          fi
+
   commit-messages:
     name: Commit Messages
     if: github.event_name == 'pull_request'
