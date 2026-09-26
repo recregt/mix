@@ -1,4 +1,6 @@
 use std::os::unix::fs::MetadataExt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -200,4 +202,58 @@ async fn the_worker_stops_once_its_client_is_gone() {
         .expect("the worker must shut down once its only client disconnects")
         .unwrap()
         .unwrap();
+}
+
+struct CleansUpWhenAbandoned {
+    cleaned_up: Arc<AtomicBool>,
+}
+
+impl Worker for CleansUpWhenAbandoned {
+    async fn bootstrap(
+        &self,
+        _caller: Caller,
+        _request: BootstrapRequest,
+        events: Events,
+    ) -> Outcome {
+        let _ = events.send(Event::ActivityLine("started".into()));
+        events.closed().await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        self.cleaned_up.store(true, Ordering::SeqCst);
+        Outcome::Failure(Failure::Interrupted)
+    }
+
+    async fn repair(&self, _caller: Caller, _request: RepairRequest, _events: Events) -> Outcome {
+        Outcome::RepairDone(Vec::new())
+    }
+}
+
+#[tokio::test]
+async fn the_worker_waits_for_a_request_its_client_left() {
+    let cleaned_up = Arc::new(AtomicBool::new(false));
+    let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
+    let server = tokio::spawn(serve_connection(
+        CleansUpWhenAbandoned {
+            cleaned_up: Arc::clone(&cleaned_up),
+        },
+        theirs,
+    ));
+    let mut client = Client::connect(ours).await.unwrap();
+    let mut events = client.bootstrap(&request(false)).await.unwrap();
+    assert!(matches!(
+        events.next().await,
+        Some(Ok(Event::ActivityLine(line))) if line == "started"
+    ));
+
+    drop(events);
+    drop(client);
+
+    tokio::time::timeout(Duration::from_secs(10), server)
+        .await
+        .expect("the worker must shut down once the request is over")
+        .unwrap()
+        .unwrap();
+    assert!(
+        cleaned_up.load(Ordering::SeqCst),
+        "the worker returned before the abandoned request cleaned up"
+    );
 }

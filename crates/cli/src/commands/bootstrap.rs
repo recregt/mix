@@ -15,9 +15,12 @@ pub async fn run(
             mirror,
             mirror_key,
             force,
-            mix_ui::download_reporter(),
-            mix_ui::step_observer(),
-            mix_ui::activity_reporter(),
+            mix_app::bootstrap::Reporters {
+                downloads: mix_ui::download_reporter(),
+                steps: mix_ui::step_observer(),
+                activity: mix_ui::activity_reporter(),
+            },
+            std::future::pending(),
         )
         .await?;
     } else {

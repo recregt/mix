@@ -23,13 +23,20 @@ impl Environment {
     }
 }
 
-async fn interrupted() {
+pub struct Reporters {
+    pub downloads: Arc<dyn DownloadProgress>,
+    pub steps: Arc<dyn StepObserver>,
+    pub activity: Arc<dyn ActivityReporter>,
+}
+
+async fn interrupted(stop: impl Future<Output = ()>) {
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .expect("registering a SIGTERM handler");
 
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {}
         _ = terminate.recv() => {}
+        _ = stop => {}
     }
     tracing::warn!("Cancelling... (cleaning up)");
 }
@@ -39,9 +46,8 @@ pub async fn bootstrap(
     mirror: Option<&str>,
     mirror_key: Option<&str>,
     force: bool,
-    progress: Arc<dyn DownloadProgress>,
-    step_observer: Arc<dyn StepObserver>,
-    activity: Arc<dyn ActivityReporter>,
+    reporters: Reporters,
+    stop: impl Future<Output = ()>,
 ) -> Result<Environment> {
     if !privilege::is_root() {
         return Err(Error::NotRoot("bootstrap the managed environment"));
@@ -55,37 +61,27 @@ pub async fn bootstrap(
     }
 
     let user_config = user.and_then(crate::profile::user_config_for);
-    run_steps(
-        mirror,
-        mirror_key,
-        force,
-        progress,
-        step_observer,
-        activity,
-        user_config,
-    )
-    .await
+    run_steps(mirror, mirror_key, force, reporters, user_config, stop).await
 }
 
 async fn run_steps(
     mirror: Option<&str>,
     mirror_key: Option<&str>,
     force: bool,
-    progress: Arc<dyn DownloadProgress>,
-    step_observer: Arc<dyn StepObserver>,
-    activity: Arc<dyn ActivityReporter>,
+    reporters: Reporters,
     user_config: Option<mix_core::models::UserConfig>,
+    stop: impl Future<Output = ()>,
 ) -> Result<Environment> {
     let mut plan = Plan::new(planner::bootstrap_steps(
         mirror,
         mirror_key,
         force,
-        progress,
-        activity,
+        reporters.downloads,
+        reporters.activity,
         user_config,
     ))
-    .with_step_observer(step_observer);
-    let cause = match plan.run_cancellable(interrupted()).await {
+    .with_step_observer(reporters.steps);
+    let cause = match plan.run_cancellable(interrupted(stop)).await {
         Outcome::Completed(Ok(())) => return Ok(Environment::new()),
         Outcome::Completed(Err(cause)) => cause,
         Outcome::Interrupted => Error::Interrupted,
@@ -114,7 +110,7 @@ mod tests {
     use super::*;
 
     async fn assert_interrupted_by(raise: Signal) {
-        let handle = tokio::spawn(interrupted());
+        let handle = tokio::spawn(interrupted(std::future::pending()));
         tokio::time::sleep(Duration::from_millis(50)).await;
         signal::raise(raise).unwrap();
 
@@ -132,5 +128,19 @@ mod tests {
     #[tokio::test]
     async fn interrupted_resolves_on_sigterm() {
         assert_interrupted_by(Signal::SIGTERM).await;
+    }
+
+    #[tokio::test]
+    async fn interrupted_resolves_once_the_caller_asks_to_stop() {
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let handle = tokio::spawn(interrupted(async {
+            let _ = stopped.await;
+        }));
+        drop(stop);
+
+        tokio::time::timeout(Duration::from_secs(5), handle)
+            .await
+            .expect("interrupted() should resolve once the stop future does")
+            .unwrap();
     }
 }

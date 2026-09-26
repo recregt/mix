@@ -1,3 +1,5 @@
+import time
+
 from conftest import MIRROR_TEST_USERS, create_user, mirror_args
 
 USER = MIRROR_TEST_USERS[0]
@@ -84,5 +86,32 @@ def test_ctrl_c_through_the_worker_rolls_back_and_says_so(container, mock_nix_se
     assert "rolling back: create the managed groups and build users" in result.stdout
     assert "rolling back: create /nix" in result.stdout
     assert "stopped; everything it had changed was undone" in result.stdout.lower()
+    assert not container.path_exists(MIX_MANAGED_MARKER)
+    assert container.exec("getent", "group", "nixbld").returncode != 0
+
+
+def _wait_until_gone(container, pattern: str, timeout: float) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if container.exec("pgrep", "-f", pattern).returncode != 0:
+            return
+        time.sleep(0.2)
+    raise TimeoutError(f"a process matching {pattern!r} was still running")
+
+
+def test_a_killed_client_still_gets_its_changes_rolled_back(
+    container, mock_nix_server, mirror_cache
+):
+    create_user(container, USER, sudo=True)
+    proc = container.start_background(
+        "mix", "-v", "bootstrap", *mirror_args(mock_nix_server, mirror_cache), user=USER
+    )
+    proc.wait_for_output(RUNNING_CREATE_USERS_AND_GROUPS, timeout=60)
+    worker = f"^sudo {MIX} worker"
+    container.exec("pgrep", "-f", worker, check=True)
+
+    container.exec("kill", "-KILL", proc.pid(), check=True)
+    _wait_until_gone(container, worker, timeout=60)
+
     assert not container.path_exists(MIX_MANAGED_MARKER)
     assert container.exec("getent", "group", "nixbld").returncode != 0

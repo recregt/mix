@@ -63,7 +63,10 @@ pub enum Error {
 
 type Responses<R> = Pin<Box<dyn Stream<Item = Result<R, Status>> + Send>>;
 
-struct Service<W>(Arc<W>);
+struct Service<W> {
+    worker: Arc<W>,
+    running: mpsc::Sender<()>,
+}
 
 fn caller<T>(request: &Request<T>) -> Result<Caller, Status> {
     request
@@ -106,8 +109,10 @@ impl<W: Worker> proto::worker_service_server::WorkerService for Service<W> {
         let request =
             convert::bootstrap_request_from_wire(request.into_inner()).map_err(malformed)?;
         let (events, received) = mpsc::unbounded_channel();
-        let worker = Arc::clone(&self.0);
+        let worker = Arc::clone(&self.worker);
+        let running = self.running.clone();
         tokio::spawn(async move {
+            let _running = running;
             let outcome = worker.bootstrap(caller, request, events.clone()).await;
             let _ = events.send(Event::Finished(outcome));
         });
@@ -124,8 +129,10 @@ impl<W: Worker> proto::worker_service_server::WorkerService for Service<W> {
         let caller = caller(&request)?;
         let request = convert::repair_request_from_wire(request.into_inner()).map_err(malformed)?;
         let (events, received) = mpsc::unbounded_channel();
-        let worker = Arc::clone(&self.0);
+        let worker = Arc::clone(&self.worker);
+        let running = self.running.clone();
         tokio::spawn(async move {
+            let _running = running;
             let outcome = worker.repair(caller, request, events.clone()).await;
             let _ = events.send(Event::Finished(outcome));
         });
@@ -193,13 +200,19 @@ pub async fn serve_connection<W: Worker>(worker: W, connection: UnixStream) -> R
     };
     let incoming = futures_util::stream::once(async move { Ok::<_, std::io::Error>(connection) })
         .chain(futures_util::stream::pending());
-    Server::builder()
-        .add_service(WorkerServiceServer::new(Service(Arc::new(worker))))
+    let (running, mut finished) = mpsc::channel(1);
+    let served = Server::builder()
+        .add_service(WorkerServiceServer::new(Service {
+            worker: Arc::new(worker),
+            running,
+        }))
         .serve_with_incoming_shutdown(incoming, async {
             let _ = on_close.await;
         })
         .await
-        .map_err(|error| Error::Connect(error.to_string()))
+        .map_err(|error| Error::Connect(error.to_string()));
+    let _ = finished.recv().await;
+    served
 }
 
 pub async fn serve_stdin<W: Worker>(worker: W) -> Result<(), Error> {

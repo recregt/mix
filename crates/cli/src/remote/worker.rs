@@ -234,14 +234,18 @@ impl mix_rpc::Worker for CliWorker {
             Err(error) => Outcome::Failure(Failure::Core(error)),
             Ok(_lock) => {
                 let mirror = request.mirror.as_ref();
+                let client = events.clone();
                 let result = mix_app::bootstrap::bootstrap(
                     mix_core::privilege::user_by_uid(caller.uid),
                     mirror.map(|mirror| mirror.url.as_str()),
                     mirror.and_then(|mirror| mirror.key.as_deref()),
                     request.force,
-                    Arc::new(Downloads(events.clone())),
-                    Arc::new(Steps(self.0.clone())),
-                    Arc::new(Activity(events.clone())),
+                    mix_app::bootstrap::Reporters {
+                        downloads: Arc::new(Downloads(events.clone())),
+                        steps: Arc::new(Steps(self.0.clone())),
+                        activity: Arc::new(Activity(events.clone())),
+                    },
+                    async move { client.closed().await },
                 )
                 .await;
                 match result {
