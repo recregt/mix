@@ -9,7 +9,8 @@ use futures_util::{Stream, StreamExt};
 use hyper_util::rt::TokioIo;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::UnixStream;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio_util::task::TaskTracker;
 use tonic::transport::server::{Connected, UdsConnectInfo};
 use tonic::transport::{Channel, Endpoint, Server, Uri};
 use tonic::{Request, Response, Status};
@@ -65,7 +66,28 @@ type Responses<R> = Pin<Box<dyn Stream<Item = Result<R, Status>> + Send>>;
 
 struct Service<W> {
     worker: Arc<W>,
-    running: mpsc::Sender<()>,
+    running: TaskTracker,
+    one_at_a_time: Arc<Semaphore>,
+}
+
+impl<W: Worker> Service<W> {
+    fn run<F, Fut>(&self, work: F) -> Result<mpsc::UnboundedReceiver<Event>, Status>
+    where
+        F: FnOnce(Arc<W>, Events) -> Fut,
+        Fut: Future<Output = Outcome> + Send + 'static,
+    {
+        let permit = Arc::clone(&self.one_at_a_time)
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("the worker is already running a request"))?;
+        let (events, received) = mpsc::unbounded_channel();
+        let work = work(Arc::clone(&self.worker), events.clone());
+        self.running.spawn(async move {
+            let outcome = work.await;
+            drop(permit);
+            let _ = events.send(Event::Finished(outcome));
+        });
+        Ok(received)
+    }
 }
 
 fn caller<T>(request: &Request<T>) -> Result<Caller, Status> {
@@ -108,14 +130,8 @@ impl<W: Worker> proto::worker_service_server::WorkerService for Service<W> {
         let caller = caller(&request)?;
         let request =
             convert::bootstrap_request_from_wire(request.into_inner()).map_err(malformed)?;
-        let (events, received) = mpsc::unbounded_channel();
-        let worker = Arc::clone(&self.worker);
-        let running = self.running.clone();
-        tokio::spawn(async move {
-            let _running = running;
-            let outcome = worker.bootstrap(caller, request, events.clone()).await;
-            let _ = events.send(Event::Finished(outcome));
-        });
+        let received = self
+            .run(|worker, events| async move { worker.bootstrap(caller, request, events).await })?;
         Ok(Response::new(stream(
             received,
             convert::bootstrap_response_to_wire,
@@ -128,14 +144,8 @@ impl<W: Worker> proto::worker_service_server::WorkerService for Service<W> {
     ) -> Result<Response<Self::RepairStream>, Status> {
         let caller = caller(&request)?;
         let request = convert::repair_request_from_wire(request.into_inner()).map_err(malformed)?;
-        let (events, received) = mpsc::unbounded_channel();
-        let worker = Arc::clone(&self.worker);
-        let running = self.running.clone();
-        tokio::spawn(async move {
-            let _running = running;
-            let outcome = worker.repair(caller, request, events.clone()).await;
-            let _ = events.send(Event::Finished(outcome));
-        });
+        let received =
+            self.run(|worker, events| async move { worker.repair(caller, request, events).await })?;
         Ok(Response::new(stream(
             received,
             convert::repair_response_to_wire,
@@ -200,18 +210,20 @@ pub async fn serve_connection<W: Worker>(worker: W, connection: UnixStream) -> R
     };
     let incoming = futures_util::stream::once(async move { Ok::<_, std::io::Error>(connection) })
         .chain(futures_util::stream::pending());
-    let (running, mut finished) = mpsc::channel(1);
+    let running = TaskTracker::new();
     let served = Server::builder()
         .add_service(WorkerServiceServer::new(Service {
             worker: Arc::new(worker),
-            running,
+            running: running.clone(),
+            one_at_a_time: Arc::new(Semaphore::new(1)),
         }))
         .serve_with_incoming_shutdown(incoming, async {
             let _ = on_close.await;
         })
         .await
         .map_err(|error| Error::Connect(error.to_string()));
-    let _ = finished.recv().await;
+    running.close();
+    running.wait().await;
     served
 }
 

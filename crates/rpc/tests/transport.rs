@@ -257,3 +257,58 @@ async fn the_worker_waits_for_a_request_its_client_left() {
         "the worker returned before the abandoned request cleaned up"
     );
 }
+
+struct WaitsForRelease {
+    release: Arc<tokio::sync::Notify>,
+}
+
+impl Worker for WaitsForRelease {
+    async fn bootstrap(
+        &self,
+        _caller: Caller,
+        _request: BootstrapRequest,
+        events: Events,
+    ) -> Outcome {
+        let _ = events.send(Event::ActivityLine("started".into()));
+        self.release.notified().await;
+        Outcome::BootstrapDone
+    }
+
+    async fn repair(&self, _caller: Caller, _request: RepairRequest, _events: Events) -> Outcome {
+        Outcome::RepairDone(Vec::new())
+    }
+}
+
+#[tokio::test]
+async fn a_second_request_is_refused_while_the_first_is_running() {
+    let release = Arc::new(tokio::sync::Notify::new());
+    let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
+    let _server = tokio::spawn(serve_connection(
+        WaitsForRelease {
+            release: Arc::clone(&release),
+        },
+        theirs,
+    ));
+    let mut client = Client::connect(ours).await.unwrap();
+    let mut first = client.bootstrap(&request(false)).await.unwrap();
+    assert!(matches!(
+        first.next().await,
+        Some(Ok(Event::ActivityLine(line))) if line == "started"
+    ));
+
+    let second = client
+        .repair(&RepairRequest {
+            log_level: Level::Warn,
+        })
+        .await;
+
+    let Err(mix_rpc::Error::Refused(reason)) = second else {
+        panic!("a second request must be refused while the first is running");
+    };
+    assert!(reason.contains("already"), "{reason}");
+    release.notify_one();
+    assert!(matches!(
+        first.next().await,
+        Some(Ok(Event::Finished(Outcome::BootstrapDone)))
+    ));
+}
