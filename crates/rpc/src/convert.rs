@@ -109,6 +109,28 @@ pub fn event_to_wire(event: Event) -> proto::Event {
     proto::Event { kind: Some(kind) }
 }
 
+pub fn bootstrap_response_to_wire(event: Event) -> proto::BootstrapResponse {
+    proto::BootstrapResponse {
+        event: Some(event_to_wire(event)),
+    }
+}
+
+pub fn bootstrap_response_from_wire(
+    response: proto::BootstrapResponse,
+) -> Result<Event, Malformed> {
+    event_from_wire(response.event.ok_or_else(|| missing("event"))?)
+}
+
+pub fn repair_response_to_wire(event: Event) -> proto::RepairResponse {
+    proto::RepairResponse {
+        event: Some(event_to_wire(event)),
+    }
+}
+
+pub fn repair_response_from_wire(response: proto::RepairResponse) -> Result<Event, Malformed> {
+    event_from_wire(response.event.ok_or_else(|| missing("event"))?)
+}
+
 pub fn event_from_wire(event: proto::Event) -> Result<Event, Malformed> {
     use proto::event::Kind;
 
@@ -731,6 +753,8 @@ mod tests {
     #[test]
     fn an_event_without_a_kind_is_refused() {
         assert!(event_from_wire(proto::Event { kind: None }).is_err());
+        assert!(bootstrap_response_from_wire(proto::BootstrapResponse { event: None }).is_err());
+        assert!(repair_response_from_wire(proto::RepairResponse { event: None }).is_err());
         assert!(
             event_from_wire(proto::Event {
                 kind: Some(proto::event::Kind::Finished(proto::Finished {

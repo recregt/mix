@@ -2,9 +2,9 @@ syntax = "proto3";
 
 package mix.worker.v1;
 
-service Worker {
-  rpc Bootstrap(BootstrapRequest) returns (stream Event);
-  rpc Repair(RepairRequest) returns (stream Event);
+service WorkerService {
+  rpc Bootstrap(BootstrapRequest) returns (stream BootstrapResponse);
+  rpc Repair(RepairRequest) returns (stream RepairResponse);
 }
 
 message Mirror {
@@ -20,6 +20,14 @@ message BootstrapRequest {
 
 message RepairRequest {
   Level log_level = 1;
+}
+
+message BootstrapResponse {
+  Event event = 1;
+}
+
+message RepairResponse {
+  Event event = 1;
 }
 
 message Event {

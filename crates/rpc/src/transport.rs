@@ -16,8 +16,8 @@ use tonic::{Request, Response, Status};
 
 use crate::convert::{self, Malformed};
 use crate::proto;
-use crate::proto::worker_client::WorkerClient;
-use crate::proto::worker_server::WorkerServer;
+use crate::proto::worker_service_client::WorkerServiceClient;
+use crate::proto::worker_service_server::WorkerServiceServer;
 use crate::types::{BootstrapRequest, Caller, Event, Outcome, RepairRequest};
 
 const WORKER_URI: &str = "http://worker";
@@ -61,7 +61,7 @@ pub enum Error {
     NotAConnection(#[source] std::io::Error),
 }
 
-type WireEvents = Pin<Box<dyn Stream<Item = Result<proto::Event, Status>> + Send>>;
+type Responses<R> = Pin<Box<dyn Stream<Item = Result<R, Status>> + Send>>;
 
 struct Service<W>(Arc<W>);
 
@@ -77,12 +77,15 @@ fn caller<T>(request: &Request<T>) -> Result<Caller, Status> {
         .ok_or_else(|| Status::unauthenticated("the caller could not be identified"))
 }
 
-fn stream(events: mpsc::UnboundedReceiver<Event>) -> WireEvents {
+fn stream<R: Send + 'static>(
+    events: mpsc::UnboundedReceiver<Event>,
+    to_wire: fn(Event) -> R,
+) -> Responses<R> {
     Box::pin(
         futures_util::stream::unfold(events, |mut events| async move {
             events.recv().await.map(|event| (event, events))
         })
-        .map(|event| Ok(convert::event_to_wire(event))),
+        .map(move |event| Ok(to_wire(event))),
     )
 }
 
@@ -91,14 +94,14 @@ fn malformed(error: Malformed) -> Status {
 }
 
 #[tonic::async_trait]
-impl<W: Worker> proto::worker_server::Worker for Service<W> {
-    type BootstrapStream = WireEvents;
-    type RepairStream = WireEvents;
+impl<W: Worker> proto::worker_service_server::WorkerService for Service<W> {
+    type BootstrapStream = Responses<proto::BootstrapResponse>;
+    type RepairStream = Responses<proto::RepairResponse>;
 
     async fn bootstrap(
         &self,
         request: Request<proto::BootstrapRequest>,
-    ) -> Result<Response<WireEvents>, Status> {
+    ) -> Result<Response<Self::BootstrapStream>, Status> {
         let caller = caller(&request)?;
         let request =
             convert::bootstrap_request_from_wire(request.into_inner()).map_err(malformed)?;
@@ -108,13 +111,16 @@ impl<W: Worker> proto::worker_server::Worker for Service<W> {
             let outcome = worker.bootstrap(caller, request, events.clone()).await;
             let _ = events.send(Event::Finished(outcome));
         });
-        Ok(Response::new(stream(received)))
+        Ok(Response::new(stream(
+            received,
+            convert::bootstrap_response_to_wire,
+        )))
     }
 
     async fn repair(
         &self,
         request: Request<proto::RepairRequest>,
-    ) -> Result<Response<WireEvents>, Status> {
+    ) -> Result<Response<Self::RepairStream>, Status> {
         let caller = caller(&request)?;
         let request = convert::repair_request_from_wire(request.into_inner()).map_err(malformed)?;
         let (events, received) = mpsc::unbounded_channel();
@@ -123,7 +129,10 @@ impl<W: Worker> proto::worker_server::Worker for Service<W> {
             let outcome = worker.repair(caller, request, events.clone()).await;
             let _ = events.send(Event::Finished(outcome));
         });
-        Ok(Response::new(stream(received)))
+        Ok(Response::new(stream(
+            received,
+            convert::repair_response_to_wire,
+        )))
     }
 }
 
@@ -185,7 +194,7 @@ pub async fn serve_connection<W: Worker>(worker: W, connection: UnixStream) -> R
     let incoming = futures_util::stream::once(async move { Ok::<_, std::io::Error>(connection) })
         .chain(futures_util::stream::pending());
     Server::builder()
-        .add_service(WorkerServer::new(Service(Arc::new(worker))))
+        .add_service(WorkerServiceServer::new(Service(Arc::new(worker))))
         .serve_with_incoming_shutdown(incoming, async {
             let _ = on_close.await;
         })
@@ -209,7 +218,7 @@ fn unix_stream(fd: OwnedFd) -> std::io::Result<UnixStream> {
 }
 
 pub struct Client {
-    inner: WorkerClient<Channel>,
+    inner: WorkerServiceClient<Channel>,
     worker: Option<std::process::Child>,
 }
 
@@ -228,7 +237,7 @@ impl Client {
             .await
             .map_err(|error| Error::Connect(error.to_string()))?;
         Ok(Self {
-            inner: WorkerClient::new(channel),
+            inner: WorkerServiceClient::new(channel),
             worker: None,
         })
     }
@@ -264,7 +273,7 @@ impl Client {
             .await
             .map_err(refused)?
             .into_inner();
-        Ok(decode(events))
+        Ok(decode(events, convert::bootstrap_response_from_wire))
     }
 
     pub async fn repair(
@@ -277,7 +286,7 @@ impl Client {
             .await
             .map_err(refused)?
             .into_inner();
-        Ok(decode(events))
+        Ok(decode(events, convert::repair_response_from_wire))
     }
 
     pub fn wait(mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
@@ -293,9 +302,12 @@ fn refused(status: Status) -> Error {
     Error::Refused(status.message().to_string())
 }
 
-fn decode(events: tonic::Streaming<proto::Event>) -> impl Stream<Item = Result<Event, Error>> {
-    events.map(|event| match event {
-        Ok(event) => Ok(convert::event_from_wire(event)?),
+fn decode<R>(
+    responses: tonic::Streaming<R>,
+    from_wire: fn(R) -> Result<Event, Malformed>,
+) -> impl Stream<Item = Result<Event, Error>> {
+    responses.map(move |response| match response {
+        Ok(response) => Ok(from_wire(response)?),
         Err(status) => Err(refused(status)),
     })
 }
