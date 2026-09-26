@@ -19,3 +19,6 @@ tower = { version = "0.5.3", features = ["util"] }
 [build-dependencies]
 protox = "0.9.1"
 tonic-prost-build = "0.14.6"
+
+[package.metadata.cargo-machete]
+ignored = ["tonic-prost"]
