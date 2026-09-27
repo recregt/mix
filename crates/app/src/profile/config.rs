@@ -4,13 +4,16 @@ use mix_core::paths::{GENERATION_STATE_FILE, HOME_NIX, STATE_FILE, mix_state_dir
 use mix_core::privilege::{InvokingUser, invoking_user};
 use mix_core::state::StateManifest;
 use mix_core::system::{Arch, Os};
-use mix_nixgen::{FlakeConfig, HomeManagerConfig, InvalidInput, Rev, System};
-
 use mix_nixgen::lock::{self, LockedInput, NarHash};
+use mix_nixgen::{
+    CopyIntoGeneration, FileName, FlakeConfig, HomeModule, InvalidInput, Rev, StateVersion, System,
+};
 use mix_pins::{
     HOME_MANAGER_LAST_MODIFIED, HOME_MANAGER_NAR_HASH, HOME_MANAGER_REV, NIXPKGS_LAST_MODIFIED,
     NIXPKGS_NAR_HASH, NIXPKGS_REV,
 };
+
+use crate::profile::state::{Settled, Source, settle};
 
 const NIXPKGS: Rev = Rev::new_static(NIXPKGS_REV);
 const HOME_MANAGER: Rev = Rev::new_static(HOME_MANAGER_REV);
@@ -26,13 +29,16 @@ const HOME_MANAGER_LOCK: LockedInput = LockedInput {
     last_modified: HOME_MANAGER_LAST_MODIFIED,
 };
 
+const HOME_MANAGER_STATE_VERSION: StateVersion = StateVersion::new_static("24.05");
+
+const STATE_INTO_GENERATION: CopyIntoGeneration = CopyIntoGeneration {
+    source: FileName::new_static(STATE_FILE),
+    target: FileName::new_static(GENERATION_STATE_FILE),
+};
+
 fn render_lock() -> String {
     lock::render(NIXPKGS_LOCK, HOME_MANAGER_LOCK)
 }
-
-use crate::profile::state::{Settled, Source, settle};
-
-const HOME_MANAGER_STATE_VERSION: &str = "24.05";
 
 fn nix_system(arch: Arch, os: Os) -> System {
     match (arch, os) {
@@ -47,18 +53,12 @@ pub(crate) fn render_home<S: AsRef<str>>(
     user: &InvokingUser,
     packages: impl IntoIterator<Item = S>,
 ) -> Result<String, InvalidInput> {
-    let mut home_cfg = HomeManagerConfig::new();
-    home_cfg
-        .set_str("home.username", &user.name)
-        .expect("a real username cannot contain a null byte")
-        .set_str("home.homeDirectory", &user.home.to_string_lossy())
-        .expect("a real home directory cannot contain a null byte")
-        .set_str("home.stateVersion", HOME_MANAGER_STATE_VERSION)
-        .expect("state version is a hardcoded literal")
-        .copy_into_generation(STATE_FILE, GENERATION_STATE_FILE)
-        .expect("both file names are hardcoded literals")
-        .packages(packages)?;
-    Ok(home_cfg.render())
+    Ok(
+        HomeModule::new(&user.name, &user.home, HOME_MANAGER_STATE_VERSION)?
+            .copy_into_generation(STATE_INTO_GENERATION)
+            .packages(packages)?
+            .render(),
+    )
 }
 
 pub fn resolve_user_config() -> Option<UserConfig> {
@@ -117,6 +117,62 @@ mod tests {
             name: "mix-user".to_string(),
             home: home.to_path_buf(),
         }
+    }
+
+    #[test]
+    #[ignore = "requires nix and network access"]
+    fn the_rendered_options_match_the_pinned_home_manager() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = sample_user(Path::new("/home/mix-user"));
+        let system = nix_system(Arch::current().unwrap(), Os::current().unwrap());
+        let flake = FlakeConfig::new(system, &user.name, NIXPKGS, HOME_MANAGER).unwrap();
+        std::fs::write(dir.path().join("flake.nix"), flake.render()).unwrap();
+        std::fs::write(dir.path().join("flake.lock"), render_lock()).unwrap();
+        std::fs::write(
+            dir.path().join(HOME_NIX),
+            render_home(&user, StateManifest::seed().packages).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(dir.path().join(STATE_FILE), StateManifest::seed_rendered()).unwrap();
+        let options = mix_nixgen::Installable::new(
+            mix_nixgen::FlakeRef::path(dir.path()).unwrap(),
+            mix_nixgen::AttrPath::new(["homeConfigurations", &user.name, "options", "home"])
+                .unwrap(),
+        )
+        .render();
+
+        let command = mix_exec::Command::new("nix")
+            .args(["--extra-experimental-features", "nix-command flakes"])
+            .args(["eval", "--json", "--apply"])
+            .arg(
+                "o: { username = o.username.type.name; \
+                 homeDirectory = o.homeDirectory.type.name; \
+                 stateVersion = o.stateVersion.type.name; \
+                 stateVersions = o.stateVersion.type.functor.payload.values; \
+                 packages = o.packages.type.name; \
+                 extraBuilderCommands = o.extraBuilderCommands.type.name; }",
+            )
+            .arg(options);
+        let output = command.output_blocking(&mix_exec::cancel::root()).unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let types: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+
+        assert_eq!(types["username"], "nonEmptyStr");
+        assert_eq!(types["homeDirectory"], "path");
+        assert_eq!(types["stateVersion"], "enum");
+        assert!(
+            types["stateVersions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == HOME_MANAGER_STATE_VERSION.as_str())
+        );
+        assert_eq!(types["packages"], "listOf");
+        assert_eq!(types["extraBuilderCommands"], "separatedString");
     }
 
     #[test]

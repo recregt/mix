@@ -1,7 +1,7 @@
 pub mod ast;
-mod builder;
 mod escape;
 mod flake;
+mod home;
 mod ident;
 mod installable;
 pub mod lock;
@@ -13,8 +13,8 @@ pub(crate) const GENERATED_HEADER: &str = "\
 
 ";
 
-pub use builder::{HomeManagerConfig, InvalidInput};
 pub use escape::NulByte;
 pub use flake::{FlakeConfig, Rev, System};
+pub use home::{CopyIntoGeneration, HomeModule, InvalidInput, StateVersion};
 pub use ident::{FileName, Ident, InvalidIdent, is_identifier};
 pub use installable::{AttrPath, FlakeRef, Installable, InvalidInstallable, PublicKey};

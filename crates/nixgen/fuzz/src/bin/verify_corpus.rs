@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use arbitrary::{Arbitrary, Unstructured};
-use mix_nixgen_fuzz::{Input, nix, render_with_log, surviving_str_values};
+use mix_nixgen_fuzz::{Input, nix, render_with_values};
 
 fn main() {
     let corpus_dir: PathBuf = std::env::args()
@@ -29,7 +29,9 @@ fn main() {
             continue;
         };
 
-        let (rendered, log) = render_with_log(input);
+        let Some((rendered, values)) = render_with_values(input) else {
+            continue;
+        };
         checked += 1;
 
         let parse_output = nix::parse(&rendered);
@@ -42,7 +44,7 @@ fn main() {
             continue;
         }
 
-        for (attr_path, expected) in surviving_str_values(&log) {
+        for (attr_path, expected) in values {
             round_trips_checked += 1;
             let output = nix::eval_raw_module_attr(&rendered, &attr_path);
             if !output.status.success() {

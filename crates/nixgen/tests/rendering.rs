@@ -1,30 +1,41 @@
 mod support;
 
-use mix_nixgen::{FlakeConfig, HomeManagerConfig, Rev, System};
-use mix_pins::{HOME_MANAGER_REV, NIXPKGS_REV};
+use std::path::Path;
 
-const NIXPKGS: Rev = Rev::new_static(NIXPKGS_REV);
-const HOME_MANAGER: Rev = Rev::new_static(HOME_MANAGER_REV);
+use mix_nixgen::{
+    CopyIntoGeneration, FileName, FlakeConfig, HomeModule, Rev, StateVersion, System,
+};
+use mix_pins::{HOME_MANAGER_REV, NIXPKGS_REV};
 use proptest::collection::vec;
 use proptest::prelude::*;
 
-#[test]
-#[ignore = "requires nix-instantiate on PATH"]
-fn a_realistic_config_is_syntactically_valid_nix() {
-    let mut cfg = HomeManagerConfig::new();
-    cfg.packages(["firefox", "git", "node-sass"]).unwrap();
-    cfg.copy_into_generation("state", "mix-state").unwrap();
-    cfg.set_bool("programs.git.enable", true).unwrap();
-    cfg.set_str("programs.git.userName", "mix").unwrap();
-    cfg.set_str("programs.git.userEmail", "user@example.com")
-        .unwrap();
+const NIXPKGS: Rev = Rev::new_static(NIXPKGS_REV);
+const HOME_MANAGER: Rev = Rev::new_static(HOME_MANAGER_REV);
+const STATE_VERSION: StateVersion = StateVersion::new_static("24.05");
 
-    let output = support::parse_with_nix(&cfg.render());
+fn assert_parses(source: &str) {
+    let output = support::parse_with_nix(source);
     assert!(
         output.status.success(),
-        "nix-instantiate --parse failed:\n{}",
+        "nix-instantiate --parse failed:\n{}\n{source}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+#[ignore = "requires nix-instantiate on PATH"]
+fn a_realistic_home_module_is_syntactically_valid_nix() {
+    let rendered = HomeModule::new("mix", Path::new("/home/mix"), STATE_VERSION)
+        .unwrap()
+        .copy_into_generation(CopyIntoGeneration {
+            source: FileName::new_static("state"),
+            target: FileName::new_static("mix-state"),
+        })
+        .packages(["firefox", "git", "node-sass"])
+        .unwrap()
+        .render();
+
+    assert_parses(&rendered);
 }
 
 #[test]
@@ -34,24 +45,19 @@ fn a_realistic_flake_is_syntactically_valid_nix() {
         .unwrap()
         .render();
 
-    let output = support::parse_with_nix(&rendered);
-    assert!(
-        output.status.success(),
-        "nix-instantiate --parse failed:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn dotted_path() -> impl Strategy<Value = String> {
-    vec("[a-zA-Z_][a-zA-Z0-9_'-]{0,8}", 1..4).prop_map(|segments| segments.join("."))
+    assert_parses(&rendered);
 }
 
 fn arbitrary_text() -> impl Strategy<Value = String> {
     vec(
-        any::<char>().prop_filter("no NUL: unrepresentable in a process argv", |c| *c != '\0'),
-        0..20,
+        any::<char>().prop_filter("no NUL: unrepresentable in a nix string", |c| *c != '\0'),
+        1..20,
     )
     .prop_map(|chars| chars.into_iter().collect())
+}
+
+fn package_name() -> impl Strategy<Value = String> {
+    "[a-zA-Z_][a-zA-Z0-9_'-]{0,8}".prop_filter("not a keyword", |s| mix_nixgen::is_identifier(s))
 }
 
 proptest! {
@@ -59,24 +65,21 @@ proptest! {
 
     #[test]
     #[ignore = "requires nix-instantiate on PATH"]
-    fn arbitrary_valid_paths_always_render_parseable_nix(
-        ops in vec((dotted_path(), any::<bool>(), arbitrary_text()), 1..8)
+    fn arbitrary_home_modules_always_render_parseable_nix(
+        username in arbitrary_text(),
+        home in arbitrary_text(),
+        packages in vec(package_name(), 0..8),
     ) {
-        let mut cfg = HomeManagerConfig::new();
-        for (path, as_bool, text) in &ops {
-            if *as_bool {
-                cfg.set_bool(path, true).unwrap();
-            } else {
-                cfg.set_str(path, text).unwrap();
-            }
+        let home = format!("/{home}");
+        if let Ok(module) = HomeModule::new(&username, Path::new(&home), STATE_VERSION) {
+            let rendered = module.packages(&packages).unwrap().render();
+            let output = support::parse_with_nix(&rendered);
+            prop_assert!(
+                output.status.success(),
+                "parse failed:\n{}\n{rendered}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
-
-        let output = support::parse_with_nix(&cfg.render());
-        prop_assert!(
-            output.status.success(),
-            "parse failed for {ops:?}:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
     }
 
     #[test]

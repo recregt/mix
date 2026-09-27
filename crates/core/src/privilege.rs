@@ -54,18 +54,22 @@ fn current_user(uid: nix::unistd::Uid) -> Option<InvokingUser> {
 }
 
 fn usable(name: &str, home: &std::path::Path) -> bool {
-    !name.contains('"') && home.is_absolute()
+    !name.contains('"') && home.is_absolute() && home.to_str().is_some()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use std::os::unix::ffi::OsStrExt;
+
     #[test]
     fn an_account_nix_cannot_name_is_not_usable() {
         assert!(usable("mix", std::path::Path::new("/home/mix")));
         assert!(!usable("mi\"x", std::path::Path::new("/home/mix")));
         assert!(!usable("mix", std::path::Path::new("home/mix")));
+        let not_utf8 = std::ffi::OsStr::from_bytes(b"/home/\xff");
+        assert!(!usable("mix", std::path::Path::new(not_utf8)));
     }
 
     #[test]

@@ -1,6 +1,10 @@
 mod support;
 
-use mix_nixgen::{FlakeConfig, HomeManagerConfig, Rev, System};
+use std::path::Path;
+
+use mix_nixgen::{
+    CopyIntoGeneration, FileName, FlakeConfig, HomeModule, Rev, StateVersion, System,
+};
 use mix_pins::{HOME_MANAGER_REV, NIXPKGS_REV};
 
 const GOLDEN_FLAKE: &str = include_str!("golden/flake.nix");
@@ -18,18 +22,19 @@ fn flake() -> String {
 }
 
 fn home() -> String {
-    let mut cfg = HomeManagerConfig::new();
-    cfg.set_str("home.username", "mix")
-        .unwrap()
-        .set_str("home.homeDirectory", "/home/mix")
-        .unwrap()
-        .set_str("home.stateVersion", "24.05")
-        .unwrap()
-        .copy_into_generation("state", "mix-state")
-        .unwrap()
-        .packages(["git", "ripgrep", "jq", "hello", "tree"])
-        .unwrap();
-    cfg.render()
+    HomeModule::new(
+        "mix",
+        Path::new("/home/mix"),
+        StateVersion::new_static("24.05"),
+    )
+    .unwrap()
+    .copy_into_generation(CopyIntoGeneration {
+        source: FileName::new_static("state"),
+        target: FileName::new_static("mix-state"),
+    })
+    .packages(["git", "ripgrep", "jq", "hello", "tree"])
+    .unwrap()
+    .render()
 }
 
 #[test]

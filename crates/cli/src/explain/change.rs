@@ -91,9 +91,14 @@ mod tests {
             "rip grep".to_string(),
         )));
         let from_render = message(&Error::InvalidPackage(
-            mix_nixgen::HomeManagerConfig::new()
-                .packages(["rip grep"])
-                .unwrap_err(),
+            mix_nixgen::HomeModule::new(
+                "mix",
+                std::path::Path::new("/home/mix"),
+                mix_nixgen::StateVersion::new_static("24.05"),
+            )
+            .unwrap()
+            .packages(["rip grep"])
+            .unwrap_err(),
         ));
 
         assert_eq!(from_state, from_render);
