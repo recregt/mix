@@ -1,7 +1,10 @@
 mod support;
 
-use mix_nixgen::{FlakeConfig, HomeManagerConfig};
+use mix_nixgen::{FlakeConfig, HomeManagerConfig, Rev, System};
 use mix_pins::{HOME_MANAGER_REV, NIXPKGS_REV};
+
+const NIXPKGS: Rev = Rev::new_static(NIXPKGS_REV);
+const HOME_MANAGER: Rev = Rev::new_static(HOME_MANAGER_REV);
 use proptest::collection::vec;
 use proptest::prelude::*;
 
@@ -27,7 +30,7 @@ fn a_realistic_config_is_syntactically_valid_nix() {
 #[test]
 #[ignore = "requires nix-instantiate on PATH"]
 fn a_realistic_flake_is_syntactically_valid_nix() {
-    let rendered = FlakeConfig::new("x86_64-linux", "mix", NIXPKGS_REV, HOME_MANAGER_REV)
+    let rendered = FlakeConfig::new(System::X86_64Linux, "mix", NIXPKGS, HOME_MANAGER)
         .unwrap()
         .render();
 
@@ -81,7 +84,7 @@ proptest! {
     fn arbitrary_usernames_always_render_a_parseable_flake(
         username in arbitrary_text()
     ) {
-        let rendered = FlakeConfig::new("x86_64-linux", &username, NIXPKGS_REV, HOME_MANAGER_REV)
+        let rendered = FlakeConfig::new(System::X86_64Linux, &username, NIXPKGS, HOME_MANAGER)
             .unwrap()
             .render();
 

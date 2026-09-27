@@ -1,11 +1,24 @@
+use std::collections::BTreeMap;
+
 use crate::GENERATED_HEADER;
+use crate::ast::{Expr, Key, NixStr, RelPath, StrPart};
 use crate::escape::NulByte;
 use crate::ident::{FileName, Ident, InvalidIdent};
-use crate::value::Nix;
+use crate::print;
 
-#[derive(Debug, Default)]
+const PKGS: Ident = Ident::new_static("pkgs");
+
+#[derive(Debug)]
 pub struct HomeManagerConfig {
-    root: Vec<(Ident, Nix)>,
+    root: Expr,
+}
+
+impl Default for HomeManagerConfig {
+    fn default() -> Self {
+        Self {
+            root: Expr::Attrs(BTreeMap::new()),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -37,11 +50,14 @@ impl HomeManagerConfig {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        let idents = pkgs
+        let selections = pkgs
             .into_iter()
-            .map(|p| Ident::new(p.as_ref()))
+            .map(|p| {
+                Ident::new(p.as_ref())
+                    .map(|name| Expr::select(Expr::Var(PKGS), Key::from(&name), []))
+            })
             .collect::<Result<Vec<_>, _>>()?;
-        self.set_at(&["home", "packages"], Nix::PackageList(idents))?;
+        self.set_at(&["home", "packages"], Expr::List(selections))?;
         Ok(self)
     }
 
@@ -50,31 +66,35 @@ impl HomeManagerConfig {
         source: &str,
         target: &str,
     ) -> Result<&mut Self, InvalidInput> {
-        let value = Nix::CopyIntoGeneration {
-            source: FileName::new(source)?,
-            target: FileName::new(target)?,
-        };
+        let source = FileName::new(source)?;
+        let target = FileName::new(target)?;
+        let value = Expr::Str(vec![
+            StrPart::Lit(NixStr::new_static("cp ")),
+            StrPart::Interp(Expr::Path(RelPath::from(&source))),
+            StrPart::Lit(NixStr::new(format!(" $out/{}", target.as_str()))?),
+        ]);
         self.set_at(&["home", "extraBuilderCommands"], value)?;
         Ok(self)
     }
 
     pub fn set_bool(&mut self, path: &str, value: bool) -> Result<&mut Self, InvalidInput> {
-        self.set(path, Nix::Bool(value))
+        self.set(path, Expr::Bool(value))
     }
 
     pub fn set_str(&mut self, path: &str, value: &str) -> Result<&mut Self, InvalidInput> {
-        let value = Nix::str(value)?;
+        let value = Expr::string(value)?;
         self.set(path, value)
     }
 
     pub fn render(&self) -> String {
-        format!(
-            "{GENERATED_HEADER}{{ pkgs, ... }}:\n{}\n",
-            Nix::Attrs(self.root.clone()).render()
-        )
+        let mut out = String::with_capacity(GENERATED_HEADER.len() + 512);
+        out.push_str(GENERATED_HEADER);
+        print::print_function(&[PKGS], true, &self.root, &mut out);
+        out.push('\n');
+        out
     }
 
-    fn set(&mut self, path: &str, value: Nix) -> Result<&mut Self, InvalidInput> {
+    fn set(&mut self, path: &str, value: Expr) -> Result<&mut Self, InvalidInput> {
         if path.is_empty() {
             return Err(InvalidInput::EmptyPath);
         }
@@ -83,41 +103,36 @@ impl HomeManagerConfig {
         Ok(self)
     }
 
-    fn set_at(&mut self, segments: &[&str], value: Nix) -> Result<(), InvalidInput> {
-        let idents = segments
+    fn set_at(&mut self, segments: &[&str], value: Expr) -> Result<(), InvalidInput> {
+        let keys = segments
             .iter()
-            .map(|s| Ident::new(*s))
+            .map(|s| Ident::new(*s).map(|ident| Key::from(&ident)))
             .collect::<Result<Vec<_>, _>>()?;
-        insert_nested(&mut self.root, &idents, value);
+        let Expr::Attrs(root) = &mut self.root else {
+            unreachable!("the module body is always an attribute set")
+        };
+        insert_nested(root, &keys, value);
         Ok(())
     }
 }
 
-fn insert_nested(entries: &mut Vec<(Ident, Nix)>, path: &[Ident], value: Nix) {
+fn insert_nested(entries: &mut BTreeMap<Key, Expr>, path: &[Key], value: Expr) {
     let (head, rest) = path.split_first().expect("path segments are never empty");
 
     if rest.is_empty() {
-        if let Some(existing) = entries.iter_mut().find(|(k, _)| k == head) {
-            existing.1 = value;
-        } else {
-            entries.push((head.clone(), value));
-        }
+        entries.insert(head.clone(), value);
         return;
     }
 
-    if let Some(existing) = entries.iter_mut().find(|(k, _)| k == head) {
-        if !matches!(existing.1, Nix::Attrs(_)) {
-            existing.1 = Nix::Attrs(Vec::new());
-        }
-        if let Nix::Attrs(children) = &mut existing.1 {
-            insert_nested(children, rest, value);
-        }
-        return;
+    let child = entries
+        .entry(head.clone())
+        .or_insert_with(|| Expr::Attrs(BTreeMap::new()));
+    if !matches!(child, Expr::Attrs(_)) {
+        *child = Expr::Attrs(BTreeMap::new());
     }
-
-    let mut children = Vec::new();
-    insert_nested(&mut children, rest, value);
-    entries.push((head.clone(), Nix::Attrs(children)));
+    if let Expr::Attrs(children) = child {
+        insert_nested(children, rest, value);
+    }
 }
 
 #[cfg(test)]
@@ -136,7 +151,7 @@ mod tests {
         let mut cfg = HomeManagerConfig::new();
         cfg.packages(["firefox", "git"]).unwrap();
         assert!(cfg.render().ends_with(
-            "{ pkgs, ... }:\n{\n  home = {\n    packages = [ pkgs.firefox pkgs.git ];\n  };\n}\n"
+            "{ pkgs, ... }: {\n  home = {\n    packages = [\n      pkgs.firefox\n      pkgs.git\n    ];\n  };\n}\n"
         ));
     }
 
@@ -146,8 +161,8 @@ mod tests {
         cfg.packages(["git"]).unwrap();
         cfg.copy_into_generation("state", "mix-state").unwrap();
         assert!(cfg.render().ends_with(
-            "{ pkgs, ... }:\n{\n  home = {\n    packages = [ pkgs.git ];\n    \
-             extraBuilderCommands = \"cp ${./state} $out/mix-state\";\n  };\n}\n"
+            "{ pkgs, ... }: {\n  home = {\n    extraBuilderCommands = \"cp ${./state} $out/mix-state\";\n    \
+             packages = [\n      pkgs.git\n    ];\n  };\n}\n"
         ));
     }
 
@@ -171,7 +186,7 @@ mod tests {
         let mut cfg = HomeManagerConfig::new();
         cfg.set_bool("programs.git.enable", true).unwrap();
         assert!(cfg.render().ends_with(
-            "{ pkgs, ... }:\n{\n  programs = {\n    git = {\n      enable = true;\n    };\n  };\n}\n"
+            "{ pkgs, ... }: {\n  programs = {\n    git = {\n      enable = true;\n    };\n  };\n}\n"
         ));
     }
 

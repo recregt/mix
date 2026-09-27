@@ -1,7 +1,7 @@
 pub mod nix;
 
 use arbitrary::Arbitrary;
-use mix_nixgen::{FlakeConfig, HomeManagerConfig};
+use mix_nixgen::{FlakeConfig, HomeManagerConfig, Rev, System};
 use mix_pins::{HOME_MANAGER_REV, NIXPKGS_REV};
 
 #[derive(Debug, Arbitrary)]
@@ -85,30 +85,25 @@ fn related(a: &[String], b: &[String]) -> bool {
 
 #[derive(Debug, Arbitrary)]
 pub struct FlakeInput {
-    pub system: String,
     pub username: String,
 }
 
+const NIXPKGS: Rev = Rev::new_static(NIXPKGS_REV);
+const HOME_MANAGER: Rev = Rev::new_static(HOME_MANAGER_REV);
+
 pub fn render_flake(input: &FlakeInput) -> Option<String> {
-    FlakeConfig::new(
-        &input.system,
-        &input.username,
-        NIXPKGS_REV,
-        HOME_MANAGER_REV,
-    )
-    .ok()
-    .map(|cfg| cfg.render())
+    FlakeConfig::new(System::X86_64Linux, &input.username, NIXPKGS, HOME_MANAGER)
+        .ok()
+        .map(|cfg| cfg.render())
 }
 
-const KEY_PREFIX: &str = "homeConfigurations.";
+const KEY_PREFIX: &str = "homeConfigurations = {\n      ";
 const KEY_SUFFIX: &str = " = home-manager.lib.homeManagerConfiguration {";
 
 pub fn rendered_username_key(rendered: &str) -> Option<&str> {
-    rendered.lines().find_map(|line| {
-        line.trim_start()
-            .strip_prefix(KEY_PREFIX)?
-            .strip_suffix(KEY_SUFFIX)
-    })
+    let start = rendered.find(KEY_PREFIX)? + KEY_PREFIX.len();
+    let end = rendered.rfind(KEY_SUFFIX)?;
+    rendered.get(start..end)
 }
 
 #[cfg(test)]
@@ -117,7 +112,6 @@ mod tests {
 
     fn key_for(username: &str) -> String {
         let input = FlakeInput {
-            system: "x86_64-linux".to_string(),
             username: username.to_string(),
         };
         let rendered = render_flake(&input).unwrap();
@@ -125,8 +119,9 @@ mod tests {
     }
 
     #[test]
-    fn the_key_is_extracted_as_a_quoted_nix_literal() {
-        assert_eq!(key_for("mix"), "\"mix\"");
+    fn the_key_is_extracted_as_written() {
+        assert_eq!(key_for("mix"), "mix");
+        assert_eq!(key_for("john.doe"), "\"john.doe\"");
     }
 
     #[test]
@@ -136,8 +131,8 @@ mod tests {
             "\" = home-manager.lib.homeManagerConfiguration {\""
         );
         assert_eq!(
-            key_for("x\n  homeConfigurations.y"),
-            "\"x\\n  homeConfigurations.y\""
+            key_for("x\n  homeConfigurations = {\n      y"),
+            "\"x\n  homeConfigurations = {\n      y\""
         );
     }
 
@@ -145,7 +140,6 @@ mod tests {
     fn a_username_with_a_null_byte_renders_nothing() {
         assert!(
             render_flake(&FlakeInput {
-                system: "x86_64-linux".to_string(),
                 username: "mi\0x".to_string(),
             })
             .is_none()

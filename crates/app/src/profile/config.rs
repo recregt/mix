@@ -4,20 +4,23 @@ use mix_core::paths::{GENERATION_STATE_FILE, HOME_NIX, STATE_FILE, mix_state_dir
 use mix_core::privilege::{InvokingUser, invoking_user};
 use mix_core::state::StateManifest;
 use mix_core::system::{Arch, Os};
-use mix_nixgen::{FlakeConfig, HomeManagerConfig, InvalidInput};
+use mix_nixgen::{FlakeConfig, HomeManagerConfig, InvalidInput, Rev, System};
 
 use mix_pins::{HOME_MANAGER_REV, NIXPKGS_REV};
+
+const NIXPKGS: Rev = Rev::new_static(NIXPKGS_REV);
+const HOME_MANAGER: Rev = Rev::new_static(HOME_MANAGER_REV);
 
 use crate::profile::state::{Settled, Source, settle};
 
 const HOME_MANAGER_STATE_VERSION: &str = "24.05";
 
-fn nix_system_double(arch: Arch, os: Os) -> &'static str {
+fn nix_system(arch: Arch, os: Os) -> System {
     match (arch, os) {
-        (Arch::X86_64, Os::Linux) => "x86_64-linux",
-        (Arch::Aarch64, Os::Linux) => "aarch64-linux",
-        (Arch::X86_64, Os::MacOs) => "x86_64-darwin",
-        (Arch::Aarch64, Os::MacOs) => "aarch64-darwin",
+        (Arch::X86_64, Os::Linux) => System::X86_64Linux,
+        (Arch::Aarch64, Os::Linux) => System::Aarch64Linux,
+        (Arch::X86_64, Os::MacOs) => System::X86_64Darwin,
+        (Arch::Aarch64, Os::MacOs) => System::Aarch64Darwin,
     }
 }
 
@@ -44,9 +47,9 @@ pub fn resolve_user_config() -> Option<UserConfig> {
 }
 
 pub fn user_config_for(user: InvokingUser) -> Option<UserConfig> {
-    let system = nix_system_double(Arch::current()?, Os::current()?);
-    let flake = FlakeConfig::new(system, &user.name, NIXPKGS_REV, HOME_MANAGER_REV)
-        .expect("system is a hardcoded literal and a real username cannot contain a null byte")
+    let system = nix_system(Arch::current()?, Os::current()?);
+    let flake = FlakeConfig::new(system, &user.name, NIXPKGS, HOME_MANAGER)
+        .expect("a real username cannot contain a null byte")
         .render();
     let (home, restored_state) = match settle(&user.home) {
         Settled::Current { manifest, source } => (
@@ -118,13 +121,10 @@ mod tests {
     }
 
     #[test]
-    fn nix_system_double_covers_all_four_combinations() {
-        assert_eq!(nix_system_double(Arch::X86_64, Os::Linux), "x86_64-linux");
-        assert_eq!(nix_system_double(Arch::Aarch64, Os::Linux), "aarch64-linux");
-        assert_eq!(nix_system_double(Arch::X86_64, Os::MacOs), "x86_64-darwin");
-        assert_eq!(
-            nix_system_double(Arch::Aarch64, Os::MacOs),
-            "aarch64-darwin"
-        );
+    fn nix_system_covers_all_four_combinations() {
+        assert_eq!(nix_system(Arch::X86_64, Os::Linux), System::X86_64Linux);
+        assert_eq!(nix_system(Arch::Aarch64, Os::Linux), System::Aarch64Linux);
+        assert_eq!(nix_system(Arch::X86_64, Os::MacOs), System::X86_64Darwin);
+        assert_eq!(nix_system(Arch::Aarch64, Os::MacOs), System::Aarch64Darwin);
     }
 }
