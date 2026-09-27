@@ -319,6 +319,7 @@ mod tests {
     use super::*;
     use mockito::Server;
 
+    #[allow(clippy::disallowed_methods)]
     fn make_xz_tarball(files: &[(&str, &[u8])]) -> Vec<u8> {
         let src = tempfile::tempdir().unwrap();
         for (name, contents) in files {
@@ -548,6 +549,7 @@ mod tests {
         assert!(pin_for(&host_target_key()).is_some());
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn xz_compress(bytes: &[u8]) -> Vec<u8> {
         use std::io::Write as _;
         let mut child = std::process::Command::new("xz")
@@ -570,6 +572,7 @@ mod tests {
         assert!(matches!(err, Error::Core(mix_core::Error::Io { .. })));
     }
 
+    #[allow(clippy::disallowed_methods)]
     #[test]
     fn unpack_restores_unaligned_entries_under_a_read_only_directory() {
         use std::os::unix::fs::PermissionsExt as _;

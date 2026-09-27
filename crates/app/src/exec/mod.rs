@@ -4,8 +4,10 @@
 //! tools, git. A command either answers a question — [`status_as`], [`plan_as`] — or does work
 //! worth watching, and a failure is named by the command line that produced it.
 
+pub mod group;
 pub mod output;
 
+use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
@@ -33,8 +35,15 @@ fn path_with_nix_profile() -> String {
     }
 }
 
+#[allow(clippy::disallowed_methods)]
+pub fn command(program: impl AsRef<OsStr>) -> Command {
+    let mut command = Command::new(program);
+    command.stdin(std::process::Stdio::null());
+    command
+}
+
 fn command_as(user: &InvokingUser, command: &str, args: &[&str]) -> Command {
-    let mut cmd = Command::new(command);
+    let mut cmd = self::command(command);
     cmd.args(args)
         .uid(user.uid)
         .gid(user.gid)
@@ -82,14 +91,13 @@ async fn run_command_reporting(
     if input.is_some() {
         command.stdin(std::process::Stdio::piped());
     }
-    let mut child = command
+    command
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| Error::Exec {
-            command: command_line.to_string(),
-            source: e,
-        })?;
+        .stderr(std::process::Stdio::piped());
+    let (mut child, group) = group::spawn(&mut command).map_err(|e| Error::Exec {
+        command: command_line.to_string(),
+        source: e,
+    })?;
 
     let stdin_task = input.map(|input| {
         let mut stdin = child.stdin.take().expect("stdin was piped");
@@ -122,10 +130,7 @@ async fn run_command_reporting(
             source: e,
         })?,
         () = token.cancelled() => {
-            child.kill().await.map_err(|e| Error::Exec {
-                command: command_line.to_string(),
-                source: e,
-            })?;
+            group.stop(&mut child, group::GRACE).await;
             stdout_task.abort();
             stderr_task.abort();
             if let Some(stdin_task) = &stdin_task {
@@ -154,9 +159,18 @@ async fn run_command_reporting(
     })
 }
 
+pub async fn output(
+    command: Command,
+    command_line: &str,
+    input: Option<Vec<u8>>,
+    token: &CancellationToken,
+) -> Result<std::process::Output> {
+    run_command_reporting(command, command_line, token, None, input).await
+}
+
 pub async fn run(command: &str, args: &[&str], token: &CancellationToken) -> Result<()> {
     let command_line = format_command(command, args);
-    let mut cmd = Command::new(command);
+    let mut cmd = self::command(command);
     cmd.args(args);
     let output = run_command(cmd, &command_line, token).await?;
     if !output.status.success() {
@@ -301,7 +315,7 @@ mod tests {
                 "printf 'this derivation will be built:\\n  \
                  /nix/store/00000000000000000000000000000001-hello.drv\\n' >&2",
             ],
-            &CancellationToken::new(),
+            &mix_core::cancel::root(),
         )
         .await
         .unwrap();
@@ -322,7 +336,7 @@ mod tests {
                 "printf 'these 1 derivations are going to be built:\\n  \
                  /nix/store/00000000000000000000000000000001-hello.drv\\n' >&2",
             ],
-            &CancellationToken::new(),
+            &mix_core::cancel::root(),
         )
         .await
         .unwrap();
@@ -344,7 +358,7 @@ mod tests {
                 "/bin/cat",
                 &[],
                 input.clone(),
-                &CancellationToken::new(),
+                &mix_core::cancel::root(),
             ),
         )
         .await
@@ -363,7 +377,7 @@ mod tests {
                 "/bin/sh",
                 &["-c", "echo done"],
                 vec![b'x'; 1024 * 1024],
-                &CancellationToken::new(),
+                &mix_core::cancel::root(),
             ),
         )
         .await
@@ -379,7 +393,7 @@ mod tests {
             &current_user(),
             "/bin/sh",
             &["-c", "echo \"error: attribute 'nope' missing\" >&2; exit 1"],
-            &CancellationToken::new(),
+            &mix_core::cancel::root(),
         )
         .await
         .unwrap_err();
@@ -457,7 +471,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_reports_the_full_command_line_on_failure() {
-        let token = CancellationToken::new();
+        let token = mix_core::cancel::root();
         match run("false", &["--gid", "30000", "nixbld1"], &token).await {
             Err(Error::Command { command, .. }) => {
                 assert_eq!(command, "false --gid 30000 nixbld1");
@@ -468,7 +482,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_preserves_the_source_error_when_the_command_cannot_be_spawned() {
-        let token = CancellationToken::new();
+        let token = mix_core::cancel::root();
         match run(
             "mix-test-nonexistent-binary-xyz",
             &["--gid", "30000"],
@@ -486,7 +500,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_kills_and_reaps_the_child_when_cancelled() {
-        let token = CancellationToken::new();
+        let token = mix_core::cancel::root();
         token.cancel();
 
         match run("sleep", &["5"], &token).await {
@@ -499,7 +513,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_does_not_deadlock_on_output_larger_than_a_pipe_buffer() {
-        let token = CancellationToken::new();
+        let token = mix_core::cancel::root();
 
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(10),
@@ -646,9 +660,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_streamed_command_reports_its_progress_and_still_returns_its_output() {
-        let token = CancellationToken::new();
+        let token = mix_core::cancel::root();
         let recorder = Arc::new(Recorder::default());
-        let mut cmd = Command::new("sh");
+        let mut cmd = command("sh");
         cmd.args(["-c", "echo building >&2; echo done >&2; echo /nix/store/x"]);
 
         let output = run_command_reporting(
@@ -673,9 +687,9 @@ mod tests {
     /// handed to the reporter that draws them.
     #[tokio::test]
     async fn a_streamed_command_reports_structured_progress_end_to_end() {
-        let token = CancellationToken::new();
+        let token = mix_core::cancel::root();
         let recorder = Arc::new(Recorder::default());
-        let mut cmd = Command::new("sh");
+        let mut cmd = command("sh");
         cmd.args([
             "-c",
             concat!(
@@ -711,9 +725,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_streamed_command_keeps_only_the_tail_of_a_flood_of_output() {
-        let token = CancellationToken::new();
+        let token = mix_core::cancel::root();
         let recorder = Arc::new(Recorder::default());
-        let mut cmd = Command::new("sh");
+        let mut cmd = command("sh");
         cmd.args(["-c", "seq 1 60000 >&2"]);
 
         let output = tokio::time::timeout(

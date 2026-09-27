@@ -267,6 +267,7 @@ impl Client {
         })
     }
 
+    #[allow(clippy::disallowed_methods)]
     pub async fn start(program: &Path, args: &[&str], via: Option<&str>) -> Result<Self, Error> {
         let (ours, theirs) = std::os::unix::net::UnixStream::pair().map_err(Error::Spawn)?;
         let mut command = match via {
@@ -333,6 +334,6 @@ fn decode<R>(
 ) -> impl Stream<Item = Result<Event, Error>> {
     responses.map(move |response| match response {
         Ok(response) => Ok(from_wire(response)?),
-        Err(status) => Err(refused(status)),
+        Err(_) => Err(Error::Ended),
     })
 }

@@ -39,7 +39,7 @@ impl Step for CreateNixDir {
         Ok(())
     }
 
-    async fn rollback(&mut self) -> Result<()> {
+    async fn rollback(&mut self, _token: &CancellationToken) -> Result<()> {
         if self.created_dir {
             remove_dir_all("/nix").await?;
         } else {

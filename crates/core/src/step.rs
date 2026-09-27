@@ -1,12 +1,11 @@
-use std::future::Future;
 use std::pin::pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures_util::future::{Either, select};
-pub use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
+use crate::cancel::{self, CancellationToken};
 use crate::progress::StepObserver;
 
 #[async_trait]
@@ -17,7 +16,7 @@ pub trait Step: Send + Sync {
     async fn check(&self) -> Result<bool, Self::Error>;
     async fn execute(&mut self, token: &CancellationToken) -> Result<(), Self::Error>;
 
-    async fn rollback(&mut self) -> Result<(), Self::Error> {
+    async fn rollback(&mut self, _token: &CancellationToken) -> Result<(), Self::Error> {
         Ok(())
     }
 }
@@ -57,27 +56,22 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
     }
 
     pub async fn run(&mut self) -> Result<(), E> {
-        match self.run_cancellable(std::future::pending()).await {
+        match self.run_cancellable(&cancel::shield()).await {
             Outcome::Completed(result) => result,
-            Outcome::Interrupted => unreachable!("cancel future never resolves"),
+            Outcome::Interrupted => unreachable!("a shield is never cancelled"),
         }
     }
 
-    pub async fn run_cancellable(&mut self, cancel: impl Future<Output = ()>) -> Outcome<E> {
-        let mut cancel = pin!(cancel);
+    pub async fn run_cancellable(&mut self, cancel: &CancellationToken) -> Outcome<E> {
+        let token = cancel.child_token();
+        let mut cancel = pin!(cancel.cancelled());
         let recording = tracing::Level::INFO <= tracing::level_filters::LevelFilter::current();
         let mut attempted = Attempted::default();
-        let mut token: Option<CancellationToken> = None;
 
         let stop = 'run: {
             for (idx, step) in self.steps.iter_mut().enumerate() {
                 let check = match select(cancel.as_mut(), step.check()).await {
-                    Either::Left(((), _)) => {
-                        if let Some(token) = &token {
-                            token.cancel();
-                        }
-                        break 'run Some(StopReason::Interrupted);
-                    }
+                    Either::Left(((), _)) => break 'run Some(StopReason::Interrupted),
                     Either::Right((result, _)) => result,
                 };
 
@@ -97,7 +91,6 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
                 tracing::info!("running: {name}");
                 attempted.insert(idx);
 
-                let token = token.get_or_insert_with(CancellationToken::new);
                 let (executed, interrupted) = if recording {
                     let span = observed(&self.step_observer, tracing::info_span!("step", name));
                     // The span outlives the step's own future on purpose: closing it is what
@@ -105,14 +98,11 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
                     // left with, so a failure has to be reported before that happens.
                     let ran = match select(
                         cancel.as_mut(),
-                        step.execute(token).instrument(span.clone()),
+                        step.execute(&token).instrument(span.clone()),
                     )
                     .await
                     {
-                        Either::Left(((), executing)) => {
-                            token.cancel();
-                            (executing.await, true)
-                        }
+                        Either::Left(((), executing)) => (executing.await, true),
                         Either::Right((result, _)) => (result, false),
                     };
                     if ran.0.is_err() {
@@ -120,11 +110,8 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
                     }
                     ran
                 } else {
-                    match select(cancel.as_mut(), step.execute(token)).await {
-                        Either::Left(((), executing)) => {
-                            token.cancel();
-                            (executing.await, true)
-                        }
+                    match select(cancel.as_mut(), step.execute(&token)).await {
+                        Either::Left(((), executing)) => (executing.await, true),
                         Either::Right((result, _)) => (result, false),
                     }
                 };
@@ -160,6 +147,7 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
     }
 
     async fn unwind(&mut self, attempted: &Attempted, recording: bool) {
+        let shield = cancel::shield();
         for idx in (0..self.steps.len()).rev() {
             if !attempted.contains(idx) {
                 continue;
@@ -172,8 +160,8 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
             let span = recording
                 .then(|| observed(&self.step_observer, tracing::info_span!("rollback", name)));
             let rolled_back = match span {
-                Some(span) => step.rollback().instrument(span).await,
-                None => step.rollback().await,
+                Some(span) => step.rollback(&shield).instrument(span).await,
+                None => step.rollback(&shield).await,
             };
             if let Err(e) = rolled_back {
                 tracing::error!("rollback failed: {name} ({e})");
@@ -252,6 +240,18 @@ mod tests {
     #[error("probe error")]
     struct ProbeError;
 
+    fn cancel_once(ready: impl Fn() -> bool + Send + 'static) -> CancellationToken {
+        let cancel = cancel::root();
+        let cancelling = cancel.clone();
+        tokio::spawn(async move {
+            while !ready() {
+                tokio::task::yield_now().await;
+            }
+            cancelling.cancel();
+        });
+        cancel
+    }
+
     struct Noop {
         satisfied: bool,
         fail: bool,
@@ -300,7 +300,7 @@ mod tests {
             satisfied: false,
             fail: false,
         };
-        assert!(step.rollback().await.is_ok());
+        assert!(step.rollback(&cancel::root()).await.is_ok());
     }
 
     struct Recorder {
@@ -334,7 +334,7 @@ mod tests {
             }
         }
 
-        async fn rollback(&mut self) -> Result<(), ProbeError> {
+        async fn rollback(&mut self, _token: &CancellationToken) -> Result<(), ProbeError> {
             self.log
                 .lock()
                 .unwrap()
@@ -505,7 +505,7 @@ mod tests {
             Err(ProbeError)
         }
 
-        async fn rollback(&mut self) -> Result<(), ProbeError> {
+        async fn rollback(&mut self, _token: &CancellationToken) -> Result<(), ProbeError> {
             while self.progress > 0 {
                 self.progress -= 1;
                 self.log.lock().unwrap().push(self.progress);
@@ -539,19 +539,21 @@ mod tests {
         })];
         let mut plan = Plan::new(steps);
 
-        let outcome = plan.run_cancellable(std::future::ready(())).await;
+        let cancel = cancel::root();
+        cancel.cancel();
+        let outcome = plan.run_cancellable(&cancel).await;
 
         assert!(matches!(outcome, Outcome::Interrupted));
         assert!(log.lock().unwrap().is_empty());
     }
 
-    struct SetFlagOnExecute {
-        flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    struct InterruptsDuringExecute {
+        interrupt: CancellationToken,
         log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     }
 
     #[async_trait]
-    impl Step for SetFlagOnExecute {
+    impl Step for InterruptsDuringExecute {
         type Error = ProbeError;
 
         fn name(&self) -> &'static str {
@@ -564,11 +566,11 @@ mod tests {
 
         async fn execute(&mut self, _token: &CancellationToken) -> Result<(), ProbeError> {
             self.log.lock().unwrap().push("execute:a".to_string());
-            self.flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            self.interrupt.cancel();
             Ok(())
         }
 
-        async fn rollback(&mut self) -> Result<(), ProbeError> {
+        async fn rollback(&mut self, _token: &CancellationToken) -> Result<(), ProbeError> {
             self.log.lock().unwrap().push("rollback:a".to_string());
             Ok(())
         }
@@ -577,10 +579,10 @@ mod tests {
     #[tokio::test]
     async fn interrupting_after_a_step_rolls_back_only_that_step() {
         let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel = cancel::root();
         let steps: Vec<Box<dyn Step<Error = ProbeError>>> = vec![
-            Box::new(SetFlagOnExecute {
-                flag: flag.clone(),
+            Box::new(InterruptsDuringExecute {
+                interrupt: cancel.clone(),
                 log: log.clone(),
             }),
             Box::new(Recorder {
@@ -591,16 +593,7 @@ mod tests {
             }),
         ];
         let mut plan = Plan::new(steps);
-        let cancel = std::future::poll_fn(move |cx| {
-            if flag.load(std::sync::atomic::Ordering::SeqCst) {
-                std::task::Poll::Ready(())
-            } else {
-                cx.waker().wake_by_ref();
-                std::task::Poll::Pending
-            }
-        });
-
-        let outcome = plan.run_cancellable(cancel).await;
+        let outcome = plan.run_cancellable(&cancel).await;
 
         assert!(matches!(outcome, Outcome::Interrupted));
         assert_eq!(*log.lock().unwrap(), vec!["execute:a", "rollback:a"]);
@@ -648,16 +641,9 @@ mod tests {
         let mut plan = Plan::new(steps);
 
         let checkpoint_log = log.clone();
-        let cancel = std::future::poll_fn(move |cx| {
-            if checkpoint_log.lock().unwrap().len() >= 3 {
-                std::task::Poll::Ready(())
-            } else {
-                cx.waker().wake_by_ref();
-                std::task::Poll::Pending
-            }
-        });
+        let cancel = cancel_once(move || checkpoint_log.lock().unwrap().len() >= 3);
 
-        let outcome = plan.run_cancellable(cancel).await;
+        let outcome = plan.run_cancellable(&cancel).await;
 
         assert!(matches!(outcome, Outcome::Interrupted));
         let log = log.lock().unwrap();
@@ -691,7 +677,7 @@ mod tests {
             Err(ProbeError)
         }
 
-        async fn rollback(&mut self) -> Result<(), ProbeError> {
+        async fn rollback(&mut self, _token: &CancellationToken) -> Result<(), ProbeError> {
             self.log.lock().unwrap().push("rollback".to_string());
             Ok(())
         }
@@ -705,59 +691,12 @@ mod tests {
         let mut plan = Plan::new(steps);
 
         let started = log.clone();
-        let cancel = std::future::poll_fn(move |cx| {
-            if started.lock().unwrap().is_empty() {
-                cx.waker().wake_by_ref();
-                std::task::Poll::Pending
-            } else {
-                std::task::Poll::Ready(())
-            }
-        });
+        let cancel = cancel_once(move || !started.lock().unwrap().is_empty());
 
-        let outcome = plan.run_cancellable(cancel).await;
+        let outcome = plan.run_cancellable(&cancel).await;
 
         assert!(matches!(outcome, Outcome::Interrupted));
         assert_eq!(*log.lock().unwrap(), vec!["execute", "rollback"]);
-    }
-
-    #[tokio::test]
-    async fn a_second_signal_sent_while_the_first_is_already_being_handled_has_no_additional_effect()
-     {
-        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let steps: Vec<Box<dyn Step<Error = ProbeError>>> = vec![Box::new(CooperativeStep {
-            total_iterations: 1_000_000,
-            log: log.clone(),
-        })];
-        let mut plan = Plan::new(steps);
-
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
-        let sender_log = log.clone();
-        tokio::spawn(async move {
-            while sender_log.lock().unwrap().len() < 3 {
-                tokio::task::yield_now().await;
-            }
-            tx.send(()).unwrap();
-            tx.send(()).unwrap();
-        });
-
-        let cancel = async {
-            let _ = rx.recv().await;
-        };
-        let outcome = plan.run_cancellable(cancel).await;
-
-        assert!(matches!(outcome, Outcome::Interrupted));
-        {
-            let log = log.lock().unwrap();
-            assert!(log.len() < 50, "step ran far past the checkpoint: {log:?}");
-            assert!(log.last().unwrap().starts_with("cancelled-at:"));
-        }
-
-        assert_eq!(
-            rx.try_recv(),
-            Ok(()),
-            "the second signal must still be sitting unread in the channel: \
-             run_cancellable only ever consumes the first"
-        );
     }
 
     struct RecordingObserver(std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>);

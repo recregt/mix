@@ -49,7 +49,7 @@ pub async fn repair(user_config: Option<&UserConfig>, cancel: &CancellationToken
     let items = targets(user_config);
     let (mut reports, interrupted) = put_back(&items, cancel).await;
 
-    let token = CancellationToken::new();
+    let token = mix_core::cancel::shield();
     if rewrote_nix_conf(&reports) {
         restart_the_daemon(&token, &mut reports).await;
     }
@@ -65,7 +65,7 @@ pub async fn repair(user_config: Option<&UserConfig>, cancel: &CancellationToken
 }
 
 async fn put_back(items: &[Target], cancel: &CancellationToken) -> (Vec<RepairReport>, bool) {
-    let token = CancellationToken::new();
+    let token = mix_core::cancel::shield();
 
     // Measuring does not change anything, so every target is measured at once; putting them back
     // is done in the order they are declared in, because a target can be what the next one needs.
@@ -202,7 +202,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
 
         let (reports, interrupted) =
-            put_back(&drifted_files(dir.path()), &CancellationToken::new()).await;
+            put_back(&drifted_files(dir.path()), &mix_core::cancel::root()).await;
 
         assert!(!interrupted);
         assert_eq!(reports.len(), 2);
@@ -216,7 +216,7 @@ mod tests {
     #[tokio::test]
     async fn a_stopped_repair_starts_nothing_new_and_says_it_was_stopped() {
         let dir = tempfile::tempdir().unwrap();
-        let cancel = CancellationToken::new();
+        let cancel = mix_core::cancel::root();
         cancel.cancel();
 
         let (reports, interrupted) = put_back(&drifted_files(dir.path()), &cancel).await;
@@ -232,7 +232,7 @@ mod tests {
     #[tokio::test]
     async fn a_stop_with_nothing_left_to_repair_is_not_an_interruption() {
         let dir = tempfile::tempdir().unwrap();
-        let cancel = CancellationToken::new();
+        let cancel = mix_core::cancel::root();
         cancel.cancel();
         let healthy = Target::File {
             path: dir.path().join("healthy"),

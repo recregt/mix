@@ -9,9 +9,9 @@ pub async fn run(verbosity: u8) -> anyhow::Result<ExitCode> {
     } = if mix_core::privilege::is_root() {
         let _lock = super::acquire_lock()?;
         let user_config = mix_app::resolve_existing_user_config();
-        let cancel = mix_core::CancellationToken::new();
+        let cancel = mix_core::cancel::root();
         let _watch =
-            crate::interrupt::watch(&cancel, crate::interrupt::FINISHING, std::future::pending());
+            crate::interrupt::watch(&cancel, crate::interrupt::REPAIR, std::future::pending());
         mix_app::repair::repair(user_config.as_ref(), &cancel).await
     } else {
         crate::remote::client::repair(verbosity).await?

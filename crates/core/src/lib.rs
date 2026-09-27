@@ -1,4 +1,5 @@
 pub mod build_graph;
+pub mod cancel;
 pub mod constants;
 pub mod error;
 pub mod lock;
@@ -11,10 +12,11 @@ pub mod state;
 pub mod step;
 pub mod system;
 
+pub use cancel::CancellationToken;
 pub use constants::{identity, paths};
 pub use error::{Error, Result};
 pub use models::{Category, Target};
 pub use nix_log::{BuildProgress, NixLog};
 pub use nix_plan::BuildPlan;
 pub use progress::{ActivityReporter, DownloadProgress, NoopActivity, NoopProgress, StepObserver};
-pub use step::{CancellationToken, Outcome, Plan, Step};
+pub use step::{Outcome, Plan, Step};

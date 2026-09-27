@@ -4,9 +4,7 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use mix_core::paths::LOCK_FILE;
-use mix_core::{
-    ActivityReporter, BuildProgress, CancellationToken, DownloadProgress, StepObserver,
-};
+use mix_core::{ActivityReporter, BuildProgress, DownloadProgress, StepObserver};
 use mix_rpc::{BootstrapRequest, Caller, Event, Events, Failure, Level, Outcome, RepairRequest};
 use tracing::Subscriber;
 use tracing::field::{Field, Visit};
@@ -243,8 +241,8 @@ impl mix_rpc::Worker for CliWorker {
             Err(error) => Outcome::Failure(Failure::Core(error)),
             Ok(_lock) => {
                 let mirror = request.mirror.as_ref();
-                let cancel = CancellationToken::new();
-                let _watch = interrupt::watch(&cancel, interrupt::UNDOING, client_gone(&events));
+                let cancel = mix_core::cancel::root();
+                let _watch = interrupt::watch(&cancel, interrupt::BOOTSTRAP, client_gone(&events));
                 let result = mix_app::bootstrap::bootstrap(
                     mix_core::privilege::user_by_uid(caller.uid),
                     mirror.map(|mirror| mirror.url.as_str()),
@@ -275,8 +273,8 @@ impl mix_rpc::Worker for CliWorker {
             Ok(_lock) => {
                 let user_config = mix_core::privilege::user_by_uid(caller.uid)
                     .and_then(mix_app::profile::existing_user_config_for);
-                let cancel = CancellationToken::new();
-                let _watch = interrupt::watch(&cancel, interrupt::FINISHING, client_gone(&events));
+                let cancel = mix_core::cancel::root();
+                let _watch = interrupt::watch(&cancel, interrupt::REPAIR, client_gone(&events));
                 let repair = mix_app::repair::repair(user_config.as_ref(), &cancel).await;
                 Outcome::RepairDone {
                     reports: repair.reports.into_iter().map(report_to_wire).collect(),

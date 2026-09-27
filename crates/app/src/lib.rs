@@ -29,4 +29,8 @@ pub mod target;
 pub use profile::resolve_existing_user_config;
 
 #[doc(hidden)]
-pub use exec::output;
+pub use exec::{command, output};
+
+pub mod children {
+    pub use crate::exec::group::{kill_all, pause_all, resume_all};
+}

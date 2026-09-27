@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use mix_core::ActivityReporter;
 use mix_core::models::UserConfig;
 use mix_core::state::StateManifest;
+use mix_core::{ActivityReporter, CancellationToken};
 
 use crate::profile::BuildPolicy;
 use crate::profile::change;
@@ -43,6 +43,7 @@ pub async fn remove(
     mirror: Option<&str>,
     mirror_key: Option<&str>,
     activity: Arc<dyn ActivityReporter>,
+    cancel: &CancellationToken,
 ) -> Result<Removed> {
     let protected = StateManifest::protected(packages);
     if !protected.is_empty() {
@@ -68,10 +69,13 @@ pub async fn remove(
         cfg,
         &state.without(&removed),
         &change::label("Removing", &removed),
-        mirror,
-        mirror_key,
+        change::PackageSource {
+            mirror,
+            mirror_key,
+            policy: BuildPolicy::AllowSource,
+        },
         &activity,
-        BuildPolicy::AllowSource,
+        cancel,
     )
     .await?;
 
@@ -129,7 +133,15 @@ mod tests {
 
     async fn remove_from(home: &std::path::Path, packages: &[&str]) -> Result<Removed> {
         let packages: Vec<String> = packages.iter().map(|p| p.to_string()).collect();
-        remove(&user_config(home), &packages, None, None, noop()).await
+        remove(
+            &user_config(home),
+            &packages,
+            None,
+            None,
+            noop(),
+            &mix_core::cancel::root(),
+        )
+        .await
     }
 
     #[tokio::test]

@@ -56,29 +56,40 @@ pub async fn settled(cfg: &UserConfig) -> Result<(StateManifest, Option<Source>)
     }
 }
 
+pub struct PackageSource<'a> {
+    pub mirror: Option<&'a str>,
+    pub mirror_key: Option<&'a str>,
+    pub policy: BuildPolicy,
+}
+
 pub async fn apply(
     cfg: &UserConfig,
     manifest: &StateManifest,
     label: &str,
-    mirror: Option<&str>,
-    mirror_key: Option<&str>,
+    source: PackageSource<'_>,
     activity: &Arc<dyn ActivityReporter>,
-    policy: BuildPolicy,
+    cancel: &CancellationToken,
 ) -> Result<()> {
     let (new_state, new_home) = render_candidate(cfg, manifest)?;
 
     let state_dir = mix_state_dir(&cfg.user.home);
     let state_path = state_dir.join(STATE_FILE);
     let home_path = state_dir.join(HOME_NIX);
-    let token = CancellationToken::new();
     let span = tracing::info_span!("step", name = label);
 
     async {
         let generation = write_then_switch(&state_path, &home_path, &new_state, &new_home, || {
-            profile::switch(cfg, mirror, mirror_key, activity, &token, policy)
+            profile::switch(
+                cfg,
+                source.mirror,
+                source.mirror_key,
+                activity,
+                cancel,
+                source.policy,
+            )
         })
         .await?;
-        profile::finish(cfg, &generation, activity, &token).await?;
+        profile::finish(cfg, &generation, activity, &mix_core::cancel::shield()).await?;
         Ok(())
     }
     .instrument(span)

@@ -57,9 +57,7 @@ impl Step for ConfigureSystemdService {
         Ok(())
     }
 
-    async fn rollback(&mut self) -> Result<()> {
-        let token = CancellationToken::new();
-
+    async fn rollback(&mut self, token: &CancellationToken) -> Result<()> {
         if self.started_socket {
             warn_on_failure(
                 "disable nix-daemon.socket",
@@ -71,7 +69,7 @@ impl Step for ConfigureSystemdService {
                         "nix-daemon.socket",
                         "nix-daemon.service",
                     ],
-                    &token,
+                    token,
                 )
                 .await,
             );
@@ -90,7 +88,7 @@ impl Step for ConfigureSystemdService {
 
         warn_on_failure(
             "reload systemd",
-            run("systemctl", &["daemon-reload"], &token).await,
+            run("systemctl", &["daemon-reload"], token).await,
         );
         Ok(())
     }

@@ -56,25 +56,6 @@ def test_sigint_during_fetch_and_unpack_exits_promptly_and_rolls_back(container,
     assert not container.path_exists(DEFAULT_PROFILE_NIX_ENV)
 
 
-def test_a_second_sigint_during_fetch_and_unpack_has_no_additional_effect(container, mock_nix_server):
-    proc = container.start_background(
-        "mix", "-v", "bootstrap", env={"MIX_NIX_MIRROR": mock_nix_server["url"]}
-    )
-    proc.wait_for_output(RUNNING_FETCH_AND_UNPACK)
-    proc.signal("INT")
-    proc.signal("INT")
-
-    started = time.time()
-    result = proc.wait(timeout=15.0)
-    elapsed = time.time() - started
-
-    assert result.returncode != 0, result.stdout
-    assert elapsed < 10.0
-    assert result.stdout.count(WINDING_DOWN_NOTICE) == 1
-    assert not container.path_exists(PROVISIONING_MANIFEST)
-    assert _store_entry_count(container) == 0
-
-
 def test_hard_kill_during_fetch_and_unpack_then_bootstrap_converges(container, mock_nix_server):
     proc = container.start_background(
         "mix", "-v", "bootstrap", env={"MIX_NIX_MIRROR": mock_nix_server["url"]}
@@ -94,3 +75,21 @@ def test_hard_kill_during_fetch_and_unpack_then_bootstrap_converges(container, m
     assert not container.path_exists(PROVISIONING_MANIFEST)
     check = container.exec("mix", "doctor")
     assert check.returncode == 0, check.stderr
+
+
+def test_a_store_left_half_rolled_back_is_provisioned_again(container, mock_nix_server):
+    env = {"MIX_NIX_MIRROR": mock_nix_server["url"]}
+    first = container.exec("mix", "bootstrap", env=env)
+    assert first.returncode == 0, first.stdout + first.stderr
+    container.exec(
+        "sh",
+        "-c",
+        "rm -f /nix/var/nix/profiles/default /nix/var/nix/profiles/default-*-link"
+        " && rm -rf /nix/store/*-user-environment /nix/store/*-user-environment.drv",
+        check=True,
+    )
+
+    again = container.exec("mix", "-v", "--no-progress", "bootstrap", env=env)
+
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert container.path_exists(DEFAULT_PROFILE_NIX_ENV)

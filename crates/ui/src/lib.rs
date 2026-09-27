@@ -174,6 +174,15 @@ fn print_status(status: Status, message: &str, to_stderr: bool) {
     print_line(&status_line(status, message, colour), to_stderr);
 }
 
+pub fn restore_terminal() {
+    use std::io::{IsTerminal, Write};
+    let mut stderr = std::io::stderr();
+    if stderr.is_terminal() {
+        let _ = stderr.write_all(b"\x1b[?25h");
+        let _ = stderr.flush();
+    }
+}
+
 pub fn ok(message: impl std::fmt::Display) {
     print_status(Status::Done, &message.to_string(), false);
 }

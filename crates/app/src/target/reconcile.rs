@@ -192,7 +192,7 @@ mod tests {
     use crate::target::{Error, apply};
 
     fn token() -> CancellationToken {
-        CancellationToken::new()
+        mix_core::cancel::root()
     }
 
     #[tokio::test]
