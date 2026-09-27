@@ -1,177 +1,250 @@
-use crate::ast::{Expr, Key, StrPart};
-use crate::ident::Ident;
+use crate::ast::{Expr, Key, NixStr, RelPath, StrPart, Verbatim};
+use crate::ident::{FileName, Ident};
 
 const INDENT: &str = "  ";
 const SPACES: &str = "                                ";
 
-pub(crate) fn print(expr: &Expr) -> String {
-    let mut out = String::with_capacity(1024);
-    write(expr, 0, &mut out);
-    out
-}
-
-pub(crate) fn print_into(expr: &Expr, out: &mut String) {
-    write(expr, 0, out);
-}
-
-pub(crate) fn print_function<'a>(
-    formals: impl IntoIterator<Item = &'a Ident>,
-    ellipsis: bool,
-    body: &Expr,
-    out: &mut String,
-) {
-    write_lambda(formals, ellipsis, body, 0, out);
-}
-
-fn write(expr: &Expr, depth: usize, out: &mut String) {
-    match expr {
-        Expr::Str(parts) => write_str(parts, depth, out),
-        Expr::Bool(value) => out.push_str(if *value { "true" } else { "false" }),
-        Expr::List(items) if items.is_empty() => out.push_str("[ ]"),
-        Expr::List(items) => {
-            out.push_str("[\n");
-            for item in items {
-                indent(depth + 1, out);
-                write_operand(item, depth + 1, out);
-                out.push('\n');
-            }
-            indent(depth, out);
-            out.push(']');
-        }
-        Expr::Attrs(entries) if entries.is_empty() => out.push_str("{ }"),
-        Expr::Attrs(entries) => {
-            out.push_str("{\n");
-            for (key, value) in entries.iter() {
-                indent(depth + 1, out);
-                write_key(key, out);
-                out.push_str(" = ");
-                write(value, depth + 1, out);
-                out.push_str(";\n");
-            }
-            indent(depth, out);
-            out.push('}');
-        }
-        Expr::Var(ident) => out.push_str(ident.as_str()),
-        Expr::Select(base, first, rest) => {
-            if matches!(**base, Expr::Path(_)) {
-                write_parenthesized(base, depth, out);
-            } else {
-                write_operand(base, depth, out);
-            }
-            for key in std::iter::once(first).chain(rest) {
-                out.push('.');
-                write_key(key, out);
-            }
-        }
-        Expr::Apply(function, argument) => {
-            if matches!(**function, Expr::Lambda { .. }) {
-                write_parenthesized(function, depth, out);
-            } else {
-                write(function, depth, out);
-            }
-            out.push(' ');
-            write_operand(argument, depth, out);
-        }
-        Expr::Lambda {
-            formals,
-            ellipsis,
-            body,
-        } => write_lambda(formals.iter(), *ellipsis, body, depth, out),
-        Expr::Path(path) => {
-            out.push_str("./");
-            out.push_str(path.as_str());
-        }
-    }
-}
-
-fn write_lambda<'a>(
-    formals: impl IntoIterator<Item = &'a Ident>,
-    ellipsis: bool,
-    body: &Expr,
+pub(crate) struct Writer<'o> {
+    out: &'o mut String,
     depth: usize,
-    out: &mut String,
-) {
-    out.push('{');
-    let mut first = true;
-    for formal in formals {
-        out.push_str(if first { " " } else { ", " });
-        out.push_str(formal.as_str());
-        first = false;
+}
+
+impl<'o> Writer<'o> {
+    pub(crate) fn new(out: &'o mut String) -> Self {
+        Self { out, depth: 0 }
     }
-    if ellipsis {
-        out.push_str(if first { " ..." } else { ", ..." });
-        first = false;
+
+    pub(crate) fn bool(&mut self, value: bool) {
+        self.out.push_str(if value { "true" } else { "false" });
     }
-    out.push_str(if first { "}: " } else { " }: " });
-    write(body, depth, out);
-}
 
-fn is_operand(expr: &Expr) -> bool {
-    matches!(
-        expr,
-        Expr::Str(_)
-            | Expr::Bool(_)
-            | Expr::List(_)
-            | Expr::Attrs(_)
-            | Expr::Var(_)
-            | Expr::Select(..)
-            | Expr::Path(_)
-    )
-}
+    pub(crate) fn var(&mut self, var: &Ident) {
+        self.out.push_str(var.as_str());
+    }
 
-fn write_operand(expr: &Expr, depth: usize, out: &mut String) {
-    if is_operand(expr) {
-        write(expr, depth, out);
-    } else {
-        write_parenthesized(expr, depth, out);
+    pub(crate) fn path(&mut self, path: &RelPath) {
+        self.out.push_str("./");
+        self.out.push_str(path.as_str());
+    }
+
+    pub(crate) fn file_path(&mut self, file: &FileName) {
+        self.out.push_str("./");
+        self.out.push_str(file.as_str());
+    }
+
+    pub(crate) fn keys<'k>(&mut self, keys: impl IntoIterator<Item = &'k Key>) {
+        for key in keys {
+            self.out.push('.');
+            write_key(key, self.out);
+        }
+    }
+
+    pub(crate) fn select_ident(&mut self, var: &Ident, attr: &Ident) {
+        self.out.push_str(var.as_str());
+        self.out.push('.');
+        self.out.push_str(attr.as_str());
+    }
+
+    pub(crate) fn text(&mut self, text: &NixStr) {
+        self.string(|s| s.lit(text.as_str()));
+    }
+
+    pub(crate) fn string(&mut self, parts: impl FnOnce(&mut StrWriter<'_, 'o>)) {
+        self.out.push('"');
+        let mut writer = StrWriter {
+            w: self,
+            pending_dollar: false,
+        };
+        parts(&mut writer);
+        if writer.pending_dollar {
+            writer.w.out.push('$');
+        }
+        self.out.push('"');
+    }
+
+    pub(crate) fn parenthesized(&mut self, inner: impl FnOnce(&mut Writer<'o>)) {
+        self.out.push('(');
+        inner(self);
+        self.out.push(')');
+    }
+
+    pub(crate) fn apply(
+        &mut self,
+        function: impl FnOnce(&mut Writer<'o>),
+        argument: impl FnOnce(&mut Writer<'o>),
+    ) {
+        function(self);
+        self.out.push(' ');
+        argument(self);
+    }
+
+    pub(crate) fn lambda<'f>(
+        &mut self,
+        formals: impl IntoIterator<Item = &'f Ident>,
+        ellipsis: bool,
+        body: impl FnOnce(&mut Writer<'o>),
+    ) {
+        self.out.push('{');
+        let mut previous: Option<&Ident> = None;
+        for formal in formals {
+            if let Some(previous) = previous {
+                assert!(
+                    previous < formal,
+                    "lambda formals must be written in strictly increasing order"
+                );
+            }
+            self.out
+                .push_str(if previous.is_none() { " " } else { ", " });
+            self.out.push_str(formal.as_str());
+            previous = Some(formal);
+        }
+        if ellipsis {
+            self.out
+                .push_str(if previous.is_none() { " ..." } else { ", ..." });
+        }
+        self.out.push_str(if previous.is_none() && !ellipsis {
+            "}: "
+        } else {
+            " }: "
+        });
+        body(self);
+    }
+
+    pub(crate) fn attrs<'k>(&mut self, entries: impl FnOnce(&mut AttrsWriter<'_, 'o, 'k>)) {
+        let mut writer = AttrsWriter {
+            w: self,
+            last: None,
+        };
+        entries(&mut writer);
+        if writer.last.is_some() {
+            indent(self.depth, self.out);
+            self.out.push('}');
+        } else {
+            self.out.push_str("{ }");
+        }
+    }
+
+    pub(crate) fn list(&mut self, items: impl FnOnce(&mut ListWriter<'_, 'o>)) {
+        let mut writer = ListWriter {
+            w: self,
+            opened: false,
+        };
+        items(&mut writer);
+        if writer.opened {
+            indent(self.depth, self.out);
+            self.out.push(']');
+        } else {
+            self.out.push_str("[ ]");
+        }
     }
 }
 
-fn write_parenthesized(expr: &Expr, depth: usize, out: &mut String) {
-    out.push('(');
-    write(expr, depth, out);
-    out.push(')');
+pub(crate) struct AttrsWriter<'w, 'o, 'k> {
+    w: &'w mut Writer<'o>,
+    last: Option<&'k Key>,
 }
 
-fn write_key(key: &Key, out: &mut String) {
+impl<'o, 'k> AttrsWriter<'_, 'o, 'k> {
+    pub(crate) fn entry(&mut self, key: &'k Key, value: impl FnOnce(&mut Writer<'o>)) {
+        match self.last {
+            Some(last) => assert!(
+                last < key,
+                "attribute keys must be written in strictly increasing order"
+            ),
+            None => self.w.out.push_str("{\n"),
+        }
+        self.last = Some(key);
+        self.w.depth += 1;
+        indent(self.w.depth, self.w.out);
+        write_key(key, self.w.out);
+        self.w.out.push_str(" = ");
+        value(self.w);
+        self.w.out.push_str(";\n");
+        self.w.depth -= 1;
+    }
+}
+
+pub(crate) struct ListWriter<'w, 'o> {
+    w: &'w mut Writer<'o>,
+    opened: bool,
+}
+
+impl<'o> ListWriter<'_, 'o> {
+    pub(crate) fn item(&mut self, value: impl FnOnce(&mut Writer<'o>)) {
+        if !self.opened {
+            self.w.out.push_str("[\n");
+            self.opened = true;
+        }
+        self.w.depth += 1;
+        indent(self.w.depth, self.w.out);
+        value(self.w);
+        self.w.out.push('\n');
+        self.w.depth -= 1;
+    }
+}
+
+pub(crate) struct StrWriter<'w, 'o> {
+    w: &'w mut Writer<'o>,
+    pending_dollar: bool,
+}
+
+impl<'o> StrWriter<'_, 'o> {
+    pub(crate) fn lit(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        if self.pending_dollar {
+            self.w
+                .out
+                .push_str(if text.starts_with('{') { "\\$" } else { "$" });
+            self.pending_dollar = false;
+        }
+        let body = match text.strip_suffix('$') {
+            Some(body) => {
+                self.pending_dollar = true;
+                body
+            }
+            None => text,
+        };
+        write_escaped(body, self.w.out);
+    }
+
+    pub(crate) fn verbatim(&mut self, text: Verbatim<'_>) {
+        let text = text.as_str();
+        if text.is_empty() {
+            return;
+        }
+        if self.pending_dollar {
+            self.w
+                .out
+                .push_str(if text.starts_with('{') { "\\$" } else { "$" });
+            self.pending_dollar = false;
+        }
+        self.w.out.push_str(text);
+    }
+
+    pub(crate) fn interp(&mut self, value: impl FnOnce(&mut Writer<'o>)) {
+        if self.pending_dollar {
+            self.w.out.push_str("\\$");
+            self.pending_dollar = false;
+        }
+        self.w.out.push_str("${");
+        value(self.w);
+        self.w.out.push('}');
+    }
+}
+
+pub(crate) fn write_key(key: &Key, out: &mut String) {
     if key.is_bare() {
         out.push_str(key.as_str());
     } else {
         out.push('"');
-        write_escaped(key.as_str(), false, out);
+        write_escaped(key.as_str(), out);
         out.push('"');
     }
 }
 
-fn write_str(parts: &[StrPart], depth: usize, out: &mut String) {
-    out.push('"');
-    for (index, part) in parts.iter().enumerate() {
-        match part {
-            StrPart::Lit(text) => {
-                write_escaped(text.as_str(), opens_interpolation(&parts[index + 1..]), out);
-            }
-            StrPart::Interp(expr) => {
-                out.push_str("${");
-                write(expr, depth, out);
-                out.push('}');
-            }
-        }
-    }
-    out.push('"');
-}
-
-fn opens_interpolation(rest: &[StrPart]) -> bool {
-    for part in rest {
-        match part {
-            StrPart::Lit(text) if text.as_str().is_empty() => continue,
-            StrPart::Lit(text) => return text.as_str().starts_with('{'),
-            StrPart::Interp(_) => return true,
-        }
-    }
-    false
-}
-
-fn write_escaped(text: &str, dollar_would_open: bool, out: &mut String) {
+fn write_escaped(text: &str, out: &mut String) {
     let bytes = text.as_bytes();
     let mut start = 0;
     for (index, &byte) in bytes.iter().enumerate() {
@@ -179,11 +252,7 @@ fn write_escaped(text: &str, dollar_would_open: bool, out: &mut String) {
             b'"' => "\\\"",
             b'\\' => "\\\\",
             b'\r' => "\\r",
-            b'$' if bytes.get(index + 1) == Some(&b'{')
-                || (dollar_would_open && index + 1 == bytes.len()) =>
-            {
-                "\\$"
-            }
+            b'$' if bytes.get(index + 1) == Some(&b'{') => "\\$",
             _ => continue,
         };
         out.push_str(&text[start..index]);
@@ -201,6 +270,82 @@ fn indent(depth: usize, out: &mut String) {
         for _ in 0..depth {
             out.push_str(INDENT);
         }
+    }
+}
+
+pub(crate) fn print(expr: &Expr) -> String {
+    let mut out = String::with_capacity(1024);
+    write_expr(&mut Writer::new(&mut out), expr);
+    out
+}
+
+fn write_expr(w: &mut Writer<'_>, expr: &Expr) {
+    match expr {
+        Expr::Str(parts) => w.string(|s| {
+            for part in parts {
+                match part {
+                    StrPart::Lit(text) => s.lit(text.as_str()),
+                    StrPart::Interp(inner) => s.interp(|w| write_expr(w, inner)),
+                }
+            }
+        }),
+        Expr::Bool(value) => w.bool(*value),
+        Expr::List(items) => w.list(|l| {
+            for item in items {
+                l.item(|w| write_operand(w, item));
+            }
+        }),
+        Expr::Attrs(entries) => w.attrs(|a| {
+            for (key, value) in entries.iter() {
+                a.entry(key, |w| write_expr(w, value));
+            }
+        }),
+        Expr::Var(ident) => w.var(ident),
+        Expr::Select(base, first, rest) => {
+            if matches!(**base, Expr::Path(_)) {
+                w.parenthesized(|w| write_expr(w, base));
+            } else {
+                write_operand(w, base);
+            }
+            w.keys(std::iter::once(first).chain(rest));
+        }
+        Expr::Apply(function, argument) => w.apply(
+            |w| {
+                if matches!(**function, Expr::Lambda { .. }) {
+                    w.parenthesized(|w| write_expr(w, function));
+                } else {
+                    write_expr(w, function);
+                }
+            },
+            |w| write_operand(w, argument),
+        ),
+        Expr::Lambda {
+            formals,
+            ellipsis,
+            body,
+        } => w.lambda(formals, *ellipsis, |w| write_expr(w, body)),
+        Expr::Path(path) => w.path(path),
+    }
+}
+
+fn is_operand(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Str(_)
+            | Expr::Bool(_)
+            | Expr::List(_)
+            | Expr::Attrs(_)
+            | Expr::Var(_)
+            | Expr::Select(..)
+            | Expr::Path(_)
+    )
+}
+
+fn write_operand(w: &mut Writer<'_>, expr: &Expr) {
+    if is_operand(expr) {
+        write_expr(w, expr);
+    } else {
+        w.parenthesized(|w| write_expr(w, expr));
     }
 }
 

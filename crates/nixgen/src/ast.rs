@@ -84,10 +84,43 @@ impl NixStr {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
 
-    pub(crate) fn from_checked(s: &'static str) -> Self {
-        Self(Cow::Borrowed(s))
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Verbatim<'a>(&'a str);
+
+impl<'a> Verbatim<'a> {
+    pub const fn new_static(s: &'static str) -> Verbatim<'static> {
+        assert!(
+            is_verbatim(s.as_bytes()),
+            "text that a nix string would escape"
+        );
+        Verbatim(s)
     }
+
+    pub fn new(s: &'a str) -> Option<Self> {
+        is_verbatim(s.as_bytes()).then_some(Self(s))
+    }
+
+    pub(crate) fn unchecked(s: &'a str) -> Self {
+        debug_assert!(is_verbatim(s.as_bytes()));
+        Self(s)
+    }
+
+    pub fn as_str(self) -> &'a str {
+        self.0
+    }
+}
+
+pub(crate) const fn is_verbatim(bytes: &[u8]) -> bool {
+    let mut i = 0;
+    while i < bytes.len() {
+        if matches!(bytes[i], b'"' | b'\\' | b'\r' | b'$' | 0) {
+            return false;
+        }
+        i += 1;
+    }
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

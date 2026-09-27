@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use crate::GENERATED_HEADER;
-use crate::ast::{AttrSet, Expr, Key, NixStr, RelPath, StrPart};
+use crate::ast::{Key, NixStr, Verbatim};
 use crate::ident::{FileName, Ident, InvalidIdent};
-use crate::print;
+use crate::print::Writer;
 
 const PKGS: Ident = Ident::new_static("pkgs");
 
@@ -86,13 +86,23 @@ pub struct CopyIntoGeneration {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HomeModule {
-    body: Expr,
+    username: NixStr,
+    home_directory: NixStr,
+    state_version: StateVersion,
+    packages: Vec<Ident>,
     generation_files: Vec<CopyIntoGeneration>,
 }
 
-const HOME: Key = Key::new_static("home");
-const PACKAGES: Key = Key::new_static("packages");
-const BUILDER_COMMANDS: Key = Key::new_static("extraBuilderCommands");
+const CP: Verbatim<'static> = Verbatim::new_static("cp ");
+const NEXT_CP: Verbatim<'static> = Verbatim::new_static("\ncp ");
+const INTO_OUT: &str = " $out/";
+
+static HOME: Key = Key::new_static("home");
+static USERNAME: Key = Key::new_static("username");
+static HOME_DIRECTORY: Key = Key::new_static("homeDirectory");
+static STATE_VERSION: Key = Key::new_static("stateVersion");
+static PACKAGES: Key = Key::new_static("packages");
+static BUILDER_COMMANDS: Key = Key::new_static("extraBuilderCommands");
 
 impl HomeModule {
     pub fn new(
@@ -100,27 +110,11 @@ impl HomeModule {
         home_directory: &Path,
         state_version: StateVersion,
     ) -> Result<Self, InvalidInput> {
-        let username = UserName::new(username)?;
-        let home_directory = HomeDir::new(home_directory)?;
-        let home = AttrSet::from([
-            (
-                Key::new_static("username"),
-                Expr::Str(vec![StrPart::Lit(username.0)]),
-            ),
-            (
-                Key::new_static("homeDirectory"),
-                Expr::Str(vec![StrPart::Lit(home_directory.0)]),
-            ),
-            (
-                Key::new_static("stateVersion"),
-                Expr::Str(vec![StrPart::Lit(NixStr::new_static(
-                    state_version.as_str(),
-                ))]),
-            ),
-            (PACKAGES, Expr::List(Vec::new())),
-        ]);
         Ok(Self {
-            body: Expr::Attrs(AttrSet::from([(HOME, Expr::Attrs(home))])),
+            username: UserName::new(username)?.0,
+            home_directory: HomeDir::new(home_directory)?.0,
+            state_version,
+            packages: Vec::new(),
             generation_files: Vec::new(),
         })
     }
@@ -130,55 +124,62 @@ impl HomeModule {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        let selections = names
+        self.packages = names
             .into_iter()
-            .map(|name| {
-                Ident::new(name.as_ref())
-                    .map(|ident| Expr::select(Expr::Var(PKGS), Key::from(ident), []))
-            })
+            .map(|name| Ident::new(name.as_ref()))
             .collect::<Result<Vec<_>, _>>()?;
-        self.home_mut().insert(PACKAGES, Expr::List(selections));
         Ok(self)
     }
 
     pub fn copy_into_generation(mut self, copy: CopyIntoGeneration) -> Self {
         self.generation_files.push(copy);
-        let commands = Expr::Str(builder_commands(&self.generation_files));
-        self.home_mut().insert(BUILDER_COMMANDS, commands);
         self
     }
 
     pub fn render(&self) -> String {
         let mut out = String::with_capacity(GENERATED_HEADER.len() + 512);
         out.push_str(GENERATED_HEADER);
-        print::print_function(&[PKGS], true, &self.body, &mut out);
+        self.write(&mut Writer::new(&mut out));
         out.push('\n');
         out
     }
 
-    fn home_mut(&mut self) -> &mut AttrSet {
-        let Expr::Attrs(body) = &mut self.body else {
-            unreachable!("the module body is an attribute set")
-        };
-        let Some(Expr::Attrs(home)) = body.get_mut(&HOME) else {
-            unreachable!("the module body always holds `home`")
-        };
-        home
+    fn write(&self, w: &mut Writer<'_>) {
+        w.lambda([&PKGS], true, |w| {
+            w.attrs(|a| {
+                a.entry(&HOME, |w| {
+                    w.attrs(|a| {
+                        if !self.generation_files.is_empty() {
+                            a.entry(&BUILDER_COMMANDS, |w| {
+                                w.string(|s| {
+                                    for (index, copy) in self.generation_files.iter().enumerate() {
+                                        s.verbatim(if index == 0 { CP } else { NEXT_CP });
+                                        s.interp(|w| w.file_path(&copy.source));
+                                        s.lit(INTO_OUT);
+                                        s.verbatim(Verbatim::unchecked(copy.target.as_str()));
+                                    }
+                                })
+                            });
+                        }
+                        a.entry(&HOME_DIRECTORY, |w| w.text(&self.home_directory));
+                        a.entry(&PACKAGES, |w| {
+                            w.list(|l| {
+                                for package in &self.packages {
+                                    l.item(|w| w.select_ident(&PKGS, package));
+                                }
+                            })
+                        });
+                        a.entry(&STATE_VERSION, |w| {
+                            w.string(|s| {
+                                s.verbatim(Verbatim::unchecked(self.state_version.as_str()))
+                            })
+                        });
+                        a.entry(&USERNAME, |w| w.text(&self.username));
+                    })
+                })
+            })
+        });
     }
-}
-
-fn builder_commands(copies: &[CopyIntoGeneration]) -> Vec<StrPart> {
-    let mut parts = Vec::with_capacity(copies.len() * 3);
-    for (index, copy) in copies.iter().enumerate() {
-        let lead = if index == 0 { "cp " } else { "\ncp " };
-        parts.push(StrPart::Lit(NixStr::new_static(lead)));
-        parts.push(StrPart::Interp(Expr::Path(RelPath::from(&copy.source))));
-        parts.push(StrPart::Lit(
-            NixStr::new(format!(" $out/{}", copy.target.as_str()))
-                .expect("a file name never holds a null byte"),
-        ));
-    }
-    parts
 }
 
 #[cfg(test)]

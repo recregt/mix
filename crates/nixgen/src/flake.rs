@@ -1,14 +1,6 @@
-use std::collections::BTreeSet;
-
-use crate::GENERATED_HEADER;
-use crate::ast::{Expr, Key, NixStr, RelPath, StrPart};
+use crate::ast::Key;
 use crate::escape::NulByte;
-use crate::ident::Ident;
 use crate::print;
-
-const HOME_MANAGER: Ident = Ident::new_static("home-manager");
-const NIXPKGS: Ident = Ident::new_static("nixpkgs");
-const HOME_NIX: RelPath = RelPath::new_static("home.nix");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum System {
@@ -25,6 +17,19 @@ impl System {
             System::Aarch64Linux => "aarch64-linux",
             System::X86_64Darwin => "x86_64-darwin",
             System::Aarch64Darwin => "aarch64-darwin",
+        }
+    }
+
+    pub(crate) fn key(self) -> &'static Key {
+        static X86_64_LINUX: Key = Key::new_static("x86_64-linux");
+        static AARCH64_LINUX: Key = Key::new_static("aarch64-linux");
+        static X86_64_DARWIN: Key = Key::new_static("x86_64-darwin");
+        static AARCH64_DARWIN: Key = Key::new_static("aarch64-darwin");
+        match self {
+            System::X86_64Linux => &X86_64_LINUX,
+            System::Aarch64Linux => &AARCH64_LINUX,
+            System::X86_64Darwin => &X86_64_DARWIN,
+            System::Aarch64Darwin => &AARCH64_DARWIN,
         }
     }
 }
@@ -58,15 +63,22 @@ const fn is_rev(bytes: &[u8]) -> bool {
     true
 }
 
-impl From<Rev> for NixStr {
-    fn from(rev: Rev) -> Self {
-        NixStr::from_checked(rev.0)
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FlakeHole {
+    Username,
+    System,
+    NixpkgsRev,
+    HomeManagerRev,
 }
+
+include!(concat!(env!("OUT_DIR"), "/flake_template.rs"));
 
 #[derive(Debug)]
 pub struct FlakeConfig {
-    expr: Expr,
+    system: System,
+    username: Key,
+    nixpkgs_rev: Rev,
+    home_manager_rev: Rev,
 }
 
 impl FlakeConfig {
@@ -77,96 +89,75 @@ impl FlakeConfig {
         home_manager_rev: Rev,
     ) -> Result<Self, NulByte> {
         Ok(Self {
-            expr: flake(system, Key::new(username)?, nixpkgs_rev, home_manager_rev),
+            system,
+            username: Key::new(username)?,
+            nixpkgs_rev,
+            home_manager_rev,
         })
     }
 
     pub fn render(&self) -> String {
-        let mut out = String::with_capacity(GENERATED_HEADER.len() + 1024);
-        out.push_str(GENERATED_HEADER);
-        print::print_into(&self.expr, &mut out);
-        out.push('\n');
+        let mut out = String::with_capacity(
+            FLAKE_TEMPLATE_LEN
+                + 2 * self.username.as_str().len()
+                + 2
+                + self.system.as_str().len()
+                + 80,
+        );
+        for (index, chunk) in FLAKE_CHUNKS.iter().enumerate() {
+            out.push_str(chunk);
+            match FLAKE_HOLES.get(index) {
+                Some(FlakeHole::Username) => print::write_key(&self.username, &mut out),
+                Some(FlakeHole::System) => print::write_key(self.system.key(), &mut out),
+                Some(FlakeHole::NixpkgsRev) => out.push_str(self.nixpkgs_rev.as_str()),
+                Some(FlakeHole::HomeManagerRev) => out.push_str(self.home_manager_rev.as_str()),
+                None => {}
+            }
+        }
         out
     }
 }
 
-fn flake(system: System, username: Key, nixpkgs_rev: Rev, home_manager_rev: Rev) -> Expr {
-    let url = |prefix: &'static str, rev: Rev| {
-        Expr::Str(vec![
-            StrPart::Lit(NixStr::new_static(prefix)),
-            StrPart::Lit(NixStr::from(rev)),
-        ])
-    };
-    let inputs = Expr::attrs([
-        (
-            Key::from(&HOME_MANAGER),
-            Expr::attrs([
-                (
-                    Key::new_static("inputs"),
-                    Expr::attrs([(
-                        Key::from(&NIXPKGS),
-                        Expr::attrs([(
-                            Key::new_static("follows"),
-                            Expr::Str(vec![StrPart::Lit(NixStr::new_static("nixpkgs"))]),
-                        )]),
-                    )]),
-                ),
-                (
-                    Key::new_static("url"),
-                    url("github:nix-community/home-manager/", home_manager_rev),
-                ),
-            ]),
-        ),
-        (
-            Key::from(&NIXPKGS),
-            Expr::attrs([(
-                Key::new_static("url"),
-                url("github:NixOS/nixpkgs/", nixpkgs_rev),
-            )]),
-        ),
-    ]);
-    let configuration = Expr::apply(
-        Expr::select(
-            Expr::Var(HOME_MANAGER),
-            Key::new_static("lib"),
-            [Key::new_static("homeManagerConfiguration")],
-        ),
-        Expr::attrs([
-            (
-                Key::new_static("modules"),
-                Expr::List(vec![Expr::Path(HOME_NIX)]),
-            ),
-            (
-                Key::new_static("pkgs"),
-                Expr::select(
-                    Expr::Var(NIXPKGS),
-                    Key::new_static("legacyPackages"),
-                    [Key::new_static(system.as_str())],
-                ),
-            ),
-        ]),
-    );
-    let outputs = Expr::Lambda {
-        formals: BTreeSet::from([HOME_MANAGER, NIXPKGS]),
-        ellipsis: true,
-        body: Box::new(Expr::attrs([(
-            Key::new_static("homeConfigurations"),
-            Expr::attrs([(username, configuration)]),
-        )])),
-    };
-    Expr::attrs([
-        (
-            Key::new_static("description"),
-            Expr::Str(vec![StrPart::Lit(NixStr::new_static("Generated by mix"))]),
-        ),
-        (Key::new_static("inputs"), inputs),
-        (Key::new_static("outputs"), outputs),
-    ])
-}
-
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
+    use crate::GENERATED_HEADER;
+    use crate::ast::Verbatim;
+    use crate::flake_write::write_flake;
+    use crate::print::Writer;
+
+    const SYSTEMS: [System; 4] = [
+        System::X86_64Linux,
+        System::Aarch64Linux,
+        System::X86_64Darwin,
+        System::Aarch64Darwin,
+    ];
+
+    fn written_in_full(flake: &FlakeConfig) -> String {
+        let mut out = String::from(GENERATED_HEADER);
+        write_flake(
+            &mut Writer::new(&mut out),
+            &flake.username,
+            flake.system.key(),
+            Verbatim::unchecked(flake.nixpkgs_rev.as_str()),
+            Verbatim::unchecked(flake.home_manager_rev.as_str()),
+        );
+        out.push('\n');
+        out
+    }
+
+    proptest! {
+        #[test]
+        fn the_spliced_template_equals_writing_the_flake_in_full(
+            username in "[^\\x00]{0,24}",
+            system in 0usize..4,
+        ) {
+            let flake = FlakeConfig::new(SYSTEMS[system], &username, NIXPKGS_PIN, HOME_MANAGER_PIN).unwrap();
+            prop_assert_eq!(flake.render(), written_in_full(&flake));
+        }
+    }
 
     use mix_pins::{HOME_MANAGER_REV, NIXPKGS_REV};
 

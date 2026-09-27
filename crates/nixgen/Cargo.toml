@@ -11,6 +11,9 @@ parse = []
 [dependencies]
 thiserror = { workspace = true }
 
+[build-dependencies]
+thiserror = { workspace = true }
+
 [dev-dependencies]
 mix-exec = { path = "../exec" }
 mix-pins = { path = "../pins" }
