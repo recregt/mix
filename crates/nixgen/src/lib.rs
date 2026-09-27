@@ -1,10 +1,8 @@
-pub mod ast;
 mod escape;
 mod flake;
 mod home;
 mod ident;
 mod installable;
-pub mod lock;
 mod print;
 
 pub(crate) const GENERATED_HEADER: &str = "\
@@ -12,6 +10,11 @@ pub(crate) const GENERATED_HEADER: &str = "\
 # Manual changes will be overwritten. Use `mix` commands to manage this configuration.
 
 ";
+
+pub mod ast;
+pub mod lock;
+#[cfg(any(test, feature = "parse"))]
+pub mod parse;
 
 pub use escape::NulByte;
 pub use flake::{FlakeConfig, Rev, System};

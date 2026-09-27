@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use crate::GENERATED_HEADER;
 use crate::ast::{Expr, Key, RelPath};
 use crate::escape::NulByte;
@@ -134,7 +136,7 @@ fn flake(system: System, username: Key, nixpkgs_rev: Rev, home_manager_rev: Rev)
         ]),
     );
     let outputs = Expr::Lambda {
-        formals: vec![HOME_MANAGER, NIXPKGS],
+        formals: BTreeSet::from([HOME_MANAGER, NIXPKGS]),
         ellipsis: true,
         body: Box::new(Expr::attrs([(
             Key::new_static("homeConfigurations"),

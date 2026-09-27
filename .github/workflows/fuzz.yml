@@ -26,16 +26,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: codegen
-            hours: 3
-            max-total-time: 10800
-            cache-key: nixgen-fuzz-corpus-
-            verifier: verify_corpus
-          - target: flake
+          - target: printer
+            hours: 2
+            max-total-time: 7200
+            cache-key: nixgen-printer-fuzz-corpus-
+            verifier: verify_printer_corpus
+          - target: installable
             hours: 1
             max-total-time: 3600
-            cache-key: nixgen-flake-fuzz-corpus-
-            verifier: verify_flake_corpus
+            cache-key: nixgen-installable-fuzz-corpus-
+            verifier: ""
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -59,12 +59,12 @@ jobs:
         run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=${{ matrix.max-total-time }} -timeout=10
 
       - name: Build the corpus verifier
-        if: always()
+        if: always() && matrix.verifier != ''
         working-directory: crates/nixgen/fuzz
         run: cargo build --release --bin ${{ matrix.verifier }}
 
-      - name: Verify the grown corpus parses and round-trips through real Nix
-        if: always()
+      - name: Verify the grown corpus parses and evaluates through real Nix
+        if: always() && matrix.verifier != ''
         working-directory: crates/nixgen/fuzz
         run: ./target/release/${{ matrix.verifier }} corpus/${{ matrix.target }}
 

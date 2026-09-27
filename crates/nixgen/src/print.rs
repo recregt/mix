@@ -14,7 +14,12 @@ pub(crate) fn print_into(expr: &Expr, out: &mut String) {
     write(expr, 0, out);
 }
 
-pub(crate) fn print_function(formals: &[Ident], ellipsis: bool, body: &Expr, out: &mut String) {
+pub(crate) fn print_function<'a>(
+    formals: impl IntoIterator<Item = &'a Ident>,
+    ellipsis: bool,
+    body: &Expr,
+    out: &mut String,
+) {
     write_lambda(formals, ellipsis, body, 0, out);
 }
 
@@ -48,7 +53,11 @@ fn write(expr: &Expr, depth: usize, out: &mut String) {
         }
         Expr::Var(ident) => out.push_str(ident.as_str()),
         Expr::Select(base, first, rest) => {
-            write_operand(base, depth, out);
+            if matches!(**base, Expr::Path(_)) {
+                write_parenthesized(base, depth, out);
+            } else {
+                write_operand(base, depth, out);
+            }
             for key in std::iter::once(first).chain(rest) {
                 out.push('.');
                 write_key(key, out);
@@ -67,7 +76,7 @@ fn write(expr: &Expr, depth: usize, out: &mut String) {
             formals,
             ellipsis,
             body,
-        } => write_lambda(formals, *ellipsis, body, depth, out),
+        } => write_lambda(formals.iter(), *ellipsis, body, depth, out),
         Expr::Path(path) => {
             out.push_str("./");
             out.push_str(path.as_str());
@@ -75,7 +84,13 @@ fn write(expr: &Expr, depth: usize, out: &mut String) {
     }
 }
 
-fn write_lambda(formals: &[Ident], ellipsis: bool, body: &Expr, depth: usize, out: &mut String) {
+fn write_lambda<'a>(
+    formals: impl IntoIterator<Item = &'a Ident>,
+    ellipsis: bool,
+    body: &Expr,
+    depth: usize,
+    out: &mut String,
+) {
     out.push('{');
     let mut first = true;
     for formal in formals {
@@ -130,16 +145,34 @@ fn write_key(key: &Key, out: &mut String) {
 
 fn write_str(parts: &[StrPart], depth: usize, out: &mut String) {
     out.push('"');
-    for (index, part) in parts.iter().enumerate() {
-        match part {
-            StrPart::Lit(text) => {
-                let before_interpolation = matches!(parts.get(index + 1), Some(StrPart::Interp(_)));
-                write_escaped(text.as_str(), before_interpolation, out);
-            }
+    let mut index = 0;
+    while index < parts.len() {
+        match &parts[index] {
             StrPart::Interp(expr) => {
                 out.push_str("${");
                 write(expr, depth, out);
                 out.push('}');
+                index += 1;
+            }
+            StrPart::Lit(first) => {
+                let run_end = parts[index..]
+                    .iter()
+                    .position(|part| matches!(part, StrPart::Interp(_)))
+                    .map_or(parts.len(), |offset| index + offset);
+                let before_interpolation = run_end < parts.len();
+                if run_end == index + 1 {
+                    write_escaped(first.as_str(), before_interpolation, out);
+                } else {
+                    let joined: String = parts[index..run_end]
+                        .iter()
+                        .map(|part| match part {
+                            StrPart::Lit(text) => text.as_str(),
+                            StrPart::Interp(_) => unreachable!("a run holds only literals"),
+                        })
+                        .collect();
+                    write_escaped(&joined, before_interpolation, out);
+                }
+                index = run_end;
             }
         }
     }
@@ -181,6 +214,8 @@ fn indent(depth: usize, out: &mut String) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
     use crate::ast::{NixStr, RelPath};
 
@@ -221,6 +256,18 @@ mod tests {
             StrPart::Interp(Expr::Path(RelPath::new("state").unwrap())),
         ]);
         assert_eq!(expr.print(), r#""a\$${./state}""#);
+    }
+
+    #[test]
+    fn escapes_a_dollar_across_literal_pieces() {
+        let empty_between = Expr::Str(vec![
+            lit("|$"),
+            lit(""),
+            StrPart::Interp(Expr::string("").unwrap()),
+        ]);
+        assert_eq!(empty_between.print(), r#""|\$${""}""#);
+        let brace_after = Expr::Str(vec![lit("a$"), lit("{x}")]);
+        assert_eq!(brace_after.print(), r#""a\${x}""#);
     }
 
     #[test]
@@ -270,7 +317,7 @@ mod tests {
     #[test]
     fn wraps_a_lambda_in_function_position() {
         let lambda = Expr::Lambda {
-            formals: vec![],
+            formals: BTreeSet::new(),
             ellipsis: true,
             body: Box::new(Expr::Bool(true)),
         };
@@ -283,13 +330,13 @@ mod tests {
     #[test]
     fn prints_a_formal_set_lambda() {
         let lambda = Expr::Lambda {
-            formals: vec![Ident::new("pkgs").unwrap()],
+            formals: BTreeSet::from([Ident::new("pkgs").unwrap()]),
             ellipsis: true,
             body: Box::new(Expr::attrs([])),
         };
         assert_eq!(lambda.print(), "{ pkgs, ... }: { }");
         let bare = Expr::Lambda {
-            formals: vec![],
+            formals: BTreeSet::new(),
             ellipsis: false,
             body: Box::new(Expr::Bool(true)),
         };
@@ -306,6 +353,12 @@ mod tests {
         assert_eq!(expr.print(), "nixpkgs.legacyPackages.x86_64-linux");
         let quoted = Expr::select(Expr::Var(Ident::new("a").unwrap()), key("b c"), []);
         assert_eq!(quoted.print(), "a.\"b c\"");
+    }
+
+    #[test]
+    fn parenthesizes_a_path_before_a_selection() {
+        let expr = Expr::select(Expr::Path(RelPath::new("a").unwrap()), key("b"), []);
+        assert_eq!(expr.print(), "(./a).b");
     }
 
     #[test]

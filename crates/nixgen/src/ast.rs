@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::escape::NulByte;
 use crate::ident::{FileName, Ident, is_identifier};
@@ -139,7 +139,7 @@ pub enum Expr {
     Select(Box<Expr>, Key, Vec<Key>),
     Apply(Box<Expr>, Box<Expr>),
     Lambda {
-        formals: Vec<Ident>,
+        formals: BTreeSet<Ident>,
         ellipsis: bool,
         body: Box<Expr>,
     },

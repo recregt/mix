@@ -5,6 +5,9 @@ edition = "2024"
 authors = ["Ömer Tekin"]
 license = "MPL-2.0"
 
+[features]
+parse = []
+
 [dependencies]
 thiserror = { workspace = true }
 
