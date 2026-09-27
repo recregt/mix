@@ -220,11 +220,10 @@ mod tests {
         state_dir
     }
 
-    #[allow(clippy::disallowed_methods)]
     async fn committed_files(state_dir: &Path) -> Vec<String> {
-        let output = tokio::process::Command::new("git")
-            .args(["-C", &state_dir.to_string_lossy(), "ls-files"])
-            .output()
+        let mut git = crate::exec::command("git");
+        git.args(["-C", &state_dir.to_string_lossy(), "ls-files"]);
+        let output = crate::exec::output(git, "git ls-files", None, &mix_core::cancel::root())
             .await
             .unwrap();
         String::from_utf8_lossy(&output.stdout)

@@ -168,6 +168,22 @@ pub async fn output(
     run_command_reporting(command, command_line, token, None, input).await
 }
 
+#[cfg(test)]
+pub(crate) fn fixture(
+    program: &str,
+    args: &[&std::ffi::OsStr],
+    input: Option<Vec<u8>>,
+) -> std::process::Output {
+    let mut fixture = command(program);
+    fixture.args(args);
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(output(fixture, program, input, &mix_core::cancel::root()))
+        .unwrap_or_else(|error| panic!("{program} must be on PATH to build test fixtures: {error}"))
+}
+
 pub async fn run(command: &str, args: &[&str], token: &CancellationToken) -> Result<()> {
     let command_line = format_command(command, args);
     let mut cmd = self::command(command);

@@ -319,19 +319,13 @@ mod tests {
     use super::*;
     use mockito::Server;
 
-    #[allow(clippy::disallowed_methods)]
     fn make_xz_tarball(files: &[(&str, &[u8])]) -> Vec<u8> {
         let src = tempfile::tempdir().unwrap();
         for (name, contents) in files {
             std::fs::write(src.path().join(name), contents).unwrap();
         }
 
-        let output = std::process::Command::new("tar")
-            .args(["cJf", "-", "-C"])
-            .arg(src.path())
-            .arg(".")
-            .output()
-            .expect("tar must be on PATH to build test fixtures");
+        let output = tar_of(src.path());
         assert!(
             output.status.success(),
             "{}",
@@ -549,17 +543,23 @@ mod tests {
         assert!(pin_for(&host_target_key()).is_some());
     }
 
-    #[allow(clippy::disallowed_methods)]
+    fn tar_of(dir: &std::path::Path) -> std::process::Output {
+        crate::exec::fixture(
+            "tar",
+            &[
+                "cJf".as_ref(),
+                "-".as_ref(),
+                "-C".as_ref(),
+                dir.as_os_str(),
+                ".".as_ref(),
+            ],
+            None,
+        )
+    }
+
     fn xz_compress(bytes: &[u8]) -> Vec<u8> {
-        use std::io::Write as _;
-        let mut child = std::process::Command::new("xz")
-            .args(["-z", "-c"])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .expect("xz must be on PATH to build test fixtures");
-        child.stdin.take().unwrap().write_all(bytes).unwrap();
-        let output = child.wait_with_output().unwrap();
+        let output =
+            crate::exec::fixture("xz", &["-z".as_ref(), "-c".as_ref()], Some(bytes.to_vec()));
         assert!(output.status.success());
         output.stdout
     }
@@ -572,7 +572,6 @@ mod tests {
         assert!(matches!(err, Error::Core(mix_core::Error::Io { .. })));
     }
 
-    #[allow(clippy::disallowed_methods)]
     #[test]
     fn unpack_restores_unaligned_entries_under_a_read_only_directory() {
         use std::os::unix::fs::PermissionsExt as _;
@@ -589,12 +588,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = std::process::Command::new("tar")
-            .args(["cJf", "-", "-C"])
-            .arg(src.path())
-            .arg(".")
-            .output()
-            .expect("tar must be on PATH to build test fixtures");
+        let output = tar_of(src.path());
         assert!(output.status.success());
 
         let dest = tempfile::tempdir().unwrap();
