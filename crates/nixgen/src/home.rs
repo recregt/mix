@@ -1,8 +1,7 @@
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::GENERATED_HEADER;
-use crate::ast::{Expr, Key, NixStr, RelPath, StrPart};
+use crate::ast::{AttrSet, Expr, Key, NixStr, RelPath, StrPart};
 use crate::ident::{FileName, Ident, InvalidIdent};
 use crate::print;
 
@@ -87,12 +86,13 @@ pub struct CopyIntoGeneration {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HomeModule {
-    username: UserName,
-    home_directory: HomeDir,
-    state_version: StateVersion,
-    packages: Vec<Ident>,
+    body: Expr,
     generation_files: Vec<CopyIntoGeneration>,
 }
+
+const HOME: Key = Key::new_static("home");
+const PACKAGES: Key = Key::new_static("packages");
+const BUILDER_COMMANDS: Key = Key::new_static("extraBuilderCommands");
 
 impl HomeModule {
     pub fn new(
@@ -100,11 +100,27 @@ impl HomeModule {
         home_directory: &Path,
         state_version: StateVersion,
     ) -> Result<Self, InvalidInput> {
+        let username = UserName::new(username)?;
+        let home_directory = HomeDir::new(home_directory)?;
+        let home = AttrSet::from([
+            (
+                Key::new_static("username"),
+                Expr::Str(vec![StrPart::Lit(username.0)]),
+            ),
+            (
+                Key::new_static("homeDirectory"),
+                Expr::Str(vec![StrPart::Lit(home_directory.0)]),
+            ),
+            (
+                Key::new_static("stateVersion"),
+                Expr::Str(vec![StrPart::Lit(NixStr::new_static(
+                    state_version.as_str(),
+                ))]),
+            ),
+            (PACKAGES, Expr::List(Vec::new())),
+        ]);
         Ok(Self {
-            username: UserName::new(username)?,
-            home_directory: HomeDir::new(home_directory)?,
-            state_version,
-            packages: Vec::new(),
+            body: Expr::Attrs(AttrSet::from([(HOME, Expr::Attrs(home))])),
             generation_files: Vec::new(),
         })
     }
@@ -114,58 +130,40 @@ impl HomeModule {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        self.packages = names
+        let selections = names
             .into_iter()
-            .map(|name| Ident::new(name.as_ref()))
+            .map(|name| {
+                Ident::new(name.as_ref())
+                    .map(|ident| Expr::select(Expr::Var(PKGS), Key::from(ident), []))
+            })
             .collect::<Result<Vec<_>, _>>()?;
+        self.home_mut().insert(PACKAGES, Expr::List(selections));
         Ok(self)
     }
 
     pub fn copy_into_generation(mut self, copy: CopyIntoGeneration) -> Self {
         self.generation_files.push(copy);
+        let commands = Expr::Str(builder_commands(&self.generation_files));
+        self.home_mut().insert(BUILDER_COMMANDS, commands);
         self
     }
 
     pub fn render(&self) -> String {
         let mut out = String::with_capacity(GENERATED_HEADER.len() + 512);
         out.push_str(GENERATED_HEADER);
-        print::print_function(&[PKGS], true, &self.expr(), &mut out);
+        print::print_function(&[PKGS], true, &self.body, &mut out);
         out.push('\n');
         out
     }
 
-    fn expr(&self) -> Expr {
-        let mut home = BTreeMap::new();
-        home.insert(
-            Key::new_static("username"),
-            Expr::Str(vec![StrPart::Lit(self.username.0.clone())]),
-        );
-        home.insert(
-            Key::new_static("homeDirectory"),
-            Expr::Str(vec![StrPart::Lit(self.home_directory.0.clone())]),
-        );
-        home.insert(
-            Key::new_static("stateVersion"),
-            Expr::Str(vec![StrPart::Lit(NixStr::new_static(
-                self.state_version.as_str(),
-            ))]),
-        );
-        home.insert(
-            Key::new_static("packages"),
-            Expr::List(
-                self.packages
-                    .iter()
-                    .map(|name| Expr::select(Expr::Var(PKGS), Key::from(name), []))
-                    .collect(),
-            ),
-        );
-        if !self.generation_files.is_empty() {
-            home.insert(
-                Key::new_static("extraBuilderCommands"),
-                Expr::Str(builder_commands(&self.generation_files)),
-            );
-        }
-        Expr::attrs([(Key::new_static("home"), Expr::Attrs(home))])
+    fn home_mut(&mut self) -> &mut AttrSet {
+        let Expr::Attrs(body) = &mut self.body else {
+            unreachable!("the module body is an attribute set")
+        };
+        let Some(Expr::Attrs(home)) = body.get_mut(&HOME) else {
+            unreachable!("the module body always holds `home`")
+        };
+        home
     }
 }
 

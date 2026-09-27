@@ -1,8 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use arbitrary::Arbitrary;
 use mix_nixgen::Ident;
-use mix_nixgen::ast::{Expr, Key, NixStr, RelPath, StrPart};
+use mix_nixgen::ast::{AttrSet, Expr, Key, NixStr, RelPath, StrPart};
 
 pub const NAMES: &[&str] = &["a", "b", "f", "pkgs", "home-manager", "x'", "_y"];
 const PATHS: &[&str] = &["state", "home.nix", "a-b", "x.y.z"];
@@ -63,7 +63,7 @@ impl ArbExpr {
                 entries
                     .into_iter()
                     .map(|(k, v)| (Key::new(text(k)).unwrap(), v.build_at(deeper)))
-                    .collect::<BTreeMap<_, _>>(),
+                    .collect::<AttrSet>(),
             ),
             ArbExpr::Var(index) => Expr::Var(name(index)),
             ArbExpr::Select(base, first, rest) => Expr::select(

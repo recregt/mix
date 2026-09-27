@@ -1,12 +1,15 @@
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use crate::escape::NulByte;
-use crate::ident::{FileName, Ident, is_identifier};
+use crate::ident::{FileName, Ident, is_identifier, is_identifier_bytes};
 use crate::print;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Key(Cow<'static, str>);
+pub struct Key {
+    text: Cow<'static, str>,
+    bare: bool,
+}
 
 impl Key {
     pub fn new(s: impl Into<String>) -> Result<Self, NulByte> {
@@ -14,27 +17,46 @@ impl Key {
         if s.contains('\0') {
             Err(NulByte)
         } else {
-            Ok(Self(Cow::Owned(s)))
+            let bare = is_identifier(&s);
+            Ok(Self {
+                text: Cow::Owned(s),
+                bare,
+            })
         }
     }
 
     pub const fn new_static(s: &'static str) -> Self {
         assert!(!contains_nul(s.as_bytes()), "a key cannot hold a null byte");
-        Self(Cow::Borrowed(s))
+        Self {
+            text: Cow::Borrowed(s),
+            bare: is_identifier_bytes(s.as_bytes()),
+        }
     }
 
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.text
     }
 
     pub(crate) fn is_bare(&self) -> bool {
-        is_identifier(&self.0)
+        self.bare
     }
 }
 
 impl From<&Ident> for Key {
     fn from(ident: &Ident) -> Self {
-        Self(ident.0.clone())
+        Self {
+            text: ident.0.clone(),
+            bare: true,
+        }
+    }
+}
+
+impl From<Ident> for Key {
+    fn from(ident: Ident) -> Self {
+        Self {
+            text: ident.0,
+            bare: true,
+        }
     }
 }
 
@@ -61,6 +83,10 @@ impl NixStr {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    pub(crate) fn from_checked(s: &'static str) -> Self {
+        Self(Cow::Borrowed(s))
     }
 }
 
@@ -123,6 +149,79 @@ const fn is_rel_path_bytes(bytes: &[u8]) -> bool {
     true
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct AttrSet(Vec<(Key, Expr)>);
+
+impl AttrSet {
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    pub fn insert(&mut self, key: Key, value: Expr) -> Option<Expr> {
+        match self.0.binary_search_by(|(k, _)| k.cmp(&key)) {
+            Ok(index) => Some(std::mem::replace(&mut self.0[index].1, value)),
+            Err(index) => {
+                self.0.insert(index, (key, value));
+                None
+            }
+        }
+    }
+
+    pub fn get_mut(&mut self, key: &Key) -> Option<&mut Expr> {
+        self.0
+            .binary_search_by(|(k, _)| k.cmp(key))
+            .ok()
+            .map(|index| &mut self.0[index].1)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&Key, &Expr)> {
+        self.0.iter().map(|(k, v)| (k, v))
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &Expr> {
+        self.0.iter().map(|(_, v)| v)
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl FromIterator<(Key, Expr)> for AttrSet {
+    fn from_iter<I: IntoIterator<Item = (Key, Expr)>>(entries: I) -> Self {
+        let mut entries: Vec<(Key, Expr)> = entries.into_iter().collect();
+        entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+        entries.dedup_by(|later, kept| {
+            if later.0 == kept.0 {
+                std::mem::swap(&mut later.1, &mut kept.1);
+                true
+            } else {
+                false
+            }
+        });
+        Self(entries)
+    }
+}
+
+impl<const N: usize> From<[(Key, Expr); N]> for AttrSet {
+    fn from(entries: [(Key, Expr); N]) -> Self {
+        entries.into_iter().collect()
+    }
+}
+
+impl IntoIterator for AttrSet {
+    type Item = (Key, Expr);
+    type IntoIter = std::vec::IntoIter<(Key, Expr)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum StrPart {
     Lit(NixStr),
@@ -134,7 +233,7 @@ pub enum Expr {
     Str(Vec<StrPart>),
     Bool(bool),
     List(Vec<Expr>),
-    Attrs(BTreeMap<Key, Expr>),
+    Attrs(AttrSet),
     Var(Ident),
     Select(Box<Expr>, Key, Vec<Key>),
     Apply(Box<Expr>, Box<Expr>),

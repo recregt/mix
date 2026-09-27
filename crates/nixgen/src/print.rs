@@ -41,7 +41,7 @@ fn write(expr: &Expr, depth: usize, out: &mut String) {
         Expr::Attrs(entries) if entries.is_empty() => out.push_str("{ }"),
         Expr::Attrs(entries) => {
             out.push_str("{\n");
-            for (key, value) in entries {
+            for (key, value) in entries.iter() {
                 indent(depth + 1, out);
                 write_key(key, out);
                 out.push_str(" = ");
@@ -145,41 +145,33 @@ fn write_key(key: &Key, out: &mut String) {
 
 fn write_str(parts: &[StrPart], depth: usize, out: &mut String) {
     out.push('"');
-    let mut index = 0;
-    while index < parts.len() {
-        match &parts[index] {
+    for (index, part) in parts.iter().enumerate() {
+        match part {
+            StrPart::Lit(text) => {
+                write_escaped(text.as_str(), opens_interpolation(&parts[index + 1..]), out);
+            }
             StrPart::Interp(expr) => {
                 out.push_str("${");
                 write(expr, depth, out);
                 out.push('}');
-                index += 1;
-            }
-            StrPart::Lit(first) => {
-                let run_end = parts[index..]
-                    .iter()
-                    .position(|part| matches!(part, StrPart::Interp(_)))
-                    .map_or(parts.len(), |offset| index + offset);
-                let before_interpolation = run_end < parts.len();
-                if run_end == index + 1 {
-                    write_escaped(first.as_str(), before_interpolation, out);
-                } else {
-                    let joined: String = parts[index..run_end]
-                        .iter()
-                        .map(|part| match part {
-                            StrPart::Lit(text) => text.as_str(),
-                            StrPart::Interp(_) => unreachable!("a run holds only literals"),
-                        })
-                        .collect();
-                    write_escaped(&joined, before_interpolation, out);
-                }
-                index = run_end;
             }
         }
     }
     out.push('"');
 }
 
-fn write_escaped(text: &str, before_interpolation: bool, out: &mut String) {
+fn opens_interpolation(rest: &[StrPart]) -> bool {
+    for part in rest {
+        match part {
+            StrPart::Lit(text) if text.as_str().is_empty() => continue,
+            StrPart::Lit(text) => return text.as_str().starts_with('{'),
+            StrPart::Interp(_) => return true,
+        }
+    }
+    false
+}
+
+fn write_escaped(text: &str, dollar_would_open: bool, out: &mut String) {
     let bytes = text.as_bytes();
     let mut start = 0;
     for (index, &byte) in bytes.iter().enumerate() {
@@ -188,7 +180,7 @@ fn write_escaped(text: &str, before_interpolation: bool, out: &mut String) {
             b'\\' => "\\\\",
             b'\r' => "\\r",
             b'$' if bytes.get(index + 1) == Some(&b'{')
-                || (before_interpolation && index + 1 == bytes.len()) =>
+                || (dollar_would_open && index + 1 == bytes.len()) =>
             {
                 "\\$"
             }

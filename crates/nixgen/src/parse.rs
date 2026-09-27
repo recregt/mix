@@ -1,6 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
-use crate::ast::{Expr, Key, NixStr, RelPath, StrPart};
+use crate::ast::{AttrSet, Expr, Key, NixStr, RelPath, StrPart};
 use crate::ident::Ident;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -242,7 +242,7 @@ impl<'a> Parser<'a> {
             }
             Some(b'{') => {
                 self.pos += 1;
-                let mut entries = BTreeMap::new();
+                let mut entries = AttrSet::new();
                 loop {
                     self.skip_trivia();
                     if self.peek() == Some(b'}') {

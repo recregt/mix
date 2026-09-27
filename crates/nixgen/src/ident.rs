@@ -32,7 +32,7 @@ const fn is_reserved(bytes: &[u8]) -> bool {
     false
 }
 
-const fn is_identifier_bytes(bytes: &[u8]) -> bool {
+pub(crate) const fn is_identifier_bytes(bytes: &[u8]) -> bool {
     if bytes.is_empty() {
         return false;
     }
