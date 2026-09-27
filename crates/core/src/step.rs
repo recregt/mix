@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::pin::pin;
 use std::sync::Arc;
 
@@ -56,15 +57,23 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
     }
 
     pub async fn run(&mut self) -> Result<(), E> {
-        match self.run_cancellable(&cancel::shield()).await {
+        match self.run_until(std::future::pending(), None).await {
             Outcome::Completed(result) => result,
             Outcome::Interrupted => unreachable!("a shield is never cancelled"),
         }
     }
 
     pub async fn run_cancellable(&mut self, cancel: &CancellationToken) -> Outcome<E> {
-        let token = cancel.child_token();
-        let mut cancel = pin!(cancel.cancelled());
+        self.run_until(cancel.cancelled(), Some(cancel)).await
+    }
+
+    async fn run_until(
+        &mut self,
+        cancel: impl Future<Output = ()>,
+        parent: Option<&CancellationToken>,
+    ) -> Outcome<E> {
+        let mut cancel = pin!(cancel);
+        let mut token: Option<CancellationToken> = None;
         let recording = tracing::Level::INFO <= tracing::level_filters::LevelFilter::current();
         let mut attempted = Attempted::default();
 
@@ -91,6 +100,9 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
                 tracing::info!("running: {name}");
                 attempted.insert(idx);
 
+                let token = token.get_or_insert_with(|| {
+                    parent.map_or_else(cancel::shield, CancellationToken::child_token)
+                });
                 let (executed, interrupted) = if recording {
                     let span = observed(&self.step_observer, tracing::info_span!("step", name));
                     // The span outlives the step's own future on purpose: closing it is what
@@ -98,7 +110,7 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
                     // left with, so a failure has to be reported before that happens.
                     let ran = match select(
                         cancel.as_mut(),
-                        step.execute(&token).instrument(span.clone()),
+                        step.execute(token).instrument(span.clone()),
                     )
                     .await
                     {
@@ -110,7 +122,7 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
                     }
                     ran
                 } else {
-                    match select(cancel.as_mut(), step.execute(&token)).await {
+                    match select(cancel.as_mut(), step.execute(token)).await {
                         Either::Left(((), executing)) => (executing.await, true),
                         Either::Right((result, _)) => (result, false),
                     }
