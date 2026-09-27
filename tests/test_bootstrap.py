@@ -96,8 +96,8 @@ def test_bootstrap_auto_escalates_for_a_sudo_user(container, mock_nix_server, mi
     assert flake_owner.stdout.strip() == "ciuser:ciuser"
 
     flake_contents = container.exec("cat", flake_nix, check=True).stdout
-    assert 'system = "x86_64-linux"' in flake_contents
-    assert 'homeConfigurations."ciuser"' in flake_contents
+    assert "pkgs = nixpkgs.legacyPackages.x86_64-linux;" in flake_contents
+    assert "ciuser = home-manager.lib.homeManagerConfiguration {" in flake_contents
 
     assert container.exec("cat", "/etc/nix/nix.conf", check=True).stdout == NIX_CONF_CONTENT
     assert group_members(container, MIX_USERS_GROUP) == ["ciuser"]

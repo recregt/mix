@@ -233,4 +233,4 @@ def test_repair_restores_a_wiped_state_dir(container, mock_nix_server, mirror_ca
     assert restored_owner.stdout.strip() == f"{USER}:{USER}"
 
     restored_flake_contents = container.exec("cat", flake_nix, check=True).stdout
-    assert f'homeConfigurations."{USER}"' in restored_flake_contents
+    assert f"{USER} = home-manager.lib.homeManagerConfiguration {{" in restored_flake_contents
