@@ -9,11 +9,16 @@ import pytest
 from support.paths import CACHE_DIR, REPO_ROOT, TESTS_ROOT
 
 NIX_BINARY = "/nix/var/nix/profiles/default/bin/nix"
+ERE_SPECIAL = set("\\.[]{}()*+?^$|")
 MIX_USERS_GROUP = "mix-users"
 NIX_CONF_DEST = "/etc/nix/nix.conf"
 
 IMAGE_TAG = "mix-bootstrap-test:latest"
 REMOTE_IMAGE = os.environ.get("MIX_TEST_IMAGE")
+
+
+def literal(text: str) -> str:
+    return "".join(f"\\{char}" if char in ERE_SPECIAL else char for char in text)
 
 
 class BackgroundProcess:
@@ -112,7 +117,7 @@ class Container:
             text=True,
             bufsize=1,
         )
-        return BackgroundProcess(self, proc, pattern=" ".join(args))
+        return BackgroundProcess(self, proc, pattern=literal(" ".join(args)))
 
     def path_exists(self, path: str) -> bool:
         return self.exec("test", "-e", path).returncode == 0
