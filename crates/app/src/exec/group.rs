@@ -79,8 +79,24 @@ mod tests {
         command
     }
 
-    fn alive(pid: i32) -> bool {
-        nix::sys::signal::kill(Pid::from_raw(pid), None).is_ok()
+    fn exited(pid: i32) -> bool {
+        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Err(_) => true,
+            Ok(stat) => stat
+                .rsplit_once(')')
+                .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z')),
+        }
+    }
+
+    async fn exits_soon(pid: i32) -> bool {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if exited(pid) {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        false
     }
 
     async fn read_pid(child: &mut Child) -> i32 {
@@ -117,8 +133,10 @@ mod tests {
         group.stop(&mut child, Duration::from_secs(5)).await;
 
         assert!(child.try_wait().unwrap().is_some());
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(!alive(grandchild), "the grandchild outlived its group");
+        assert!(
+            exits_soon(grandchild).await,
+            "the grandchild outlived its group"
+        );
     }
 
     #[tokio::test]
