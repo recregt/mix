@@ -1,5 +1,4 @@
 use mix_app::target::{self, Finding};
-use mix_core::CancellationToken;
 use mix_core::models::Target;
 
 fn main() {
@@ -77,7 +76,7 @@ fn inspect_the_declared_targets(bencher: divan::Bencher, n: usize) {
 fn apply_the_declared_targets(bencher: divan::Bencher, n: usize) {
     let root = tempfile::tempdir().unwrap();
     let targets = declared_tree(root.path(), n);
-    let token = CancellationToken::new();
+    let token = mix_exec::cancel::root();
     let rt = runtime();
 
     bencher.bench_local(|| {
@@ -101,7 +100,7 @@ fn reconcile_a_file_that_drifted(bencher: divan::Bencher) {
         expected: Some("build-users-group = nixbld\n".to_string()),
         owner: None,
     };
-    let token = CancellationToken::new();
+    let token = mix_exec::cancel::root();
     let rt = runtime();
 
     bencher.bench_local(|| {
@@ -132,7 +131,7 @@ fn reconcile_an_owner_that_drifted(bencher: divan::Bencher) {
         actual: (0, 0),
         expected: owner,
     };
-    let token = CancellationToken::new();
+    let token = mix_exec::cancel::root();
     let rt = runtime();
 
     bencher.bench_local(|| {

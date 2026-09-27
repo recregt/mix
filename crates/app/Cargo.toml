@@ -12,6 +12,7 @@ embed-tarball = []
 
 [dependencies]
 mix-core = { path = "../core" }
+mix-exec = { path = "../exec" }
 mix-nixgen = { path = "../nixgen" }
 mix-pins = { path = "../pins" }
 async-trait = { workspace = true }

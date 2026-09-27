@@ -155,7 +155,7 @@ pub async fn bootstrap(
         log_level: level_for(verbosity),
     };
     let outcome = replay(client.bootstrap(&request).await?).await?;
-    let _ = client.wait();
+    let _ = client.wait().await;
     match outcome {
         Outcome::BootstrapDone => Ok(()),
         Outcome::Failure(failure) => Err(bootstrap_error_from(failure).into()),
@@ -169,7 +169,7 @@ pub async fn repair(verbosity: u8) -> anyhow::Result<Repair> {
         log_level: level_for(verbosity),
     };
     let outcome = replay(client.repair(&request).await?).await?;
-    let _ = client.wait();
+    let _ = client.wait().await;
     match outcome {
         Outcome::RepairDone {
             reports,

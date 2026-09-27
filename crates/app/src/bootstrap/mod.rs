@@ -71,7 +71,7 @@ async fn run_steps(
         user_config,
     ))
     .with_step_observer(reporters.steps);
-    let cause = match plan.run_cancellable(cancel.cancelled()).await {
+    let cause = match plan.run_cancellable(cancel).await {
         Outcome::Completed(Ok(())) => return Ok(Environment::new()),
         Outcome::Completed(Err(cause)) => cause,
         Outcome::Interrupted => Error::Interrupted,

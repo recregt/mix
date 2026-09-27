@@ -32,7 +32,7 @@ impl Step for CreateNixTree {
         provision_all(NIX_TREE_PATHS, NIX_TREE_MODE, &mut self.created).await
     }
 
-    async fn rollback(&mut self) -> Result<()> {
+    async fn rollback(&mut self, _token: &CancellationToken) -> Result<()> {
         for path in self.created.drain(..).rev() {
             warn_on_failure("remove managed directory", remove_dir_all(path).await);
         }

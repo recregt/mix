@@ -214,16 +214,16 @@ mod tests {
         let state_dir = mix_core::paths::mix_state_dir(home);
         tokio::fs::create_dir_all(&state_dir).await.unwrap();
         git()
-            .init(&user(home), &state_dir, &CancellationToken::new())
+            .init(&user(home), &state_dir, &mix_exec::cancel::root())
             .await
             .unwrap();
         state_dir
     }
 
     async fn committed_files(state_dir: &Path) -> Vec<String> {
-        let output = tokio::process::Command::new("git")
+        let output = mix_exec::Command::new("git")
             .args(["-C", &state_dir.to_string_lossy(), "ls-files"])
-            .output()
+            .output(&mix_exec::cancel::root())
             .await
             .unwrap();
         String::from_utf8_lossy(&output.stdout)
@@ -268,7 +268,7 @@ mod tests {
         tokio::fs::create_dir_all(&state_dir).await.unwrap();
 
         let committed = git()
-            .sync(&user(home.path()), &state_dir, &CancellationToken::new())
+            .sync(&user(home.path()), &state_dir, &mix_exec::cancel::root())
             .await
             .unwrap();
 
@@ -298,7 +298,7 @@ mod tests {
         std::fs::write(state_dir.join(HOME_NIX), "home-content").unwrap();
 
         let committed = git()
-            .sync(&user(home.path()), &state_dir, &CancellationToken::new())
+            .sync(&user(home.path()), &state_dir, &mix_exec::cancel::root())
             .await
             .unwrap();
 
@@ -324,7 +324,7 @@ mod tests {
         std::fs::write(state_dir.join("result/out"), "build output").unwrap();
 
         git()
-            .sync(&user(home.path()), &state_dir, &CancellationToken::new())
+            .sync(&user(home.path()), &state_dir, &mix_exec::cancel::root())
             .await
             .unwrap();
 
@@ -342,12 +342,12 @@ mod tests {
 
         let git = git();
         assert!(
-            git.sync(&user(home.path()), &state_dir, &CancellationToken::new())
+            git.sync(&user(home.path()), &state_dir, &mix_exec::cancel::root())
                 .await
                 .unwrap()
         );
         assert!(
-            !git.sync(&user(home.path()), &state_dir, &CancellationToken::new())
+            !git.sync(&user(home.path()), &state_dir, &mix_exec::cancel::root())
                 .await
                 .unwrap()
         );
@@ -359,14 +359,14 @@ mod tests {
         let state_dir = repository(home.path()).await;
         std::fs::write(state_dir.join(FLAKE_NIX), "flake-content").unwrap();
         let git = git();
-        git.sync(&user(home.path()), &state_dir, &CancellationToken::new())
+        git.sync(&user(home.path()), &state_dir, &mix_exec::cancel::root())
             .await
             .unwrap();
 
         std::fs::write(state_dir.join(FLAKE_NIX), "repaired-content").unwrap();
 
         assert!(
-            git.sync(&user(home.path()), &state_dir, &CancellationToken::new())
+            git.sync(&user(home.path()), &state_dir, &mix_exec::cancel::root())
                 .await
                 .unwrap()
         );

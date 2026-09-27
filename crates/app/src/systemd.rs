@@ -1,9 +1,7 @@
 //! Asking systemd about a unit, and asking it to start, restart or re-read one.
 
-use mix_core::{CancellationToken, Result};
-use tokio::process::Command;
-
 use crate::exec::run;
+use mix_core::{CancellationToken, Result};
 
 /// Restarts a unit that is running, and says whether it had to be restarted.
 pub async fn restart_if_active(name: &str, token: &CancellationToken) -> Result<bool> {
@@ -16,13 +14,11 @@ pub async fn restart_if_active(name: &str, token: &CancellationToken) -> Result<
 
 pub async fn unit_is_active(name: &str) -> bool {
     tracing::debug!("checking systemd unit is-active: {name}");
-    Command::new("systemctl")
+    mix_exec::Command::new("systemctl")
         .args(["is-active", "--quiet", name])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
+        .output(&mix_exec::cancel::shield())
         .await
-        .is_ok_and(|status| status.success())
+        .is_ok_and(|output| output.status.success())
 }
 
 /// Re-reads the unit files on disk, after one of them was replaced.

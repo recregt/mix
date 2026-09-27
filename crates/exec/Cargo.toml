@@ -1,0 +1,13 @@
+[package]
+name = "mix-exec"
+version = "0.1.0"
+edition = "2024"
+authors = ["Ömer Tekin"]
+license = "MPL-2.0"
+
+[dependencies]
+nix = { workspace = true, features = ["signal", "process"] }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { version = "0.7", default-features = false }
+tracing = { workspace = true }

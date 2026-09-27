@@ -321,3 +321,70 @@ async fn a_second_request_is_refused_while_the_first_is_running() {
         Some(Ok(Event::Finished(Outcome::BootstrapDone)))
     ));
 }
+
+#[tokio::test]
+async fn a_worker_that_dies_mid_request_reads_as_ended_not_refused() {
+    let release = Arc::new(tokio::sync::Notify::new());
+    let (ours, theirs) = std::os::unix::net::UnixStream::pair().unwrap();
+    theirs.set_nonblocking(true).unwrap();
+    ours.set_nonblocking(true).unwrap();
+    let worker_process = tokio::runtime::Runtime::new().unwrap();
+    worker_process.spawn(async move {
+        serve_connection(
+            WaitsForRelease { release },
+            tokio::net::UnixStream::from_std(theirs).unwrap(),
+        )
+        .await
+    });
+    let mut client = Client::connect(tokio::net::UnixStream::from_std(ours).unwrap())
+        .await
+        .unwrap();
+    let mut events = client.bootstrap(&request(false)).await.unwrap();
+    assert!(matches!(
+        events.next().await,
+        Some(Ok(Event::ActivityLine(_)))
+    ));
+
+    worker_process.shutdown_background();
+
+    let next = tokio::time::timeout(Duration::from_secs(5), events.next())
+        .await
+        .expect("a dead worker ends the stream");
+    assert!(
+        matches!(next, None | Some(Err(mix_rpc::Error::Ended))),
+        "{next:?}"
+    );
+}
+
+#[tokio::test]
+async fn waiting_for_the_worker_hands_back_how_it_exited() {
+    let client = Client::start(
+        std::path::Path::new("sh"),
+        &["-c", "cat >/dev/null; exit 3"],
+        None,
+    )
+    .await
+    .unwrap();
+
+    let status = tokio::time::timeout(Duration::from_secs(5), client.wait())
+        .await
+        .expect("waiting for an exited worker does not block")
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(status.code(), Some(3));
+}
+
+#[tokio::test]
+async fn a_worker_that_cannot_start_is_named_in_the_error() {
+    let missing = Client::start(std::path::Path::new("mix-no-such-program"), &[], None)
+        .await
+        .err()
+        .expect("a missing program cannot start");
+
+    assert!(
+        std::error::Error::source(&missing)
+            .is_some_and(|source| source.to_string().contains("mix-no-such-program")),
+        "{missing}"
+    );
+}

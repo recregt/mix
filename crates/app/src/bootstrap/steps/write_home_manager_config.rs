@@ -55,7 +55,7 @@ impl Step for WriteHomeManagerConfig {
         Ok(())
     }
 
-    async fn rollback(&mut self) -> Result<()> {
+    async fn rollback(&mut self, token: &CancellationToken) -> Result<()> {
         let Some(cfg) = &self.user_config else {
             return Ok(());
         };
@@ -69,13 +69,12 @@ impl Step for WriteHomeManagerConfig {
         }
 
         if self.enrolled {
-            let token = CancellationToken::new();
             warn_on_failure(
                 "un-enrol the user from the managed group",
                 run(
                     "gpasswd",
                     &["--delete", &cfg.user.name, MIX_USERS_GROUP],
-                    &token,
+                    token,
                 )
                 .await,
             );
@@ -133,13 +132,16 @@ mod tests {
     #[tokio::test]
     async fn execute_is_a_no_op_without_a_user_config() {
         let mut step = WriteHomeManagerConfig::new(None);
-        step.execute(&CancellationToken::new()).await.unwrap();
+        step.execute(&mix_exec::cancel::root()).await.unwrap();
         assert!(!step.created_dir);
     }
 
     #[tokio::test]
     async fn rollback_is_a_no_op_without_a_user_config() {
-        WriteHomeManagerConfig::new(None).rollback().await.unwrap();
+        WriteHomeManagerConfig::new(None)
+            .rollback(&mix_exec::cancel::root())
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -149,7 +151,7 @@ mod tests {
 
         let mut step = WriteHomeManagerConfig::new(Some(user_config(home.path())));
         step.created_dir = true;
-        step.rollback().await.unwrap();
+        step.rollback(&mix_exec::cancel::root()).await.unwrap();
 
         assert!(!state_dir.exists());
         assert!(home.path().join(".local/state").exists());
@@ -162,7 +164,7 @@ mod tests {
         std::fs::write(state_dir.join("flake.lock"), "lock").unwrap();
 
         let mut step = WriteHomeManagerConfig::new(Some(user_config(home.path())));
-        step.rollback().await.unwrap();
+        step.rollback(&mix_exec::cancel::root()).await.unwrap();
 
         assert!(state_dir.exists());
         assert!(!state_dir.join(FLAKE_NIX).exists());
@@ -174,7 +176,7 @@ mod tests {
     async fn rollback_tolerates_a_state_dir_that_was_never_written() {
         let home = tempfile::tempdir().unwrap();
         let mut step = WriteHomeManagerConfig::new(Some(user_config(home.path())));
-        step.rollback().await.unwrap();
+        step.rollback(&mix_exec::cancel::root()).await.unwrap();
         assert!(!home.path().join(MIX_STATE_DIR).exists());
     }
 }

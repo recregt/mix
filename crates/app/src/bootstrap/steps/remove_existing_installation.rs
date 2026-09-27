@@ -51,7 +51,7 @@ impl Step for RemoveExistingInstallation {
         for n in 1..=NIXBLD_USER_COUNT {
             let name = user_name(n);
             if identity::user_exists(&name) {
-                delete_user(&name).await;
+                delete_user(&name, token).await;
             }
         }
         for group in [NIXBLD_GROUP, MIX_USERS_GROUP] {

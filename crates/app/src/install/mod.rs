@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use mix_core::ActivityReporter;
 use mix_core::models::UserConfig;
 use mix_core::state::StateManifest;
+use mix_core::{ActivityReporter, CancellationToken};
 
 use crate::profile::BuildPolicy;
 use crate::profile::change::{self, Result};
@@ -38,6 +38,7 @@ pub async fn install(
     mirror_key: Option<&str>,
     activity: Arc<dyn ActivityReporter>,
     allow_source_builds: bool,
+    cancel: &CancellationToken,
 ) -> Result<Installed> {
     let (state, restored) = change::settled(cfg).await?;
     let partition = state.partition(packages);
@@ -64,10 +65,13 @@ pub async fn install(
         cfg,
         &with_added(&state, &added),
         &label,
-        mirror,
-        mirror_key,
+        change::PackageSource {
+            mirror,
+            mirror_key,
+            policy,
+        },
         &activity,
-        policy,
+        cancel,
     )
     .await?;
 
@@ -138,6 +142,7 @@ mod tests {
             None,
             noop(),
             false,
+            &mix_exec::cancel::root(),
         )
         .await
         .unwrap();
@@ -159,6 +164,7 @@ mod tests {
             None,
             noop(),
             false,
+            &mix_exec::cancel::root(),
         )
         .await
         .unwrap();
@@ -181,6 +187,7 @@ mod tests {
             None,
             noop(),
             false,
+            &mix_exec::cancel::root(),
         )
         .await
         .unwrap();
@@ -200,6 +207,7 @@ mod tests {
             None,
             noop(),
             false,
+            &mix_exec::cancel::root(),
         )
         .await
         .unwrap_err();

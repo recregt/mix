@@ -25,12 +25,9 @@ pub async fn check_nix_not_installed() -> Result<()> {
         return Ok(());
     }
 
-    let on_path = tokio::process::Command::new("nix-env")
+    let on_path = mix_exec::Command::new("nix-env")
         .arg("--version")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
+        .output(&mix_exec::cancel::shield())
         .await
         .is_ok();
 

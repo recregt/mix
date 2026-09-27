@@ -90,15 +90,13 @@ impl Step for CreateUsersAndGroups {
         Ok(())
     }
 
-    async fn rollback(&mut self) -> Result<()> {
-        let token = CancellationToken::new();
-
+    async fn rollback(&mut self, token: &CancellationToken) -> Result<()> {
         for name in self.created_users.drain(..).rev() {
-            delete_user(&name).await;
+            delete_user(&name, token).await;
         }
 
         for name in self.created_groups.drain(..).rev() {
-            warn_on_failure("delete group", run("groupdel", &[name], &token).await);
+            warn_on_failure("delete group", run("groupdel", &[name], token).await);
         }
 
         Ok(())
@@ -130,22 +128,19 @@ impl CreateUsersAndGroups {
     }
 }
 
-pub(crate) async fn delete_user(name: &str) {
-    terminate_processes(name).await;
-    let token = CancellationToken::new();
-    warn_on_failure("delete build user", run("userdel", &[name], &token).await);
+pub(crate) async fn delete_user(name: &str, token: &CancellationToken) {
+    terminate_processes(name, token).await;
+    warn_on_failure("delete build user", run("userdel", &[name], token).await);
 }
 
-async fn terminate_processes(name: &str) {
-    match tokio::process::Command::new("pkill")
+async fn terminate_processes(name: &str, token: &CancellationToken) {
+    match mix_exec::Command::new("pkill")
         .args(["-u", name])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
+        .output(token)
         .await
     {
-        Ok(status) if status.success() || status.code() == Some(1) => {}
-        Ok(status) => tracing::warn!("pkill -u {name} exited with {status}, continuing"),
+        Ok(output) if output.status.success() || output.status.code() == Some(1) => {}
+        Ok(output) => tracing::warn!("pkill -u {name} exited with {}, continuing", output.status),
         Err(e) => tracing::warn!("pkill -u {name} failed to run: {e}, continuing"),
     }
 }

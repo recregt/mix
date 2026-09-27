@@ -13,8 +13,9 @@ pub mod system;
 
 pub use constants::{identity, paths};
 pub use error::{Error, Result};
+pub use mix_exec::CancellationToken;
 pub use models::{Category, Target};
 pub use nix_log::{BuildProgress, NixLog};
 pub use nix_plan::BuildPlan;
 pub use progress::{ActivityReporter, DownloadProgress, NoopActivity, NoopProgress, StepObserver};
-pub use step::{CancellationToken, Outcome, Plan, Step};
+pub use step::{Outcome, Plan, Step};

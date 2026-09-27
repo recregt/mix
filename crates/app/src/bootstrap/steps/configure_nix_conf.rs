@@ -60,7 +60,7 @@ impl Step for ConfigureNixConf {
         Ok(())
     }
 
-    async fn rollback(&mut self) -> Result<()> {
+    async fn rollback(&mut self, _token: &CancellationToken) -> Result<()> {
         for written in self.written.drain(..).rev() {
             warn_on_failure(
                 "restore runtime configuration file",
@@ -229,7 +229,7 @@ mod tests {
                 created_dir,
             }],
         };
-        step.rollback().await.unwrap();
+        step.rollback(&mix_exec::cancel::root()).await.unwrap();
 
         assert!(!dir.path().join("a").exists());
     }

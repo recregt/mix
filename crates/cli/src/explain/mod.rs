@@ -144,11 +144,16 @@ pub(crate) fn privileged(error: &mix_rpc::Error, action: &dyn Display) -> Diagno
     use mix_rpc::Error;
 
     match error {
-        Error::Spawn(_) | Error::Connect(_) | Error::Refused(_) => Diagnostic::hinting(
-            format!("couldn't get administrator rights to {action}"),
-            "Make sure your account can use sudo, then try again",
+        Error::Spawn(_) | Error::Launch(_) | Error::Connect(_) | Error::Refused(_) => {
+            Diagnostic::hinting(
+                format!("couldn't get administrator rights to {action}"),
+                "Make sure your account can use sudo, then try again",
+            )
+        }
+        Error::Ended => Diagnostic::hinting(
+            format!("stopped before it could {action}"),
+            "Run the same command again to finish; it picks up where it stopped",
         ),
-        Error::Ended => failed(action),
         Error::Malformed(_) | Error::NotAConnection(_) => bug(),
     }
 }
@@ -302,11 +307,10 @@ mod tests {
     }
 
     #[test]
-    fn a_worker_that_stopped_mid_way_points_at_the_details() {
-        assert!(
-            privileged(&mix_rpc::Error::Ended, &"finish the repair")
-                .message()
-                .contains("with `-v`")
-        );
+    fn a_worker_that_stopped_mid_way_says_to_run_the_command_again() {
+        let message = privileged(&mix_rpc::Error::Ended, &"finish the repair").message();
+
+        assert!(message.contains("stopped before it could finish the repair"));
+        assert!(message.contains("Run the same command again"));
     }
 }

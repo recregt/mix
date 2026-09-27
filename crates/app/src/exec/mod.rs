@@ -6,22 +6,15 @@
 
 pub mod output;
 
-use std::fmt::Write as _;
 use std::sync::Arc;
 
 use mix_core::nix_plan::DryRun;
 use mix_core::paths::DEFAULT_PROFILE_BIN;
 use mix_core::privilege::InvokingUser;
-use mix_core::{ActivityReporter, CancellationToken, Error, Result};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::process::Command;
-use tracing::Instrument;
+use mix_core::{ActivityReporter, CancellationToken, Result};
+use mix_exec::{Command, Drain};
 
 use crate::exec::output::StreamDrain;
-
-/// Read size for a streamed pipe: large enough that a burst of output costs one syscall,
-/// small enough that a single slow line still reaches the screen immediately.
-const STREAM_CHUNK: usize = 8 * 1024;
 
 /// How much of a streamed process's output is kept to explain a failure with.
 const STREAM_TAIL: usize = 64 * 1024;
@@ -33,178 +26,85 @@ fn path_with_nix_profile() -> String {
     }
 }
 
-fn command_as(user: &InvokingUser, command: &str, args: &[&str]) -> Command {
-    let mut cmd = Command::new(command);
-    cmd.args(args)
-        .uid(user.uid)
-        .gid(user.gid)
+fn command_as(user: &InvokingUser, program: &str, args: &[&str]) -> Command {
+    Command::new(program)
+        .args(args)
+        .as_user(user.uid, user.gid)
         .env("HOME", &user.home)
         .env("USER", &user.name)
-        .env("PATH", path_with_nix_profile());
-    cmd
+        .env("PATH", path_with_nix_profile())
 }
 
-/// Drains a pipe, handing every line to `activity` as it arrives and keeping only what a later
-/// error message would be written from.
-async fn stream(mut pipe: impl AsyncRead + Unpin, activity: Arc<dyn ActivityReporter>) -> Vec<u8> {
-    let mut chunk = vec![0u8; STREAM_CHUNK];
-    let mut drain = StreamDrain::new(STREAM_TAIL);
-
-    while let Ok(read) = pipe.read(&mut chunk).await {
-        if read == 0 {
-            break;
-        }
-        drain.push(&chunk[..read], activity.as_ref());
-    }
-
-    drain.finish(activity.as_ref())
+/// Hands every line to `activity` as it arrives and keeps only what a later error message would
+/// be written from.
+struct Reported {
+    drain: StreamDrain,
+    activity: Arc<dyn ActivityReporter>,
 }
 
-async fn run_command(
-    command: Command,
-    command_line: &str,
-    token: &CancellationToken,
-) -> Result<std::process::Output> {
-    run_command_reporting(command, command_line, token, None, None).await
+impl Drain for Reported {
+    fn push(&mut self, chunk: &[u8]) {
+        self.drain.push(chunk, self.activity.as_ref());
+    }
+
+    fn finish(self: Box<Self>) -> Vec<u8> {
+        let Self { drain, activity } = *self;
+        drain.finish(activity.as_ref())
+    }
 }
 
-/// The command line is borrowed rather than handed over: it is only ever needed as an owned
-/// string to name a failure with, and a command that succeeds is the common case.
-async fn run_command_reporting(
-    mut command: Command,
-    command_line: &str,
-    token: &CancellationToken,
-    activity: Option<Arc<dyn ActivityReporter>>,
-    input: Option<Vec<u8>>,
-) -> Result<std::process::Output> {
-    tracing::debug!("running command: {command_line}");
-
-    if input.is_some() {
-        command.stdin(std::process::Stdio::piped());
-    }
-    let mut child = command
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| Error::Exec {
-            command: command_line.to_string(),
-            source: e,
-        })?;
-
-    let stdin_task = input.map(|input| {
-        let mut stdin = child.stdin.take().expect("stdin was piped");
-        tokio::spawn(async move {
-            let _ = stdin.write_all(&input).await;
-        })
-    });
-
-    let mut stdout_pipe = child.stdout.take().expect("stdout was piped");
-    let mut stderr_pipe = child.stderr.take().expect("stderr was piped");
-    let stdout_task = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        let _ = stdout_pipe.read_to_end(&mut buf).await;
-        buf
-    });
-    // Progress goes to stderr, so that is the pipe worth watching live. The reader keeps the
-    // caller's span so the reporter can draw on the line the step already owns.
-    let stderr_task = match activity {
-        Some(activity) => tokio::spawn(stream(stderr_pipe, activity).in_current_span()),
-        None => tokio::spawn(async move {
-            let mut buf = Vec::new();
-            let _ = stderr_pipe.read_to_end(&mut buf).await;
-            buf
-        }),
-    };
-
-    let status = tokio::select! {
-        status = child.wait() => status.map_err(|e| Error::Exec {
-            command: command_line.to_string(),
-            source: e,
-        })?,
-        () = token.cancelled() => {
-            child.kill().await.map_err(|e| Error::Exec {
-                command: command_line.to_string(),
-                source: e,
-            })?;
-            stdout_task.abort();
-            stderr_task.abort();
-            if let Some(stdin_task) = &stdin_task {
-                stdin_task.abort();
-            }
-            return Err(Error::Cancelled { command: command_line.to_string() });
-        }
-    };
-
-    if let Some(stdin_task) = stdin_task {
-        let _ = stdin_task.await;
-    }
-    let stdout = stdout_task.await.unwrap_or_default();
-    let stderr = stderr_task.await.unwrap_or_default();
-
-    tracing::trace!(
-        "command output: {command_line}\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&stdout),
-        String::from_utf8_lossy(&stderr)
-    );
-
-    Ok(std::process::Output {
-        status,
-        stdout,
-        stderr,
+fn reported(activity: Arc<dyn ActivityReporter>) -> Box<dyn Drain> {
+    Box::new(Reported {
+        drain: StreamDrain::new(STREAM_TAIL),
+        activity,
     })
 }
 
-pub async fn run(command: &str, args: &[&str], token: &CancellationToken) -> Result<()> {
-    let command_line = format_command(command, args);
-    let mut cmd = Command::new(command);
-    cmd.args(args);
-    let output = run_command(cmd, &command_line, token).await?;
-    if !output.status.success() {
-        return Err(command_error(command_line, &output));
-    }
+fn stdout_of(output: &std::process::Output) -> String {
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+pub async fn run(program: &str, args: &[&str], token: &CancellationToken) -> Result<()> {
+    Command::new(program).args(args).run(token).await?;
     Ok(())
 }
 
 pub async fn run_as(
     user: &InvokingUser,
-    command: &str,
+    program: &str,
     args: &[&str],
     token: &CancellationToken,
 ) -> Result<String> {
-    run_as_reporting(user, command, args, token, None).await
+    run_as_reporting(user, program, args, token, None).await
 }
 
 /// Like [`run_as`], but reports the command's output line by line while it runs.
 pub async fn run_as_reporting(
     user: &InvokingUser,
-    command: &str,
+    program: &str,
     args: &[&str],
     token: &CancellationToken,
     activity: Option<Arc<dyn ActivityReporter>>,
 ) -> Result<String> {
-    let command_line = format_command(command, args);
-    let cmd = command_as(user, command, args);
-    let output = run_command_reporting(cmd, &command_line, token, activity, None).await?;
-    if !output.status.success() {
-        return Err(command_error(command_line, &output));
+    let mut command = command_as(user, program, args);
+    if let Some(activity) = activity {
+        command = command.stderr(reported(activity));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    Ok(stdout_of(&command.run(token).await?))
 }
 
 pub async fn run_as_with_input(
     user: &InvokingUser,
-    command: &str,
+    program: &str,
     args: &[&str],
     input: Vec<u8>,
     token: &CancellationToken,
 ) -> Result<String> {
-    let command_line = format_command(command, args);
-    let cmd = command_as(user, command, args);
-    let output = run_command_reporting(cmd, &command_line, token, None, Some(input)).await?;
-    if !output.status.success() {
-        return Err(command_error(command_line, &output));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let output = command_as(user, program, args)
+        .input(input)
+        .run(token)
+        .await?;
+    Ok(stdout_of(&output))
 }
 
 /// Runs a nix dry run as `user` and reads back the plan it printed.
@@ -214,16 +114,11 @@ pub async fn run_as_with_input(
 /// failure still reads as prose.
 pub async fn plan_as(
     user: &InvokingUser,
-    command: &str,
+    program: &str,
     args: &[&str],
     token: &CancellationToken,
 ) -> Result<DryRun> {
-    let command_line = format_command(command, args);
-    let cmd = command_as(user, command, args);
-    let output = run_command(cmd, &command_line, token).await?;
-    if !output.status.success() {
-        return Err(command_error(command_line, &output));
-    }
+    let output = command_as(user, program, args).run(token).await?;
     let stderr = String::from_utf8(output.stderr)
         .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned());
     Ok(DryRun::new(stderr))
@@ -231,54 +126,31 @@ pub async fn plan_as(
 
 pub async fn status_as(
     user: &InvokingUser,
-    command: &str,
+    program: &str,
     args: &[&str],
     token: &CancellationToken,
 ) -> Result<bool> {
-    let command_line = format_command(command, args);
-    let cmd = command_as(user, command, args);
-    let output = run_command(cmd, &command_line, token).await?;
+    let output = command_as(user, program, args).output(token).await?;
     Ok(output.status.success())
-}
-
-/// Renders a command line for a log line or an error message.
-///
-/// Built in one buffer sized for the whole line: this runs for every command the tool spawns,
-/// including the ones that only answer a question.
-pub fn format_command(command: &str, args: &[&str]) -> String {
-    let width = command.len() + args.iter().map(|arg| arg.len() + 3).sum::<usize>();
-    let mut rendered = String::with_capacity(width);
-    rendered.push_str(command);
-
-    for arg in args {
-        rendered.push(' ');
-        if arg.is_empty() || arg.contains(char::is_whitespace) {
-            // An argument that would not survive being read back as one word is quoted.
-            let _ = write!(rendered, "{arg:?}");
-        } else {
-            rendered.push_str(arg);
-        }
-    }
-    rendered
-}
-
-pub fn command_error(command: impl Into<String>, output: &std::process::Output) -> Error {
-    let detail = if !output.stderr.is_empty() {
-        String::from_utf8_lossy(&output.stderr).trim().to_string()
-    } else if !output.stdout.is_empty() {
-        String::from_utf8_lossy(&output.stdout).trim().to_string()
-    } else {
-        format!("exited with status {}", output.status)
-    };
-    Error::Command {
-        command: command.into(),
-        detail,
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use mix_core::Error;
+
     use super::*;
+
+    async fn stream(
+        mut pipe: impl tokio::io::AsyncRead + Unpin,
+        activity: Arc<dyn ActivityReporter>,
+    ) -> Vec<u8> {
+        use tokio::io::AsyncReadExt as _;
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes).await.unwrap();
+        let mut drain = reported(activity);
+        drain.push(&bytes);
+        drain.finish()
+    }
 
     /// The user the test itself runs as: switching to it is a no-op, so a command can be run
     /// without any privilege at all.
@@ -301,7 +173,7 @@ mod tests {
                 "printf 'this derivation will be built:\\n  \
                  /nix/store/00000000000000000000000000000001-hello.drv\\n' >&2",
             ],
-            &CancellationToken::new(),
+            &mix_exec::cancel::root(),
         )
         .await
         .unwrap();
@@ -322,7 +194,7 @@ mod tests {
                 "printf 'these 1 derivations are going to be built:\\n  \
                  /nix/store/00000000000000000000000000000001-hello.drv\\n' >&2",
             ],
-            &CancellationToken::new(),
+            &mix_exec::cancel::root(),
         )
         .await
         .unwrap();
@@ -344,7 +216,7 @@ mod tests {
                 "/bin/cat",
                 &[],
                 input.clone(),
-                &CancellationToken::new(),
+                &mix_exec::cancel::root(),
             ),
         )
         .await
@@ -363,7 +235,7 @@ mod tests {
                 "/bin/sh",
                 &["-c", "echo done"],
                 vec![b'x'; 1024 * 1024],
-                &CancellationToken::new(),
+                &mix_exec::cancel::root(),
             ),
         )
         .await
@@ -379,7 +251,7 @@ mod tests {
             &current_user(),
             "/bin/sh",
             &["-c", "echo \"error: attribute 'nope' missing\" >&2; exit 1"],
-            &CancellationToken::new(),
+            &mix_exec::cancel::root(),
         )
         .await
         .unwrap_err();
@@ -387,77 +259,9 @@ mod tests {
         assert!(err.to_string().contains("attribute 'nope' missing"));
     }
 
-    fn output_with(stdout: &str, stderr: &str, exit_code: i32) -> std::process::Output {
-        use std::os::unix::process::ExitStatusExt;
-        std::process::Output {
-            status: std::process::ExitStatus::from_raw(exit_code << 8),
-            stdout: stdout.as_bytes().to_vec(),
-            stderr: stderr.as_bytes().to_vec(),
-        }
-    }
-
-    #[test]
-    fn format_command_with_no_args_has_no_trailing_space() {
-        assert_eq!(format_command("systemctl", &[]), "systemctl");
-    }
-
-    #[test]
-    fn format_command_joins_plain_args() {
-        assert_eq!(
-            format_command("systemctl", &["daemon-reload"]),
-            "systemctl daemon-reload"
-        );
-    }
-
-    #[test]
-    fn format_command_quotes_args_with_whitespace() {
-        assert_eq!(
-            format_command("useradd", &["--comment", "mix build user 1"]),
-            r#"useradd --comment "mix build user 1""#
-        );
-    }
-
-    #[test]
-    fn format_command_quotes_empty_args() {
-        assert_eq!(
-            format_command("nix-env", &["--option", ""]),
-            r#"nix-env --option """#
-        );
-    }
-
-    #[test]
-    fn command_error_prefers_stderr() {
-        let output = output_with("out", "err", 1);
-        match command_error("mycmd", &output) {
-            Error::Command { command, detail } => {
-                assert_eq!(command, "mycmd");
-                assert_eq!(detail, "err");
-            }
-            other => panic!("expected Command error, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn command_error_falls_back_to_stdout_when_stderr_empty() {
-        let output = output_with("out-only", "", 1);
-        match command_error("mycmd", &output) {
-            Error::Command { detail, .. } => assert_eq!(detail, "out-only"),
-            other => panic!("expected Command error, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn command_error_falls_back_to_status_when_both_empty() {
-        let output = output_with("", "", 7);
-        match command_error("mycmd", &output) {
-            Error::Command { detail, .. } => assert!(detail.contains("exited with status")),
-            other => panic!("expected Command error, got {other:?}"),
-        }
-    }
-
     #[tokio::test]
     async fn run_reports_the_full_command_line_on_failure() {
-        let token = CancellationToken::new();
+        let token = mix_exec::cancel::root();
         match run("false", &["--gid", "30000", "nixbld1"], &token).await {
             Err(Error::Command { command, .. }) => {
                 assert_eq!(command, "false --gid 30000 nixbld1");
@@ -468,7 +272,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_preserves_the_source_error_when_the_command_cannot_be_spawned() {
-        let token = CancellationToken::new();
+        let token = mix_exec::cancel::root();
         match run(
             "mix-test-nonexistent-binary-xyz",
             &["--gid", "30000"],
@@ -486,7 +290,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_kills_and_reaps_the_child_when_cancelled() {
-        let token = CancellationToken::new();
+        let token = mix_exec::cancel::root();
         token.cancel();
 
         match run("sleep", &["5"], &token).await {
@@ -499,7 +303,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_does_not_deadlock_on_output_larger_than_a_pipe_buffer() {
-        let token = CancellationToken::new();
+        let token = mix_exec::cancel::root();
 
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(10),
@@ -646,20 +450,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_streamed_command_reports_its_progress_and_still_returns_its_output() {
-        let token = CancellationToken::new();
+        let token = mix_exec::cancel::root();
         let recorder = Arc::new(Recorder::default());
-        let mut cmd = Command::new("sh");
-        cmd.args(["-c", "echo building >&2; echo done >&2; echo /nix/store/x"]);
+        let cmd = Command::new("sh")
+            .args(["-c", "echo building >&2; echo done >&2; echo /nix/store/x"])
+            .stderr(reported(Arc::clone(&recorder) as Arc<dyn ActivityReporter>));
 
-        let output = run_command_reporting(
-            cmd,
-            "sh",
-            &token,
-            Some(Arc::clone(&recorder) as Arc<dyn ActivityReporter>),
-            None,
-        )
-        .await
-        .unwrap();
+        let output = cmd.output(&token).await.unwrap();
 
         assert!(output.status.success());
         assert_eq!(
@@ -673,10 +470,10 @@ mod tests {
     /// handed to the reporter that draws them.
     #[tokio::test]
     async fn a_streamed_command_reports_structured_progress_end_to_end() {
-        let token = CancellationToken::new();
+        let token = mix_exec::cancel::root();
         let recorder = Arc::new(Recorder::default());
-        let mut cmd = Command::new("sh");
-        cmd.args([
+        let cmd = Command::new("sh")
+            .args([
             "-c",
             concat!(
                 r#"echo '@nix {"action":"start","id":1,"level":3,"text":"","type":103,"fields":[]}' >&2;"#,
@@ -684,17 +481,10 @@ mod tests {
                 r#"echo '@nix {"action":"start","id":2,"level":3,"text":"","type":100,"fields":[]}' >&2;"#,
                 r#"echo '@nix {"action":"result","id":2,"type":105,"fields":[50525798,95420416,0,0]}' >&2"#,
             ),
-        ]);
+        ])
+            .stderr(reported(Arc::clone(&recorder) as Arc<dyn ActivityReporter>));
 
-        let output = run_command_reporting(
-            cmd,
-            "sh",
-            &token,
-            Some(Arc::clone(&recorder) as Arc<dyn ActivityReporter>),
-            None,
-        )
-        .await
-        .unwrap();
+        let output = cmd.output(&token).await.unwrap();
 
         assert!(output.status.success());
         let progress = recorder.last_progress().expect("counters were reported");
@@ -711,24 +501,16 @@ mod tests {
 
     #[tokio::test]
     async fn a_streamed_command_keeps_only_the_tail_of_a_flood_of_output() {
-        let token = CancellationToken::new();
+        let token = mix_exec::cancel::root();
         let recorder = Arc::new(Recorder::default());
-        let mut cmd = Command::new("sh");
-        cmd.args(["-c", "seq 1 60000 >&2"]);
+        let cmd = Command::new("sh")
+            .args(["-c", "seq 1 60000 >&2"])
+            .stderr(reported(Arc::clone(&recorder) as Arc<dyn ActivityReporter>));
 
-        let output = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            run_command_reporting(
-                cmd,
-                "sh",
-                &token,
-                Some(Arc::clone(&recorder) as Arc<dyn ActivityReporter>),
-                None,
-            ),
-        )
-        .await
-        .expect("streaming a flood of output should not deadlock")
-        .unwrap();
+        let output = tokio::time::timeout(std::time::Duration::from_secs(30), cmd.output(&token))
+            .await
+            .expect("streaming a flood of output should not deadlock")
+            .unwrap();
 
         assert!(output.status.success());
         assert_eq!(recorder.lines().len(), 60000);

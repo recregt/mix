@@ -32,7 +32,7 @@ const STEP_STYLE: &str = "{span_child_prefix}{spinner:.cyan} {span_fields}{wide_
 /// blocks reads as a row of them.
 const PROGRESS_CHARS: &str = "━╸━";
 
-const OWN_CRATES: [&str; 4] = ["mix_core", "mix_app", "mix_cli", "mix_ui"];
+const OWN_CRATES: [&str; 5] = ["mix_core", "mix_exec", "mix_app", "mix_cli", "mix_ui"];
 
 /// The spinner's frames: a three-dot arc sweeping once around the braille cell.
 ///
@@ -250,6 +250,19 @@ mod tests {
     use indicatif::{ProgressBar, ProgressDrawTarget, TermLike};
 
     use super::*;
+
+    #[test]
+    fn verbose_output_includes_the_commands_every_crate_runs() {
+        let targets = own_crates_at(LevelFilter::DEBUG, LevelFilter::OFF);
+
+        for name in ["mix_core", "mix_exec", "mix_app", "mix_cli", "mix_ui"] {
+            assert!(
+                targets.would_enable(name, &tracing::Level::DEBUG),
+                "{name} is filtered out of verbose output"
+            );
+        }
+        assert!(!targets.would_enable("hyper", &tracing::Level::DEBUG));
+    }
 
     #[derive(Clone, Debug)]
     struct RecordingTerm(Arc<Mutex<Vec<String>>>);

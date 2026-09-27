@@ -1271,6 +1271,7 @@ dependencies = [
  "futures-util",
  "liblzma",
  "mix-core",
+ "mix-exec",
  "mix-nixgen",
  "mix-pins",
  "mockito",
@@ -1305,6 +1306,7 @@ dependencies = [
  "futures-util",
  "mix-app",
  "mix-core",
+ "mix-exec",
  "mix-nixgen",
  "mix-rpc",
  "mix-ui",
@@ -1322,10 +1324,21 @@ dependencies = [
  "codspeed-divan-compat",
  "futures-util",
  "memchr",
+ "mix-exec",
  "nix",
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "mix-exec"
+version = "0.1.0"
+dependencies = [
+ "nix",
  "thiserror",
  "tokio",
  "tokio-util",
@@ -1337,6 +1350,7 @@ name = "mix-nixgen"
 version = "0.1.0"
 dependencies = [
  "codspeed-divan-compat",
+ "mix-exec",
  "mix-pins",
  "proptest",
  "tempfile",
@@ -1354,6 +1368,7 @@ dependencies = [
  "futures-util",
  "hyper-util",
  "mix-core",
+ "mix-exec",
  "prost",
  "protox",
  "thiserror",

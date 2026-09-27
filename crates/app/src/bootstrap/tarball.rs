@@ -325,12 +325,7 @@ mod tests {
             std::fs::write(src.path().join(name), contents).unwrap();
         }
 
-        let output = std::process::Command::new("tar")
-            .args(["cJf", "-", "-C"])
-            .arg(src.path())
-            .arg(".")
-            .output()
-            .expect("tar must be on PATH to build test fixtures");
+        let output = tar_of(src.path());
         assert!(
             output.status.success(),
             "{}",
@@ -548,16 +543,21 @@ mod tests {
         assert!(pin_for(&host_target_key()).is_some());
     }
 
+    fn tar_of(dir: &std::path::Path) -> std::process::Output {
+        mix_exec::Command::new("tar")
+            .args(["cJf", "-", "-C"])
+            .arg(dir)
+            .arg(".")
+            .output_blocking(&mix_exec::cancel::root())
+            .expect("tar must be on PATH to build test fixtures")
+    }
+
     fn xz_compress(bytes: &[u8]) -> Vec<u8> {
-        use std::io::Write as _;
-        let mut child = std::process::Command::new("xz")
+        let output = mix_exec::Command::new("xz")
             .args(["-z", "-c"])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
+            .input(bytes.to_vec())
+            .output_blocking(&mix_exec::cancel::root())
             .expect("xz must be on PATH to build test fixtures");
-        child.stdin.take().unwrap().write_all(bytes).unwrap();
-        let output = child.wait_with_output().unwrap();
         assert!(output.status.success());
         output.stdout
     }
@@ -586,12 +586,7 @@ mod tests {
         )
         .unwrap();
 
-        let output = std::process::Command::new("tar")
-            .args(["cJf", "-", "-C"])
-            .arg(src.path())
-            .arg(".")
-            .output()
-            .expect("tar must be on PATH to build test fixtures");
+        let output = tar_of(src.path());
         assert!(output.status.success());
 
         let dest = tempfile::tempdir().unwrap();
