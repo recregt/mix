@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -47,7 +47,7 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Restore the fuzz corpus
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: crates/nixgen/fuzz/corpus/${{ matrix.target }}
           key: ${{ matrix.cache-key }}${{ github.run_id }}
@@ -57,6 +57,18 @@ jobs:
       - name: Fuzz mix-nixgen's ${{ matrix.target }} for ${{ matrix.hours }} hour(s)
         working-directory: crates/nixgen
         run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=${{ matrix.max-total-time }} -timeout=10
+
+      - name: Minimize the corpus
+        if: always()
+        working-directory: crates/nixgen
+        run: cargo fuzz cmin ${{ matrix.target }}
+
+      - name: Save the fuzz corpus
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: crates/nixgen/fuzz/corpus/${{ matrix.target }}
+          key: ${{ matrix.cache-key }}${{ github.run_id }}
 
       - name: Build the corpus verifier
         if: always()
