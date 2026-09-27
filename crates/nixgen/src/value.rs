@@ -26,9 +26,9 @@ impl Nix {
             Nix::Str(escaped) => out.push_str(escaped),
             Nix::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
             Nix::PackageList(pkgs) => {
-                out.push_str("with pkgs; [");
+                out.push('[');
                 for pkg in pkgs {
-                    out.push(' ');
+                    out.push_str(" pkgs.");
                     out.push_str(pkg.as_str());
                 }
                 out.push_str(" ]");
@@ -87,13 +87,19 @@ mod tests {
 
     #[test]
     fn renders_an_empty_package_list() {
-        assert_eq!(Nix::PackageList(vec![]).render(), "with pkgs; [ ]");
+        assert_eq!(Nix::PackageList(vec![]).render(), "[ ]");
     }
 
     #[test]
     fn renders_a_package_list() {
         let list = Nix::PackageList(vec![ident("firefox"), ident("git")]);
-        assert_eq!(list.render(), "with pkgs; [ firefox git ]");
+        assert_eq!(list.render(), "[ pkgs.firefox pkgs.git ]");
+    }
+
+    #[test]
+    fn a_package_named_pkgs_is_selected_from_pkgs() {
+        let list = Nix::PackageList(vec![ident("pkgs")]);
+        assert_eq!(list.render(), "[ pkgs.pkgs ]");
     }
 
     #[test]

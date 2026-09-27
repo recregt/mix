@@ -136,7 +136,7 @@ mod tests {
         let mut cfg = HomeManagerConfig::new();
         cfg.packages(["firefox", "git"]).unwrap();
         assert!(cfg.render().ends_with(
-            "{ pkgs, ... }:\n{\n  home = {\n    packages = with pkgs; [ firefox git ];\n  };\n}\n"
+            "{ pkgs, ... }:\n{\n  home = {\n    packages = [ pkgs.firefox pkgs.git ];\n  };\n}\n"
         ));
     }
 
@@ -146,7 +146,7 @@ mod tests {
         cfg.packages(["git"]).unwrap();
         cfg.copy_into_generation("state", "mix-state").unwrap();
         assert!(cfg.render().ends_with(
-            "{ pkgs, ... }:\n{\n  home = {\n    packages = with pkgs; [ git ];\n    \
+            "{ pkgs, ... }:\n{\n  home = {\n    packages = [ pkgs.git ];\n    \
              extraBuilderCommands = \"cp ${./state} $out/mix-state\";\n  };\n}\n"
         ));
     }
