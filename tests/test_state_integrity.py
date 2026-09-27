@@ -1,4 +1,5 @@
 import json
+import pathlib
 import socket
 import threading
 
@@ -210,3 +211,17 @@ def test_remove_restores_a_broken_package_list_before_removing(
     assert f"removed: {INSTALL_TEST_PACKAGE}" in (result.stdout + result.stderr).lower()
     assert _packages(_state(container)) == ["git"]
     _assert_consistent(container)
+
+
+def test_nix_never_rewrites_the_lock(container, mock_nix_server, mirror_cache):
+    rendered = (
+        pathlib.Path(__file__).resolve().parent.parent
+        / "crates/nixgen/tests/fixtures/flake.lock"
+    ).read_text()
+    _bootstrapped(container, mock_nix_server, mirror_cache)
+    assert container.exec("cat", f"{STATE_DIR}/flake.lock", check=True).stdout == rendered
+
+    result = _install(container, mock_nix_server, mirror_cache)
+
+    assert result.returncode == 0, result.stderr
+    assert container.exec("cat", f"{STATE_DIR}/flake.lock", check=True).stdout == rendered

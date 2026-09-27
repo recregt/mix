@@ -4,6 +4,7 @@ mod escape;
 mod flake;
 mod ident;
 mod installable;
+pub mod lock;
 mod print;
 
 pub(crate) const GENERATED_HEADER: &str = "\

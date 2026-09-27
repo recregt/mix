@@ -1360,6 +1360,10 @@ dependencies = [
 [[package]]
 name = "mix-pins"
 version = "0.1.0"
+dependencies = [
+ "mix-exec",
+ "serde_json",
+]
 
 [[package]]
 name = "mix-rpc"

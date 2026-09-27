@@ -22,6 +22,7 @@ pub const PROFILE_SNIPPET: &str = "# Managed by mix -- do not edit, changes are 
 pub struct UserConfig {
     pub user: InvokingUser,
     pub flake: String,
+    pub lock: String,
     pub home: String,
     pub restored_state: Option<String>,
 }
@@ -155,7 +156,7 @@ fn push_user_targets(items: &mut Vec<Target>, cfg: &UserConfig) {
     });
     items.push(Target::File {
         path: state_dir.join(FLAKE_LOCK),
-        expected: None,
+        expected: Some(cfg.lock.clone()),
         owner,
     });
     match &cfg.restored_state {
@@ -265,6 +266,7 @@ mod tests {
                 home: PathBuf::from("/home/mix-user"),
             },
             flake: "flake-content".to_string(),
+            lock: "lock-content".to_string(),
             home: "home-content".to_string(),
             restored_state: None,
         }
@@ -509,12 +511,12 @@ mod tests {
     }
 
     #[test]
-    fn user_targets_includes_a_flake_lock_with_no_expected_content() {
+    fn user_targets_includes_the_rendered_flake_lock() {
         let cfg = sample_user_config();
         assert!(user_targets(&cfg).iter().any(|t| matches!(
             t,
-            Target::File { path, expected: None, owner: Some((1000, 1000)) }
-                if path.ends_with("flake.lock")
+            Target::File { path, expected: Some(expected), owner: Some((1000, 1000)) }
+                if path.ends_with("flake.lock") && expected == &cfg.lock
         )));
     }
 

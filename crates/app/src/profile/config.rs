@@ -6,10 +6,29 @@ use mix_core::state::StateManifest;
 use mix_core::system::{Arch, Os};
 use mix_nixgen::{FlakeConfig, HomeManagerConfig, InvalidInput, Rev, System};
 
-use mix_pins::{HOME_MANAGER_REV, NIXPKGS_REV};
+use mix_nixgen::lock::{self, LockedInput, NarHash};
+use mix_pins::{
+    HOME_MANAGER_LAST_MODIFIED, HOME_MANAGER_NAR_HASH, HOME_MANAGER_REV, NIXPKGS_LAST_MODIFIED,
+    NIXPKGS_NAR_HASH, NIXPKGS_REV,
+};
 
 const NIXPKGS: Rev = Rev::new_static(NIXPKGS_REV);
 const HOME_MANAGER: Rev = Rev::new_static(HOME_MANAGER_REV);
+
+const NIXPKGS_LOCK: LockedInput = LockedInput {
+    rev: NIXPKGS,
+    nar_hash: NarHash::new_static(NIXPKGS_NAR_HASH),
+    last_modified: NIXPKGS_LAST_MODIFIED,
+};
+const HOME_MANAGER_LOCK: LockedInput = LockedInput {
+    rev: HOME_MANAGER,
+    nar_hash: NarHash::new_static(HOME_MANAGER_NAR_HASH),
+    last_modified: HOME_MANAGER_LAST_MODIFIED,
+};
+
+fn render_lock() -> String {
+    lock::render(NIXPKGS_LOCK, HOME_MANAGER_LOCK)
+}
 
 use crate::profile::state::{Settled, Source, settle};
 
@@ -70,6 +89,7 @@ pub fn user_config_for(user: InvokingUser) -> Option<UserConfig> {
     Some(UserConfig {
         user,
         flake,
+        lock: render_lock(),
         home,
         restored_state,
     })
