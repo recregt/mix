@@ -16,6 +16,7 @@ fn user_config() -> UserConfig {
             home: PathBuf::from("/home/mix-user"),
         },
         flake: "f".repeat(512),
+        lock: "lock-content".to_string(),
         home: "h".repeat(256),
         restored_state: None,
     }

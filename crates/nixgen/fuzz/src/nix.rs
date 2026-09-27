@@ -23,6 +23,19 @@ pub fn eval_raw_module_attr(src: &str, attr_path: &str) -> Output {
     eval_raw(src, &["--arg", "pkgs", "{}"], attr_path)
 }
 
+pub fn eval_raw_file(src: &str) -> Output {
+    let mut file = tempfile::NamedTempFile::new().expect("creating a temp file for nix eval");
+    file.write_all(src.as_bytes())
+        .expect("writing the nix expression to a temp file");
+
+    std::process::Command::new("nix")
+        .args(["--extra-experimental-features", "nix-command"])
+        .args(["eval", "--raw", "-f"])
+        .arg(file.path())
+        .output()
+        .expect("failed to run nix eval")
+}
+
 pub fn eval_raw_attr(src: &str, attr_path: &str) -> Output {
     eval_raw(src, &[], attr_path)
 }

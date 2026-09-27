@@ -189,8 +189,8 @@ mod tests {
                 let path = dir.join(name);
                 std::fs::write(&path, "drifted").unwrap();
                 Target::File {
-                    path,
-                    expected: Some("expected".to_string()),
+                    path: path.into(),
+                    expected: Some("expected".to_string().into()),
                     owner: None,
                 }
             })
@@ -235,8 +235,8 @@ mod tests {
         let cancel = mix_exec::cancel::root();
         cancel.cancel();
         let healthy = Target::File {
-            path: dir.path().join("healthy"),
-            expected: Some("expected".to_string()),
+            path: dir.path().join("healthy").into(),
+            expected: Some("expected".to_string().into()),
             owner: None,
         };
         std::fs::write(dir.path().join("healthy"), "expected").unwrap();

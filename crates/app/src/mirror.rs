@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use mix_pins::{HOME_MANAGER_REV, NIXPKGS_REV};
+use mix_pins::{HOME_MANAGER_NAR_HASH, HOME_MANAGER_REV, NIXPKGS_NAR_HASH, NIXPKGS_REV};
 
 const CACHE_NIXOS_ORG_KEY: &str = "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=";
 const TRUSTED_KEY_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -18,16 +18,24 @@ pub fn mirror_url(base: &str, filename: &str) -> String {
 
 pub fn nixpkgs_override(base: &str) -> String {
     format!(
-        "tarball+{}",
-        mirror_url(base, &format!("nixpkgs-{NIXPKGS_REV}.tar.gz"))
+        "tarball+{}?narHash={}",
+        mirror_url(base, &format!("nixpkgs-{NIXPKGS_REV}.tar.gz")),
+        query_value(NIXPKGS_NAR_HASH)
     )
 }
 
 pub fn home_manager_override(base: &str) -> String {
     format!(
-        "tarball+{}",
-        mirror_url(base, &format!("home-manager-{HOME_MANAGER_REV}.tar.gz"))
+        "tarball+{}?narHash={}",
+        mirror_url(base, &format!("home-manager-{HOME_MANAGER_REV}.tar.gz")),
+        query_value(HOME_MANAGER_NAR_HASH)
     )
+}
+
+fn query_value(sri: &str) -> String {
+    sri.replace('+', "%2B")
+        .replace('/', "%2F")
+        .replace('=', "%3D")
 }
 
 pub fn substituter(base: &str) -> String {
@@ -150,10 +158,18 @@ mod tests {
     }
 
     #[test]
+    fn a_nar_hash_is_percent_encoded_for_a_query() {
+        assert_eq!(query_value("sha256-a+b/c="), "sha256-a%2Bb%2Fc%3D");
+    }
+
+    #[test]
     fn nixpkgs_override_uses_a_tarball_scheme_keyed_by_the_pinned_revision() {
         assert_eq!(
             nixpkgs_override("http://mirror.internal"),
-            format!("tarball+http://mirror.internal/nixpkgs-{NIXPKGS_REV}.tar.gz")
+            format!(
+                "tarball+http://mirror.internal/nixpkgs-{NIXPKGS_REV}.tar.gz?narHash={}",
+                query_value(NIXPKGS_NAR_HASH)
+            )
         );
     }
 
@@ -161,7 +177,10 @@ mod tests {
     fn home_manager_override_uses_a_tarball_scheme_keyed_by_the_pinned_revision() {
         assert_eq!(
             home_manager_override("http://mirror.internal"),
-            format!("tarball+http://mirror.internal/home-manager-{HOME_MANAGER_REV}.tar.gz")
+            format!(
+                "tarball+http://mirror.internal/home-manager-{HOME_MANAGER_REV}.tar.gz?narHash={}",
+                query_value(HOME_MANAGER_NAR_HASH)
+            )
         );
     }
 

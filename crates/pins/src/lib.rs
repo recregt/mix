@@ -1,7 +1,11 @@
 pub const NIX_VERSION: &str = "2.35.2";
 
 pub const NIXPKGS_REV: &str = "efe6f071ede9d21c37462d2d6682d5e670099684";
+pub const NIXPKGS_NAR_HASH: &str = "sha256-GnotcvKtbTMnoVx6G4E7ZdUX6487Dky74dqq3pU7iRk=";
+pub const NIXPKGS_LAST_MODIFIED: u64 = 1789426278;
 pub const HOME_MANAGER_REV: &str = "efa3ccb4c3cc90d832eab232976379058fa75aa3";
+pub const HOME_MANAGER_NAR_HASH: &str = "sha256-pD3qVlQ4mUCFoTWrYtxecpSitQMsgJvJIN0FUIDZoEU=";
+pub const HOME_MANAGER_LAST_MODIFIED: u64 = 1789482455;
 
 pub struct TarballPin {
     pub target: &'static str,

@@ -17,6 +17,19 @@ pub fn parse_with_nix(src: &str) -> std::process::Output {
     )
 }
 
+pub fn eval_raw_file(source: &str) -> std::process::Output {
+    let mut file = tempfile::NamedTempFile::new().expect("creating a temp file for nix eval");
+    file.write_all(source.as_bytes())
+        .expect("writing the nix expression to a temp file");
+
+    finished(
+        mix_exec::Command::new("nix")
+            .args(["--extra-experimental-features", "nix-command"])
+            .args(["eval", "--raw", "-f"])
+            .arg(file.path()),
+    )
+}
+
 pub fn eval_raw_attr(rendered: &str, attr_path: &str) -> std::process::Output {
     let mut file = tempfile::NamedTempFile::new().expect("creating a temp file for nix eval");
     file.write_all(rendered.as_bytes())
@@ -31,4 +44,29 @@ pub fn eval_raw_attr(rendered: &str, attr_path: &str) -> std::process::Output {
             .arg("--raw")
             .arg(attr_path),
     )
+}
+
+pub fn eval_installable(installable: &str) -> std::process::Output {
+    finished(
+        mix_exec::Command::new("nix")
+            .args(["--extra-experimental-features", "nix-command flakes"])
+            .args(["eval", "--raw"])
+            .arg(installable),
+    )
+}
+
+pub fn git(dir: &std::path::Path, args: &[&str]) {
+    let output = finished(
+        mix_exec::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "mix")
+            .env("GIT_AUTHOR_EMAIL", "mix@localhost")
+            .env("GIT_COMMITTER_NAME", "mix")
+            .env("GIT_COMMITTER_EMAIL", "mix@localhost"),
+    );
+    assert!(output.status.success(), "git {args:?} failed");
 }

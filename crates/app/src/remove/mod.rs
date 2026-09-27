@@ -122,6 +122,7 @@ mod tests {
                 home: home.to_path_buf(),
             },
             flake: "flake-content".to_string(),
+            lock: "lock-content".to_string(),
             home: "home-content".to_string(),
             restored_state: None,
         }

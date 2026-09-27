@@ -1,24 +1,87 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Ident(String);
+use std::borrow::Cow;
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Ident(pub(crate) Cow<'static, str>);
 
 const RESERVED_WORDS: &[&str] = &[
     "assert", "else", "if", "in", "inherit", "let", "or", "rec", "then", "with",
 ];
 
+const fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+const fn is_reserved(bytes: &[u8]) -> bool {
+    let mut i = 0;
+    while i < RESERVED_WORDS.len() {
+        if bytes_eq(RESERVED_WORDS[i].as_bytes(), bytes) {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+pub(crate) const fn is_identifier_bytes(bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return false;
+    }
+    let first = bytes[0];
+    if !(first.is_ascii_alphabetic() || first == b'_') {
+        return false;
+    }
+    let mut i = 1;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if !(b.is_ascii_alphanumeric() || b == b'_' || b == b'\'' || b == b'-') {
+            return false;
+        }
+        i += 1;
+    }
+    !is_reserved(bytes)
+}
+
+const fn is_file_name_bytes(bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return false;
+    }
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if !(b.is_ascii_lowercase() || b.is_ascii_digit() || (b == b'-' && i > 0)) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 impl Ident {
     pub fn new(s: impl Into<String>) -> Result<Self, InvalidIdent> {
         let s = s.into();
-        let mut chars = s.chars();
-        let first_ok = chars
-            .next()
-            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
-        let rest_ok = chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '\'' | '-'));
-
-        if first_ok && rest_ok && !RESERVED_WORDS.contains(&s.as_str()) {
-            Ok(Self(s))
+        if is_identifier_bytes(s.as_bytes()) {
+            Ok(Self(Cow::Owned(s)))
         } else {
             Err(InvalidIdent(s))
         }
+    }
+
+    pub const fn new_static(s: &'static str) -> Self {
+        assert!(
+            is_identifier_bytes(s.as_bytes()),
+            "not a valid nix identifier"
+        );
+        Self(Cow::Borrowed(s))
     }
 
     pub fn as_str(&self) -> &str {
@@ -37,22 +100,21 @@ impl InvalidIdent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileName(String);
+pub struct FileName(Cow<'static, str>);
 
 impl FileName {
     pub fn new(s: impl Into<String>) -> Result<Self, InvalidIdent> {
         let s = s.into();
-        let valid = s
-            .bytes()
-            .next()
-            .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
-            && s.bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
-        if valid {
-            Ok(Self(s))
+        if is_file_name_bytes(s.as_bytes()) {
+            Ok(Self(Cow::Owned(s)))
         } else {
             Err(InvalidIdent(s))
         }
+    }
+
+    pub const fn new_static(s: &'static str) -> Self {
+        assert!(is_file_name_bytes(s.as_bytes()), "not a valid file name");
+        Self(Cow::Borrowed(s))
     }
 
     pub fn as_str(&self) -> &str {
@@ -61,7 +123,7 @@ impl FileName {
 }
 
 pub fn is_identifier(s: &str) -> bool {
-    Ident::new(s).is_ok()
+    is_identifier_bytes(s.as_bytes())
 }
 
 #[cfg(test)]
@@ -90,6 +152,15 @@ mod tests {
                 prop_assert!(!name.as_str().starts_with('-'));
             }
         }
+    }
+
+    const CONST_IDENT: Ident = Ident::new_static("home-manager");
+    const CONST_FILE: FileName = FileName::new_static("mix-state");
+
+    #[test]
+    fn a_literal_is_checked_at_compile_time() {
+        assert_eq!(CONST_IDENT.as_str(), "home-manager");
+        assert_eq!(CONST_FILE.as_str(), "mix-state");
     }
 
     #[test]

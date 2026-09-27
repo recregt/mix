@@ -260,7 +260,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let target = Target::Directory {
-            path: dir.path().to_path_buf(),
+            path: dir.path().to_path_buf().into(),
             mode: 0o755,
             owner: None,
         };
@@ -298,8 +298,8 @@ mod tests {
     async fn a_file_mix_writes_is_written_with_the_declared_contents() {
         let dir = tempfile::tempdir().unwrap();
         let target = Target::File {
-            path: dir.path().join("nix.conf"),
-            expected: Some("expected content".to_string()),
+            path: dir.path().join("nix.conf").into(),
+            expected: Some("expected content".to_string().into()),
             owner: None,
         };
 
@@ -352,7 +352,7 @@ mod tests {
     async fn a_seeded_file_is_written_when_there_is_nothing_there() {
         let dir = tempfile::tempdir().unwrap();
         let target = Target::SeededFile {
-            path: dir.path().join("state"),
+            path: dir.path().join("state").into(),
             seed: "seed content".into(),
             owner: None,
         };
@@ -373,7 +373,7 @@ mod tests {
         let path = dir.path().join("state");
         std::fs::write(&path, "installed by the user since").unwrap();
         let target = Target::SeededFile {
-            path: path.clone(),
+            path: path.clone().into(),
             seed: "seed content".into(),
             owner: None,
         };

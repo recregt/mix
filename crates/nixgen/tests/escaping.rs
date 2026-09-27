@@ -1,14 +1,12 @@
 mod support;
 
-use mix_nixgen::HomeManagerConfig;
+use mix_nixgen::ast::Expr;
 use proptest::collection::vec;
 use proptest::prelude::*;
 
 fn round_trip(raw: &str) -> String {
-    let mut cfg = HomeManagerConfig::new();
-    cfg.set_str("mix.fuzz.value", raw).unwrap();
-
-    let output = support::eval_raw_attr(&cfg.render(), "mix.fuzz.value");
+    let printed = Expr::string(raw).unwrap().print();
+    let output = support::eval_raw_file(&printed);
     assert!(
         output.status.success(),
         "eval failed for {raw:?}:\n{}",
@@ -25,7 +23,10 @@ fn escaped_strings_round_trip_through_the_real_nix_evaluator() {
         "with \"quotes\"",
         "with\\backslash",
         "${interpolation}",
+        "$${double dollar}",
+        "ends with a dollar $",
         "a\nnewline\tand\ttab",
+        "a\rcarriage return",
         "unicode: héllo wörld 你好",
     ];
 
@@ -36,7 +37,7 @@ fn escaped_strings_round_trip_through_the_real_nix_evaluator() {
 
 fn arbitrary_nix_content() -> impl Strategy<Value = String> {
     vec(
-        any::<char>().prop_filter("no NUL: unrepresentable in a process argv", |c| *c != '\0'),
+        any::<char>().prop_filter("no NUL: unrepresentable in a nix string", |c| *c != '\0'),
         0..40,
     )
     .prop_map(|chars| chars.into_iter().collect())
