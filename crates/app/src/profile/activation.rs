@@ -13,6 +13,7 @@ use mix_core::paths::{
     DEFAULT_PROFILE_NIX, HOME_MANAGER_PROFILE_NAME, mix_state_dir, nix_profiles_dir,
 };
 use mix_core::{ActivityReporter, BuildProgress, CancellationToken};
+use mix_nixgen::{AttrPath, FlakeRef, Installable};
 
 use crate::exec::{plan_as, run_as_reporting, run_as_with_input};
 use crate::fs;
@@ -207,13 +208,13 @@ pub async fn switch(
     token: &CancellationToken,
     policy: BuildPolicy,
 ) -> Result<String> {
-    let state_dir = mix_state_dir(&cfg.user.home);
-    let state_dir_str = state_dir.to_string_lossy().into_owned();
-
-    let flake_attr = format!(
-        "path:{state_dir_str}#homeConfigurations.\"{}\".activationPackage",
-        cfg.user.name
-    );
+    let flake_attr = Installable::new(
+        FlakeRef::path(mix_state_dir(&cfg.user.home))
+            .expect("an invoking user always has an absolute home"),
+        AttrPath::new(["homeConfigurations", &cfg.user.name, "activationPackage"])
+            .expect("an invoking user's name never holds a quote"),
+    )
+    .render();
     let profile = nix_profiles_dir(&cfg.user.home).join(HOME_MANAGER_PROFILE_NAME);
     let profile_str = profile.to_string_lossy().into_owned();
     let options = nix_options(mirror, mirror_key).await;

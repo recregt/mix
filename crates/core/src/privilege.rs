@@ -42,6 +42,9 @@ fn invoking_user_from(get: impl Fn(&str) -> Option<String>) -> Option<InvokingUs
 
 fn current_user(uid: nix::unistd::Uid) -> Option<InvokingUser> {
     let user = nix::unistd::User::from_uid(uid).ok().flatten()?;
+    if !usable(&user.name, &user.dir) {
+        return None;
+    }
     Some(InvokingUser {
         uid: uid.as_raw(),
         gid: user.gid.as_raw(),
@@ -50,9 +53,20 @@ fn current_user(uid: nix::unistd::Uid) -> Option<InvokingUser> {
     })
 }
 
+fn usable(name: &str, home: &std::path::Path) -> bool {
+    !name.contains('"') && home.is_absolute()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_account_nix_cannot_name_is_not_usable() {
+        assert!(usable("mix", std::path::Path::new("/home/mix")));
+        assert!(!usable("mi\"x", std::path::Path::new("/home/mix")));
+        assert!(!usable("mix", std::path::Path::new("home/mix")));
+    }
 
     #[test]
     fn invoking_user_from_resolves_a_known_uid() {

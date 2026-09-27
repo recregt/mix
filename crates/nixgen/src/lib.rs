@@ -2,6 +2,7 @@ mod builder;
 mod escape;
 mod flake;
 mod ident;
+mod installable;
 mod value;
 
 pub(crate) const GENERATED_HEADER: &str = "\
@@ -13,3 +14,4 @@ pub(crate) const GENERATED_HEADER: &str = "\
 pub use builder::{HomeManagerConfig, InvalidInput};
 pub use flake::FlakeConfig;
 pub use ident::is_identifier;
+pub use installable::{AttrPath, FlakeRef, Installable, InvalidInstallable, PublicKey};
