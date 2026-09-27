@@ -10,7 +10,7 @@ pub async fn run(
 ) -> anyhow::Result<ExitCode> {
     if mix_core::privilege::is_root() {
         let _lock = super::acquire_lock()?;
-        let cancel = mix_core::cancel::root();
+        let cancel = mix_exec::cancel::root();
         let _watch =
             crate::interrupt::watch(&cancel, crate::interrupt::BOOTSTRAP, std::future::pending());
         mix_app::bootstrap::bootstrap(

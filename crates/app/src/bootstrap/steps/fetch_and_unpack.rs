@@ -481,53 +481,19 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path, token: &CancellationToken) -> Re
         path: reginfo_path.to_path_buf(),
         source: e,
     })?;
-
-    let nix_store = nix_pkg.join("bin/nix-store");
-    let command_line = crate::exec::format_command(&nix_store.to_string_lossy(), &["--load-db"]);
-    let mut command = crate::exec::command(&nix_store);
-    command
+    nix_as_root(nix_pkg.join("bin/nix-store"))
         .arg("--load-db")
-        .env("HOME", root_home())
-        .env_remove("NIX_REMOTE");
-    run_to_completion(command, &command_line, Some(reginfo), token)
+        .input(reginfo)
+        .run_blocking(token)
+        .map_err(CoreError::from)?;
+    Ok(())
 }
 
 fn forget_vanished_paths(nix_pkg: &Path, token: &CancellationToken) -> Result<()> {
-    let nix_store = nix_pkg.join("bin/nix-store");
-    let command_line = crate::exec::format_command(&nix_store.to_string_lossy(), &["--verify"]);
-    let mut command = crate::exec::command(&nix_store);
-    command
+    nix_as_root(nix_pkg.join("bin/nix-store"))
         .arg("--verify")
-        .env("HOME", root_home())
-        .env_remove("NIX_REMOTE");
-    run_to_completion(command, &command_line, None, token)
-}
-
-fn run_to_completion(
-    command: tokio::process::Command,
-    command_line: &str,
-    input: Option<Vec<u8>>,
-    token: &CancellationToken,
-) -> Result<()> {
-    let output = tokio::runtime::Handle::current().block_on(crate::exec::output(
-        command,
-        command_line,
-        input,
-        token,
-    ))?;
-
-    tracing::trace!(
-        "command output: {command_line}\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    if !output.status.success() {
-        return Err(Error::Core(crate::exec::command_error(
-            command_line,
-            &output,
-        )));
-    }
+        .run_blocking(token)
+        .map_err(CoreError::from)?;
     Ok(())
 }
 
@@ -536,25 +502,7 @@ fn activate_default_profile(
     nss_cacert_pkg: &Path,
     token: &CancellationToken,
 ) -> Result<()> {
-    let nix_env = nix_pkg.join("bin/nix-env");
-    let command_line = crate::exec::format_command(
-        &nix_env.to_string_lossy(),
-        &[
-            "--profile",
-            DEFAULT_PROFILE,
-            "--install",
-            &nix_pkg.to_string_lossy(),
-            &nss_cacert_pkg.to_string_lossy(),
-            "--option",
-            "substitute",
-            "false",
-            "--option",
-            "post-build-hook",
-            "",
-        ],
-    );
-    let mut command = crate::exec::command(&nix_env);
-    command
+    nix_as_root(nix_pkg.join("bin/nix-env"))
         .arg("--profile")
         .arg(DEFAULT_PROFILE)
         .arg("--install")
@@ -562,9 +510,15 @@ fn activate_default_profile(
         .arg(nss_cacert_pkg)
         .args(["--option", "substitute", "false"])
         .args(["--option", "post-build-hook", ""])
+        .run_blocking(token)
+        .map_err(CoreError::from)?;
+    Ok(())
+}
+
+fn nix_as_root(program: PathBuf) -> mix_exec::Command {
+    mix_exec::Command::new(program)
         .env("HOME", root_home())
-        .env_remove("NIX_REMOTE");
-    run_to_completion(command, &command_line, None, token)
+        .env_remove("NIX_REMOTE")
 }
 
 fn root_home() -> String {
@@ -604,7 +558,7 @@ mod tests {
             created,
             Uid::current(),
             Gid::current(),
-            &mix_core::cancel::root(),
+            &mix_exec::cancel::root(),
         )
     }
 
@@ -815,7 +769,7 @@ mod tests {
         let dest = tempfile::tempdir().unwrap();
         let dest_store = dest.path().join("store");
 
-        let token = mix_core::cancel::root();
+        let token = mix_exec::cancel::root();
         token.cancel();
 
         let mut created = Vec::new();

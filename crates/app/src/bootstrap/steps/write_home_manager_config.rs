@@ -132,14 +132,14 @@ mod tests {
     #[tokio::test]
     async fn execute_is_a_no_op_without_a_user_config() {
         let mut step = WriteHomeManagerConfig::new(None);
-        step.execute(&mix_core::cancel::root()).await.unwrap();
+        step.execute(&mix_exec::cancel::root()).await.unwrap();
         assert!(!step.created_dir);
     }
 
     #[tokio::test]
     async fn rollback_is_a_no_op_without_a_user_config() {
         WriteHomeManagerConfig::new(None)
-            .rollback(&mix_core::cancel::root())
+            .rollback(&mix_exec::cancel::root())
             .await
             .unwrap();
     }
@@ -151,7 +151,7 @@ mod tests {
 
         let mut step = WriteHomeManagerConfig::new(Some(user_config(home.path())));
         step.created_dir = true;
-        step.rollback(&mix_core::cancel::root()).await.unwrap();
+        step.rollback(&mix_exec::cancel::root()).await.unwrap();
 
         assert!(!state_dir.exists());
         assert!(home.path().join(".local/state").exists());
@@ -164,7 +164,7 @@ mod tests {
         std::fs::write(state_dir.join("flake.lock"), "lock").unwrap();
 
         let mut step = WriteHomeManagerConfig::new(Some(user_config(home.path())));
-        step.rollback(&mix_core::cancel::root()).await.unwrap();
+        step.rollback(&mix_exec::cancel::root()).await.unwrap();
 
         assert!(state_dir.exists());
         assert!(!state_dir.join(FLAKE_NIX).exists());
@@ -176,7 +176,7 @@ mod tests {
     async fn rollback_tolerates_a_state_dir_that_was_never_written() {
         let home = tempfile::tempdir().unwrap();
         let mut step = WriteHomeManagerConfig::new(Some(user_config(home.path())));
-        step.rollback(&mix_core::cancel::root()).await.unwrap();
+        step.rollback(&mix_exec::cancel::root()).await.unwrap();
         assert!(!home.path().join(MIX_STATE_DIR).exists());
     }
 }

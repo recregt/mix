@@ -229,7 +229,7 @@ mod tests {
                 created_dir,
             }],
         };
-        step.rollback(&mix_core::cancel::root()).await.unwrap();
+        step.rollback(&mix_exec::cancel::root()).await.unwrap();
 
         assert!(!dir.path().join("a").exists());
     }

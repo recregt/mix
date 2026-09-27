@@ -139,7 +139,7 @@ mod tests {
             None,
             None,
             noop(),
-            &mix_core::cancel::root(),
+            &mix_exec::cancel::root(),
         )
         .await
     }

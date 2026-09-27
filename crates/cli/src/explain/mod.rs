@@ -144,10 +144,12 @@ pub(crate) fn privileged(error: &mix_rpc::Error, action: &dyn Display) -> Diagno
     use mix_rpc::Error;
 
     match error {
-        Error::Spawn(_) | Error::Connect(_) | Error::Refused(_) => Diagnostic::hinting(
-            format!("couldn't get administrator rights to {action}"),
-            "Make sure your account can use sudo, then try again",
-        ),
+        Error::Spawn(_) | Error::Launch(_) | Error::Connect(_) | Error::Refused(_) => {
+            Diagnostic::hinting(
+                format!("couldn't get administrator rights to {action}"),
+                "Make sure your account can use sudo, then try again",
+            )
+        }
         Error::Ended => Diagnostic::hinting(
             format!("stopped before it could {action}"),
             "Run the same command again to finish; it picks up where it stopped",

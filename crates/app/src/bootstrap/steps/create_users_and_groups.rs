@@ -134,9 +134,11 @@ pub(crate) async fn delete_user(name: &str, token: &CancellationToken) {
 }
 
 async fn terminate_processes(name: &str, token: &CancellationToken) {
-    let mut pkill = crate::exec::command("pkill");
-    pkill.args(["-u", name]);
-    match crate::exec::output(pkill, &format!("pkill -u {name}"), None, token).await {
+    match mix_exec::Command::new("pkill")
+        .args(["-u", name])
+        .output(token)
+        .await
+    {
         Ok(output) if output.status.success() || output.status.code() == Some(1) => {}
         Ok(output) => tracing::warn!("pkill -u {name} exited with {}, continuing", output.status),
         Err(e) => tracing::warn!("pkill -u {name} failed to run: {e}, continuing"),

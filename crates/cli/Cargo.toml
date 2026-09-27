@@ -11,6 +11,7 @@ embed-tarball = ["mix-app/embed-tarball"]
 [dependencies]
 mix-app = { path = "../app" }
 mix-core = { path = "../core" }
+mix-exec = { path = "../exec" }
 mix-rpc = { path = "../rpc" }
 mix-ui = { path = "../ui" }
 anyhow = "1.0.104"

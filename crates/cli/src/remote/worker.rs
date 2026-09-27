@@ -241,7 +241,7 @@ impl mix_rpc::Worker for CliWorker {
             Err(error) => Outcome::Failure(Failure::Core(error)),
             Ok(_lock) => {
                 let mirror = request.mirror.as_ref();
-                let cancel = mix_core::cancel::root();
+                let cancel = mix_exec::cancel::root();
                 let _watch = interrupt::watch(&cancel, interrupt::BOOTSTRAP, client_gone(&events));
                 let result = mix_app::bootstrap::bootstrap(
                     mix_core::privilege::user_by_uid(caller.uid),
@@ -273,7 +273,7 @@ impl mix_rpc::Worker for CliWorker {
             Ok(_lock) => {
                 let user_config = mix_core::privilege::user_by_uid(caller.uid)
                     .and_then(mix_app::profile::existing_user_config_for);
-                let cancel = mix_core::cancel::root();
+                let cancel = mix_exec::cancel::root();
                 let _watch = interrupt::watch(&cancel, interrupt::REPAIR, client_gone(&events));
                 let repair = mix_app::repair::repair(user_config.as_ref(), &cancel).await;
                 Outcome::RepairDone {

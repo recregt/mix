@@ -35,7 +35,7 @@ impl Drop for Group {
     }
 }
 
-pub fn spawn(command: &mut Command) -> std::io::Result<(Child, Group)> {
+pub(crate) fn spawn(command: &mut Command) -> std::io::Result<(Child, Group)> {
     let mut live = LIVE.lock().unwrap_or_else(PoisonError::into_inner);
     let child = command.process_group(0).kill_on_drop(true).spawn()?;
     let pgid = child
@@ -71,11 +71,8 @@ mod tests {
     use super::*;
 
     fn sh(script: &str) -> Command {
-        let mut command = super::super::command("sh");
-        command
-            .args(["-c", script])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+        let mut command = crate::Command::new("sh").args(["-c", script]).process();
+        command.stdout(Stdio::piped()).stderr(Stdio::null());
         command
     }
 

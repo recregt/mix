@@ -135,14 +135,14 @@ mod tests {
     #[tokio::test]
     async fn execute_is_a_no_op_without_a_user_config() {
         let mut step = ActivateHomeManagerConfig::new(None, None, None, noop());
-        step.execute(&mix_core::cancel::root()).await.unwrap();
+        step.execute(&mix_exec::cancel::root()).await.unwrap();
         assert!(!step.created_git_dir);
     }
 
     #[tokio::test]
     async fn rollback_is_a_no_op_without_a_user_config() {
         ActivateHomeManagerConfig::new(None, None, None, noop())
-            .rollback(&mix_core::cancel::root())
+            .rollback(&mix_exec::cancel::root())
             .await
             .unwrap();
     }
@@ -156,7 +156,7 @@ mod tests {
         let mut step =
             ActivateHomeManagerConfig::new(Some(user_config(home.path())), None, None, noop());
         step.created_git_dir = true;
-        step.rollback(&mix_core::cancel::root()).await.unwrap();
+        step.rollback(&mix_exec::cancel::root()).await.unwrap();
 
         assert!(!git_dir.exists());
         assert!(mix_state_dir(home.path()).exists());
@@ -170,7 +170,7 @@ mod tests {
 
         let mut step =
             ActivateHomeManagerConfig::new(Some(user_config(home.path())), None, None, noop());
-        step.rollback(&mix_core::cancel::root()).await.unwrap();
+        step.rollback(&mix_exec::cancel::root()).await.unwrap();
 
         assert!(git_dir.exists());
     }

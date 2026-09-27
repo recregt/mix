@@ -12,12 +12,13 @@ embed-tarball = []
 
 [dependencies]
 mix-core = { path = "../core" }
+mix-exec = { path = "../exec" }
 mix-nixgen = { path = "../nixgen" }
 mix-pins = { path = "../pins" }
 async-trait = { workspace = true }
 futures-util = { workspace = true }
 liblzma = { version = "0.4.8", default-features = false, features = ["static"] }
-nix = { workspace = true, features = ["signal", "process"] }
+nix = { workspace = true }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "http2"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

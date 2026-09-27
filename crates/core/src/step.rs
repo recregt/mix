@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use futures_util::future::{Either, select};
 use tracing::Instrument;
 
-use crate::cancel::{self, CancellationToken};
 use crate::progress::StepObserver;
+use mix_exec::cancel::{self, CancellationToken};
 
 #[async_trait]
 pub trait Step: Send + Sync {

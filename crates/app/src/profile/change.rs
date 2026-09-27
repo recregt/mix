@@ -89,7 +89,7 @@ pub async fn apply(
             )
         })
         .await?;
-        profile::finish(cfg, &generation, activity, &mix_core::cancel::shield()).await?;
+        profile::finish(cfg, &generation, activity, &mix_exec::cancel::shield()).await?;
         Ok(())
     }
     .instrument(span)

@@ -355,3 +355,36 @@ async fn a_worker_that_dies_mid_request_reads_as_ended_not_refused() {
         "{next:?}"
     );
 }
+
+#[tokio::test]
+async fn waiting_for_the_worker_hands_back_how_it_exited() {
+    let client = Client::start(
+        std::path::Path::new("sh"),
+        &["-c", "cat >/dev/null; exit 3"],
+        None,
+    )
+    .await
+    .unwrap();
+
+    let status = tokio::time::timeout(Duration::from_secs(5), client.wait())
+        .await
+        .expect("waiting for an exited worker does not block")
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(status.code(), Some(3));
+}
+
+#[tokio::test]
+async fn a_worker_that_cannot_start_is_named_in_the_error() {
+    let missing = Client::start(std::path::Path::new("mix-no-such-program"), &[], None)
+        .await
+        .err()
+        .expect("a missing program cannot start");
+
+    assert!(
+        std::error::Error::source(&missing)
+            .is_some_and(|source| source.to_string().contains("mix-no-such-program")),
+        "{missing}"
+    );
+}

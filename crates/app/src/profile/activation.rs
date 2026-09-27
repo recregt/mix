@@ -449,7 +449,7 @@ mod tests {
             inner: Arc::clone(&recorded) as Arc<dyn ActivityReporter>,
             approved: approved_set(approved),
             refused: OnceLock::new(),
-            token: mix_core::cancel::root(),
+            token: mix_exec::cancel::root(),
         };
         (guard, recorded)
     }
@@ -514,7 +514,7 @@ mod tests {
 
     #[test]
     fn stopping_a_build_does_not_cancel_the_run_it_belongs_to() {
-        let parent = mix_core::cancel::root();
+        let parent = mix_exec::cancel::root();
         let (mut guard, _) = guard(&[]);
         guard.token = parent.child_token();
 

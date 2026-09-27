@@ -142,7 +142,7 @@ mod tests {
             None,
             noop(),
             false,
-            &mix_core::cancel::root(),
+            &mix_exec::cancel::root(),
         )
         .await
         .unwrap();
@@ -164,7 +164,7 @@ mod tests {
             None,
             noop(),
             false,
-            &mix_core::cancel::root(),
+            &mix_exec::cancel::root(),
         )
         .await
         .unwrap();
@@ -187,7 +187,7 @@ mod tests {
             None,
             noop(),
             false,
-            &mix_core::cancel::root(),
+            &mix_exec::cancel::root(),
         )
         .await
         .unwrap();
@@ -207,7 +207,7 @@ mod tests {
             None,
             noop(),
             false,
-            &mix_core::cancel::root(),
+            &mix_exec::cancel::root(),
         )
         .await
         .unwrap_err();

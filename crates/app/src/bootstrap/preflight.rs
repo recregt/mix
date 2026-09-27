@@ -25,16 +25,11 @@ pub async fn check_nix_not_installed() -> Result<()> {
         return Ok(());
     }
 
-    let mut nix_env = crate::exec::command("nix-env");
-    nix_env.arg("--version");
-    let on_path = crate::exec::output(
-        nix_env,
-        "nix-env --version",
-        None,
-        &mix_core::cancel::shield(),
-    )
-    .await
-    .is_ok();
+    let on_path = mix_exec::Command::new("nix-env")
+        .arg("--version")
+        .output(&mix_exec::cancel::shield())
+        .await
+        .is_ok();
 
     if on_path || is_dir("/nix/store").await {
         return Err(Error::AlreadyManaged);

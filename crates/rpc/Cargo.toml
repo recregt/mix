@@ -7,6 +7,7 @@ license = "MPL-2.0"
 
 [dependencies]
 mix-core = { path = "../core" }
+mix-exec = { path = "../exec" }
 futures-util = { workspace = true }
 hyper-util = { version = "0.1.21", features = ["tokio"] }
 prost = "0.14.4"

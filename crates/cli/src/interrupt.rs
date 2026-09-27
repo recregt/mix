@@ -64,18 +64,18 @@ pub fn watch(
                     }
                 }
                 _ = suspend.recv() => {
-                    mix_app::children::pause_all();
+                    mix_exec::group::pause_all();
                     let _ = nix::sys::signal::raise(Signal::SIGSTOP);
                     continue;
                 }
                 _ = resume.recv() => {
-                    mix_app::children::resume_all();
+                    mix_exec::group::resume_all();
                     continue;
                 }
             }
             if cancel.is_cancelled() {
                 tracing::warn!("{}", stopping.forced);
-                mix_app::children::kill_all();
+                mix_exec::group::kill_all();
                 mix_ui::restore_terminal();
                 std::process::exit(FORCED_EXIT);
             }
@@ -104,7 +104,7 @@ mod tests {
     #[tokio::test]
     async fn sigint_cancels_the_token() {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
-        let cancel = mix_core::cancel::root();
+        let cancel = mix_exec::cancel::root();
         let _watch = watch(&cancel, BOOTSTRAP, std::future::pending());
 
         signal::raise(Signal::SIGINT).unwrap();
@@ -115,7 +115,7 @@ mod tests {
     #[tokio::test]
     async fn sigterm_cancels_the_token() {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
-        let cancel = mix_core::cancel::root();
+        let cancel = mix_exec::cancel::root();
         let _watch = watch(&cancel, BOOTSTRAP, std::future::pending());
 
         signal::raise(Signal::SIGTERM).unwrap();
@@ -126,7 +126,7 @@ mod tests {
     #[tokio::test]
     async fn a_client_that_leaves_cancels_the_token() {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
-        let cancel = mix_core::cancel::root();
+        let cancel = mix_exec::cancel::root();
         let (leave, left) = tokio::sync::oneshot::channel::<()>();
         let _watch = watch(&cancel, BOOTSTRAP, async {
             let _ = left.await;
@@ -140,7 +140,7 @@ mod tests {
     #[tokio::test]
     async fn a_client_that_leaves_after_an_interrupt_does_not_count_as_a_second_one() {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
-        let cancel = mix_core::cancel::root();
+        let cancel = mix_exec::cancel::root();
         let (leave, left) = tokio::sync::oneshot::channel::<()>();
         let watch = watch(&cancel, BOOTSTRAP, async {
             let _ = left.await;
@@ -157,7 +157,7 @@ mod tests {
     #[tokio::test]
     async fn a_finished_watch_cancels_nothing() {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
-        let cancel = mix_core::cancel::root();
+        let cancel = mix_exec::cancel::root();
         let (leave, left) = tokio::sync::oneshot::channel::<()>();
         let watch = watch(&cancel, BOOTSTRAP, async {
             let _ = left.await;

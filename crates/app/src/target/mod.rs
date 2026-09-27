@@ -72,7 +72,7 @@ mod tests {
             owner: None,
         };
 
-        assert!(!apply(&target, &mix_core::cancel::root()).await.unwrap());
+        assert!(!apply(&target, &mix_exec::cancel::root()).await.unwrap());
     }
 
     #[tokio::test]
@@ -86,7 +86,7 @@ mod tests {
             owner: None,
         };
 
-        let error = apply(&target, &mix_core::cancel::root()).await.unwrap_err();
+        let error = apply(&target, &mix_exec::cancel::root()).await.unwrap_err();
 
         match error {
             Error::Unrepairable { artifact, reason } => {
@@ -107,7 +107,7 @@ mod tests {
             owner: None,
         };
 
-        assert!(apply(&target, &mix_core::cancel::root()).await.unwrap());
+        assert!(apply(&target, &mix_exec::cancel::root()).await.unwrap());
         assert!(path.is_dir());
     }
 
@@ -120,7 +120,7 @@ mod tests {
             path: "/does/not/exist/nix-env",
         };
 
-        let error = apply(&target, &mix_core::cancel::root()).await.unwrap_err();
+        let error = apply(&target, &mix_exec::cancel::root()).await.unwrap_err();
 
         assert!(matches!(
             error,
@@ -140,6 +140,6 @@ mod tests {
             owner: None,
         };
 
-        assert!(!apply(&target, &mix_core::cancel::root()).await.unwrap());
+        assert!(!apply(&target, &mix_exec::cancel::root()).await.unwrap());
     }
 }

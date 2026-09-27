@@ -46,6 +46,9 @@ pub enum Error {
     #[error("could not start the privileged worker: {0}")]
     Spawn(#[source] std::io::Error),
 
+    #[error("could not start the privileged worker")]
+    Launch(#[source] mix_exec::Error),
+
     #[error("could not reach the privileged worker: {0}")]
     Connect(String),
 
@@ -244,7 +247,7 @@ fn unix_stream(fd: OwnedFd) -> std::io::Result<UnixStream> {
 
 pub struct Client {
     inner: WorkerServiceClient<Channel>,
-    worker: Option<std::process::Child>,
+    worker: Option<mix_exec::Foreground>,
 }
 
 impl Client {
@@ -267,22 +270,16 @@ impl Client {
         })
     }
 
-    #[allow(clippy::disallowed_methods)]
     pub async fn start(program: &Path, args: &[&str], via: Option<&str>) -> Result<Self, Error> {
         let (ours, theirs) = std::os::unix::net::UnixStream::pair().map_err(Error::Spawn)?;
-        let mut command = match via {
-            Some(launcher) => {
-                let mut command = std::process::Command::new(launcher);
-                command.arg(program);
-                command
-            }
-            None => std::process::Command::new(program),
+        let command = match via {
+            Some(launcher) => mix_exec::Command::new(launcher).arg(program),
+            None => mix_exec::Command::new(program),
         };
         let worker = command
             .args(args)
-            .stdin(std::process::Stdio::from(OwnedFd::from(theirs)))
-            .spawn()
-            .map_err(Error::Spawn)?;
+            .spawn_foreground(OwnedFd::from(theirs))
+            .map_err(Error::Launch)?;
         ours.set_nonblocking(true).map_err(Error::Spawn)?;
         let mut client = Self::connect(UnixStream::from_std(ours).map_err(Error::Spawn)?).await?;
         client.worker = Some(worker);
@@ -315,12 +312,12 @@ impl Client {
         Ok(decode(events, convert::repair_response_from_wire))
     }
 
-    pub fn wait(mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+    pub async fn wait(mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
         drop(self.inner);
-        self.worker
-            .take()
-            .map(|mut worker| worker.wait())
-            .transpose()
+        match self.worker.take() {
+            Some(mut worker) => worker.wait().await.map(Some),
+            None => Ok(None),
+        }
     }
 }
 

@@ -9,7 +9,7 @@ pub async fn run(
     json: bool,
 ) -> anyhow::Result<ExitCode> {
     let (_lock, user_config) = super::acquire_profile().map_err(Error::from)?;
-    let cancel = mix_core::cancel::root();
+    let cancel = mix_exec::cancel::root();
     let _watch = crate::interrupt::watch(&cancel, crate::interrupt::CHANGE, std::future::pending());
 
     let removed = mix_app::remove::remove(

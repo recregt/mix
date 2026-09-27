@@ -544,22 +544,20 @@ mod tests {
     }
 
     fn tar_of(dir: &std::path::Path) -> std::process::Output {
-        crate::exec::fixture(
-            "tar",
-            &[
-                "cJf".as_ref(),
-                "-".as_ref(),
-                "-C".as_ref(),
-                dir.as_os_str(),
-                ".".as_ref(),
-            ],
-            None,
-        )
+        mix_exec::Command::new("tar")
+            .args(["cJf", "-", "-C"])
+            .arg(dir)
+            .arg(".")
+            .output_blocking(&mix_exec::cancel::root())
+            .expect("tar must be on PATH to build test fixtures")
     }
 
     fn xz_compress(bytes: &[u8]) -> Vec<u8> {
-        let output =
-            crate::exec::fixture("xz", &["-z".as_ref(), "-c".as_ref()], Some(bytes.to_vec()));
+        let output = mix_exec::Command::new("xz")
+            .args(["-z", "-c"])
+            .input(bytes.to_vec())
+            .output_blocking(&mix_exec::cancel::root())
+            .expect("xz must be on PATH to build test fixtures");
         assert!(output.status.success());
         output.stdout
     }
