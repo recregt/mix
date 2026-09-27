@@ -24,22 +24,22 @@ fn declared_tree(root: &std::path::Path, n: usize) -> Vec<Target> {
         std::fs::write(dir.join("state"), "{\"version\":1,\"packages\":[]}").unwrap();
 
         items.push(Target::Directory {
-            path: dir.clone(),
+            path: dir.clone().into(),
             mode: mode_of(&dir),
             owner: None,
         });
         items.push(Target::File {
-            path: dir.join("nix.conf"),
-            expected: Some("declared contents\n".to_string()),
+            path: dir.join("nix.conf").into(),
+            expected: Some("declared contents\n".to_string().into()),
             owner: None,
         });
         items.push(Target::File {
-            path: dir.join("flake.lock"),
+            path: dir.join("flake.lock").into(),
             expected: None,
             owner: None,
         });
         items.push(Target::SeededFile {
-            path: dir.join("state"),
+            path: dir.join("state").into(),
             seed: "{\"version\":1,\"packages\":[]}".into(),
             owner: None,
         });
@@ -96,8 +96,8 @@ fn apply_the_declared_targets(bencher: divan::Bencher, n: usize) {
 fn reconcile_a_file_that_drifted(bencher: divan::Bencher) {
     let root = tempfile::tempdir().unwrap();
     let target = Target::File {
-        path: root.path().join("nix.conf"),
-        expected: Some("build-users-group = nixbld\n".to_string()),
+        path: root.path().join("nix.conf").into(),
+        expected: Some("build-users-group = nixbld\n".to_string().into()),
         owner: None,
     };
     let token = mix_exec::cancel::root();
@@ -123,7 +123,7 @@ fn reconcile_an_owner_that_drifted(bencher: divan::Bencher) {
         nix::unistd::Gid::current().as_raw(),
     );
     let target = Target::Directory {
-        path: root.path().to_path_buf(),
+        path: root.path().to_path_buf().into(),
         mode: mode_of(root.path()),
         owner: Some(owner),
     };

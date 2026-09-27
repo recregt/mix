@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::identity::{
     self, MIX_USERS_GID, MIX_USERS_GROUP, NIXBLD_GID, NIXBLD_GROUP, NIXBLD_UID_BASE,
@@ -58,17 +58,17 @@ type Owner = Option<(u32, u32)>;
 #[derive(Debug, Clone)]
 pub enum Target {
     Directory {
-        path: PathBuf,
+        path: Cow<'static, Path>,
         mode: u32,
         owner: Owner,
     },
     File {
-        path: PathBuf,
-        expected: Option<String>,
+        path: Cow<'static, Path>,
+        expected: Option<Cow<'static, str>>,
         owner: Owner,
     },
     SeededFile {
-        path: PathBuf,
+        path: Cow<'static, Path>,
         seed: Cow<'static, str>,
         owner: Owner,
     },
@@ -115,8 +115,8 @@ impl Target {
         match self {
             Target::Directory { .. } => Category::Filesystem,
             Target::File { path, .. }
-                if path.as_path() == Path::new(NIX_CONF_DEST)
-                    || path.as_path() == Path::new(PROFILE_SNIPPET_DEST) =>
+                if path.as_ref() == Path::new(NIX_CONF_DEST)
+                    || path.as_ref() == Path::new(PROFILE_SNIPPET_DEST) =>
             {
                 Category::Configuration
             }
@@ -135,38 +135,38 @@ fn push_user_targets(items: &mut Vec<Target>, cfg: &UserConfig) {
     let state_dir = mix_state_dir(&cfg.user.home);
     let owner = Some((cfg.user.uid, cfg.user.gid));
     items.push(Target::Directory {
-        path: state_dir.clone(),
+        path: Cow::Owned(state_dir.clone()),
         mode: MIX_STATE_DIR_MODE,
         owner,
     });
     items.push(Target::Directory {
-        path: nix_profiles_dir(&cfg.user.home),
+        path: Cow::Owned(nix_profiles_dir(&cfg.user.home)),
         mode: NIX_PROFILES_DIR_MODE,
         owner,
     });
     items.push(Target::File {
-        path: state_dir.join(HOME_NIX),
-        expected: Some(cfg.home.clone()),
+        path: Cow::Owned(state_dir.join(HOME_NIX)),
+        expected: Some(Cow::Owned(cfg.home.clone())),
         owner,
     });
     items.push(Target::File {
-        path: state_dir.join(FLAKE_NIX),
-        expected: Some(cfg.flake.clone()),
+        path: Cow::Owned(state_dir.join(FLAKE_NIX)),
+        expected: Some(Cow::Owned(cfg.flake.clone())),
         owner,
     });
     items.push(Target::File {
-        path: state_dir.join(FLAKE_LOCK),
-        expected: Some(cfg.lock.clone()),
+        path: Cow::Owned(state_dir.join(FLAKE_LOCK)),
+        expected: Some(Cow::Owned(cfg.lock.clone())),
         owner,
     });
     match &cfg.restored_state {
         Some(restored) => items.push(Target::File {
-            path: state_dir.join(STATE_FILE),
-            expected: Some(restored.clone()),
+            path: Cow::Owned(state_dir.join(STATE_FILE)),
+            expected: Some(Cow::Owned(restored.clone())),
             owner,
         }),
         None => items.push(Target::SeededFile {
-            path: state_dir.join(STATE_FILE),
+            path: Cow::Owned(state_dir.join(STATE_FILE)),
             seed: Cow::Borrowed(crate::state::StateManifest::seed_rendered()),
             owner,
         }),
@@ -177,43 +177,52 @@ fn push_user_targets(items: &mut Vec<Target>, cfg: &UserConfig) {
     });
 }
 
+const SYSTEM_TARGET_COUNT: usize = 10 + NIX_TREE_PATHS.len() + NIXBLD_USER_COUNT as usize;
+const USER_TARGET_COUNT: usize = 7;
+
 pub fn user_targets(cfg: &UserConfig) -> Vec<Target> {
-    let mut items = Vec::new();
+    let mut items = Vec::with_capacity(USER_TARGET_COUNT);
     push_user_targets(&mut items, cfg);
     items
 }
 
 pub fn targets(user_config: Option<&UserConfig>) -> Vec<Target> {
-    let mut items = vec![
-        Target::Directory {
-            path: PathBuf::from("/nix"),
-            mode: 0o755,
-            owner: None,
-        },
-        Target::Directory {
-            path: PathBuf::from(NIX_STORE),
-            mode: 0o1775,
-            owner: None,
-        },
-    ];
+    let mut items = Vec::with_capacity(
+        SYSTEM_TARGET_COUNT
+            + if user_config.is_some() {
+                USER_TARGET_COUNT
+            } else {
+                0
+            },
+    );
+    items.push(Target::Directory {
+        path: Cow::Borrowed(Path::new("/nix")),
+        mode: 0o755,
+        owner: None,
+    });
+    items.push(Target::Directory {
+        path: Cow::Borrowed(Path::new(NIX_STORE)),
+        mode: 0o1775,
+        owner: None,
+    });
     items.extend(NIX_TREE_PATHS.iter().map(|&path| Target::Directory {
-        path: PathBuf::from(path),
+        path: Cow::Borrowed(Path::new(path)),
         mode: NIX_TREE_MODE,
         owner: None,
     }));
     items.push(Target::File {
-        path: PathBuf::from(NIX_OWNERSHIP_MARKER),
-        expected: Some(String::new()),
+        path: Cow::Borrowed(Path::new(NIX_OWNERSHIP_MARKER)),
+        expected: Some(Cow::Borrowed("")),
         owner: None,
     });
     items.push(Target::File {
-        path: PathBuf::from(NIX_CONF_DEST),
-        expected: Some(NIX_CONF.to_string()),
+        path: Cow::Borrowed(Path::new(NIX_CONF_DEST)),
+        expected: Some(Cow::Borrowed(NIX_CONF)),
         owner: None,
     });
     items.push(Target::File {
-        path: PathBuf::from(PROFILE_SNIPPET_DEST),
-        expected: Some(PROFILE_SNIPPET.to_string()),
+        path: Cow::Borrowed(Path::new(PROFILE_SNIPPET_DEST)),
+        expected: Some(Cow::Borrowed(PROFILE_SNIPPET)),
         owner: None,
     });
     items.push(Target::Group {
@@ -255,6 +264,8 @@ pub fn targets(user_config: Option<&UserConfig>) -> Vec<Target> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     fn sample_user_config() -> UserConfig {
@@ -275,7 +286,7 @@ mod tests {
     #[test]
     fn label_uses_the_path_for_path_based_targets() {
         let target = Target::Directory {
-            path: PathBuf::from("/nix"),
+            path: PathBuf::from("/nix").into(),
             mode: 0o755,
             owner: None,
         };
@@ -307,7 +318,7 @@ mod tests {
     fn category_groups_directories_and_the_ownership_marker_as_filesystem() {
         assert_eq!(
             Target::Directory {
-                path: PathBuf::from("/nix"),
+                path: PathBuf::from("/nix").into(),
                 mode: 0o755,
                 owner: None,
             }
@@ -316,8 +327,8 @@ mod tests {
         );
         assert_eq!(
             Target::File {
-                path: PathBuf::from(NIX_OWNERSHIP_MARKER),
-                expected: Some(String::new()),
+                path: PathBuf::from(NIX_OWNERSHIP_MARKER).into(),
+                expected: Some(String::new().into()),
                 owner: None,
             }
             .category(),
@@ -329,8 +340,8 @@ mod tests {
     fn category_groups_nix_conf_and_the_profile_snippet_as_configuration() {
         assert_eq!(
             Target::File {
-                path: PathBuf::from(NIX_CONF_DEST),
-                expected: Some(NIX_CONF.to_string()),
+                path: PathBuf::from(NIX_CONF_DEST).into(),
+                expected: Some(NIX_CONF.to_string().into()),
                 owner: None,
             }
             .category(),
@@ -338,8 +349,8 @@ mod tests {
         );
         assert_eq!(
             Target::File {
-                path: PathBuf::from(PROFILE_SNIPPET_DEST),
-                expected: Some(PROFILE_SNIPPET.to_string()),
+                path: PathBuf::from(PROFILE_SNIPPET_DEST).into(),
+                expected: Some(PROFILE_SNIPPET.to_string().into()),
                 owner: None,
             }
             .category(),
@@ -410,7 +421,7 @@ mod tests {
                 items.iter().any(|t| matches!(
                     t,
                     Target::Directory { path: p, mode, .. }
-                        if p.as_path() == Path::new(path) && *mode == NIX_TREE_MODE
+                        if p.as_ref() == Path::new(path) && *mode == NIX_TREE_MODE
                 )),
                 "targets() is missing an entry for {path} (mode {NIX_TREE_MODE:o})"
             );
@@ -473,15 +484,26 @@ mod tests {
     }
 
     #[test]
+    fn the_target_lists_are_built_at_their_exact_size() {
+        let cfg = sample_user_config();
+        assert_eq!(targets(None).len(), SYSTEM_TARGET_COUNT);
+        assert_eq!(user_targets(&cfg).len(), USER_TARGET_COUNT);
+        assert_eq!(
+            targets(Some(&cfg)).len(),
+            SYSTEM_TARGET_COUNT + USER_TARGET_COUNT
+        );
+    }
+
+    #[test]
     fn every_user_gets_the_same_nix_conf() {
         let cfg = sample_user_config();
-        let expected = Some(NIX_CONF.to_string());
+        let expected: Option<Cow<'static, str>> = Some(Cow::Borrowed(NIX_CONF));
 
         for items in [targets(None), targets(Some(&cfg))] {
             assert!(items.iter().any(|t| matches!(
                 t,
                 Target::File { path, expected: actual, .. }
-                    if path.as_path() == Path::new(NIX_CONF_DEST) && *actual == expected
+                    if path.as_ref() == Path::new(NIX_CONF_DEST) && *actual == expected
             )));
         }
     }

@@ -65,7 +65,7 @@ mod tests {
     async fn apply_does_nothing_to_a_target_that_is_already_as_declared() {
         let dir = tempfile::tempdir().unwrap();
         let target = Target::Directory {
-            path: dir.path().to_path_buf(),
+            path: dir.path().to_path_buf().into(),
             mode: std::os::unix::fs::PermissionsExt::mode(
                 &std::fs::metadata(dir.path()).unwrap().permissions(),
             ) & 0o7777,
@@ -81,7 +81,7 @@ mod tests {
         let file = dir.path().join("not-a-dir");
         std::fs::write(&file, "x").unwrap();
         let target = Target::Directory {
-            path: file.clone(),
+            path: file.clone().into(),
             mode: 0o755,
             owner: None,
         };
@@ -102,7 +102,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("nix/var/nix/profiles");
         let target = Target::Directory {
-            path: path.clone(),
+            path: path.clone().into(),
             mode: 0o755,
             owner: None,
         };
@@ -135,7 +135,7 @@ mod tests {
     async fn apply_leaves_a_file_mix_does_not_write_alone() {
         let dir = tempfile::tempdir().unwrap();
         let target = Target::File {
-            path: dir.path().join("flake.lock"),
+            path: dir.path().join("flake.lock").into(),
             expected: None,
             owner: None,
         };
