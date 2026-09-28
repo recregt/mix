@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use mix_core::identity::{self, MIX_USERS_GROUP};
+use mix_core::identity::MIX_USERS_GROUP;
 use mix_core::models::{UserConfig, user_targets};
 use mix_core::paths::{FLAKE_NIX, HOME_NIX, mix_state_dir};
 use mix_core::{Scope, Step};
@@ -38,7 +38,10 @@ impl Step for WriteHomeManagerConfig {
         let Some(cfg) = &self.user_config else {
             return Ok(true);
         };
-        Ok(identity::group_has_member(MIX_USERS_GROUP, &cfg.user.name))
+        Ok(crate::accounts::group_has_member(
+            MIX_USERS_GROUP,
+            &cfg.user.name,
+        ))
     }
 
     async fn execute(&mut self, scope: &Scope) -> Result<()> {
@@ -48,7 +51,7 @@ impl Step for WriteHomeManagerConfig {
         let state_dir = mix_state_dir(&cfg.user.home);
 
         self.created_dir = !exists(&state_dir).await;
-        self.enrolled = !identity::group_has_member(MIX_USERS_GROUP, &cfg.user.name);
+        self.enrolled = !crate::accounts::group_has_member(MIX_USERS_GROUP, &cfg.user.name);
         for target in user_targets(cfg) {
             target::apply(&target, scope).await?;
         }

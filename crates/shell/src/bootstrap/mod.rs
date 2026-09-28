@@ -10,7 +10,7 @@ pub mod tarball;
 
 pub use error::{Error, Host, Result};
 
-use mix_core::{Outcome, Plan, Scope, privilege};
+use mix_core::{Outcome, Plan, Scope};
 
 use crate::{Context, HostConfig, Reporters};
 
@@ -24,7 +24,7 @@ impl Environment {
 
 pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
     let scope = &ctx.scope;
-    if !privilege::is_root() {
+    if !crate::accounts::is_root() {
         return Err(Error::NotRoot("bootstrap the managed environment"));
     }
 

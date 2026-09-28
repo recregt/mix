@@ -5,7 +5,7 @@ use std::path::Path;
 
 use nix::fcntl::{Flock, FlockArg};
 
-use crate::error::{Error, Result};
+use mix_core::error::{Error, Result};
 
 pub struct LockGuard {
     _flock: Flock<File>,
@@ -138,7 +138,7 @@ mod tests {
 
     #[test]
     fn a_lock_nobody_here_may_create_is_reported_as_missing() {
-        if crate::privilege::is_root() {
+        if crate::accounts::is_root() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();

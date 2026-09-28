@@ -18,9 +18,11 @@ mod git;
 mod mirror;
 mod systemd;
 
+pub mod accounts;
 pub mod bootstrap;
 pub mod doctor;
 pub mod install;
+pub mod lock;
 pub mod profile;
 pub mod remove;
 pub mod repair;

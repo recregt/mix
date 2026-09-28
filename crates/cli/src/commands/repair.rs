@@ -6,7 +6,7 @@ pub async fn run(verbosity: u8) -> anyhow::Result<ExitCode> {
     let Repair {
         reports,
         interrupted,
-    } = if mix_core::privilege::is_root() {
+    } = if mix_shell::accounts::is_root() {
         let _lock = super::acquire_lock()?;
         let ctx = mix_shell::Context::new(mix_exec::Scope::root())
             .with_user(super::enrolled_user())

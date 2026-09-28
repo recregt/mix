@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use mix_core::identity::{
-    self, MIX_USERS_GID, MIX_USERS_GROUP, NIXBLD_GID, NIXBLD_GROUP, NIXBLD_HOME, NIXBLD_SHELL,
+    MIX_USERS_GID, MIX_USERS_GROUP, NIXBLD_GID, NIXBLD_GROUP, NIXBLD_HOME, NIXBLD_SHELL,
     NIXBLD_UID_BASE, NIXBLD_USER_COUNT, user_name,
 };
 use mix_core::{Scope, Step};
@@ -25,8 +25,8 @@ impl Step for CreateUsersAndGroups {
     }
 
     async fn check(&self, _scope: &Scope) -> Result<bool> {
-        Ok(identity::group_has_gid(NIXBLD_GROUP, NIXBLD_GID)
-            && identity::group_has_gid(MIX_USERS_GROUP, MIX_USERS_GID)
+        Ok(crate::accounts::group_has_gid(NIXBLD_GROUP, NIXBLD_GID)
+            && crate::accounts::group_has_gid(MIX_USERS_GROUP, MIX_USERS_GID)
             && all_users_valid())
     }
 
@@ -44,12 +44,12 @@ impl Step for CreateUsersAndGroups {
         for n in 1..=NIXBLD_USER_COUNT {
             let name = user_name(n);
             let uid = NIXBLD_UID_BASE + n;
-            if identity::user_exists(&name) {
-                if !identity::user_has_gid(&name, NIXBLD_GID) {
+            if crate::accounts::user_exists(&name) {
+                if !crate::accounts::user_has_gid(&name, NIXBLD_GID) {
                     let gid = NIXBLD_GID.to_string();
                     run("usermod", &["--gid", &gid, &name], scope).await?;
                 }
-                if !identity::user_has_uid(&name, uid) {
+                if !crate::accounts::user_has_uid(&name, uid) {
                     let uid = uid.to_string();
                     run("usermod", &["--uid", &uid, &name], scope).await?;
                 }
@@ -81,7 +81,7 @@ impl Step for CreateUsersAndGroups {
                 scope,
             )
             .await;
-            if identity::user_exists(&name) {
+            if crate::accounts::user_exists(&name) {
                 self.created_users.push(name.into_owned());
             }
             result?;
@@ -105,8 +105,8 @@ impl Step for CreateUsersAndGroups {
 
 impl CreateUsersAndGroups {
     async fn reconcile_group(&mut self, name: &'static str, gid: u32, scope: &Scope) -> Result<()> {
-        if identity::group_exists(name) {
-            if !identity::group_has_gid(name, gid) {
+        if crate::accounts::group_exists(name) {
+            if !crate::accounts::group_has_gid(name, gid) {
                 let gid = gid.to_string();
                 run("groupmod", &["--gid", &gid, name], scope).await?;
             }
@@ -115,7 +115,7 @@ impl CreateUsersAndGroups {
 
         let gid = gid.to_string();
         let result = run("groupadd", &["--system", "--gid", &gid, name], scope).await;
-        if identity::group_exists(name) {
+        if crate::accounts::group_exists(name) {
             self.created_groups.push(name);
         }
         result?;
@@ -142,5 +142,5 @@ async fn terminate_processes(name: &str, scope: &Scope) {
 
 fn all_users_valid() -> bool {
     (1..=NIXBLD_USER_COUNT)
-        .all(|n| identity::user_matches(&user_name(n), NIXBLD_UID_BASE + n, NIXBLD_GID))
+        .all(|n| crate::accounts::user_matches(&user_name(n), NIXBLD_UID_BASE + n, NIXBLD_GID))
 }

@@ -1,7 +1,6 @@
 pub mod build_graph;
 pub mod constants;
 pub mod error;
-pub mod lock;
 pub mod models;
 pub mod nix_log;
 pub mod nix_plan;
