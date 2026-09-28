@@ -4,64 +4,13 @@ import uuid
 
 import pytest
 
+pytest.register_assert_rewrite("support")
+
 from support import resources
-from support.container import (
-    Container,
-    MIX_USERS_GROUP,
-    NIX_BINARY,
-    NIX_CONF_DEST,
-    container,
-    container_image,
-    create_user,
-    daemon_trusts,
-    group_members,
-    mix_binary,
-    reap_orphans,
-    remove_snapshot,
-)
-from support.mirror import (
-    HOME_MANAGER_REV,
-    INSTALL_TEST_PACKAGE,
-    MIRROR_TEST_USERS,
-    NIX_CONF_CONTENT,
-    NIXPKGS_REV,
-    UNCACHED_TEST_PACKAGE,
-    bootstrap_as,
-    bootstrap_root,
-    mirror_args,
-    mirror_cache,
-    mirror_sources,
-    mock_nix_server,
-    nix_tarball,
-    start_mirror_server,
-)
+from support.container import reap_orphans, remove_snapshot
+from support.mirror import start_mirror_server
 
-__all__ = [
-    "Container",
-    "MIX_USERS_GROUP",
-    "NIX_BINARY",
-    "NIX_CONF_DEST",
-    "container",
-    "container_image",
-    "create_user",
-    "daemon_trusts",
-    "group_members",
-    "mix_binary",
-    "HOME_MANAGER_REV",
-    "INSTALL_TEST_PACKAGE",
-    "MIRROR_TEST_USERS",
-    "NIX_CONF_CONTENT",
-    "NIXPKGS_REV",
-    "UNCACHED_TEST_PACKAGE",
-    "bootstrap_as",
-    "bootstrap_root",
-    "mirror_args",
-    "mirror_cache",
-    "mirror_sources",
-    "mock_nix_server",
-    "nix_tarball",
-]
-
+pytest_plugins = ["support.container", "support.mirror"]
 
 PRESSURE_AT_START = pytest.StashKey[dict]()
 MIRROR_SERVER = pytest.StashKey[object]()

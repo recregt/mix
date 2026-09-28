@@ -1,16 +1,13 @@
 import shlex
 
-from conftest import (
-    MIRROR_TEST_USERS,
+from support.container import (
     MIX_USERS_GROUP,
-    NIX_CONF_CONTENT,
     NIX_CONF_DEST,
-    bootstrap_as,
-    bootstrap_root,
     create_user,
     daemon_trusts,
     group_members,
 )
+from support.mirror import MIRROR_TEST_USERS, NIX_CONF_CONTENT, bootstrap_as, bootstrap_root
 
 FIRST_USER, SECOND_USER = MIRROR_TEST_USERS
 UNMANAGED_USER = "plainuser"

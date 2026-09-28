@@ -2,7 +2,8 @@ import json
 
 import pytest
 
-from conftest import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS, bootstrap_as, create_user, mirror_args
+from support.container import create_user
+from support.mirror import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS, bootstrap_as, mirror_args
 
 USER = MIRROR_TEST_USERS[0]
 STATE_DIR = f"/home/{USER}/.local/state/mix"

@@ -2,12 +2,8 @@ import time
 
 import pytest
 
-from conftest import (
-    INSTALL_TEST_PACKAGE,
-    MIRROR_TEST_USERS,
-    create_user,
-    mirror_args,
-)
+from support.container import create_user
+from support.mirror import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS, mirror_args
 
 USER = MIRROR_TEST_USERS[0]
 MIX = "/usr/local/bin/mix"

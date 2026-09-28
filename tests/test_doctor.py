@@ -1,4 +1,5 @@
-from conftest import MIX_USERS_GROUP, bootstrap_root, create_user, daemon_trusts, group_members
+from support.container import MIX_USERS_GROUP, create_user, daemon_trusts, group_members
+from support.mirror import bootstrap_root
 
 
 def test_doctor_detects_a_stopped_socket_alone(container, mock_nix_server):

@@ -1,12 +1,7 @@
 import pytest
 
-from conftest import (
-    MIRROR_TEST_USERS,
-    MIX_USERS_GROUP,
-    NIX_CONF_CONTENT,
-    bootstrap_root,
-    group_members,
-)
+from support.container import MIX_USERS_GROUP, group_members
+from support.mirror import MIRROR_TEST_USERS, NIX_CONF_CONTENT, bootstrap_root
 
 DEFAULT_PROFILE_BIN = "/nix/var/nix/profiles/default/bin"
 SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"

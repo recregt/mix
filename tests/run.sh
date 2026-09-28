@@ -14,6 +14,6 @@ done
 
 export PYTHONDONTWRITEBYTECODE=1
 dir="$(cd "$(dirname "$0")" && pwd)"
-pytest_cmd=(uv run --with-requirements "$dir/requirements.txt" pytest)
+pytest_cmd=(uv run --project "$dir" --locked pytest)
 
 exec "${pytest_cmd[@]}" -n "${MIX_TEST_WORKERS:-auto}" "$dir" "$@"

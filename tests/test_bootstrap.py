@@ -1,15 +1,7 @@
 import pytest
 
-from conftest import (
-    MIRROR_TEST_USERS,
-    MIX_USERS_GROUP,
-    NIX_CONF_CONTENT,
-    bootstrap_root,
-    create_user,
-    daemon_trusts,
-    group_members,
-    mirror_args,
-)
+from support.container import MIX_USERS_GROUP, create_user, daemon_trusts, group_members
+from support.mirror import MIRROR_TEST_USERS, NIX_CONF_CONTENT, bootstrap_root, mirror_args
 
 
 def test_bootstrap_accepts_mirror_as_a_cli_flag(container, mock_nix_server):

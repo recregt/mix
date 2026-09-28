@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from conftest import (
+from support.mirror import (
     INSTALL_TEST_PACKAGE,
     MIRROR_TEST_USERS,
     UNCACHED_TEST_PACKAGE,

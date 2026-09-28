@@ -1,7 +1,8 @@
 import json
 import os
 
-from conftest import NIX_BINARY, bootstrap_root
+from support.container import NIX_BINARY
+from support.mirror import bootstrap_root
 from support.paths import REPO_ROOT
 
 FIXTURES = REPO_ROOT / "crates/core/fixtures/nix"
