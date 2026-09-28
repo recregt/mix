@@ -256,8 +256,12 @@ impl mix_rpc::Worker for CliWorker {
                         mirror_key: mirror.and_then(|mirror| mirror.key.clone()),
                     })
                     .with_host(crate::commands::host_config());
-                let _watch =
-                    interrupt::watch(&ctx.scope, interrupt::BOOTSTRAP, client_gone(&events));
+                let _watch = interrupt::watch(
+                    &ctx.scope,
+                    interrupt::BOOTSTRAP,
+                    client_gone(&events),
+                    interrupt::Side::Worker,
+                );
                 let result = mix_app::bootstrap::bootstrap(&ctx, request.force).await;
                 match result {
                     Ok(_) => Outcome::BootstrapDone,
@@ -280,7 +284,12 @@ impl mix_rpc::Worker for CliWorker {
                             .and_then(mix_app::profile::existing_user_config_for),
                     )
                     .with_host(crate::commands::host_config());
-                let _watch = interrupt::watch(&ctx.scope, interrupt::REPAIR, client_gone(&events));
+                let _watch = interrupt::watch(
+                    &ctx.scope,
+                    interrupt::REPAIR,
+                    client_gone(&events),
+                    interrupt::Side::Worker,
+                );
                 let repair = mix_app::repair::repair(&ctx).await;
                 Outcome::RepairDone {
                     reports: repair.reports.into_iter().map(report_to_wire).collect(),

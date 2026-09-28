@@ -26,6 +26,7 @@ pub async fn run(
             &ctx.scope,
             crate::interrupt::BOOTSTRAP,
             std::future::pending(),
+            crate::interrupt::Side::Client,
         );
         mix_app::bootstrap::bootstrap(&ctx, force).await?;
     } else {

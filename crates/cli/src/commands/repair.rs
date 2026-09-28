@@ -11,8 +11,12 @@ pub async fn run(verbosity: u8) -> anyhow::Result<ExitCode> {
         let ctx = mix_app::Context::new(mix_exec::Scope::root())
             .with_user(super::enrolled_user())
             .with_host(super::host_config());
-        let _watch =
-            crate::interrupt::watch(&ctx.scope, crate::interrupt::REPAIR, std::future::pending());
+        let _watch = crate::interrupt::watch(
+            &ctx.scope,
+            crate::interrupt::REPAIR,
+            std::future::pending(),
+            crate::interrupt::Side::Client,
+        );
         mix_app::repair::repair(&ctx).await
     } else {
         crate::remote::client::repair(verbosity).await?

@@ -27,6 +27,74 @@ pub const CHANGE: Stopping = Stopping {
 
 const FORCED_EXIT: i32 = 130;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Received {
+    Interrupt,
+    Terminate,
+    Suspend,
+    Continue,
+    ClientGone,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Control {
+    Cancel,
+    ForceStop,
+    Pause,
+    Resume,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Client,
+    Worker,
+}
+
+#[derive(Debug, Default)]
+pub struct Translator {
+    cancelled: bool,
+    client_left: bool,
+}
+
+impl Translator {
+    pub fn translate(&mut self, received: Received) -> Option<Control> {
+        match received {
+            Received::Suspend => Some(Control::Pause),
+            Received::Continue => Some(Control::Resume),
+            Received::ClientGone => {
+                let first = !self.client_left && !self.cancelled;
+                self.client_left = true;
+                self.cancelled = true;
+                first.then_some(Control::Cancel)
+            }
+            Received::Interrupt | Received::Terminate => {
+                if self.cancelled {
+                    return Some(Control::ForceStop);
+                }
+                self.cancelled = true;
+                Some(Control::Cancel)
+            }
+        }
+    }
+}
+
+pub fn apply(scope: &Scope, stopping: &Stopping, control: Control) {
+    match control {
+        Control::Cancel => {
+            tracing::warn!("{}", stopping.first);
+            scope.cancel();
+        }
+        Control::ForceStop => {
+            tracing::warn!("{}", stopping.forced);
+            scope.processes().kill();
+            mix_ui::restore_terminal();
+            std::process::exit(FORCED_EXIT);
+        }
+        Control::Pause => scope.processes().pause(),
+        Control::Resume => scope.processes().resume(),
+    }
+}
+
 pub struct Watch(JoinHandle<()>);
 
 impl Drop for Watch {
@@ -44,6 +112,7 @@ pub fn watch(
     scope: &Scope,
     stopping: Stopping,
     client_gone: impl Future<Output = ()> + Send + 'static,
+    side: Side,
 ) -> Watch {
     let mut interrupt = listen(Signal::SIGINT);
     let mut terminate = listen(Signal::SIGTERM);
@@ -53,34 +122,25 @@ pub fn watch(
     Watch(tokio::spawn(async move {
         let mut client_gone = std::pin::pin!(client_gone);
         let mut client_left = false;
+        let mut translator = Translator::default();
         loop {
-            tokio::select! {
-                _ = interrupt.recv() => {}
-                _ = terminate.recv() => {}
+            let received = tokio::select! {
+                _ = interrupt.recv() => Received::Interrupt,
+                _ = terminate.recv() => Received::Terminate,
+                _ = suspend.recv() => Received::Suspend,
+                _ = resume.recv() => Received::Continue,
                 () = &mut client_gone, if !client_left => {
                     client_left = true;
-                    if scope.is_stopped() {
-                        continue;
-                    }
+                    Received::ClientGone
                 }
-                _ = suspend.recv() => {
-                    scope.processes().pause();
-                    let _ = nix::sys::signal::raise(Signal::SIGSTOP);
-                    continue;
-                }
-                _ = resume.recv() => {
-                    scope.processes().resume();
-                    continue;
-                }
+            };
+            let Some(control) = translator.translate(received) else {
+                continue;
+            };
+            apply(&scope, &stopping, control);
+            if control == Control::Pause && side == Side::Client {
+                let _ = nix::sys::signal::raise(Signal::SIGSTOP);
             }
-            if scope.is_stopped() {
-                tracing::warn!("{}", stopping.forced);
-                scope.processes().kill();
-                mix_ui::restore_terminal();
-                std::process::exit(FORCED_EXIT);
-            }
-            tracing::warn!("{}", stopping.first);
-            scope.cancel();
         }
     }))
 }
@@ -95,6 +155,71 @@ mod tests {
 
     static ONE_WATCH_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+    fn translated(received: &[Received]) -> Vec<Option<Control>> {
+        let mut translator = Translator::default();
+        received
+            .iter()
+            .map(|received| translator.translate(*received))
+            .collect()
+    }
+
+    #[test]
+    fn a_first_interrupt_cancels_and_a_second_forces_a_stop() {
+        assert_eq!(
+            translated(&[Received::Interrupt, Received::Interrupt]),
+            [Some(Control::Cancel), Some(Control::ForceStop)]
+        );
+        assert_eq!(
+            translated(&[Received::Terminate, Received::Interrupt]),
+            [Some(Control::Cancel), Some(Control::ForceStop)]
+        );
+    }
+
+    #[test]
+    fn a_client_that_leaves_cancels_once_and_never_forces_a_stop() {
+        assert_eq!(translated(&[Received::ClientGone]), [Some(Control::Cancel)]);
+        assert_eq!(
+            translated(&[Received::Interrupt, Received::ClientGone]),
+            [Some(Control::Cancel), None]
+        );
+    }
+
+    #[test]
+    fn an_interrupt_after_the_client_left_forces_a_stop() {
+        assert_eq!(
+            translated(&[Received::ClientGone, Received::Interrupt]),
+            [Some(Control::Cancel), Some(Control::ForceStop)]
+        );
+    }
+
+    #[test]
+    fn suspending_and_resuming_pause_and_resume_the_request() {
+        assert_eq!(
+            translated(&[Received::Suspend, Received::Continue]),
+            [Some(Control::Pause), Some(Control::Resume)]
+        );
+    }
+
+    #[test]
+    fn suspending_does_not_count_as_an_interrupt() {
+        assert_eq!(
+            translated(&[Received::Suspend, Received::Interrupt]),
+            [Some(Control::Pause), Some(Control::Cancel)]
+        );
+    }
+
+    #[test]
+    fn cancelling_stops_the_scope_and_pausing_does_not() {
+        let scope = mix_exec::Scope::root();
+
+        apply(&scope, &BOOTSTRAP, Control::Pause);
+        apply(&scope, &BOOTSTRAP, Control::Resume);
+        assert!(!scope.is_stopped());
+
+        apply(&scope, &BOOTSTRAP, Control::Cancel);
+        assert!(scope.is_stopped());
+    }
+
     async fn cancelled_within_a_few_seconds(scope: &Scope) {
         tokio::time::timeout(Duration::from_secs(5), scope.stopped())
             .await
@@ -102,10 +227,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sigint_cancels_the_token() {
+    async fn sigint_cancels_the_request() {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
         let scope = mix_exec::Scope::root();
-        let _watch = watch(&scope, BOOTSTRAP, std::future::pending());
+        let _watch = watch(&scope, BOOTSTRAP, std::future::pending(), Side::Client);
 
         signal::raise(Signal::SIGINT).unwrap();
 
@@ -113,10 +238,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sigterm_cancels_the_token() {
+    async fn sigterm_cancels_the_request() {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
         let scope = mix_exec::Scope::root();
-        let _watch = watch(&scope, BOOTSTRAP, std::future::pending());
+        let _watch = watch(&scope, BOOTSTRAP, std::future::pending(), Side::Client);
 
         signal::raise(Signal::SIGTERM).unwrap();
 
@@ -124,34 +249,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_client_that_leaves_cancels_the_token() {
+    async fn a_client_that_leaves_cancels_the_request() {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
         let scope = mix_exec::Scope::root();
         let (leave, left) = tokio::sync::oneshot::channel::<()>();
-        let _watch = watch(&scope, BOOTSTRAP, async {
-            let _ = left.await;
-        });
+        let _watch = watch(
+            &scope,
+            BOOTSTRAP,
+            async {
+                let _ = left.await;
+            },
+            Side::Worker,
+        );
 
         drop(leave);
 
         cancelled_within_a_few_seconds(&scope).await;
-    }
-
-    #[tokio::test]
-    async fn a_client_that_leaves_after_an_interrupt_does_not_count_as_a_second_one() {
-        let _alone = ONE_WATCH_AT_A_TIME.lock().await;
-        let scope = mix_exec::Scope::root();
-        let (leave, left) = tokio::sync::oneshot::channel::<()>();
-        let watch = watch(&scope, BOOTSTRAP, async {
-            let _ = left.await;
-        });
-        signal::raise(Signal::SIGINT).unwrap();
-        cancelled_within_a_few_seconds(&scope).await;
-
-        drop(leave);
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        assert!(!watch.0.is_finished());
     }
 
     #[tokio::test]
@@ -159,9 +272,14 @@ mod tests {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
         let scope = mix_exec::Scope::root();
         let (leave, left) = tokio::sync::oneshot::channel::<()>();
-        let watch = watch(&scope, BOOTSTRAP, async {
-            let _ = left.await;
-        });
+        let watch = watch(
+            &scope,
+            BOOTSTRAP,
+            async {
+                let _ = left.await;
+            },
+            Side::Worker,
+        );
 
         drop(watch);
         drop(leave);
