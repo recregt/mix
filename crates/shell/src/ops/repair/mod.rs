@@ -9,8 +9,8 @@ use mix_core::Scope;
 use mix_core::models::{Target, UserConfig, targets};
 use mix_core::paths::{NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT, mix_state_dir};
 
-use crate::git;
-use crate::systemd;
+use crate::effect::git;
+use crate::effect::systemd;
 use crate::target::{self, Error};
 use crate::{Context, HostConfig};
 

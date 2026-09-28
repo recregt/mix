@@ -93,7 +93,7 @@ pub fn user_config_for(user: InvokingUser) -> Option<UserConfig> {
 
 pub fn existing_user_config_for(user: InvokingUser) -> Option<UserConfig> {
     let cfg = user_config_for(user)?;
-    crate::accounts::group_has_member(MIX_USERS_GROUP, &cfg.user.name).then_some(cfg)
+    crate::effect::accounts::group_has_member(MIX_USERS_GROUP, &cfg.user.name).then_some(cfg)
 }
 
 #[cfg(test)]

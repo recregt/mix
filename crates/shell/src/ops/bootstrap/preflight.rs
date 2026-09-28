@@ -3,10 +3,10 @@ use std::path::Path;
 use mix_core::Scope;
 use mix_core::paths::NIX_OWNERSHIP_MARKER;
 
-use crate::bootstrap::detect::{self, Wsl};
-use crate::bootstrap::error::{Error, Host, Result};
-use crate::fs::exists;
-use crate::fs::{is_dir, is_file};
+use crate::effect::fs::exists;
+use crate::effect::fs::{is_dir, is_file};
+use crate::ops::bootstrap::detect::{self, Wsl};
+use crate::ops::bootstrap::error::{Error, Host, Result};
 
 pub async fn check_not_nixos() -> Result<()> {
     tracing::debug!("checking host is not NixOS");

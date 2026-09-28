@@ -25,7 +25,7 @@ pub async fn run(
         crate::interrupt::Side::Client,
     );
 
-    let installed = mix_shell::install::install(&ctx, packages, build).await?;
+    let installed = mix_shell::ops::install::install(&ctx, packages, build).await?;
 
     if let Some(note) = installed
         .restored

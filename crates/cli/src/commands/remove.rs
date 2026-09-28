@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 
-use mix_shell::remove::Error;
+use mix_shell::ops::remove::Error;
 
 pub async fn run(
     packages: &[String],
@@ -26,7 +26,7 @@ pub async fn run(
         crate::interrupt::Side::Client,
     );
 
-    let removed = mix_shell::remove::remove(&ctx, packages).await?;
+    let removed = mix_shell::ops::remove::remove(&ctx, packages).await?;
 
     if let Some(note) = removed.restored.and_then(crate::explain::change::restored) {
         mix_ui::warn(note.message());

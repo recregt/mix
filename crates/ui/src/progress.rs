@@ -470,7 +470,7 @@ mod tests {
         let filter = log_filter(2);
 
         assert!(filter.would_enable("mix_shell", &tracing::Level::DEBUG));
-        assert!(filter.would_enable("mix_shell::bootstrap", &tracing::Level::DEBUG));
+        assert!(filter.would_enable("mix_shell::ops::bootstrap", &tracing::Level::DEBUG));
         assert!(!filter.would_enable("hyper::client", &tracing::Level::DEBUG));
     }
 

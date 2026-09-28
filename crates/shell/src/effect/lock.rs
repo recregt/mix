@@ -138,7 +138,7 @@ mod tests {
 
     #[test]
     fn a_lock_nobody_here_may_create_is_reported_as_missing() {
-        if crate::accounts::is_root() {
+        if crate::effect::accounts::is_root() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();

@@ -10,9 +10,9 @@ use nix::unistd::{Gid, Uid, User};
 use mix_core::identity::NIXBLD_GID;
 use mix_core::paths::{NIX_PROVISIONING_MANIFEST, NIX_STORE};
 
-use crate::bootstrap::error::{Error, Result};
-use crate::bootstrap::tarball;
-use crate::fs::{chown_tree, is_file};
+use crate::effect::fs::{chown_tree, is_file};
+use crate::ops::bootstrap::error::{Error, Result};
+use crate::ops::bootstrap::tarball;
 use mix_pins::NIX_VERSION;
 
 const DEFAULT_PROFILE: &str = "/nix/var/nix/profiles/default";

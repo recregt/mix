@@ -1,6 +1,6 @@
 //! Asking systemd about a unit, and asking it to start, restart or re-read one.
 
-use crate::exec::run;
+use crate::effect::exec::run;
 use mix_core::{Result, Scope};
 
 /// Restarts a unit that is running, and says whether it had to be restarted.

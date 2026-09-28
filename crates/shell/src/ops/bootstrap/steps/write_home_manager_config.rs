@@ -4,10 +4,10 @@ use mix_core::models::{UserConfig, user_targets};
 use mix_core::paths::{FLAKE_NIX, HOME_NIX, mix_state_dir};
 use mix_core::{Scope, Step};
 
-use crate::bootstrap::cleanup::warn_on_failure;
-use crate::bootstrap::error::{Error, Result};
-use crate::exec::run;
-use crate::fs::{exists, remove_dir_all, remove_file};
+use crate::effect::exec::run;
+use crate::effect::fs::{exists, remove_dir_all, remove_file};
+use crate::ops::bootstrap::cleanup::warn_on_failure;
+use crate::ops::bootstrap::error::{Error, Result};
 use crate::target;
 
 pub struct WriteHomeManagerConfig {
@@ -38,7 +38,7 @@ impl Step for WriteHomeManagerConfig {
         let Some(cfg) = &self.user_config else {
             return Ok(true);
         };
-        Ok(crate::accounts::group_has_member(
+        Ok(crate::effect::accounts::group_has_member(
             MIX_USERS_GROUP,
             &cfg.user.name,
         ))
@@ -51,7 +51,7 @@ impl Step for WriteHomeManagerConfig {
         let state_dir = mix_state_dir(&cfg.user.home);
 
         self.created_dir = !exists(&state_dir).await;
-        self.enrolled = !crate::accounts::group_has_member(MIX_USERS_GROUP, &cfg.user.name);
+        self.enrolled = !crate::effect::accounts::group_has_member(MIX_USERS_GROUP, &cfg.user.name);
         for target in user_targets(cfg) {
             target::apply(&target, scope).await?;
         }

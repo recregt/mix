@@ -4,8 +4,8 @@ use mix_core::models::UserConfig;
 use mix_core::{ActivityReporter, DownloadProgress, Step};
 
 use crate::HostConfig;
-use crate::bootstrap::error::Error;
-use crate::bootstrap::steps::{
+use crate::ops::bootstrap::error::Error;
+use crate::ops::bootstrap::steps::{
     ActivateHomeManagerConfig, ConfigureNixConf, ConfigureSystemdService, CreateNixDir,
     CreateNixTree, CreateUsersAndGroups, FetchAndUnpack, RemoveExistingInstallation,
     WriteHomeManagerConfig,

@@ -16,10 +16,10 @@ use mix_core::{ActivityReporter, BuildProgress, Scope};
 use mix_nixgen::{AttrPath, FlakeRef, Installable};
 
 use crate::HostConfig;
-use crate::exec::{plan_as, run_as_reporting, run_as_with_input};
-use crate::fs;
-use crate::git;
-use crate::mirror;
+use crate::effect::exec::{plan_as, run_as_reporting, run_as_with_input};
+use crate::effect::fs;
+use crate::effect::git;
+use crate::effect::mirror;
 use crate::profile::{Error, Result};
 
 const DERIVATION_SHOW_ARGS: [&str; 3] = ["derivation", "show", "--stdin"];

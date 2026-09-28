@@ -10,8 +10,8 @@ use std::path::Path;
 use mix_core::models::Target;
 use mix_core::{Scope, identity};
 
-use crate::fs::{DIR_MODE_MASK, Owner, exists};
-use crate::systemd::unit_is_active;
+use crate::effect::fs::{DIR_MODE_MASK, Owner, exists};
+use crate::effect::systemd::unit_is_active;
 use crate::target::Finding;
 
 pub async fn inspect(target: &Target, scope: &Scope) -> Option<Finding> {
@@ -130,7 +130,7 @@ fn inspect_owner(meta: &std::fs::Metadata, owner: Owner) -> Option<Finding> {
 }
 
 fn inspect_group(name: &str, gid: u32) -> Option<Finding> {
-    match crate::accounts::group_gid(name) {
+    match crate::effect::accounts::group_gid(name) {
         None => Some(Finding::GroupMissing),
         Some(actual) if actual != gid => Some(Finding::GroupGid {
             actual,
@@ -141,9 +141,9 @@ fn inspect_group(name: &str, gid: u32) -> Option<Finding> {
 }
 
 fn inspect_group_member(group: &'static str, user: &str) -> Option<Finding> {
-    if crate::accounts::group_has_member(group, user) {
+    if crate::effect::accounts::group_has_member(group, user) {
         None
-    } else if crate::accounts::user_exists(user) {
+    } else if crate::effect::accounts::user_exists(user) {
         Some(Finding::NotAMember { group })
     } else {
         // Enrolling an account that is gone is not something repair can do, so the inspection
@@ -155,7 +155,7 @@ fn inspect_group_member(group: &'static str, user: &str) -> Option<Finding> {
 fn inspect_user(n: u32, uid: u32, gid: u32) -> Option<Finding> {
     let name = identity::user_name(n);
     let expected = (uid, gid);
-    match crate::accounts::user_ids(&name) {
+    match crate::effect::accounts::user_ids(&name) {
         None => Some(Finding::UserMissing),
         Some(actual) if actual != expected => Some(Finding::UserIds { actual, expected }),
         Some(_) => None,

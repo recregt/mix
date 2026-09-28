@@ -24,7 +24,7 @@ impl Environment {
 
 pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
     let scope = &ctx.scope;
-    if !crate::accounts::is_root() {
+    if !crate::effect::accounts::is_root() {
         return Err(Error::NotRoot("bootstrap the managed environment"));
     }
 

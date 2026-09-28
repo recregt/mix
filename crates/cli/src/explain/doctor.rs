@@ -6,7 +6,7 @@
 
 use std::borrow::Cow;
 
-use mix_shell::doctor::HealthReport;
+use mix_shell::ops::doctor::HealthReport;
 use mix_shell::target::Finding;
 
 use super::{Diagnostic, failed};

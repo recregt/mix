@@ -7,7 +7,7 @@ use mix_core::state::StateManifest;
 use tracing::Instrument;
 
 use crate::Context;
-use crate::fs::{remove_file, write_atomic};
+use crate::effect::fs::{remove_file, write_atomic};
 use crate::profile::config::render_home;
 use crate::profile::state::{self, Invalid, Settled, Source};
 use crate::profile::{self, BuildPolicy};

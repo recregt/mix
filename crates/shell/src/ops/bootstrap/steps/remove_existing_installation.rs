@@ -5,11 +5,11 @@ use mix_core::paths::{
 };
 use mix_core::{Scope, Step};
 
-use crate::bootstrap::cleanup::warn_on_failure;
-use crate::bootstrap::error::{Error, Result};
-use crate::bootstrap::steps::create_users_and_groups::delete_user;
-use crate::exec::run;
-use crate::fs::{remove_dir_all, remove_file};
+use crate::effect::exec::run;
+use crate::effect::fs::{remove_dir_all, remove_file};
+use crate::ops::bootstrap::cleanup::warn_on_failure;
+use crate::ops::bootstrap::error::{Error, Result};
+use crate::ops::bootstrap::steps::create_users_and_groups::delete_user;
 
 #[derive(Default)]
 pub struct RemoveExistingInstallation;
@@ -50,12 +50,12 @@ impl Step for RemoveExistingInstallation {
 
         for n in 1..=NIXBLD_USER_COUNT {
             let name = user_name(n);
-            if crate::accounts::user_exists(&name) {
+            if crate::effect::accounts::user_exists(&name) {
                 delete_user(&name, scope).await;
             }
         }
         for group in [NIXBLD_GROUP, MIX_USERS_GROUP] {
-            if crate::accounts::group_exists(group) {
+            if crate::effect::accounts::group_exists(group) {
                 warn_on_failure("delete group", run("groupdel", &[group], scope).await);
             }
         }

@@ -29,7 +29,7 @@ pub async fn run() -> ExitCode {
     ) {
         let ctx =
             mix_shell::Context::new(mix_exec::Scope::root()).with_user(commands::enrolled_user());
-        if let Some(report) = mix_shell::doctor::audit(&ctx)
+        if let Some(report) = mix_shell::ops::doctor::audit(&ctx)
             .await
             .into_iter()
             .find(|report| !report.healthy())

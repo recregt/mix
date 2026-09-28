@@ -6,8 +6,8 @@ use mix_core::paths::mix_state_dir;
 use mix_core::{ActivityReporter, Scope, Step};
 
 use crate::HostConfig;
-use crate::bootstrap::error::{Error, Result};
-use crate::fs;
+use crate::effect::fs;
+use crate::ops::bootstrap::error::{Error, Result};
 use crate::profile::{self, BuildPolicy};
 
 pub struct ActivateHomeManagerConfig {

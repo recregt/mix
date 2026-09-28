@@ -5,11 +5,11 @@ use mix_core::paths::{
     NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC,
 };
 
-use crate::bootstrap::cleanup::warn_on_failure;
-use crate::bootstrap::error::{Error, Result};
-use crate::exec::run;
-use crate::fs::{copy_atomic, files_match, remove_file, write_atomic};
-use crate::systemd::unit_is_active;
+use crate::effect::exec::run;
+use crate::effect::fs::{copy_atomic, files_match, remove_file, write_atomic};
+use crate::effect::systemd::unit_is_active;
+use crate::ops::bootstrap::cleanup::warn_on_failure;
+use crate::ops::bootstrap::error::{Error, Result};
 
 #[derive(Default)]
 pub struct ConfigureSystemdService {

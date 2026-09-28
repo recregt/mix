@@ -6,10 +6,10 @@ use mix_core::{Scope, Step};
 use mix_core::models::{NIX_CONF, PROFILE_SNIPPET};
 use mix_core::paths::{NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT, PROFILE_SNIPPET_DEST};
 
-use crate::bootstrap::cleanup::warn_on_failure;
-use crate::bootstrap::error::{Error, Result};
-use crate::fs::{create_dir_all, exists, remove_dir_all, remove_file, write_atomic};
-use crate::systemd::restart_if_active;
+use crate::effect::fs::{create_dir_all, exists, remove_dir_all, remove_file, write_atomic};
+use crate::effect::systemd::restart_if_active;
+use crate::ops::bootstrap::cleanup::warn_on_failure;
+use crate::ops::bootstrap::error::{Error, Result};
 
 #[derive(Default)]
 pub struct ConfigureNixConf {

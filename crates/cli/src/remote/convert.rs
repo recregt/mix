@@ -1,7 +1,7 @@
 use mix_rpc::{Failure, Host, RepairReport, TargetFailure, Unfixable};
-use mix_shell::bootstrap::{Error as BootstrapError, Host as AppHost};
+use mix_shell::ops::bootstrap::{Error as BootstrapError, Host as AppHost};
+use mix_shell::ops::repair::RepairReport as AppReport;
 use mix_shell::profile::Error as ActivationError;
-use mix_shell::repair::RepairReport as AppReport;
 use mix_shell::target::{Error as TargetError, Unfixable as AppUnfixable};
 
 const NOT_ROOT: &str = "carry out privileged operations";

@@ -1,11 +1,11 @@
 use std::process::ExitCode;
 
 use mix_core::Category;
-use mix_shell::doctor::HealthReport;
+use mix_shell::ops::doctor::HealthReport;
 
 pub async fn run(verbose: u8) -> anyhow::Result<ExitCode> {
     let ctx = mix_shell::Context::new(mix_exec::Scope::root()).with_user(super::enrolled_user());
-    let reports = mix_shell::doctor::audit(&ctx).await;
+    let reports = mix_shell::ops::doctor::audit(&ctx).await;
     render(&reports, verbose > 0);
 
     if reports.iter().all(HealthReport::healthy) {

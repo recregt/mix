@@ -14,7 +14,7 @@ use mix_core::privilege::InvokingUser;
 use mix_core::{ActivityReporter, Result, Scope};
 use mix_exec::{Command, Drain};
 
-use crate::exec::output::StreamDrain;
+use crate::effect::exec::output::StreamDrain;
 
 /// How much of a streamed process's output is kept to explain a failure with.
 const STREAM_TAIL: usize = 64 * 1024;

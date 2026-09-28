@@ -4,8 +4,8 @@ use std::borrow::Cow;
 use std::io::{Cursor, Read};
 use std::path::Path;
 
-use crate::bootstrap::error::{Error, Result};
-use crate::mirror::{filter_mirror, mirror_url};
+use crate::effect::mirror::{filter_mirror, mirror_url};
+use crate::ops::bootstrap::error::{Error, Result};
 use mix_pins::{TarballPin, pin_for};
 
 const MAX_DOWNLOAD_BYTES: usize = 1024 * 1024 * 1024;

@@ -8,12 +8,13 @@ pub async fn run(
     force: bool,
     verbosity: u8,
 ) -> anyhow::Result<ExitCode> {
-    if mix_shell::accounts::is_root() {
+    if mix_shell::effect::accounts::is_root() {
         let _lock = super::acquire_lock()?;
         let reporters = mix_ui::reporters();
         let ctx = mix_shell::Context::new(mix_exec::Scope::root())
             .with_user(
-                mix_shell::accounts::invoking_user().and_then(mix_shell::profile::user_config_for),
+                mix_shell::effect::accounts::invoking_user()
+                    .and_then(mix_shell::profile::user_config_for),
             )
             .with_reporters(mix_shell::Reporters {
                 downloads: reporters.downloads,
@@ -28,7 +29,7 @@ pub async fn run(
             std::future::pending(),
             crate::interrupt::Side::Client,
         );
-        mix_shell::bootstrap::bootstrap(&ctx, force).await?;
+        mix_shell::ops::bootstrap::bootstrap(&ctx, force).await?;
     } else {
         crate::remote::client::bootstrap(mirror, mirror_key, force, verbosity).await?;
     }

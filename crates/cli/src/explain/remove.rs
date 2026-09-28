@@ -1,6 +1,6 @@
 //! What `mix remove` says when it cannot finish.
 
-use mix_shell::remove::Error;
+use mix_shell::ops::remove::Error;
 
 use super::{Diagnostic, change, failed, packages_action};
 

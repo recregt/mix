@@ -2,9 +2,9 @@ use async_trait::async_trait;
 use mix_core::paths::{NIX_TREE_MODE, NIX_TREE_PATHS};
 use mix_core::{Scope, Step};
 
-use crate::bootstrap::cleanup::warn_on_failure;
-use crate::bootstrap::error::{Error, Result};
-use crate::fs::{create_dir, dir_has_mode, exists, remove_dir_all, set_mode};
+use crate::effect::fs::{create_dir, dir_has_mode, exists, remove_dir_all, set_mode};
+use crate::ops::bootstrap::cleanup::warn_on_failure;
+use crate::ops::bootstrap::error::{Error, Result};
 
 #[derive(Default)]
 pub struct CreateNixTree {

@@ -10,8 +10,8 @@ use mix_core::paths::{FLAKE_LOCK, FLAKE_NIX, HOME_NIX, STATE_FILE};
 use mix_core::privilege::InvokingUser;
 use mix_core::{Error, Result, Scope};
 
-use crate::exec::{run, run_as, status_as};
-use crate::fs::exists;
+use crate::effect::exec::{run, run_as, status_as};
+use crate::effect::fs::exists;
 
 const AUTHOR_NAME: &str = "mix";
 const AUTHOR_EMAIL: &str = "mix@localhost";

@@ -2,9 +2,9 @@ use async_trait::async_trait;
 use mix_core::paths::NIX_OWNERSHIP_MARKER;
 use mix_core::{Scope, Step};
 
-use crate::bootstrap::error::{Error, Result};
-use crate::fs::{create_dir, dir_has_mode, is_file, remove_dir_all, remove_file, set_mode};
-use crate::fs::{exists, write_atomic};
+use crate::effect::fs::{create_dir, dir_has_mode, is_file, remove_dir_all, remove_file, set_mode};
+use crate::effect::fs::{exists, write_atomic};
+use crate::ops::bootstrap::error::{Error, Result};
 
 const MODE: u32 = 0o755;
 

@@ -5,15 +5,16 @@ pub mod remove;
 pub mod repair;
 
 use mix_core::models::UserConfig;
-use mix_shell::lock::LockGuard;
+use mix_shell::effect::lock::LockGuard;
 use mix_shell::profile::change::Error;
 
 fn exclusive_lock() -> mix_core::Result<LockGuard> {
-    mix_shell::lock::acquire_exclusive(mix_core::paths::LOCK_FILE)
+    mix_shell::effect::lock::acquire_exclusive(mix_core::paths::LOCK_FILE)
 }
 
 pub fn enrolled_user() -> Option<UserConfig> {
-    mix_shell::accounts::invoking_user().and_then(mix_shell::profile::existing_user_config_for)
+    mix_shell::effect::accounts::invoking_user()
+        .and_then(mix_shell::profile::existing_user_config_for)
 }
 
 pub fn host_config() -> mix_shell::HostConfig {
@@ -34,7 +35,7 @@ pub fn acquire_lock() -> anyhow::Result<LockGuard> {
 }
 
 pub fn acquire_profile() -> Result<(LockGuard, UserConfig), Error> {
-    if mix_shell::accounts::is_root() {
+    if mix_shell::effect::accounts::is_root() {
         return Err(Error::NotRoot);
     }
     let lock = exclusive_lock()?;

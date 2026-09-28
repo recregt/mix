@@ -11,9 +11,9 @@ use mix_core::identity;
 use mix_core::models::Target;
 use mix_core::{Result, Scope};
 
-use crate::exec::run;
-use crate::fs::{self, Owner};
-use crate::systemd;
+use crate::effect::exec::run;
+use crate::effect::fs::{self, Owner};
+use crate::effect::systemd;
 use crate::target::Finding;
 
 pub async fn reconcile(target: &Target, finding: Finding, scope: &Scope) -> Result<()> {
