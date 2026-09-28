@@ -128,9 +128,20 @@ class Container:
         return self.exec("test", "-e", path).returncode == 0
 
 
-def _start_container(image: str, name: str) -> str:
+def _start_container(image: str, name: str, binary: pathlib.Path) -> str:
     subprocess.run(
-        ["podman", "run", "-d", "--systemd=always", "--cap-add=SYS_ADMIN", "--name", name, image],
+        [
+            "podman",
+            "run",
+            "-d",
+            "--systemd=always",
+            "--cap-add=SYS_ADMIN",
+            "--volume",
+            f"{binary}:/usr/local/bin/mix:ro",
+            "--name",
+            name,
+            image,
+        ],
         check=True,
     )
     for _ in range(30):
@@ -240,10 +251,9 @@ def container(request, container_image, mix_binary):
     started = time.monotonic()
     cgroup = None
     try:
-        _start_container(container_image, name)
+        _start_container(container_image, name, mix_binary)
         cgroup = _cgroup_of(name)
         resources.attach(name, cgroup)
-        subprocess.run(["podman", "cp", str(mix_binary), f"{name}:/usr/local/bin/mix"], check=True)
         yield Container(name)
     finally:
         if cgroup is not None:

@@ -312,7 +312,9 @@ def mirror_args(mock_nix_server, mirror_cache):
 
 def bootstrap_root(container, mock_nix_server):
     """Bootstraps as bare root: the base runtime only, no per-user profile."""
-    result = container.exec("mix", "bootstrap", "--mirror", mock_nix_server["url"])
+    result = container.exec(
+        "mix", "-vv", "--no-progress", "bootstrap", "--mirror", mock_nix_server["url"]
+    )
     assert result.returncode == 0, result.stderr
     return result
 
@@ -321,6 +323,8 @@ def bootstrap_as(container, user: str, mock_nix_server, mirror_cache):
     """Bootstraps as an already-created sudo user, enrolling their home-manager profile."""
     result = container.exec(
         "mix",
+        "-vv",
+        "--no-progress",
         "bootstrap",
         *mirror_args(mock_nix_server, mirror_cache),
         user=user,
