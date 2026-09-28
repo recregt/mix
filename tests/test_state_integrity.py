@@ -1,11 +1,8 @@
 import json
 import pathlib
-import socket
-import threading
-
 import pytest
 
-from support.mirror import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS, mirror_args
+from support.mirror import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS, mirror_args, silent_mirror
 
 USER = MIRROR_TEST_USERS[0]
 STATE_DIR = f"/home/{USER}/.local/state/mix"
@@ -35,22 +32,6 @@ def _generation_state(container) -> str:
 
 def _packages(raw: str) -> list[str]:
     return json.loads(raw)["packages"]
-
-
-def _silent_mirror():
-    listener = socket.create_server(("0.0.0.0", 0))
-    held = []
-
-    def accept():
-        while True:
-            try:
-                connection, _ = listener.accept()
-            except OSError:
-                return
-            held.append(connection)
-
-    threading.Thread(target=accept, daemon=True).start()
-    return listener, f"http://host.containers.internal:{listener.getsockname()[1]}"
 
 
 def _kill_during(container, mock_nix_server, mirror_cache, marker: str, env=None, mirror=None) -> None:
@@ -97,12 +78,8 @@ def test_the_active_generation_carries_the_exact_package_list(
 def test_a_command_killed_before_the_switch_is_undone_by_the_next_one(
     container, mock_nix_server, mirror_cache
 ):
-    listener, silent = _silent_mirror()
-
-    try:
+    with silent_mirror() as silent:
         _kill_during(container, mock_nix_server, mirror_cache, "--dry-run", mirror=silent)
-    finally:
-        listener.close()
     assert INSTALL_TEST_PACKAGE in _packages(_state(container))
     assert not container.path_exists(PACKAGE_BIN)
 

@@ -1,5 +1,7 @@
 import time
 
+from support.mirror import silent_mirror
+
 MIX_MANAGED_MARKER = "/nix/.mix-managed"
 PROVISIONING_MANIFEST = "/nix/.mix-provisioning-manifest"
 DEFAULT_PROFILE_NIX_ENV = "/nix/var/nix/profiles/default/bin/nix-env"
@@ -37,16 +39,15 @@ def test_sigint_during_a_fast_step_exits_promptly_and_rolls_back_cleanly(contain
     assert _nixbld_users(container) == []
 
 
-def test_sigint_during_fetch_and_unpack_exits_promptly_and_rolls_back(container, mock_nix_server):
-    proc = container.start_background(
-        "mix", "-v", "bootstrap", env={"MIX_NIX_MIRROR": mock_nix_server["url"]}
-    )
-    proc.wait_for_output(RUNNING_FETCH_AND_UNPACK)
-    proc.signal("INT")
+def test_sigint_during_fetch_and_unpack_exits_promptly_and_rolls_back(container):
+    with silent_mirror() as silent:
+        proc = container.start_background("mix", "bootstrap", env={"MIX_NIX_MIRROR": silent})
+        proc.wait_for_output(RUNNING_FETCH_AND_UNPACK)
+        proc.signal("INT")
 
-    started = time.time()
-    result = proc.wait(timeout=15.0)
-    elapsed = time.time() - started
+        started = time.time()
+        result = proc.wait(timeout=15.0)
+        elapsed = time.time() - started
 
     assert result.returncode != 0, result.stdout
     assert elapsed < 10.0
@@ -57,13 +58,12 @@ def test_sigint_during_fetch_and_unpack_exits_promptly_and_rolls_back(container,
 
 
 def test_hard_kill_during_fetch_and_unpack_then_bootstrap_converges(container, mock_nix_server):
-    proc = container.start_background(
-        "mix", "-v", "bootstrap", env={"MIX_NIX_MIRROR": mock_nix_server["url"]}
-    )
-    proc.wait_for_output(RUNNING_FETCH_AND_UNPACK)
-    proc.signal("KILL")
+    with silent_mirror() as silent:
+        proc = container.start_background("mix", "bootstrap", env={"MIX_NIX_MIRROR": silent})
+        proc.wait_for_output(RUNNING_FETCH_AND_UNPACK)
+        proc.signal("KILL")
 
-    result = proc.wait(timeout=15.0)
+        result = proc.wait(timeout=15.0)
     assert result.returncode == 137
 
     fix = container.exec(

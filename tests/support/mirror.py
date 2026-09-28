@@ -1,4 +1,5 @@
 import ast
+import contextlib
 import fcntl
 import hashlib
 import http.server
@@ -7,6 +8,7 @@ import os
 import pathlib
 import re
 import shutil
+import socket
 import subprocess
 import tempfile
 import threading
@@ -308,6 +310,28 @@ def start_mirror_server() -> http.server.ThreadingHTTPServer:
 @pytest.fixture()
 def mock_nix_server(nix_tarball):
     return {"url": os.environ[MIRROR_URL_ENV]}
+
+
+@contextlib.contextmanager
+def silent_mirror():
+    listener = socket.create_server(("0.0.0.0", 0))
+    held = []
+
+    def accept():
+        while True:
+            try:
+                connection, _ = listener.accept()
+            except OSError:
+                return
+            held.append(connection)
+
+    threading.Thread(target=accept, daemon=True).start()
+    try:
+        yield f"http://host.containers.internal:{listener.getsockname()[1]}"
+    finally:
+        listener.close()
+        for connection in held:
+            connection.close()
 
 
 def mirror_args(mock_nix_server, mirror_cache):
