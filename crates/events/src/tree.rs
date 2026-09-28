@@ -4,12 +4,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::v1::{
-    Command, Diagnostic, NodeFinished, NodeProgress, NodeStarted, NotRun, NotRunReason, Status,
-    envelope::Event, node_finished, node_progress, node_started,
+    Command, Diagnostic, Envelope, NodeFinished, NodeProgress, NodeStarted, NotRun, NotRunReason,
+    Status, envelope::Event, node_finished, node_progress, node_started,
 };
 
 pub trait Sink: Send + Sync {
-    fn emit(&self, event: Event);
+    fn emit(&self, envelope: Envelope);
 }
 
 pub type Stopped = Arc<dyn Fn() -> bool + Send + Sync>;
@@ -17,12 +17,24 @@ pub type Stopped = Arc<dyn Fn() -> bool + Send + Sync>;
 struct Shared {
     sink: Arc<dyn Sink>,
     stopped: Stopped,
+    request: String,
     next: AtomicU64,
+    seq: Mutex<u64>,
 }
 
 impl Shared {
     fn allocate(&self) -> u64 {
         self.next.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn emit(&self, event: Event) {
+        let mut seq = self.seq.lock().unwrap_or_else(PoisonError::into_inner);
+        *seq += 1;
+        self.sink.emit(Envelope {
+            seq: *seq,
+            request: self.request.clone(),
+            event: Some(event),
+        });
     }
 }
 
@@ -96,6 +108,7 @@ impl Node<'static> {
     pub fn root(
         sink: Arc<dyn Sink>,
         stopped: Stopped,
+        request: impl Into<String>,
         key: impl Into<String>,
         command: Command,
         planned: Vec<String>,
@@ -103,7 +116,9 @@ impl Node<'static> {
         let shared = Arc::new(Shared {
             sink,
             stopped,
+            request: request.into(),
             next: AtomicU64::new(ROOT),
+            seq: Mutex::new(0),
         });
         Self::start(
             shared,
@@ -124,7 +139,7 @@ impl<'parent> Node<'parent> {
         planned: Vec<String>,
     ) -> Self {
         let id = shared.allocate();
-        shared.sink.emit(Event::NodeStarted(NodeStarted {
+        shared.emit(Event::NodeStarted(NodeStarted {
             id,
             parent,
             key,
@@ -169,7 +184,7 @@ impl<'parent> Node<'parent> {
     }
 
     pub fn progress(&self, progress: node_progress::Progress) {
-        self.shared.sink.emit(Event::NodeProgress(NodeProgress {
+        self.shared.emit(Event::NodeProgress(NodeProgress {
             id: self.id,
             progress: Some(progress),
         }));
@@ -177,7 +192,7 @@ impl<'parent> Node<'parent> {
 
     pub fn warn(&self, mut diagnostic: Diagnostic) {
         diagnostic.node = self.id;
-        self.shared.sink.emit(Event::Diagnostic(diagnostic));
+        self.shared.emit(Event::Diagnostic(diagnostic));
     }
 
     pub fn finish(mut self, ending: Ending) {
@@ -195,7 +210,7 @@ impl<'parent> Node<'parent> {
     }
 
     fn emit_not_run(&self, key: String, reason: NotRunReason) {
-        self.shared.sink.emit(Event::NotRun(NotRun {
+        self.shared.emit(Event::NotRun(NotRun {
             parent: self.id,
             key,
             reason: reason as i32,
@@ -215,10 +230,9 @@ impl<'parent> Node<'parent> {
         for key in unreached {
             self.emit_not_run(key, NotRunReason::NotReached);
         }
-        self.shared.sink.emit(Event::NodeFinished(NodeFinished {
+        self.shared.emit(Event::NodeFinished(NodeFinished {
             id: self.id,
             status: ending.status as i32,
-            elapsed: None,
             diagnostic: ending.diagnostic,
             exit_code: ending.exit_code,
             result: ending.result,
@@ -249,17 +263,24 @@ mod tests {
     use crate::v1::{Bytes, Plan, Step};
 
     #[derive(Default)]
-    struct Recorded(Mutex<Vec<Event>>);
+    struct Recorded(Mutex<Vec<Envelope>>);
 
     impl Sink for Recorded {
-        fn emit(&self, event: Event) {
-            self.0.lock().unwrap().push(event);
+        fn emit(&self, envelope: Envelope) {
+            self.0.lock().unwrap().push(envelope);
         }
     }
 
     impl Recorded {
-        fn take(&self) -> Vec<Event> {
+        fn envelopes(&self) -> Vec<Envelope> {
             std::mem::take(&mut self.0.lock().unwrap())
+        }
+
+        fn take(&self) -> Vec<Event> {
+            self.envelopes()
+                .into_iter()
+                .map(|envelope| envelope.event.unwrap())
+                .collect()
         }
     }
 
@@ -271,6 +292,7 @@ mod tests {
         Node::root(
             sink.clone(),
             stopped,
+            "request",
             "bootstrap",
             Command::default(),
             planned.iter().map(|key| key.to_string()).collect(),
@@ -417,5 +439,48 @@ mod tests {
         };
         assert_eq!(node.exit_code, 3);
         assert!(node.result.is_some());
+    }
+
+    #[test]
+    fn every_envelope_is_numbered_from_one_and_carries_the_request() {
+        let sink = Arc::new(Recorded::default());
+        let root = root(&sink, never(), &[]);
+        root.child("check", step()).finish(Ending::succeeded());
+        root.finish(Ending::succeeded());
+
+        let envelopes = sink.envelopes();
+        let seqs: Vec<u64> = envelopes.iter().map(|envelope| envelope.seq).collect();
+        assert_eq!(seqs, [1, 2, 3, 4]);
+        assert!(
+            envelopes
+                .iter()
+                .all(|envelope| envelope.request == "request")
+        );
+    }
+
+    #[test]
+    fn children_on_many_threads_are_delivered_in_the_order_they_are_numbered() {
+        let sink = Arc::new(Recorded::default());
+        let root = root(&sink, never(), &[]);
+        std::thread::scope(|scope| {
+            for thread in 0..8 {
+                let root = &root;
+                scope.spawn(move || {
+                    let child = root.child(format!("worker-{thread}"), step());
+                    for _ in 0..200 {
+                        child.progress(node_progress::Progress::Bytes(Bytes::default()));
+                    }
+                    child.finish(Ending::succeeded());
+                });
+            }
+        });
+        root.finish(Ending::succeeded());
+
+        let seqs: Vec<u64> = sink
+            .envelopes()
+            .iter()
+            .map(|envelope| envelope.seq)
+            .collect();
+        assert_eq!(seqs, (1..=seqs.len() as u64).collect::<Vec<_>>());
     }
 }

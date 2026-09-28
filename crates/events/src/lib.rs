@@ -4,11 +4,9 @@ pub mod v1 {
     include!(concat!(env!("OUT_DIR"), "/mix.events.v1.serde.rs"));
 }
 
-mod stamp;
 mod tree;
 mod validate;
 
-pub use stamp::{Clock, Stamper, SystemClock};
 pub use tree::{Ending, Node, ROOT, Sink, Stopped};
 pub use validate::{Entry, Outcome, Validated, Validator, Violation, validate};
 

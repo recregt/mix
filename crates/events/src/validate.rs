@@ -50,9 +50,6 @@ pub enum Violation {
     #[error("an event refers to node {id}, which is not running (I7)")]
     NotOpen { id: u64 },
 
-    #[error("node {id} ran for a negative time (I8)")]
-    NegativeElapsed { id: u64 },
-
     #[error("rollback {id} undoes {undoes}, which is not a finished step beside it (I9)")]
     RollbackTarget { id: u64, undoes: u64 },
 
@@ -269,12 +266,6 @@ impl Validator {
         let status = node.status();
         if status == Status::Unspecified {
             return Err(Violation::UnspecifiedStatus { id });
-        }
-        if node
-            .elapsed
-            .is_some_and(|elapsed| elapsed.seconds < 0 || elapsed.nanos < 0)
-        {
-            return Err(Violation::NegativeElapsed { id });
         }
         if id != ROOT && node.exit_code != 0 {
             return Err(Violation::ExitCodeOnChild { id });

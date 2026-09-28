@@ -2,14 +2,11 @@ syntax = "proto3";
 
 package mix.events.v1;
 
-import "google/protobuf/duration.proto";
 import "google/protobuf/empty.proto";
-import "google/protobuf/timestamp.proto";
 
 message Envelope {
   uint64 seq = 1;
-  google.protobuf.Timestamp time = 2;
-  string request = 3;
+  string request = 2;
   oneof event {
     NodeStarted node_started = 10;
     NodeProgress node_progress = 11;
@@ -153,9 +150,8 @@ enum Status {
 message NodeFinished {
   fixed64 id = 1;
   Status status = 2;
-  google.protobuf.Duration elapsed = 3;
-  Diagnostic diagnostic = 4;
-  uint32 exit_code = 5;
+  Diagnostic diagnostic = 3;
+  uint32 exit_code = 4;
   oneof result {
     BootstrapResult bootstrap = 10;
     InstallResult install = 11;

@@ -1,42 +1,32 @@
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use mix_events::v1::{
     Bytes, Command, Diagnostic, Envelope, Log, NotRunReason, Plan, Rollback, Status, Step,
     envelope::Event, node_progress, node_started,
 };
-use mix_events::{Clock, Ending, Node, Outcome, Sink, Stamper, Validated, Violation, validate};
+use mix_events::{Ending, Node, Outcome, Sink, Validated, Violation, validate};
 use proptest::prelude::*;
 
-struct Fixed;
+#[derive(Default)]
+struct Recorded(Mutex<Vec<Envelope>>);
 
-impl Clock for Fixed {
-    fn wall(&self) -> pbjson_types::Timestamp {
-        pbjson_types::Timestamp {
-            seconds: 1_790_000_000,
-            nanos: 0,
-        }
-    }
-
-    fn monotonic(&self) -> Duration {
-        Duration::ZERO
+impl Sink for Recorded {
+    fn emit(&self, envelope: Envelope) {
+        self.0.lock().unwrap().push(envelope);
     }
 }
 
 fn record(run: impl FnOnce(Arc<dyn Sink>)) -> Vec<Envelope> {
-    let delivered = Arc::new(Mutex::new(Vec::new()));
-    let into = delivered.clone();
-    let sink: Arc<dyn Sink> = Arc::new(Stamper::new("request", Fixed, move |envelope| {
-        into.lock().unwrap().push(envelope)
-    }));
-    run(sink);
-    Arc::try_unwrap(delivered).unwrap().into_inner().unwrap()
+    let recorded = Arc::new(Recorded::default());
+    run(recorded.clone());
+    std::mem::take(&mut recorded.0.lock().unwrap())
 }
 
 fn root(sink: Arc<dyn Sink>, planned: &[&str]) -> Node<'static> {
     Node::root(
         sink,
         Arc::new(|| false),
+        "request",
         "bootstrap",
         Command::default(),
         planned.iter().map(|key| key.to_string()).collect(),
@@ -185,21 +175,6 @@ fn a_rollback_must_undo_a_finished_step_beside_it() {
     });
 
     assert_eq!(result, Err(Violation::RollbackTarget { id: 6, undoes: 5 }));
-}
-
-#[test]
-fn a_negative_elapsed_time_is_refused() {
-    let result = edited(|stream| {
-        let index = position(stream, finish_of(3));
-        if let Event::NodeFinished(node) = event_mut(stream, index) {
-            node.elapsed = Some(pbjson_types::Duration {
-                seconds: -1,
-                nanos: 0,
-            });
-        }
-    });
-
-    assert_eq!(result, Err(Violation::NegativeElapsed { id: 3 }));
 }
 
 #[test]
@@ -420,6 +395,7 @@ fn produced(shape: &Shape) -> Vec<Envelope> {
         let root = Node::root(
             sink,
             Arc::new(|| false),
+            "request",
             "command",
             Command::default(),
             plan_of(shape),
