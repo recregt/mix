@@ -9,9 +9,9 @@ pub async fn run(
 ) -> anyhow::Result<ExitCode> {
     let (_lock, user_config) = super::acquire_profile()?;
     let reporters = mix_ui::reporters();
-    let ctx = mix_app::Context::new(mix_exec::Scope::root())
+    let ctx = mix_shell::Context::new(mix_exec::Scope::root())
         .with_user(Some(user_config))
-        .with_reporters(mix_app::Reporters {
+        .with_reporters(mix_shell::Reporters {
             downloads: reporters.downloads,
             steps: reporters.passing_steps,
             activity: reporters.activity,
@@ -25,7 +25,7 @@ pub async fn run(
         crate::interrupt::Side::Client,
     );
 
-    let installed = mix_app::install::install(&ctx, packages, build).await?;
+    let installed = mix_shell::install::install(&ctx, packages, build).await?;
 
     if let Some(note) = installed
         .restored

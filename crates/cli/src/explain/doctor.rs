@@ -6,8 +6,8 @@
 
 use std::borrow::Cow;
 
-use mix_app::doctor::HealthReport;
-use mix_app::target::Finding;
+use mix_shell::doctor::HealthReport;
+use mix_shell::target::Finding;
 
 use super::{Diagnostic, failed};
 

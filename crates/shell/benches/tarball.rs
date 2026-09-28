@@ -1,6 +1,6 @@
 use std::io::Write as _;
 
-use mix_app::bootstrap::tarball::{sha256_hex, unpack};
+use mix_shell::bootstrap::tarball::{sha256_hex, unpack};
 
 fn main() {
     divan::main();

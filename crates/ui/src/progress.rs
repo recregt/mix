@@ -34,7 +34,7 @@ const STEP_STYLE: &str = "{span_child_prefix}{spinner}{span_fields}{wide_msg}";
 /// blocks reads as a row of them.
 const PROGRESS_CHARS: &str = "━╸━";
 
-const OWN_CRATES: [&str; 5] = ["mix_core", "mix_exec", "mix_app", "mix_cli", "mix_ui"];
+const OWN_CRATES: [&str; 5] = ["mix_core", "mix_exec", "mix_shell", "mix_cli", "mix_ui"];
 
 /// The spinner's frames: a three-dot arc sweeping once around the braille cell.
 ///
@@ -286,7 +286,7 @@ mod tests {
     fn verbose_output_includes_the_commands_every_crate_runs() {
         let targets = own_crates_at(LevelFilter::DEBUG, LevelFilter::OFF);
 
-        for name in ["mix_core", "mix_exec", "mix_app", "mix_cli", "mix_ui"] {
+        for name in ["mix_core", "mix_exec", "mix_shell", "mix_cli", "mix_ui"] {
             assert!(
                 targets.would_enable(name, &tracing::Level::DEBUG),
                 "{name} is filtered out of verbose output"
@@ -469,8 +469,8 @@ mod tests {
     fn verbosity_turns_up_this_tool_and_not_its_dependencies() {
         let filter = log_filter(2);
 
-        assert!(filter.would_enable("mix_app", &tracing::Level::DEBUG));
-        assert!(filter.would_enable("mix_app::bootstrap", &tracing::Level::DEBUG));
+        assert!(filter.would_enable("mix_shell", &tracing::Level::DEBUG));
+        assert!(filter.would_enable("mix_shell::bootstrap", &tracing::Level::DEBUG));
         assert!(!filter.would_enable("hyper::client", &tracing::Level::DEBUG));
     }
 

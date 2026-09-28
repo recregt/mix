@@ -1,5 +1,5 @@
-use mix_app::target::{self, Finding};
 use mix_core::models::Target;
+use mix_shell::target::{self, Finding};
 
 fn main() {
     divan::main();

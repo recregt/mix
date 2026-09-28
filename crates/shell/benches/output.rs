@@ -1,5 +1,5 @@
-use mix_app::output::{LineSplitter, StreamDrain, TailBuffer};
 use mix_core::{ActivityReporter, NoopActivity};
+use mix_shell::output::{LineSplitter, StreamDrain, TailBuffer};
 
 fn main() {
     divan::main();

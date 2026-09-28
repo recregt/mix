@@ -11,11 +11,11 @@ pub async fn run(
     if mix_core::privilege::is_root() {
         let _lock = super::acquire_lock()?;
         let reporters = mix_ui::reporters();
-        let ctx = mix_app::Context::new(mix_exec::Scope::root())
+        let ctx = mix_shell::Context::new(mix_exec::Scope::root())
             .with_user(
-                mix_core::privilege::invoking_user().and_then(mix_app::profile::user_config_for),
+                mix_core::privilege::invoking_user().and_then(mix_shell::profile::user_config_for),
             )
-            .with_reporters(mix_app::Reporters {
+            .with_reporters(mix_shell::Reporters {
                 downloads: reporters.downloads,
                 steps: reporters.steps,
                 activity: reporters.activity,
@@ -28,7 +28,7 @@ pub async fn run(
             std::future::pending(),
             crate::interrupt::Side::Client,
         );
-        mix_app::bootstrap::bootstrap(&ctx, force).await?;
+        mix_shell::bootstrap::bootstrap(&ctx, force).await?;
     } else {
         crate::remote::client::bootstrap(mirror, mirror_key, force, verbosity).await?;
     }

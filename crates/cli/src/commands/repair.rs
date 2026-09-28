@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 
-use mix_app::repair::{Repair, RepairReport};
+use mix_shell::repair::{Repair, RepairReport};
 
 pub async fn run(verbosity: u8) -> anyhow::Result<ExitCode> {
     let Repair {
@@ -8,7 +8,7 @@ pub async fn run(verbosity: u8) -> anyhow::Result<ExitCode> {
         interrupted,
     } = if mix_core::privilege::is_root() {
         let _lock = super::acquire_lock()?;
-        let ctx = mix_app::Context::new(mix_exec::Scope::root())
+        let ctx = mix_shell::Context::new(mix_exec::Scope::root())
             .with_user(super::enrolled_user())
             .with_host(super::host_config());
         let _watch = crate::interrupt::watch(
@@ -17,7 +17,7 @@ pub async fn run(verbosity: u8) -> anyhow::Result<ExitCode> {
             std::future::pending(),
             crate::interrupt::Side::Client,
         );
-        mix_app::repair::repair(&ctx).await
+        mix_shell::repair::repair(&ctx).await
     } else {
         crate::remote::client::repair(verbosity).await?
     };
