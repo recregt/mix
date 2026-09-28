@@ -116,7 +116,8 @@ def pytest_terminal_summary(terminalreporter, config):
         f"{max(run['peak_bytes'] for run in runs) / gib:.2f} GiB; "
         f"CPU per test up to {max(run['cpu_seconds'] / run['seconds'] for run in runs):.2f} cores; "
         f"admission waits {sum(run['waited_seconds'] for run in runs):.0f}s in total; "
-        f"tasks per test up to {max(run.get('peak_tasks') or 0 for run in runs)}"
+        f"tasks per test up to {max(run.get('peak_tasks') or 0 for run in runs)}; "
+        f"forks refused by a task limit {sum(run.get('refused_forks') or 0 for run in runs)}"
     )
     terminalreporter.write_line(
         f"capacity: {resources.cpu_capacity():g} cores, "

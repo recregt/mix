@@ -3,8 +3,10 @@ import functools
 import json
 import os
 import pathlib
+import queue
 import re
 import subprocess
+import threading
 import time
 
 import pytest
@@ -39,6 +41,19 @@ class BackgroundProcess:
         self.proc = proc
         self.pattern = pattern
         self.output = ""
+        self.lines: queue.Queue[str | None] = queue.Queue()
+        threading.Thread(target=self._drain, daemon=True).start()
+
+    def _drain(self) -> None:
+        for line in self.proc.stdout:
+            self.lines.put(line)
+        self.lines.put(None)
+
+    def _next_line(self, timeout: float) -> str | None:
+        try:
+            return self.lines.get(timeout=timeout)
+        except queue.Empty:
+            return None
 
     def pid(self, timeout: float = 10.0) -> str:
         deadline = time.time() + timeout
@@ -59,16 +74,21 @@ class BackgroundProcess:
         deadline = time.time() + timeout
         while time.time() < deadline:
             remaining = max(0.01, deadline - time.time())
-            line = _readline_with_timeout(self.proc.stdout, remaining)
+            line = self._next_line(remaining)
             if line is None:
-                raise AssertionError(
-                    f"process exited before printing output containing {substring!r}: "
-                    f"{self.output!r}"
-                )
+                break
             self.output += line
             if substring in line:
                 return
-        raise TimeoutError(f"{substring!r} never appeared in output: {self.output!r}")
+        if self.proc.poll() is not None:
+            raise AssertionError(
+                f"process exited ({self.proc.returncode}) before printing output containing "
+                f"{substring!r}:\n{self.output}"
+            )
+        raise TimeoutError(
+            f"{substring!r} never appeared within {timeout:g}s; processes now:\n"
+            f"{self.container.process_tree()}\noutput so far:\n{self.output}"
+        )
 
     def signal(self, sig_name: str, timeout: float = 10.0) -> None:
         pid = self.pid(timeout=timeout)
@@ -82,26 +102,12 @@ class BackgroundProcess:
     def wait(self, timeout: float = 30.0) -> subprocess.CompletedProcess:
         deadline = time.time() + timeout
         while time.time() < deadline:
-            line = _readline_with_timeout(self.proc.stdout, max(0.01, deadline - time.time()))
+            line = self._next_line(max(0.01, deadline - time.time()))
             if line is None:
                 break
             self.output += line
         self.proc.wait(timeout=max(0.01, deadline - time.time()))
         return subprocess.CompletedProcess(self.proc.args, self.proc.returncode, self.output, "")
-
-
-def _readline_with_timeout(stream, timeout: float):
-    import selectors
-
-    sel = selectors.DefaultSelector()
-    sel.register(stream, selectors.EVENT_READ)
-    try:
-        if not sel.select(timeout=timeout):
-            return None
-    finally:
-        sel.close()
-    line = stream.readline()
-    return line if line else None
 
 
 class Container:
@@ -152,6 +158,9 @@ class Container:
         )
         return BackgroundProcess(self, proc, pattern=literal(" ".join(args)))
 
+    def process_tree(self) -> str:
+        return self.exec("ps", "-eo", "pid,ppid,stat,wchan:24,etime,args", "--forest").stdout
+
     def path_exists(self, path: str) -> bool:
         return self.exec("test", "-e", path).returncode == 0
 
@@ -164,6 +173,7 @@ def _start_container(image: str, name: str, binary: pathlib.Path) -> str:
             "-d",
             "--systemd=always",
             "--cap-add=SYS_ADMIN",
+            "--pids-limit=-1",
             "--volume",
             f"{binary}:/usr/local/bin/mix:ro",
             "--name",

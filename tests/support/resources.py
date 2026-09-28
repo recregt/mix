@@ -256,9 +256,20 @@ def release(ticket: str) -> None:
         ledger["waiting"] = [entry for entry in ledger["waiting"] if entry["ticket"] != ticket]
 
 
+def _refused_forks(cgroup: Path) -> int:
+    refused = 0
+    for directory, _, files in os.walk(cgroup):
+        if "pids.events" in files:
+            for line in (_read(Path(directory) / "pids.events") or "").splitlines():
+                if line.startswith("max "):
+                    refused += int(line.split()[1])
+    return refused
+
+
 def record(test: str, cgroup: Path, seconds: float, waited: float, variant: str) -> None:
     peak = _read(cgroup / "memory.peak")
     tasks = _read(cgroup / "pids.peak")
+    refused = _refused_forks(cgroup)
     stat = _read(cgroup / "cpu.stat") or ""
     usage = next(
         (int(line.split()[1]) for line in stat.splitlines() if line.startswith("usage_usec")),
@@ -271,6 +282,7 @@ def record(test: str, cgroup: Path, seconds: float, waited: float, variant: str)
         "session": os.environ.get("MIX_TEST_SESSION", ""),
         "peak_bytes": int(peak),
         "peak_tasks": int(tasks) if tasks else None,
+        "refused_forks": refused,
         "cpu_seconds": usage / 1_000_000,
         "seconds": seconds,
         "waited_seconds": waited,
