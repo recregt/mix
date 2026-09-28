@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::tree::ROOT;
 use crate::v1::{
-    Envelope, NodeFinished, NodeStarted, NotRun, NotRunReason, Status, envelope::Event,
-    node_started::Kind,
+    Cancellation, Envelope, NodeFinished, NodeStarted, NotRun, NotRunReason, Status,
+    envelope::Event, node_finished, node_started::Kind,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -59,6 +59,12 @@ pub enum Violation {
     #[error("child {key} of node {parent} was not run for no stated reason")]
     UnspecifiedReason { parent: u64, key: String },
 
+    #[error("node {id} has a cancellation cause exactly when it was not cancelled")]
+    CancellationMismatch { id: u64 },
+
+    #[error("node {id} carries a result for another kind of node")]
+    ResultMismatch { id: u64 },
+
     #[error("node {id} is not the root but carries an exit code")]
     ExitCodeOnChild { id: u64 },
 
@@ -94,10 +100,43 @@ impl Validated {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    Command,
+    Step,
+    Process,
+    Inspection,
+    Other,
+}
+
+impl Shape {
+    fn of(kind: Option<&Kind>) -> Self {
+        match kind {
+            Some(Kind::Command(_)) => Shape::Command,
+            Some(Kind::Step(_)) => Shape::Step,
+            Some(Kind::Process(_)) => Shape::Process,
+            Some(Kind::Inspection(_)) => Shape::Inspection,
+            _ => Shape::Other,
+        }
+    }
+
+    fn accepts(self, result: &node_finished::Result) -> bool {
+        match result {
+            node_finished::Result::Process(_) => self == Shape::Process,
+            node_finished::Result::Inspection(_) => self == Shape::Inspection,
+            node_finished::Result::Bootstrap(_)
+            | node_finished::Result::Install(_)
+            | node_finished::Result::Remove(_)
+            | node_finished::Result::Repair(_)
+            | node_finished::Result::Doctor(_) => self == Shape::Command,
+        }
+    }
+}
+
 struct Record {
     parent: u64,
     entry: usize,
-    step: bool,
+    shape: Shape,
     planned: Vec<String>,
     keys: HashSet<String>,
     open_children: HashSet<u64>,
@@ -218,7 +257,7 @@ impl Validator {
         if let Some(Kind::Rollback(rollback)) = &node.kind {
             let undoes = rollback.undoes;
             let valid = self.nodes.get(&undoes).is_some_and(|target| {
-                target.step && target.finished && target.parent == node.parent
+                target.shape == Shape::Step && target.finished && target.parent == node.parent
             });
             if !valid {
                 return Err(Violation::RollbackTarget { id, undoes });
@@ -234,7 +273,7 @@ impl Validator {
             Record {
                 parent: node.parent,
                 entry: self.validated.entries.len() - 1,
-                step: matches!(node.kind, Some(Kind::Step(_))),
+                shape: Shape::of(node.kind.as_ref()),
                 planned: node.planned.clone(),
                 keys: HashSet::new(),
                 open_children: HashSet::new(),
@@ -266,6 +305,18 @@ impl Validator {
         let status = node.status();
         if status == Status::Unspecified {
             return Err(Violation::UnspecifiedStatus { id });
+        }
+        let cancelled = status == Status::Cancelled;
+        let has_cause = node.cancellation != Cancellation::Unspecified as i32;
+        if cancelled != has_cause {
+            return Err(Violation::CancellationMismatch { id });
+        }
+        if node
+            .result
+            .as_ref()
+            .is_some_and(|result| !record.shape.accepts(result))
+        {
+            return Err(Violation::ResultMismatch { id });
         }
         if id != ROOT && node.exit_code != 0 {
             return Err(Violation::ExitCodeOnChild { id });

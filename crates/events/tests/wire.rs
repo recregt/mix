@@ -14,6 +14,7 @@ fn started() -> Envelope {
             parent: 0,
             key: "install".to_string(),
             planned: vec!["change".to_string()],
+            shielded: false,
             kind: Some(node_started::Kind::Command(Command {
                 mix_version: "0.1.0".to_string(),
                 schema_minor: mix_events::SCHEMA_MINOR,
@@ -44,6 +45,7 @@ fn finished() -> Envelope {
                 })),
             }),
             exit_code: 1,
+            cancellation: 0,
             result: Some(node_finished::Result::Install(InstallResult::default())),
         })),
     }

@@ -4,15 +4,20 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::v1::{
-    Command, Diagnostic, Envelope, NodeFinished, NodeProgress, NodeStarted, NotRun, NotRunReason,
-    Status, envelope::Event, node_finished, node_progress, node_started,
+    Builds, Bytes, Cancellation, Command, Diagnostic, Envelope, NodeFinished, NodeProgress,
+    NodeStarted, NotRun, NotRunReason, OutputLine, Status, Stream, envelope::Event, node_finished,
+    node_progress::Progress, node_started,
 };
 
 pub trait Sink: Send + Sync {
     fn emit(&self, envelope: Envelope);
 }
 
-pub type Stopped = Arc<dyn Fn() -> bool + Send + Sync>;
+pub type Stopped = Arc<dyn Fn() -> Option<Cancellation> + Send + Sync>;
+
+pub const ROOT: u64 = 1;
+
+const UNKNOWN_TOTAL_STEP: u64 = 1 << 20;
 
 struct Shared {
     sink: Arc<dyn Sink>,
@@ -39,17 +44,52 @@ impl Shared {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct Start {
+    key: String,
+    kind: node_started::Kind,
+    planned: Vec<String>,
+    shielded: bool,
+}
+
+impl Start {
+    pub fn new(key: impl Into<String>, kind: node_started::Kind) -> Self {
+        Self {
+            key: key.into(),
+            kind,
+            planned: Vec::new(),
+            shielded: false,
+        }
+    }
+
+    pub fn command(key: impl Into<String>, command: Command) -> Self {
+        Self::new(key, node_started::Kind::Command(command))
+    }
+
+    pub fn planned(mut self, keys: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.planned = keys.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn shielded(mut self) -> Self {
+        self.shielded = true;
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Ending {
     status: Status,
+    cancellation: Cancellation,
     diagnostic: Option<Diagnostic>,
     result: Option<node_finished::Result>,
     exit_code: u32,
 }
 
 impl Ending {
-    pub fn new(status: Status) -> Self {
+    fn new(status: Status) -> Self {
         Self {
             status,
+            cancellation: Cancellation::Unspecified,
             diagnostic: None,
             result: None,
             exit_code: 0,
@@ -68,8 +108,11 @@ impl Ending {
         Self::new(Status::Failed).with_diagnostic(diagnostic)
     }
 
-    pub fn cancelled() -> Self {
-        Self::new(Status::Cancelled)
+    pub fn cancelled(cause: Cancellation) -> Self {
+        Self {
+            cancellation: cause,
+            ..Self::new(Status::Cancelled)
+        }
     }
 
     pub fn with_diagnostic(mut self, diagnostic: Diagnostic) -> Self {
@@ -88,31 +131,73 @@ impl Ending {
     }
 }
 
+pub fn output(bytes: &[u8], stream: Stream) -> Progress {
+    Progress::Line(OutputLine {
+        text: String::from_utf8_lossy(bytes).into_owned(),
+        stream: stream as i32,
+    })
+}
+
 #[derive(Default)]
-struct Children {
+struct State {
     planned: Vec<String>,
     used: HashSet<String>,
+    bytes: Option<Bytes>,
+    builds: Option<Builds>,
+}
+
+impl State {
+    fn worth_sending(&mut self, progress: &Progress) -> bool {
+        match progress {
+            Progress::Line(_) => true,
+            Progress::Builds(builds) => {
+                let changed = self.builds.as_ref() != Some(builds);
+                self.builds = Some(*builds);
+                changed
+            }
+            Progress::Bytes(bytes) => {
+                let send = self.bytes.is_none_or(|last| bytes_advanced(&last, bytes));
+                if send {
+                    self.bytes = Some(*bytes);
+                }
+                send
+            }
+        }
+    }
+}
+
+fn bytes_advanced(last: &Bytes, next: &Bytes) -> bool {
+    if last.total != next.total {
+        return true;
+    }
+    match next.total {
+        Some(total) if next.done >= total => last.done < total,
+        Some(total) if total > 0 => percent(next.done, total) > percent(last.done, total),
+        Some(_) => false,
+        None => next.done / UNKNOWN_TOTAL_STEP > last.done / UNKNOWN_TOTAL_STEP,
+    }
+}
+
+fn percent(done: u64, total: u64) -> u128 {
+    u128::from(done) * 100 / u128::from(total)
 }
 
 pub struct Node<'parent> {
     shared: Arc<Shared>,
     id: u64,
-    children: Mutex<Children>,
+    state: Mutex<State>,
     finished: bool,
     _parent: PhantomData<&'parent ()>,
 }
-
-pub const ROOT: u64 = 1;
 
 impl Node<'static> {
     pub fn root(
         sink: Arc<dyn Sink>,
         stopped: Stopped,
         request: impl Into<String>,
-        key: impl Into<String>,
-        command: Command,
-        planned: Vec<String>,
+        start: Start,
     ) -> Self {
+        debug_assert!(matches!(start.kind, node_started::Kind::Command(_)));
         let shared = Arc::new(Shared {
             sink,
             stopped,
@@ -120,38 +205,27 @@ impl Node<'static> {
             next: AtomicU64::new(ROOT),
             seq: Mutex::new(0),
         });
-        Self::start(
-            shared,
-            0,
-            key.into(),
-            node_started::Kind::Command(command),
-            planned,
-        )
+        Self::open(shared, 0, start)
     }
 }
 
 impl<'parent> Node<'parent> {
-    fn start(
-        shared: Arc<Shared>,
-        parent: u64,
-        key: String,
-        kind: node_started::Kind,
-        planned: Vec<String>,
-    ) -> Self {
+    fn open(shared: Arc<Shared>, parent: u64, start: Start) -> Self {
         let id = shared.allocate();
         shared.emit(Event::NodeStarted(NodeStarted {
             id,
             parent,
-            key,
-            planned: planned.clone(),
-            kind: Some(kind),
+            key: start.key,
+            planned: start.planned.clone(),
+            shielded: start.shielded,
+            kind: Some(start.kind),
         }));
         Node {
             shared,
             id,
-            children: Mutex::new(Children {
-                planned,
-                used: HashSet::new(),
+            state: Mutex::new(State {
+                planned: start.planned,
+                ..State::default()
             }),
             finished: false,
             _parent: PhantomData,
@@ -162,19 +236,13 @@ impl<'parent> Node<'parent> {
         self.id
     }
 
-    pub fn child(&self, key: impl Into<String>, kind: node_started::Kind) -> Node<'_> {
-        self.planned_child(key, kind, Vec::new())
+    pub fn start(&self, start: Start) -> Node<'_> {
+        self.claim(&start.key);
+        Node::open(self.shared.clone(), self.id, start)
     }
 
-    pub fn planned_child(
-        &self,
-        key: impl Into<String>,
-        kind: node_started::Kind,
-        planned: Vec<String>,
-    ) -> Node<'_> {
-        let key = key.into();
-        self.claim(&key);
-        Node::start(self.shared.clone(), self.id, key, kind, planned)
+    pub fn child(&self, key: impl Into<String>, kind: node_started::Kind) -> Node<'_> {
+        self.start(Start::new(key, kind))
     }
 
     pub fn not_run(&self, key: impl Into<String>, reason: NotRunReason) {
@@ -183,7 +251,10 @@ impl<'parent> Node<'parent> {
         self.emit_not_run(key, reason);
     }
 
-    pub fn progress(&self, progress: node_progress::Progress) {
+    pub fn progress(&self, progress: Progress) {
+        if !self.state().worth_sending(&progress) {
+            return;
+        }
         self.shared.emit(Event::NodeProgress(NodeProgress {
             id: self.id,
             progress: Some(progress),
@@ -199,13 +270,12 @@ impl<'parent> Node<'parent> {
         self.close(ending);
     }
 
+    fn state(&self) -> std::sync::MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn claim(&self, key: &str) {
-        let fresh = self
-            .children
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .used
-            .insert(key.to_string());
+        let fresh = self.state().used.insert(key.to_string());
         debug_assert!(fresh, "node {} already has a child keyed {key}", self.id);
     }
 
@@ -219,11 +289,11 @@ impl<'parent> Node<'parent> {
 
     fn close(&mut self, ending: Ending) {
         let unreached: Vec<String> = {
-            let children = self.children.lock().unwrap_or_else(PoisonError::into_inner);
-            children
+            let state = self.state();
+            state
                 .planned
                 .iter()
-                .filter(|key| !children.used.contains(*key))
+                .filter(|key| !state.used.contains(*key))
                 .cloned()
                 .collect()
         };
@@ -235,6 +305,7 @@ impl<'parent> Node<'parent> {
             status: ending.status as i32,
             diagnostic: ending.diagnostic,
             exit_code: ending.exit_code,
+            cancellation: ending.cancellation as i32,
             result: ending.result,
         }));
         self.finished = true;
@@ -246,12 +317,11 @@ impl Drop for Node<'_> {
         if self.finished {
             return;
         }
-        let status = if (self.shared.stopped)() {
-            Status::Cancelled
-        } else {
-            Status::Failed
+        let ending = match (self.shared.stopped)() {
+            Some(cause) => Ending::cancelled(cause),
+            None => Ending::new(Status::Failed),
         };
-        self.close(Ending::new(status));
+        self.close(ending);
     }
 }
 
@@ -260,7 +330,7 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     use super::*;
-    use crate::v1::{Bytes, Plan, Step};
+    use crate::v1::{Plan, Step};
 
     #[derive(Default)]
     struct Recorded(Mutex<Vec<Envelope>>);
@@ -285,7 +355,7 @@ mod tests {
     }
 
     fn never() -> Stopped {
-        Arc::new(|| false)
+        Arc::new(|| None)
     }
 
     fn root(sink: &Arc<Recorded>, stopped: Stopped, planned: &[&str]) -> Node<'static> {
@@ -293,9 +363,7 @@ mod tests {
             sink.clone(),
             stopped,
             "request",
-            "bootstrap",
-            Command::default(),
-            planned.iter().map(|key| key.to_string()).collect(),
+            Start::command("bootstrap", Command::default()).planned(planned.iter().copied()),
         )
     }
 
@@ -382,16 +450,35 @@ mod tests {
         let sink = Arc::new(Recorded::default());
         let stop = Arc::new(AtomicBool::new(false));
         let probe = stop.clone();
-        let root = root(&sink, Arc::new(move || probe.load(Ordering::Relaxed)), &[]);
+        let root = root(
+            &sink,
+            Arc::new(move || {
+                probe
+                    .load(Ordering::Relaxed)
+                    .then_some(Cancellation::ClientGone)
+            }),
+            &[],
+        );
         let child = root.child("step", step());
 
         stop.store(true, Ordering::Relaxed);
         drop(child);
         drop(root);
 
+        let causes: Vec<(u64, Status, Cancellation)> = sink
+            .take()
+            .iter()
+            .filter_map(|event| match event {
+                Event::NodeFinished(node) => Some((node.id, node.status(), node.cancellation())),
+                _ => None,
+            })
+            .collect();
         assert_eq!(
-            sink.take().iter().filter_map(finished).collect::<Vec<_>>(),
-            [(2, Status::Cancelled), (1, Status::Cancelled)]
+            causes,
+            [
+                (2, Status::Cancelled, Cancellation::ClientGone),
+                (1, Status::Cancelled, Cancellation::ClientGone)
+            ]
         );
     }
 
@@ -411,7 +498,10 @@ mod tests {
         let sink = Arc::new(Recorded::default());
         let root = root(&sink, never(), &[]);
         let download = root.child("download", step());
-        download.progress(node_progress::Progress::Bytes(Bytes { done: 1, total: 2 }));
+        download.progress(Progress::Bytes(Bytes {
+            done: 1,
+            total: Some(2),
+        }));
         download.warn(Diagnostic::default());
 
         let events = sink.take();
@@ -468,7 +558,7 @@ mod tests {
                 scope.spawn(move || {
                     let child = root.child(format!("worker-{thread}"), step());
                     for _ in 0..200 {
-                        child.progress(node_progress::Progress::Bytes(Bytes::default()));
+                        child.progress(output(b"line", Stream::Stdout));
                     }
                     child.finish(Ending::succeeded());
                 });
@@ -482,5 +572,126 @@ mod tests {
             .map(|envelope| envelope.seq)
             .collect();
         assert_eq!(seqs, (1..=seqs.len() as u64).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_shielded_node_says_so_when_it_starts() {
+        let sink = Arc::new(Recorded::default());
+        let root = root(&sink, never(), &[]);
+        root.start(Start::new("activate", step()).shielded())
+            .finish(Ending::succeeded());
+
+        let events = sink.take();
+        let Event::NodeStarted(child) = &events[1] else {
+            panic!("expected the child to start, got {:?}", events[1]);
+        };
+        assert!(child.shielded);
+    }
+
+    fn sent_bytes(updates: impl IntoIterator<Item = Bytes>) -> Vec<u64> {
+        let sink = Arc::new(Recorded::default());
+        let root = root(&sink, never(), &[]);
+        for bytes in updates {
+            root.progress(Progress::Bytes(bytes));
+        }
+        sink.take()
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::NodeProgress(NodeProgress {
+                    progress: Some(Progress::Bytes(bytes)),
+                    ..
+                }) => Some(bytes.done),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_download_of_known_size_reports_each_percent_once_and_its_end() {
+        let total = 27_100_000;
+        let sent = sent_bytes((0..=total).step_by(4096).chain([total]).map(|done| Bytes {
+            done,
+            total: Some(total),
+        }));
+
+        assert_eq!(sent.len(), 101);
+        assert_eq!(sent.first(), Some(&0));
+        assert_eq!(sent.last(), Some(&total));
+    }
+
+    #[test]
+    fn a_download_of_unknown_size_reports_each_mebibyte() {
+        let sent = sent_bytes(
+            (0..=10 * UNKNOWN_TOTAL_STEP)
+                .step_by(65_536)
+                .map(|done| Bytes { done, total: None }),
+        );
+
+        assert_eq!(sent.len(), 11);
+    }
+
+    #[test]
+    fn learning_the_total_is_reported_at_once() {
+        let sent = sent_bytes([
+            Bytes {
+                done: 10,
+                total: None,
+            },
+            Bytes {
+                done: 11,
+                total: Some(1_000),
+            },
+        ]);
+
+        assert_eq!(sent, [10, 11]);
+    }
+
+    #[test]
+    fn build_counters_are_reported_only_when_they_change() {
+        let sink = Arc::new(Recorded::default());
+        let root = root(&sink, never(), &[]);
+        let one = Builds {
+            builds_done: 1,
+            ..Builds::default()
+        };
+        for builds in [Builds::default(), Builds::default(), one, one] {
+            root.progress(Progress::Builds(builds));
+        }
+
+        let sent = sink
+            .take()
+            .into_iter()
+            .filter(|event| matches!(event, Event::NodeProgress(_)))
+            .count();
+        assert_eq!(sent, 2);
+    }
+
+    #[test]
+    fn every_output_line_is_sent_with_its_stream_even_when_it_is_not_utf8() {
+        let sink = Arc::new(Recorded::default());
+        let root = root(&sink, never(), &[]);
+        root.progress(output(b"same", Stream::Stdout));
+        root.progress(output(b"same", Stream::Stdout));
+        root.progress(output(b"bad \xff byte", Stream::Stderr));
+
+        let lines: Vec<(String, Stream)> = sink
+            .take()
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::NodeProgress(NodeProgress {
+                    progress: Some(Progress::Line(line)),
+                    ..
+                }) => Some((line.text.clone(), line.stream())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                ("same".to_string(), Stream::Stdout),
+                ("same".to_string(), Stream::Stdout),
+                ("bad \u{fffd} byte".to_string(), Stream::Stderr)
+            ]
+        );
     }
 }

@@ -1,10 +1,10 @@
 use std::sync::{Arc, Mutex};
 
 use mix_events::v1::{
-    Bytes, Command, Diagnostic, Envelope, Log, NotRunReason, Plan, Rollback, Status, Step,
-    envelope::Event, node_progress, node_started,
+    Bytes, Cancellation, Command, Diagnostic, Envelope, Log, NotRunReason, Plan, ProcessResult,
+    Rollback, Status, Step, envelope::Event, node_finished, node_progress, node_started,
 };
-use mix_events::{Ending, Node, Outcome, Sink, Validated, Violation, validate};
+use mix_events::{Ending, Node, Outcome, Sink, Start, Validated, Violation, validate};
 use proptest::prelude::*;
 
 #[derive(Default)]
@@ -25,11 +25,9 @@ fn record(run: impl FnOnce(Arc<dyn Sink>)) -> Vec<Envelope> {
 fn root(sink: Arc<dyn Sink>, planned: &[&str]) -> Node<'static> {
     Node::root(
         sink,
-        Arc::new(|| false),
+        Arc::new(|| None),
         "request",
-        "bootstrap",
-        Command::default(),
-        planned.iter().map(|key| key.to_string()).collect(),
+        Start::command("bootstrap", Command::default()).planned(planned.iter().copied()),
     )
 }
 
@@ -46,28 +44,31 @@ fn renumber(stream: &mut [Envelope]) {
 fn interrupted_bootstrap() -> Vec<Envelope> {
     record(|sink| {
         let root = root(sink, &["plan"]);
-        let plan = root.planned_child(
-            "plan",
-            node_started::Kind::Plan(Plan::default()),
-            ["create-nix-dir", "fetch-runtime", "write-nix-conf"]
-                .map(String::from)
-                .to_vec(),
+        let plan = root.start(
+            Start::new("plan", node_started::Kind::Plan(Plan::default())).planned([
+                "create-nix-dir",
+                "fetch-runtime",
+                "write-nix-conf",
+            ]),
         );
         let created = plan.child("create-nix-dir", step());
         let created_id = created.id();
         created.finish(Ending::succeeded());
         let fetch = plan.child("fetch-runtime", step());
         let download = fetch.child("download", node_started::Kind::Download(Default::default()));
-        download.progress(node_progress::Progress::Bytes(Bytes { done: 1, total: 2 }));
-        download.finish(Ending::cancelled());
-        fetch.finish(Ending::cancelled());
+        download.progress(node_progress::Progress::Bytes(Bytes {
+            done: 1,
+            total: Some(2),
+        }));
+        download.finish(Ending::cancelled(Cancellation::Interrupted));
+        fetch.finish(Ending::cancelled(Cancellation::Interrupted));
         plan.child(
             "rollback:create-nix-dir",
             node_started::Kind::Rollback(Rollback { undoes: created_id }),
         )
         .finish(Ending::succeeded());
-        plan.finish(Ending::cancelled());
-        root.finish(Ending::cancelled().with_exit_code(130));
+        plan.finish(Ending::cancelled(Cancellation::Interrupted));
+        root.finish(Ending::cancelled(Cancellation::Interrupted).with_exit_code(130));
     })
 }
 
@@ -151,6 +152,7 @@ fn a_node_that_starts_under_a_finished_parent_is_refused() {
                 parent: 4,
                 key: "late".to_string(),
                 planned: vec![],
+                shielded: false,
                 kind: Some(step()),
             })),
             ..started
@@ -256,6 +258,73 @@ fn a_warning_points_at_a_running_node() {
     assert_eq!(result, Err(Violation::NotOpen { id: 42 }));
 }
 
+#[test]
+fn a_cancelled_node_names_its_cause_and_no_other_node_does() {
+    let without_cause = edited(|stream| {
+        let index = position(stream, finish_of(5));
+        if let Event::NodeFinished(node) = event_mut(stream, index) {
+            node.cancellation = Cancellation::Unspecified as i32;
+        }
+    });
+    let cause_on_success = edited(|stream| {
+        let index = position(stream, finish_of(3));
+        if let Event::NodeFinished(node) = event_mut(stream, index) {
+            node.cancellation = Cancellation::Terminated as i32;
+        }
+    });
+
+    assert_eq!(
+        without_cause,
+        Err(Violation::CancellationMismatch { id: 5 })
+    );
+    assert_eq!(
+        cause_on_success,
+        Err(Violation::CancellationMismatch { id: 3 })
+    );
+}
+
+#[test]
+fn a_result_belongs_to_the_kind_of_node_that_carries_it() {
+    let process_result_on_a_step = edited(|stream| {
+        let index = position(stream, finish_of(3));
+        if let Event::NodeFinished(node) = event_mut(stream, index) {
+            node.result = Some(node_finished::Result::Process(ProcessResult::default()));
+        }
+    });
+    let command_result_on_a_step = edited(|stream| {
+        let index = position(stream, finish_of(3));
+        if let Event::NodeFinished(node) = event_mut(stream, index) {
+            node.result = Some(node_finished::Result::Bootstrap(Default::default()));
+        }
+    });
+
+    assert_eq!(
+        process_result_on_a_step,
+        Err(Violation::ResultMismatch { id: 3 })
+    );
+    assert_eq!(
+        command_result_on_a_step,
+        Err(Violation::ResultMismatch { id: 3 })
+    );
+}
+
+#[test]
+fn a_process_node_carries_how_the_process_ended() {
+    let stream = record(|sink| {
+        let root = root(sink, &[]);
+        root.child("nix", node_started::Kind::Process(Default::default()))
+            .finish(Ending::failed(Diagnostic::default()).with_result(
+                node_finished::Result::Process(ProcessResult {
+                    exit_code: None,
+                    signal: Some(15),
+                }),
+            ));
+        root.finish(Ending::succeeded());
+    });
+
+    assert!(validate(&stream).is_ok());
+}
+
 #[derive(Debug, Clone, Copy)]
 enum End {
     Succeeded,
@@ -276,6 +345,7 @@ enum Op {
 #[derive(Debug, Clone)]
 struct Shape {
     planned: bool,
+    shielded: bool,
     rollback: bool,
     unreached: u8,
     end: End,
@@ -293,9 +363,10 @@ fn end() -> impl Strategy<Value = End> {
 }
 
 fn shape() -> impl Strategy<Value = Shape> {
-    let leaf = (any::<bool>(), any::<bool>(), 0u8..3, end()).prop_map(
-        |(planned, rollback, unreached, end)| Shape {
+    let leaf = (any::<bool>(), any::<bool>(), any::<bool>(), 0u8..3, end()).prop_map(
+        |(planned, shielded, rollback, unreached, end)| Shape {
             planned,
+            shielded,
             rollback,
             unreached,
             end,
@@ -304,6 +375,7 @@ fn shape() -> impl Strategy<Value = Shape> {
     );
     leaf.prop_recursive(4, 48, 6, |inner| {
         (
+            any::<bool>(),
             any::<bool>(),
             any::<bool>(),
             0u8..3,
@@ -318,8 +390,9 @@ fn shape() -> impl Strategy<Value = Shape> {
                 0..6,
             ),
         )
-            .prop_map(|(planned, rollback, unreached, end, ops)| Shape {
+            .prop_map(|(planned, shielded, rollback, unreached, end, ops)| Shape {
                 planned,
+                shielded,
                 rollback,
                 unreached,
                 end,
@@ -359,7 +432,12 @@ fn run(node: &Node<'_>, ops: &[Op]) {
                     _ => step(),
                 };
                 let is_step = matches!(kind, node_started::Kind::Step(_));
-                let child = node.planned_child(key, kind, plan_of(shape));
+                let start = Start::new(key, kind).planned(plan_of(shape));
+                let child = node.start(if shape.shielded {
+                    start.shielded()
+                } else {
+                    start
+                });
                 run(&child, &shape.ops);
                 if is_step {
                     last_step = Some(child.id());
@@ -385,7 +463,7 @@ fn end_node(node: Node<'_>, end: End) {
         End::Succeeded => node.finish(Ending::succeeded()),
         End::Satisfied => node.finish(Ending::already_satisfied()),
         End::Failed => node.finish(Ending::failed(Diagnostic::default())),
-        End::Cancelled => node.finish(Ending::cancelled()),
+        End::Cancelled => node.finish(Ending::cancelled(Cancellation::Interrupted)),
         End::Dropped => drop(node),
     }
 }
@@ -394,11 +472,9 @@ fn produced(shape: &Shape) -> Vec<Envelope> {
     record(|sink| {
         let root = Node::root(
             sink,
-            Arc::new(|| false),
+            Arc::new(|| None),
             "request",
-            "command",
-            Command::default(),
-            plan_of(shape),
+            Start::command("command", Command::default()).planned(plan_of(shape)),
         );
         run(&root, &shape.ops);
         end_node(root, shape.end);

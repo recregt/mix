@@ -7,7 +7,7 @@ pub mod v1 {
 mod tree;
 mod validate;
 
-pub use tree::{Ending, Node, ROOT, Sink, Stopped};
+pub use tree::{Ending, Node, ROOT, Sink, Start, Stopped, output};
 pub use validate::{Entry, Outcome, Validated, Validator, Violation, validate};
 
 pub const SCHEMA_MINOR: u32 = 0;
