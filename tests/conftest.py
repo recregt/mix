@@ -17,6 +17,7 @@ from support.container import (
     group_members,
     mix_binary,
     reap_orphans,
+    remove_snapshot,
 )
 from support.mirror import (
     HOME_MANAGER_REV,
@@ -32,6 +33,7 @@ from support.mirror import (
     mirror_sources,
     mock_nix_server,
     nix_tarball,
+    start_mirror_server,
 )
 
 __all__ = [
@@ -62,6 +64,7 @@ __all__ = [
 
 
 PRESSURE_AT_START = pytest.StashKey[dict]()
+MIRROR_SERVER = pytest.StashKey[object]()
 
 
 def _is_controller(config) -> bool:
@@ -71,9 +74,17 @@ def _is_controller(config) -> bool:
 def pytest_configure(config):
     if _is_controller(config):
         reap_orphans()
+        os.environ.setdefault("MIX_TEST_CONTROLLER_PID", str(os.getpid()))
         session = os.environ.setdefault("MIX_TEST_SESSION", uuid.uuid4().hex)
         resources.snapshot(session)
+        config.stash[MIRROR_SERVER] = start_mirror_server()
         config.stash[PRESSURE_AT_START] = resources.pressure()
+
+
+def pytest_unconfigure(config):
+    if _is_controller(config) and MIRROR_SERVER in config.stash:
+        config.stash[MIRROR_SERVER].shutdown()
+        remove_snapshot()
 
 
 @pytest.hookimpl(optionalhook=True)
@@ -104,7 +115,8 @@ def pytest_terminal_summary(terminalreporter, config):
         f"{len(runs)} containers measured; peak memory per test up to "
         f"{max(run['peak_bytes'] for run in runs) / gib:.2f} GiB; "
         f"CPU per test up to {max(run['cpu_seconds'] / run['seconds'] for run in runs):.2f} cores; "
-        f"admission waits {sum(run['waited_seconds'] for run in runs):.0f}s in total"
+        f"admission waits {sum(run['waited_seconds'] for run in runs):.0f}s in total; "
+        f"tasks per test up to {max(run.get('peak_tasks') or 0 for run in runs)}"
     )
     terminalreporter.write_line(
         f"capacity: {resources.cpu_capacity():g} cores, "

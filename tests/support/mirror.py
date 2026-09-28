@@ -16,6 +16,7 @@ import pytest
 from support.paths import CACHE_DIR, REPO_ROOT
 
 MIRROR_TEST_USERS = ("ciuser", "ciuser2")
+MIRROR_URL_ENV = "MIX_TEST_MIRROR_URL"
 
 INSTALL_TEST_PACKAGE = "hello"
 
@@ -284,25 +285,29 @@ def _seed_activation_package(
     return store_path
 
 
+class _MirrorHandler(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=str(CACHE_DIR), **kwargs)
+
+    def log_message(self, *args):
+        pass
+
+    def copyfile(self, source, outputfile):
+        self.connection.sendfile(source)
+
+
+def start_mirror_server() -> http.server.ThreadingHTTPServer:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    server = http.server.ThreadingHTTPServer(("0.0.0.0", 0), _MirrorHandler)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    os.environ[MIRROR_URL_ENV] = f"http://host.containers.internal:{server.server_address[1]}"
+    return server
+
+
 @pytest.fixture()
 def mock_nix_server(nix_tarball):
-    directory = str(nix_tarball.parent)
-
-    class Handler(http.server.SimpleHTTPRequestHandler):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, directory=directory, **kwargs)
-
-        def log_message(self, *args):
-            pass
-
-    server = http.server.ThreadingHTTPServer(("0.0.0.0", 0), Handler)
-    port = server.server_address[1]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield {"url": f"http://host.containers.internal:{port}"}
-    finally:
-        server.shutdown()
+    return {"url": os.environ[MIRROR_URL_ENV]}
 
 
 def mirror_args(mock_nix_server, mirror_cache):
@@ -312,9 +317,7 @@ def mirror_args(mock_nix_server, mirror_cache):
 
 def bootstrap_root(container, mock_nix_server):
     """Bootstraps as bare root: the base runtime only, no per-user profile."""
-    result = container.exec(
-        "mix", "-vv", "--no-progress", "bootstrap", "--mirror", mock_nix_server["url"]
-    )
+    result = container.exec("mix", "bootstrap", "--mirror", mock_nix_server["url"])
     assert result.returncode == 0, result.stderr
     return result
 
@@ -323,8 +326,6 @@ def bootstrap_as(container, user: str, mock_nix_server, mirror_cache):
     """Bootstraps as an already-created sudo user, enrolling their home-manager profile."""
     result = container.exec(
         "mix",
-        "-vv",
-        "--no-progress",
         "bootstrap",
         *mirror_args(mock_nix_server, mirror_cache),
         user=user,

@@ -1,298 +1,303 @@
 {
+  "snapshot::bootstrapped": {
+    "peak_bytes": 2186764288,
+    "cpu_cores": 1.635,
+    "seconds": 32.1
+  },
   "test_bootstrap.py::test_a_mirror_set_only_in_the_environment_survives_the_sudo_re_run": {
-    "peak_bytes": 2182045696,
+    "peak_bytes": 2207125504,
     "cpu_cores": 1.669,
     "seconds": 39.0
   },
   "test_bootstrap.py::test_bootstrap_accepts_mirror_as_a_cli_flag": {
-    "peak_bytes": 232054784,
-    "cpu_cores": 0.226,
-    "seconds": 8.6
+    "peak_bytes": 236036096,
+    "cpu_cores": 0.325,
+    "seconds": 7.6
   },
   "test_bootstrap.py::test_bootstrap_auto_escalates_for_a_sudo_user": {
-    "peak_bytes": 2174578688,
-    "cpu_cores": 1.283,
-    "seconds": 45.4
+    "peak_bytes": 2185728000,
+    "cpu_cores": 1.298,
+    "seconds": 49.8
   },
   "test_bootstrap.py::test_bootstrap_fails_cleanly_with_an_unreachable_mirror": {
-    "peak_bytes": 29954048,
-    "cpu_cores": 0.07,
-    "seconds": 11.5
+    "peak_bytes": 31588352,
+    "cpu_cores": 0.102,
+    "seconds": 9.6
   },
   "test_bootstrap.py::test_bootstrap_is_idempotent": {
-    "peak_bytes": 229666816,
-    "cpu_cores": 0.325,
-    "seconds": 7.7
+    "peak_bytes": 230424576,
+    "cpu_cores": 0.339,
+    "seconds": 7.3
   },
   "test_bootstrap.py::test_bootstrap_is_silent_by_default": {
     "peak_bytes": 231051264,
-    "cpu_cores": 0.246,
-    "seconds": 7.9
+    "cpu_cores": 0.345,
+    "seconds": 7.3
   },
   "test_bootstrap.py::test_bootstrap_mirror_flag_takes_precedence_over_the_env_var": {
-    "peak_bytes": 218574848,
-    "cpu_cores": 0.271,
-    "seconds": 8.2
+    "peak_bytes": 230285312,
+    "cpu_cores": 0.301,
+    "seconds": 8.4
   },
   "test_bootstrap.py::test_bootstrap_verbose_shows_command_execution": {
     "peak_bytes": 230273024,
-    "cpu_cores": 0.286,
-    "seconds": 7.7
+    "cpu_cores": 0.352,
+    "seconds": 7.3
   },
   "test_cancellation.py::test_a_second_ctrl_c_stops_the_worker_at_once_and_bootstrap_converges_after": {
-    "peak_bytes": 2181623808,
-    "cpu_cores": 1.121,
-    "seconds": 55.0
+    "peak_bytes": 2189336576,
+    "cpu_cores": 1.471,
+    "seconds": 50.5
   },
   "test_cancellation.py::test_an_interrupted_install_waits_out_a_stuck_nix_then_puts_the_list_back": {
-    "peak_bytes": 2173935616,
-    "cpu_cores": 1.312,
-    "seconds": 50.4
+    "peak_bytes": 209813504,
+    "cpu_cores": 0.075,
+    "seconds": 17.6
   },
   "test_cancellation.py::test_ctrl_z_pauses_nix_and_resuming_lets_the_install_finish": {
-    "peak_bytes": 2210541568,
-    "cpu_cores": 1.461,
-    "seconds": 46.0
+    "peak_bytes": 607002624,
+    "cpu_cores": 0.685,
+    "seconds": 10.9
   },
   "test_doctor.py::test_doctor_detects_a_stopped_socket_alone": {
-    "peak_bytes": 230080512,
-    "cpu_cores": 0.26,
-    "seconds": 8.8
+    "peak_bytes": 230498304,
+    "cpu_cores": 0.279,
+    "seconds": 9.3
   },
   "test_doctor.py::test_doctor_ignores_a_user_mix_never_configured": {
     "peak_bytes": 230854656,
-    "cpu_cores": 0.197,
-    "seconds": 10.9
+    "cpu_cores": 0.228,
+    "seconds": 9.7
   },
   "test_install.py::test_install_adds_a_package_as_a_regular_user_with_no_sudo": {
-    "peak_bytes": 2211385344,
-    "cpu_cores": 1.287,
-    "seconds": 49.7
+    "peak_bytes": 610529280,
+    "cpu_cores": 0.496,
+    "seconds": 11.6
   },
   "test_install.py::test_install_cannot_be_run_as_root": {
-    "peak_bytes": 2189250560,
-    "cpu_cores": 1.61,
-    "seconds": 35.0
+    "peak_bytes": 25112576,
+    "cpu_cores": 0.168,
+    "seconds": 2.3
   },
   "test_install.py::test_install_is_script_friendly": {
-    "peak_bytes": 2175709184,
-    "cpu_cores": 1.677,
-    "seconds": 40.1
+    "peak_bytes": 592216064,
+    "cpu_cores": 0.707,
+    "seconds": 9.2
   },
   "test_install.py::test_install_refuses_a_package_the_cache_cannot_serve": {
-    "peak_bytes": 2155741184,
-    "cpu_cores": 1.386,
-    "seconds": 47.4
+    "peak_bytes": 598691840,
+    "cpu_cores": 0.409,
+    "seconds": 11.8
   },
   "test_install.py::test_install_rolls_back_state_and_home_nix_when_activation_fails": {
-    "peak_bytes": 2164461568,
-    "cpu_cores": 1.586,
-    "seconds": 42.1
+    "peak_bytes": 222347264,
+    "cpu_cores": 0.157,
+    "seconds": 6.6
   },
   "test_install.py::test_install_skips_a_package_that_is_already_installed": {
-    "peak_bytes": 2179932160,
-    "cpu_cores": 1.662,
-    "seconds": 35.8
+    "peak_bytes": 28676096,
+    "cpu_cores": 0.081,
+    "seconds": 2.9
   },
   "test_install.py::test_install_with_the_build_flag_installs_a_cached_package_as_usual": {
-    "peak_bytes": 2178355200,
-    "cpu_cores": 1.551,
-    "seconds": 45.3
+    "peak_bytes": 611508224,
+    "cpu_cores": 0.678,
+    "seconds": 8.2
   },
   "test_interruption.py::test_a_store_left_half_rolled_back_is_provisioned_again": {
-    "peak_bytes": 314224640,
-    "cpu_cores": 0.379,
-    "seconds": 9.0
+    "peak_bytes": 314417152,
+    "cpu_cores": 0.405,
+    "seconds": 9.2
   },
   "test_interruption.py::test_hard_kill_during_fetch_and_unpack_then_bootstrap_converges": {
-    "peak_bytes": 320974848,
-    "cpu_cores": 0.301,
-    "seconds": 11.5
+    "peak_bytes": 340267008,
+    "cpu_cores": 0.33,
+    "seconds": 10.3
   },
   "test_interruption.py::test_sigint_during_a_fast_step_exits_promptly_and_rolls_back_cleanly": {
-    "peak_bytes": 30867456,
-    "cpu_cores": 0.063,
-    "seconds": 7.0
+    "peak_bytes": 31830016,
+    "cpu_cores": 0.098,
+    "seconds": 6.7
   },
   "test_interruption.py::test_sigint_during_fetch_and_unpack_exits_promptly_and_rolls_back": {
-    "peak_bytes": 187015168,
-    "cpu_cores": 0.191,
-    "seconds": 11.1
+    "peak_bytes": 208232448,
+    "cpu_cores": 0.222,
+    "seconds": 11.5
   },
   "test_lock.py::test_a_missing_lock_is_explained_and_bootstrap_puts_it_back": {
-    "peak_bytes": 2182029312,
-    "cpu_cores": 1.539,
-    "seconds": 42.7
+    "peak_bytes": 630202368,
+    "cpu_cores": 0.55,
+    "seconds": 9.1
   },
   "test_lock.py::test_install_works_in_the_same_session_as_bootstrap": {
     "peak_bytes": 2185592832,
-    "cpu_cores": 1.616,
-    "seconds": 45.0
+    "cpu_cores": 1.659,
+    "seconds": 42.7
   },
   "test_lock.py::test_the_lock_is_readable_by_everyone_and_owned_by_root": {
-    "peak_bytes": 2186010624,
-    "cpu_cores": 1.955,
-    "seconds": 33.5
+    "peak_bytes": 29143040,
+    "cpu_cores": 0.166,
+    "seconds": 1.8
   },
   "test_multi_user.py::test_a_rewritten_nix_conf_reaches_the_running_daemon": {
     "peak_bytes": 229900288,
-    "cpu_cores": 0.249,
-    "seconds": 12.9
+    "cpu_cores": 0.272,
+    "seconds": 14.4
   },
   "test_multi_user.py::test_bootstrapping_as_bare_root_enrols_nobody": {
-    "peak_bytes": 229806080,
-    "cpu_cores": 0.193,
+    "peak_bytes": 230268928,
+    "cpu_cores": 0.295,
     "seconds": 11.7
   },
   "test_multi_user.py::test_every_managed_user_is_trusted_through_the_group": {
-    "peak_bytes": 2254385152,
+    "peak_bytes": 2364121088,
     "cpu_cores": 1.566,
-    "seconds": 62.6
+    "seconds": 66.6
   },
   "test_multi_user.py::test_removing_a_user_from_the_group_revokes_trust_without_touching_nix_conf": {
-    "peak_bytes": 2148245504,
-    "cpu_cores": 1.339,
-    "seconds": 46.7
+    "peak_bytes": 2178691072,
+    "cpu_cores": 1.384,
+    "seconds": 47.6
   },
   "test_nix_contract.py::test_a_build_starting_is_logged_the_way_mix_reads_it": {
     "peak_bytes": 231550976,
-    "cpu_cores": 0.25,
-    "seconds": 8.9
+    "cpu_cores": 0.259,
+    "seconds": 8.8
   },
   "test_nix_contract.py::test_derivations_are_described_the_way_mix_reads_them": {
-    "peak_bytes": 229810176,
+    "peak_bytes": 230641664,
     "cpu_cores": 0.249,
-    "seconds": 10.7
+    "seconds": 10.5
   },
   "test_nix_contract.py::test_the_dry_run_plan_is_printed_the_way_mix_reads_it": {
-    "peak_bytes": 229875712,
+    "peak_bytes": 231034880,
     "cpu_cores": 0.282,
-    "seconds": 9.0
+    "seconds": 8.7
   },
   "test_remove.py::test_remove_cannot_be_run_as_root": {
-    "peak_bytes": 2169376768,
-    "cpu_cores": 1.404,
-    "seconds": 46.5
+    "peak_bytes": 2212065280,
+    "cpu_cores": 1.636,
+    "seconds": 47.3
   },
   "test_remove.py::test_remove_drops_a_package_as_a_regular_user_with_no_sudo": {
     "peak_bytes": 2198794240,
-    "cpu_cores": 1.272,
-    "seconds": 55.1
+    "cpu_cores": 1.387,
+    "seconds": 58.6
   },
   "test_remove.py::test_remove_is_script_friendly": {
-    "peak_bytes": 2167967744,
-    "cpu_cores": 1.458,
-    "seconds": 48.7
+    "peak_bytes": 2206015488,
+    "cpu_cores": 1.513,
+    "seconds": 53.1
   },
   "test_remove.py::test_remove_refuses_a_package_mix_relies_on": {
     "peak_bytes": 2187751424,
-    "cpu_cores": 1.328,
-    "seconds": 51.5
+    "cpu_cores": 1.343,
+    "seconds": 54.0
   },
   "test_repair.py::test_repair_cannot_restore_a_deleted_default_profile_but_bootstrap_can": {
-    "peak_bytes": 314105856,
-    "cpu_cores": 0.35,
-    "seconds": 14.0
+    "peak_bytes": 318119936,
+    "cpu_cores": 0.367,
+    "seconds": 14.5
   },
   "test_repair.py::test_repair_fixes_a_deleted_profile_snippet": {
-    "peak_bytes": 229642240,
-    "cpu_cores": 0.228,
-    "seconds": 9.6
+    "peak_bytes": 229777408,
+    "cpu_cores": 0.251,
+    "seconds": 7.9
   },
   "test_repair.py::test_repair_fixes_a_nix_dir_permission_drift": {
     "peak_bytes": 230846464,
-    "cpu_cores": 0.241,
-    "seconds": 8.8
+    "cpu_cores": 0.258,
+    "seconds": 8.6
   },
   "test_repair.py::test_repair_fixes_a_wrong_nixbld_gid": {
     "peak_bytes": 234364928,
-    "cpu_cores": 0.237,
-    "seconds": 9.0
+    "cpu_cores": 0.243,
+    "seconds": 8.4
   },
   "test_repair.py::test_repair_fixes_a_wrong_nixbld_user_gid": {
-    "peak_bytes": 230051840,
+    "peak_bytes": 230129664,
     "cpu_cores": 0.249,
-    "seconds": 8.5
+    "seconds": 8.7
   },
   "test_repair.py::test_repair_fixes_drift_when_path_still_points_into_the_deleted_snippet": {
-    "peak_bytes": 230379520,
+    "peak_bytes": 230412288,
     "cpu_cores": 0.273,
     "seconds": 7.9
   },
   "test_repair.py::test_repair_fixes_drift_with_a_clean_shell_path": {
     "peak_bytes": 244609024,
-    "cpu_cores": 0.227,
-    "seconds": 8.4
+    "cpu_cores": 0.257,
+    "seconds": 8.5
   },
   "test_repair.py::test_repair_fixes_independent_targets_even_when_one_target_fails": {
-    "peak_bytes": 230141952,
-    "cpu_cores": 0.189,
-    "seconds": 12.7
+    "peak_bytes": 236474368,
+    "cpu_cores": 0.234,
+    "seconds": 13.8
   },
   "test_repair.py::test_repair_fixes_injected_drift": {
     "peak_bytes": 241487872,
-    "cpu_cores": 0.204,
-    "seconds": 10.3
+    "cpu_cores": 0.274,
+    "seconds": 11.2
   },
   "test_repair.py::test_repair_fixes_state_dir_ownership_and_mode_drift": {
-    "peak_bytes": 2162548736,
-    "cpu_cores": 1.429,
-    "seconds": 41.0
+    "peak_bytes": 39739392,
+    "cpu_cores": 0.08,
+    "seconds": 4.4
   },
   "test_repair.py::test_repair_is_a_clean_no_op_on_a_healthy_system": {
-    "peak_bytes": 229040128,
-    "cpu_cores": 0.241,
-    "seconds": 9.5
+    "peak_bytes": 229953536,
+    "cpu_cores": 0.317,
+    "seconds": 6.9
   },
   "test_repair.py::test_repair_restores_a_wiped_state_dir": {
-    "peak_bytes": 2181378048,
-    "cpu_cores": 1.489,
-    "seconds": 40.0
+    "peak_bytes": 38551552,
+    "cpu_cores": 0.048,
+    "seconds": 7.5
   },
   "test_repair.py::test_repair_syncs_config_without_tracking_a_stray_file": {
-    "peak_bytes": 2153005056,
-    "cpu_cores": 1.532,
-    "seconds": 41.1
+    "peak_bytes": 39346176,
+    "cpu_cores": 0.072,
+    "seconds": 4.0
   },
   "test_state_integrity.py::test_a_broken_package_list_is_restored_from_the_active_profile": {
-    "peak_bytes": 2175549440,
-    "cpu_cores": 1.377,
-    "seconds": 46.8
+    "peak_bytes": 609656832,
+    "cpu_cores": 0.427,
+    "seconds": 11.3
   },
   "test_state_integrity.py::test_a_change_that_cannot_be_recorded_in_git_still_takes_effect": {
-    "peak_bytes": 2199908352,
-    "cpu_cores": 1.627,
-    "seconds": 43.6
+    "peak_bytes": 613175296,
+    "cpu_cores": 0.499,
+    "seconds": 11.4
   },
   "test_state_integrity.py::test_a_command_killed_after_the_switch_leaves_a_consistent_profile": {
-    "peak_bytes": 2170236928,
-    "cpu_cores": 1.41,
-    "seconds": 45.8
+    "peak_bytes": 606642176,
+    "cpu_cores": 0.399,
+    "seconds": 12.0
   },
   "test_state_integrity.py::test_a_command_killed_before_the_switch_is_undone_by_the_next_one": {
-    "peak_bytes": 2175180800,
-    "cpu_cores": 1.427,
-    "seconds": 46.2
+    "peak_bytes": 606367744,
+    "cpu_cores": 0.438,
+    "seconds": 10.9
   },
   "test_state_integrity.py::test_nix_never_rewrites_the_lock": {
-    "peak_bytes": 2211069952,
-    "cpu_cores": 1.535,
-    "seconds": 43.8
+    "peak_bytes": 614486016,
+    "cpu_cores": 0.724,
+    "seconds": 9.6
   },
   "test_state_integrity.py::test_remove_restores_a_broken_package_list_before_removing": {
-    "peak_bytes": 2189000704,
-    "cpu_cores": 1.303,
-    "seconds": 55.0
+    "peak_bytes": 627535872,
+    "cpu_cores": 0.595,
+    "seconds": 16.1
   },
   "test_state_integrity.py::test_repair_restores_a_broken_package_list_without_dropping_packages": {
-    "peak_bytes": 2162831360,
-    "cpu_cores": 1.371,
-    "seconds": 48.7
+    "peak_bytes": 604700672,
+    "cpu_cores": 0.49,
+    "seconds": 12.1
   },
   "test_state_integrity.py::test_the_active_generation_carries_the_exact_package_list": {
-    "peak_bytes": 2162999296,
-    "cpu_cores": 1.449,
-    "seconds": 48.4
+    "peak_bytes": 603316224,
+    "cpu_cores": 0.582,
+    "seconds": 10.2
   },
   "test_worker.py::test_a_killed_client_still_gets_its_changes_rolled_back": {
     "peak_bytes": 38473728,
@@ -300,23 +305,23 @@
     "seconds": 8.6
   },
   "test_worker.py::test_a_user_without_sudo_rights_is_told_so": {
-    "peak_bytes": 31670272,
-    "cpu_cores": 0.095,
+    "peak_bytes": 32403456,
+    "cpu_cores": 0.126,
     "seconds": 3.1
   },
   "test_worker.py::test_bootstrap_works_when_sudo_only_allows_mix": {
-    "peak_bytes": 2157133824,
-    "cpu_cores": 1.729,
-    "seconds": 36.9
+    "peak_bytes": 2237063168,
+    "cpu_cores": 1.93,
+    "seconds": 40.3
   },
   "test_worker.py::test_ctrl_c_through_the_worker_rolls_back_and_says_so": {
     "peak_bytes": 38985728,
-    "cpu_cores": 0.069,
+    "cpu_cores": 0.084,
     "seconds": 8.3
   },
   "test_worker.py::test_repair_works_when_sudo_only_allows_mix": {
-    "peak_bytes": 2191388672,
+    "peak_bytes": 2197901312,
     "cpu_cores": 1.628,
-    "seconds": 39.7
+    "seconds": 41.3
   }
 }

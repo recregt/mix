@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from support import resources
+from support import mirror, resources
 from support.paths import CACHE_DIR, REPO_ROOT, TESTS_ROOT
 
 NIX_BINARY = "/nix/var/nix/profiles/default/bin/nix"
@@ -20,6 +20,13 @@ NIX_CONF_DEST = "/etc/nix/nix.conf"
 IMAGE_TAG = "mix-bootstrap-test:latest"
 REMOTE_IMAGE = os.environ.get("MIX_TEST_IMAGE")
 CONTAINER_NAME = re.compile(r"mix-test-(\d+)-\d+")
+VERBOSITY = re.compile(r"-v+")
+MIX_BINARIES = ("mix", "/usr/local/bin/mix")
+SNAPSHOT_REPOSITORY = "mix-bootstrapped"
+SNAPSHOT_TAG = re.compile(r"(\d+)-[0-9a-f]+")
+SNAPSHOT_TEST = "snapshot::bootstrapped"
+SNAPSHOT_LOCK = CACHE_DIR / "snapshot.lock"
+BOOTSTRAPPED_USER = mirror.MIRROR_TEST_USERS[0]
 
 
 def literal(text: str) -> str:
@@ -65,7 +72,12 @@ class BackgroundProcess:
 
     def signal(self, sig_name: str, timeout: float = 10.0) -> None:
         pid = self.pid(timeout=timeout)
-        self.container.exec("kill", f"-{sig_name}", pid, check=True)
+        if self.container.exec("kill", f"-{sig_name}", pid).returncode != 0:
+            ended = self.wait(timeout=timeout)
+            raise AssertionError(
+                f"process matching {self.pattern!r} ended before {sig_name} "
+                f"(returncode={ended.returncode}):\n{ended.stdout}"
+            )
 
     def wait(self, timeout: float = 30.0) -> subprocess.CompletedProcess:
         deadline = time.time() + timeout
@@ -93,10 +105,25 @@ def _readline_with_timeout(stream, timeout: float):
 
 
 class Container:
-    def __init__(self, name: str):
+    def __init__(self, name: str, verbatim: bool = False):
         self.name = name
+        self.verbatim = verbatim
+
+    def _traced(self, args: tuple) -> tuple:
+        if self.verbatim:
+            return args
+        for index, arg in enumerate(args):
+            if arg in MIX_BINARIES:
+                rest = list(args[index + 1 :])
+                options = 0
+                while options < len(rest) and rest[options].startswith("-"):
+                    options += 1
+                kept = [arg for arg in rest[:options] if not VERBOSITY.fullmatch(arg)]
+                return (*args[: index + 1], "-vvv", *kept, *rest[options:])
+        return args
 
     def exec(self, *args, env=None, check=False, user=None):
+        args = self._traced(args)
         cmd = ["podman", "exec"]
         for key, value in (env or {}).items():
             cmd += ["-e", f"{key}={value}"]
@@ -109,6 +136,7 @@ class Container:
         return result
 
     def start_background(self, *args, env=None, user=None) -> BackgroundProcess:
+        args = self._traced(args)
         cmd = ["podman", "exec"]
         for key, value in (env or {}).items():
             cmd += ["-e", f"{key}={value}"]
@@ -226,6 +254,52 @@ def reap_orphans() -> None:
         match = CONTAINER_NAME.fullmatch(name)
         if match and not resources.alive(int(match.group(1))):
             subprocess.run(["podman", "rm", "-f", name], capture_output=True)
+    tags = subprocess.run(
+        ["podman", "images", "--filter", f"reference={SNAPSHOT_REPOSITORY}", "--format", "{{.Tag}}"],
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+    for tag in tags:
+        match = SNAPSHOT_TAG.fullmatch(tag)
+        if match and not resources.alive(int(match.group(1))):
+            subprocess.run(["podman", "rmi", "-f", f"{SNAPSHOT_REPOSITORY}:{tag}"], capture_output=True)
+
+
+def snapshot_image() -> str:
+    controller = os.environ["MIX_TEST_CONTROLLER_PID"]
+    return f"{SNAPSHOT_REPOSITORY}:{controller}-{os.environ['MIX_TEST_SESSION']}"
+
+
+def remove_snapshot() -> None:
+    subprocess.run(["podman", "rmi", "-f", snapshot_image()], capture_output=True)
+
+
+def _bootstrapped_image(container_image, mix_binary, mirror_server, cache) -> str:
+    tag = snapshot_image()
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    with open(SNAPSHOT_LOCK, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if subprocess.run(["podman", "image", "exists", tag]).returncode == 0:
+            return tag
+        name = f"mix-test-{os.getpid()}-{time.time_ns()}"
+        waited = resources.admit(
+            name, SNAPSHOT_TEST, resources.demand_for(SNAPSHOT_TEST, _known())
+        )
+        try:
+            started = time.monotonic()
+            _start_container(container_image, name, mix_binary)
+            cgroup = _cgroup_of(name)
+            resources.attach(name, cgroup)
+            built = Container(name)
+            create_user(built, BOOTSTRAPPED_USER, sudo=True)
+            mirror.bootstrap_as(built, BOOTSTRAPPED_USER, mirror_server, cache)
+            resources.record(SNAPSHOT_TEST, cgroup, time.monotonic() - started, waited, "build")
+            subprocess.run(["podman", "stop", name], check=True, capture_output=True)
+            subprocess.run(["podman", "commit", "--quiet", name, tag], check=True, capture_output=True)
+        finally:
+            subprocess.run(["podman", "rm", "-f", name], capture_output=True)
+            resources.release(name)
+    return tag
 
 
 def _cgroup_of(name: str) -> pathlib.Path:
@@ -246,17 +320,27 @@ def _known() -> dict[str, resources.Demand]:
 @pytest.fixture()
 def container(request, container_image, mix_binary):
     test = request.node.nodeid
+    bootstrapped = request.node.get_closest_marker("bootstrapped") is not None
+    image = container_image
+    if bootstrapped:
+        image = _bootstrapped_image(
+            container_image,
+            mix_binary,
+            request.getfixturevalue("mock_nix_server"),
+            request.getfixturevalue("mirror_cache"),
+        )
     name = f"mix-test-{os.getpid()}-{time.time_ns()}"
     waited = resources.admit(name, test, resources.demand_for(test, _known()))
     started = time.monotonic()
     cgroup = None
     try:
-        _start_container(container_image, name, mix_binary)
+        _start_container(image, name, mix_binary)
         cgroup = _cgroup_of(name)
         resources.attach(name, cgroup)
-        yield Container(name)
+        yield Container(name, verbatim=request.node.get_closest_marker("verbatim_output") is not None)
     finally:
         if cgroup is not None:
-            resources.record(test, cgroup, time.monotonic() - started, waited)
+            variant = "snapshot" if bootstrapped else "fresh"
+            resources.record(test, cgroup, time.monotonic() - started, waited, variant)
         subprocess.run(["podman", "rm", "-f", name], capture_output=True)
         resources.release(name)

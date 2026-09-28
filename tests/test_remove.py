@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from conftest import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS, bootstrap_as, create_user, mirror_args
 
 USER = MIRROR_TEST_USERS[0]
@@ -52,6 +54,7 @@ def test_remove_drops_a_package_as_a_regular_user_with_no_sudo(
     assert _read(container, "state") == state
 
 
+@pytest.mark.verbatim_output
 def test_remove_is_script_friendly(container, mock_nix_server, mirror_cache):
     mirror = _bootstrap_with_the_test_package(container, mock_nix_server, mirror_cache)
 

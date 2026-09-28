@@ -1,5 +1,6 @@
 import contextlib
 import fcntl
+import functools
 import json
 import math
 import os
@@ -29,6 +30,18 @@ class Demand:
     seconds: float
 
 
+@functools.cache
+def _defined(test: str) -> bool:
+    if test.startswith("snapshot::"):
+        return True
+    path, _, name = test.partition("::")
+    try:
+        source = (TESTS_ROOT / path).read_text()
+    except OSError:
+        return False
+    return f"def {name}(" in source
+
+
 def _runs_by_test() -> dict[str, list[dict]]:
     runs: dict[str, list[dict]] = {}
     with contextlib.suppress(FileNotFoundError):
@@ -36,7 +49,7 @@ def _runs_by_test() -> dict[str, list[dict]]:
             with contextlib.suppress(ValueError, KeyError):
                 run = json.loads(line)
                 runs.setdefault(run["test"], []).append(run)
-    return {test: kept[-KEPT_RUNS:] for test, kept in runs.items()}
+    return {test: kept[-KEPT_RUNS:] for test, kept in runs.items() if _defined(test)}
 
 
 def _baseline() -> dict[str, dict]:
@@ -49,8 +62,12 @@ def estimates() -> dict[str, Demand]:
     measured = _runs_by_test()
     known: dict[str, Demand] = {}
     for test, entry in _baseline().items():
+        if not _defined(test):
+            continue
         known[test] = Demand(entry["peak_bytes"], entry["cpu_cores"], entry["seconds"])
     for test, runs in measured.items():
+        latest = runs[-1].get("variant", "fresh")
+        runs = [run for run in runs if run.get("variant", "fresh") == latest]
         known[test] = Demand(
             peak_bytes=max(run["peak_bytes"] for run in runs),
             cpu_cores=max(run["cpu_seconds"] / run["seconds"] for run in runs),
@@ -239,8 +256,9 @@ def release(ticket: str) -> None:
         ledger["waiting"] = [entry for entry in ledger["waiting"] if entry["ticket"] != ticket]
 
 
-def record(test: str, cgroup: Path, seconds: float, waited: float) -> None:
+def record(test: str, cgroup: Path, seconds: float, waited: float, variant: str) -> None:
     peak = _read(cgroup / "memory.peak")
+    tasks = _read(cgroup / "pids.peak")
     stat = _read(cgroup / "cpu.stat") or ""
     usage = next(
         (int(line.split()[1]) for line in stat.splitlines() if line.startswith("usage_usec")),
@@ -252,9 +270,11 @@ def record(test: str, cgroup: Path, seconds: float, waited: float) -> None:
         "test": test,
         "session": os.environ.get("MIX_TEST_SESSION", ""),
         "peak_bytes": int(peak),
+        "peak_tasks": int(tasks) if tasks else None,
         "cpu_seconds": usage / 1_000_000,
         "seconds": seconds,
         "waited_seconds": waited,
+        "variant": variant,
     }
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     with open(HISTORY, "a") as history:
