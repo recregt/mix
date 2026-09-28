@@ -8,7 +8,6 @@ license = "MPL-2.0"
 [dependencies]
 mix-exec = { path = "../exec" }
 async-trait = { workspace = true }
-futures-util = { workspace = true }
 memchr = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

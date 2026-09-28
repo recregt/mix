@@ -1,5 +1,4 @@
 async-trait
-futures-util
 libc
 mio
 mix-exec
