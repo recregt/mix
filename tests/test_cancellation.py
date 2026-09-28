@@ -12,7 +12,6 @@ NIX_EVALUATION = "bin/nix build .*--dry-run"
 NIX_BUILD = "bin/nix build .*--print-out-paths"
 PUTTING_BACK = "Cancelling... (putting the package list back)"
 CLEANING_UP = "Cancelling... (cleaning up)"
-GRACE_SECONDS = 10
 
 
 def _pid_of(container, pattern: str, timeout: float = 60.0) -> str:
@@ -49,7 +48,7 @@ def _wait_for_state(container, pid: str, wanted, timeout: float = 10.0) -> str:
 
 
 @pytest.mark.bootstrapped
-def test_an_interrupted_install_waits_out_a_stuck_nix_then_puts_the_list_back(
+def test_an_interrupted_install_stops_a_frozen_nix_then_puts_the_list_back(
     container, mock_nix_server, mirror_cache
 ):
     state_before = container.exec("cat", f"{STATE_DIR}/state", check=True).stdout
@@ -62,12 +61,10 @@ def test_an_interrupted_install_waits_out_a_stuck_nix_then_puts_the_list_back(
     client = _pid_of(container, f"^mix -vvv install {INSTALL_TEST_PACKAGE}")
     assert _pgid(container, evaluation) != _pgid(container, client)
 
-    started = time.time()
     container.exec("kill", "-INT", client, check=True)
-    result = proc.wait(timeout=GRACE_SECONDS + 30)
+    result = proc.wait(timeout=30)
 
     assert result.returncode != 0, result.stdout
-    assert time.time() - started >= GRACE_SECONDS - 1
     assert PUTTING_BACK in result.stdout
     assert _gone(container, evaluation)
     assert container.exec("cat", f"{STATE_DIR}/state", check=True).stdout == state_before
@@ -92,7 +89,7 @@ def test_a_second_ctrl_c_stops_the_worker_at_once_and_bootstrap_converges_after(
     container.exec("kill", "-INT", worker, check=True)
     result = proc.wait(timeout=30)
 
-    assert time.time() - started < GRACE_SECONDS / 2
+    assert time.time() - started < 5
     assert result.returncode != 0, result.stdout
     assert "stopped before it could" in result.stdout.lower()
     assert _gone(container, build)

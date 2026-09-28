@@ -1,12 +1,9 @@
 //! Where nix is fetched from: the archive, the flake inputs, and the binary cache.
 
-use std::time::Duration;
-
+use mix_core::Scope;
 use mix_pins::{HOME_MANAGER_NAR_HASH, HOME_MANAGER_REV, NIXPKGS_NAR_HASH, NIXPKGS_REV};
 
 const CACHE_NIXOS_ORG_KEY: &str = "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=";
-const TRUSTED_KEY_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
-const TRUSTED_KEY_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn filter_mirror(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|s| !s.is_empty())
@@ -62,12 +59,7 @@ fn serves_https(base: &str) -> bool {
 
 async fn fetch_mirror_key(base: &str) -> Option<String> {
     let url = mirror_url(base, "cache/mix-mirror.pub");
-    let client = reqwest::Client::builder()
-        .connect_timeout(TRUSTED_KEY_CONNECT_TIMEOUT)
-        .timeout(TRUSTED_KEY_FETCH_TIMEOUT)
-        .build()
-        .ok()?;
-    let response = client.get(&url).send().await.ok()?;
+    let response = reqwest::get(&url).await.ok()?;
     let body = response.error_for_status().ok()?.text().await.ok()?;
     let key = body.trim().to_string();
     if !is_binary_cache_key(&key) {
@@ -77,7 +69,7 @@ async fn fetch_mirror_key(base: &str) -> Option<String> {
     Some(key)
 }
 
-async fn mirror_key(base: &str, configured: Option<&str>) -> Option<String> {
+async fn mirror_key(base: &str, configured: Option<&str>, scope: &Scope) -> Option<String> {
     if let Some(key) = filter_mirror(configured) {
         if is_binary_cache_key(key) {
             return Some(key.to_string());
@@ -91,11 +83,15 @@ async fn mirror_key(base: &str, configured: Option<&str>) -> Option<String> {
         );
         return None;
     }
-    fetch_mirror_key(base).await
+    scope.guard(fetch_mirror_key(base)).await.ok().flatten()
 }
 
-pub async fn trusted_public_keys(base: &str, configured_key: Option<&str>) -> String {
-    match mirror_key(base, configured_key).await {
+pub async fn trusted_public_keys(
+    base: &str,
+    configured_key: Option<&str>,
+    scope: &Scope,
+) -> String {
+    match mirror_key(base, configured_key, scope).await {
         Some(key) => format!("{CACHE_NIXOS_ORG_KEY} {key}"),
         None => CACHE_NIXOS_ORG_KEY.to_string(),
     }
@@ -243,7 +239,7 @@ mod tests {
     async fn trusted_public_keys_trusts_a_key_supplied_out_of_band() {
         let (server, mock) = mirror_serving(200, "attacker-1:BBBBBBBBBBBBBBBBBBBBBBBBBBBB=").await;
 
-        let keys = trusted_public_keys(&server.url(), Some(MIRROR_KEY)).await;
+        let keys = trusted_public_keys(&server.url(), Some(MIRROR_KEY), &Scope::root()).await;
 
         assert_eq!(keys, format!("{CACHE_NIXOS_ORG_KEY} {MIRROR_KEY}"));
         assert!(
@@ -255,7 +251,7 @@ mod tests {
     #[tokio::test]
     async fn trusted_public_keys_ignores_a_malformed_configured_key() {
         assert_eq!(
-            trusted_public_keys("https://mirror.internal", Some("not-a-key")).await,
+            trusted_public_keys("https://mirror.internal", Some("not-a-key"), &Scope::root()).await,
             CACHE_NIXOS_ORG_KEY
         );
     }
@@ -264,7 +260,7 @@ mod tests {
     async fn trusted_public_keys_ignores_a_configured_key_smuggling_a_second_one() {
         let smuggled = format!("{MIRROR_KEY} attacker-1:BBBB=");
         assert_eq!(
-            trusted_public_keys("https://mirror.internal", Some(&smuggled)).await,
+            trusted_public_keys("https://mirror.internal", Some(&smuggled), &Scope::root()).await,
             CACHE_NIXOS_ORG_KEY
         );
     }
@@ -273,7 +269,7 @@ mod tests {
     async fn trusted_public_keys_never_fetches_a_key_over_plain_http() {
         let (server, mock) = mirror_serving(200, MIRROR_KEY).await;
 
-        let keys = trusted_public_keys(&server.url(), None).await;
+        let keys = trusted_public_keys(&server.url(), None, &Scope::root()).await;
 
         assert_eq!(keys, CACHE_NIXOS_ORG_KEY);
         assert!(
@@ -288,7 +284,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         drop(listener);
 
-        let keys = trusted_public_keys(&format!("https://{addr}"), None).await;
+        let keys = trusted_public_keys(&format!("https://{addr}"), None, &Scope::root()).await;
 
         assert_eq!(keys, CACHE_NIXOS_ORG_KEY);
     }
@@ -349,8 +345,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_cancelled_request_stops_waiting_for_a_silent_mirror() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let scope = Scope::root();
+        scope.cancel();
+
+        let keys = trusted_public_keys(&format!("https://{addr}"), None, &scope).await;
+
+        assert_eq!(keys, CACHE_NIXOS_ORG_KEY);
+        drop(listener);
+    }
+
+    #[tokio::test]
     async fn trusted_public_keys_keeps_the_default_cache_key_first() {
-        let keys = trusted_public_keys("http://mirror.internal", Some(MIRROR_KEY)).await;
+        let keys =
+            trusted_public_keys("http://mirror.internal", Some(MIRROR_KEY), &Scope::root()).await;
 
         assert!(keys.starts_with(CACHE_NIXOS_ORG_KEY));
         assert_eq!(keys.split(' ').count(), 2);

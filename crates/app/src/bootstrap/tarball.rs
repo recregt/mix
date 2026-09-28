@@ -1,18 +1,13 @@
+use mix_core::{DownloadProgress, Error as CoreError, Scope};
+use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::io::{Cursor, Read};
 use std::path::Path;
-use std::time::Duration;
-
-use mix_core::{DownloadProgress, Error as CoreError};
-use sha2::{Digest, Sha256};
 
 use crate::bootstrap::error::{Error, Result};
 use crate::mirror::{filter_mirror, mirror_url};
 use mix_pins::{TarballPin, pin_for};
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const READ_TIMEOUT: Duration = Duration::from_secs(30);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_DOWNLOAD_BYTES: usize = 1024 * 1024 * 1024;
 
 #[cfg(feature = "embed-tarball")]
@@ -47,6 +42,7 @@ fn host_target_key() -> String {
 pub async fn bytes(
     mirror: Option<&str>,
     progress: &dyn DownloadProgress,
+    scope: &Scope,
 ) -> Result<Cow<'static, [u8]>> {
     if let Some(bytes) = embedded() {
         return Ok(Cow::Borrowed(bytes));
@@ -58,7 +54,7 @@ pub async fn bytes(
         None => pin.url.to_string(),
     };
 
-    fetch_and_verify(&url, pin.sha256, progress)
+    fetch_and_verify(&url, pin.sha256, progress, scope)
         .await
         .map(Cow::Owned)
 }
@@ -71,21 +67,21 @@ async fn fetch_and_verify(
     url: &str,
     expected_sha256: &str,
     progress: &dyn DownloadProgress,
+    scope: &Scope,
 ) -> Result<Vec<u8>> {
     tracing::info!(
         "fetching runtime archive: {url} (nix {})",
         mix_pins::NIX_VERSION
     );
-    fetch_and_verify_with_limits(
-        url,
-        expected_sha256,
-        CONNECT_TIMEOUT,
-        READ_TIMEOUT,
-        REQUEST_TIMEOUT,
-        MAX_DOWNLOAD_BYTES,
-        progress,
-    )
-    .await
+    scope
+        .guard(fetch_and_verify_with_limits(
+            url,
+            expected_sha256,
+            MAX_DOWNLOAD_BYTES,
+            progress,
+        ))
+        .await
+        .map_err(|_| Error::Interrupted)?
 }
 
 #[tracing::instrument(
@@ -97,22 +93,10 @@ async fn fetch_and_verify(
 async fn fetch_and_verify_with_limits(
     url: &str,
     expected_sha256: &str,
-    connect_timeout: Duration,
-    read_timeout: Duration,
-    request_timeout: Duration,
     max_bytes: usize,
     progress: &dyn DownloadProgress,
 ) -> Result<Vec<u8>> {
-    let client = reqwest::Client::builder()
-        .connect_timeout(connect_timeout)
-        .read_timeout(read_timeout)
-        .timeout(request_timeout)
-        .build()
-        .map_err(network_error)?;
-
-    let mut response = client
-        .get(url)
-        .send()
+    let mut response = reqwest::get(url)
         .await
         .and_then(reqwest::Response::error_for_status)
         .map_err(network_error)?;
@@ -394,9 +378,14 @@ mod tests {
             .create_async()
             .await;
 
-        let bytes = fetch_and_verify(&server.url(), &digest, &mix_core::NoopProgress)
-            .await
-            .unwrap();
+        let bytes = fetch_and_verify(
+            &server.url(),
+            &digest,
+            &mix_core::NoopProgress,
+            &Scope::root(),
+        )
+        .await
+        .unwrap();
         assert_eq!(bytes, body);
     }
 
@@ -410,9 +399,14 @@ mod tests {
             .create_async()
             .await;
 
-        let err = fetch_and_verify(&server.url(), &"0".repeat(64), &mix_core::NoopProgress)
-            .await
-            .unwrap_err();
+        let err = fetch_and_verify(
+            &server.url(),
+            &"0".repeat(64),
+            &mix_core::NoopProgress,
+            &Scope::root(),
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, Error::Integrity { .. }));
     }
 
@@ -430,9 +424,6 @@ mod tests {
         let err = fetch_and_verify_with_limits(
             &server.url(),
             &sha256_hex(&body),
-            CONNECT_TIMEOUT,
-            READ_TIMEOUT,
-            REQUEST_TIMEOUT,
             8,
             &mix_core::NoopProgress,
         )
@@ -451,29 +442,11 @@ mod tests {
             .create_async()
             .await;
 
-        let err = fetch_and_verify(&server.url(), &"0".repeat(64), &mix_core::NoopProgress)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, Error::Network(_)));
-    }
-
-    #[tokio::test]
-    async fn fetch_and_verify_times_out_instead_of_hanging_on_a_silent_server() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        std::thread::spawn(move || {
-            let _conn = listener.accept();
-            std::thread::sleep(Duration::from_secs(5));
-        });
-
-        let err = fetch_and_verify_with_limits(
-            &format!("http://{addr}/"),
+        let err = fetch_and_verify(
+            &server.url(),
             &"0".repeat(64),
-            Duration::from_millis(500),
-            Duration::from_millis(200),
-            Duration::from_secs(10),
-            MAX_DOWNLOAD_BYTES,
             &mix_core::NoopProgress,
+            &Scope::root(),
         )
         .await
         .unwrap_err();
@@ -481,34 +454,66 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_and_verify_read_timeout_catches_a_drip_fed_stall() {
+    async fn fetch_and_verify_lets_a_slow_server_finish() {
+        let body = b"slow but steady".to_vec();
+        let expected = sha256_hex(&body);
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         std::thread::spawn(move || {
-            use std::io::Write as _;
+            use std::io::{BufRead as _, Write as _};
             if let Ok((mut conn, _)) = listener.accept() {
-                let _ = conn.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nx");
-                std::thread::sleep(Duration::from_secs(5));
+                let mut request = std::io::BufReader::new(conn.try_clone().unwrap());
+                let mut line = String::new();
+                while request.read_line(&mut line).is_ok_and(|read| read > 2) {
+                    line.clear();
+                }
+                let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
+                let _ = conn.write_all(head.as_bytes());
+                for chunk in body.chunks(5) {
+                    std::thread::sleep(std::time::Duration::from_millis(400));
+                    let _ = conn.write_all(chunk);
+                }
             }
         });
 
-        let started = std::time::Instant::now();
-        let err = fetch_and_verify_with_limits(
+        let bytes = fetch_and_verify(
+            &format!("http://{addr}/"),
+            &expected,
+            &mix_core::NoopProgress,
+            &Scope::root(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(bytes, b"slow but steady");
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_request_stops_waiting_for_a_silent_server() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (accepted, wait_for_accept) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let conn = listener.accept();
+            let _ = accepted.send(());
+            std::thread::park();
+            drop(conn);
+        });
+        let scope = Scope::root();
+        let cancelling = scope.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = wait_for_accept.recv();
+            cancelling.cancel();
+        });
+
+        let err = fetch_and_verify(
             &format!("http://{addr}/"),
             &"0".repeat(64),
-            Duration::from_secs(1),
-            Duration::from_millis(200),
-            Duration::from_secs(10),
-            MAX_DOWNLOAD_BYTES,
             &mix_core::NoopProgress,
+            &scope,
         )
         .await
         .unwrap_err();
-        assert!(matches!(err, Error::Network(_)));
-        assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "read_timeout should catch the stall long before the request timeout"
-        );
+        assert!(matches!(err, Error::Interrupted));
     }
 
     #[tokio::test]
@@ -521,6 +526,7 @@ mod tests {
             &format!("http://{addr}/"),
             &"0".repeat(64),
             &mix_core::NoopProgress,
+            &Scope::root(),
         )
         .await
         .unwrap_err();

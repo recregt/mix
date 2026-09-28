@@ -187,7 +187,7 @@ impl Command {
         let status = tokio::select! {
             status = child.wait() => status.map_err(|source| Error::spawn(line.clone(), source))?,
             stop = scope.stopped() => {
-                group.stop(&mut child, group::GRACE).await;
+                group.stop(&mut child).await;
                 stdout_task.abort();
                 stderr_task.abort();
                 if let Some(stdin_task) = &stdin_task {

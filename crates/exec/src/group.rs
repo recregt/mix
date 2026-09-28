@@ -1,12 +1,8 @@
-use std::collections::BTreeSet;
-use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
-
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
+use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex, PoisonError};
 use tokio::process::{Child, Command};
-
-pub const GRACE: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Default)]
 pub struct ProcessSet(Arc<Mutex<BTreeSet<i32>>>);
@@ -49,12 +45,10 @@ impl Group {
         let _ = killpg(Pid::from_raw(self.pgid), signal);
     }
 
-    pub async fn stop(&self, child: &mut Child, grace: Duration) {
+    pub async fn stop(&self, child: &mut Child) {
         self.signal(Signal::SIGTERM);
-        if tokio::time::timeout(grace, child.wait()).await.is_err() {
-            self.signal(Signal::SIGKILL);
-            let _ = child.wait().await;
-        }
+        self.signal(Signal::SIGCONT);
+        let _ = child.wait().await;
         self.signal(Signal::SIGKILL);
     }
 }
@@ -86,6 +80,8 @@ pub(crate) fn spawn(command: &mut Command, set: &ProcessSet) -> std::io::Result<
 #[cfg(test)]
 mod tests {
     use std::process::Stdio;
+
+    use std::time::Duration;
 
     use super::*;
 
@@ -147,7 +143,7 @@ mod tests {
             spawn(&mut sh("sleep 30 & echo $!; wait"), &ProcessSet::default()).unwrap();
         let grandchild = read_pid(&mut child).await;
 
-        group.stop(&mut child, Duration::from_secs(5)).await;
+        group.stop(&mut child).await;
 
         assert!(child.try_wait().unwrap().is_some());
         assert!(
@@ -157,19 +153,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_child_that_ignores_the_request_is_killed_after_the_grace_period() {
+    async fn a_stop_reaches_a_frozen_child() {
+        let (mut child, group) = spawn(&mut sh("sleep 30"), &ProcessSet::default()).unwrap();
+        group.signal(Signal::SIGSTOP);
+
+        tokio::time::timeout(Duration::from_secs(5), group.stop(&mut child))
+            .await
+            .expect("a frozen child is woken to receive the stop");
+
+        assert!(child.try_wait().unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn a_stop_waits_for_the_child_until_the_request_is_killed() {
+        let set = ProcessSet::default();
         let (mut child, group) = spawn(
             &mut sh("trap '' TERM; echo $$; while :; do sleep 0.1; done"),
-            &ProcessSet::default(),
+            &set,
         )
         .unwrap();
         let _ = read_pid(&mut child).await;
 
-        let started = std::time::Instant::now();
-        group.stop(&mut child, Duration::from_millis(300)).await;
+        let stopping = tokio::spawn(async move {
+            group.stop(&mut child).await;
+            child
+        });
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert!(
+            !stopping.is_finished(),
+            "a stop must not give up on its own"
+        );
 
+        set.kill();
+
+        let mut child = tokio::time::timeout(Duration::from_secs(5), stopping)
+            .await
+            .expect("a killed request ends at once")
+            .unwrap();
         assert!(child.try_wait().unwrap().is_some());
-        assert!(started.elapsed() >= Duration::from_millis(300));
     }
 
     #[tokio::test]

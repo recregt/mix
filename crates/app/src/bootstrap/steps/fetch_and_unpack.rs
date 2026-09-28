@@ -53,7 +53,7 @@ impl Step for FetchAndUnpack {
     }
 
     async fn execute(&mut self, scope: &Scope) -> Result<()> {
-        let bytes = tarball::bytes(self.mirror.as_deref(), self.progress.as_ref()).await?;
+        let bytes = tarball::bytes(self.mirror.as_deref(), self.progress.as_ref(), scope).await?;
 
         let scope = scope.clone();
         let (installed, result) = tokio::task::spawn_blocking(move || {

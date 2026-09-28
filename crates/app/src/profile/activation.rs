@@ -46,7 +46,7 @@ impl BuildPolicy {
 ///
 /// Resolved once and shared, so the mirror's key is fetched once no matter how many times nix is
 /// called.
-async fn nix_options(mirror: Option<&str>, mirror_key: Option<&str>) -> Vec<String> {
+async fn nix_options(mirror: Option<&str>, mirror_key: Option<&str>, scope: &Scope) -> Vec<String> {
     let Some(base) = mirror::filter_mirror(mirror) else {
         return Vec::new();
     };
@@ -63,7 +63,7 @@ async fn nix_options(mirror: Option<&str>, mirror_key: Option<&str>) -> Vec<Stri
         mirror::substituter(base),
         "--option".to_string(),
         "trusted-public-keys".to_string(),
-        mirror::trusted_public_keys(base, mirror_key).await,
+        mirror::trusted_public_keys(base, mirror_key, scope).await,
     ]
 }
 
@@ -217,7 +217,7 @@ pub async fn switch(
     .render();
     let profile = nix_profiles_dir(&cfg.user.home).join(HOME_MANAGER_PROFILE_NAME);
     let profile_str = profile.to_string_lossy().into_owned();
-    let options = nix_options(mirror, mirror_key).await;
+    let options = nix_options(mirror, mirror_key, scope).await;
 
     let guard = match policy {
         BuildPolicy::CacheOnly => Some(Arc::new(SourceBuildGuard {
@@ -292,12 +292,16 @@ mod tests {
 
     #[tokio::test]
     async fn nix_options_are_empty_when_no_mirror_is_set() {
-        assert!(nix_options(None, None).await.is_empty());
+        assert!(nix_options(None, None, &Scope::root()).await.is_empty());
     }
 
     #[tokio::test]
     async fn nix_build_args_omits_mirror_flags_when_no_mirror_is_set() {
-        let args = nix_build_args("path:/state#x", "/profile", &nix_options(None, None).await);
+        let args = nix_build_args(
+            "path:/state#x",
+            "/profile",
+            &nix_options(None, None, &Scope::root()).await,
+        );
         assert!(!args.iter().any(|a| a == "--override-input"));
         assert!(!args.iter().any(|a| a == "substituters"));
     }
@@ -307,7 +311,7 @@ mod tests {
         let args = nix_build_args(
             "path:/state#x",
             "/profile",
-            &nix_options(Some(UNREACHABLE_MIRROR), None).await,
+            &nix_options(Some(UNREACHABLE_MIRROR), None, &Scope::root()).await,
         );
         assert!(args.iter().any(|a| a == "nixpkgs"));
         assert!(args.iter().any(|a| a == "home-manager"));
@@ -333,7 +337,7 @@ mod tests {
             let args = nix_build_args(
                 "path:/state#x",
                 "/profile",
-                &nix_options(mirror, None).await,
+                &nix_options(mirror, None, &Scope::root()).await,
             );
             assert_eq!(
                 args[..8],
@@ -358,7 +362,7 @@ mod tests {
         let args = nix_build_args(
             "path:/state#x",
             "/profile",
-            &nix_options(Some(UNREACHABLE_MIRROR), Some(KEY)).await,
+            &nix_options(Some(UNREACHABLE_MIRROR), Some(KEY), &Scope::root()).await,
         );
 
         let keys = args
@@ -377,7 +381,7 @@ mod tests {
         let args = nix_build_args(
             "path:/state#x",
             "/profile",
-            &nix_options(Some("   "), None).await,
+            &nix_options(Some("   "), None, &Scope::root()).await,
         );
         assert!(!args.iter().any(|a| a == "--override-input"));
     }
