@@ -1,4 +1,6 @@
 use std::future::Future;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio_util::sync::CancellationToken;
 
@@ -9,9 +11,30 @@ pub enum Stop {
     Cancelled,
 }
 
+#[derive(Debug, Default)]
+struct Flag {
+    raised: AtomicBool,
+    parent: Option<Arc<Flag>>,
+}
+
+impl Flag {
+    #[inline]
+    fn is_raised(&self) -> bool {
+        let mut flag = Some(self);
+        while let Some(current) = flag {
+            if current.raised.load(Ordering::Acquire) {
+                return true;
+            }
+            flag = current.parent.as_deref();
+        }
+        false
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Scope {
     token: CancellationToken,
+    flag: Arc<Flag>,
     processes: ProcessSet,
 }
 
@@ -20,6 +43,7 @@ impl Scope {
     fn with_processes(processes: ProcessSet) -> Self {
         Self {
             token: CancellationToken::new(),
+            flag: Arc::default(),
             processes,
         }
     }
@@ -31,6 +55,10 @@ impl Scope {
     pub fn child(&self) -> Self {
         Self {
             token: self.token.child_token(),
+            flag: Arc::new(Flag {
+                raised: AtomicBool::new(false),
+                parent: Some(Arc::clone(&self.flag)),
+            }),
             processes: self.processes.clone(),
         }
     }
@@ -40,11 +68,13 @@ impl Scope {
     }
 
     pub fn cancel(&self) {
+        self.flag.raised.store(true, Ordering::Release);
         self.token.cancel();
     }
 
+    #[inline]
     pub fn is_stopped(&self) -> bool {
-        self.token.is_cancelled()
+        self.flag.is_raised()
     }
 
     pub async fn stopped(&self) -> Stop {
@@ -79,6 +109,32 @@ mod tests {
 
         assert!(child.is_stopped());
         assert!(!shield.is_stopped());
+    }
+
+    #[test]
+    fn a_grandchild_is_stopped_by_its_root_and_not_by_a_sibling() {
+        let root = Scope::root();
+        let child = root.child();
+        let grandchild = child.child();
+        let sibling = root.child();
+
+        sibling.cancel();
+        assert!(!grandchild.is_stopped());
+
+        root.cancel();
+        assert!(grandchild.is_stopped());
+        assert!(!root.shielded().is_stopped());
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_parent_wakes_a_child_that_waits() {
+        let root = Scope::root();
+        let child = root.child();
+        let waiting = tokio::spawn(async move { child.stopped().await });
+
+        root.cancel();
+
+        assert_eq!(waiting.await.unwrap(), Stop::Cancelled);
     }
 
     #[test]

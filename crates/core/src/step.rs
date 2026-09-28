@@ -1,8 +1,6 @@
-use std::pin::pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures_util::future::{Either, select};
 use tracing::Instrument;
 
 use crate::progress::StepObserver;
@@ -56,72 +54,57 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
     }
 
     pub async fn run(&mut self, scope: &Scope) -> Outcome<E> {
-        let mut stopped = pin!(scope.stopped());
-        let mut step_scope: Option<Scope> = None;
         let recording = tracing::Level::INFO <= tracing::level_filters::LevelFilter::current();
         let mut attempted = Attempted::default();
 
         let stop = 'run: {
             for (idx, step) in self.steps.iter_mut().enumerate() {
-                let check = match select(stopped.as_mut(), step.check(scope)).await {
-                    Either::Left((_, _)) => break 'run Some(StopReason::Interrupted),
-                    Either::Right((result, _)) => result,
-                };
-
-                match check {
+                match step.check(scope).await {
                     Ok(true) => {
                         tracing::debug!("skipping (already satisfied): {}", step.name());
                         continue;
                     }
                     Ok(false) => {}
+                    Err(_) if scope.is_stopped() => break 'run Some(StopReason::Interrupted),
                     Err(e) => {
                         tracing::debug!("check failed: {} ({e})", step.name());
                         break 'run Some(StopReason::Failed(e));
                     }
                 }
 
-                let name = step.name();
-                tracing::info!("running: {name}");
+                if scope.is_stopped() {
+                    break 'run Some(StopReason::Interrupted);
+                }
                 attempted.insert(idx);
 
-                let step_scope = step_scope.get_or_insert_with(|| scope.child());
-                let (executed, interrupted) = if recording {
+                let executed = if recording {
+                    let name = step.name();
+                    tracing::info!("running: {name}");
                     let span = observed(&self.step_observer, tracing::info_span!("step", name));
                     // The span outlives the step's own future on purpose: closing it is what
                     // finishes the line it drew, and a finished line keeps the marker it was
                     // left with, so a failure has to be reported before that happens.
-                    let ran = match select(
-                        stopped.as_mut(),
-                        step.execute(step_scope).instrument(span.clone()),
-                    )
-                    .await
-                    {
-                        Either::Left((_, executing)) => (executing.await, true),
-                        Either::Right((result, _)) => (result, false),
-                    };
-                    closed(&self.step_observer, &span, ran.0.is_err());
-                    ran
+                    let executed = step.execute(scope).instrument(span.clone()).await;
+                    closed(&self.step_observer, &span, executed.is_err());
+                    executed
                 } else {
-                    match select(stopped.as_mut(), step.execute(step_scope)).await {
-                        Either::Left((_, executing)) => (executing.await, true),
-                        Either::Right((result, _)) => (result, false),
-                    }
+                    step.execute(scope).await
                 };
                 match executed {
-                    Err(e) if interrupted => {
-                        tracing::debug!("step stopped by the interrupt: {name} ({e})");
+                    Err(e) if scope.is_stopped() => {
+                        tracing::debug!("step stopped by the interrupt: {} ({e})", step.name());
                         break 'run Some(StopReason::Interrupted);
                     }
                     Err(e) => {
-                        tracing::debug!("step failed: {name} ({e})");
+                        tracing::debug!("step failed: {} ({e})", step.name());
                         break 'run Some(StopReason::Failed(e));
                     }
-                    Ok(()) if interrupted => break 'run Some(StopReason::Interrupted),
+                    Ok(()) if scope.is_stopped() => break 'run Some(StopReason::Interrupted),
                     Ok(()) => {}
                 }
             }
 
-            None
+            scope.is_stopped().then_some(StopReason::Interrupted)
         };
 
         match stop {
