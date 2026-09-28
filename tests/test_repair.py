@@ -1,22 +1,13 @@
-from conftest import (
-    MIRROR_TEST_USERS,
-    MIX_USERS_GROUP,
-    NIX_CONF_CONTENT,
-    bootstrap_as,
-    bootstrap_root,
-    create_user,
-    group_members,
-)
+import pytest
+
+from support.container import MIX_USERS_GROUP, group_members
+from support.mirror import MIRROR_TEST_USERS, NIX_CONF_CONTENT, bootstrap_root
 
 DEFAULT_PROFILE_BIN = "/nix/var/nix/profiles/default/bin"
 SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 MIX_MANAGED_MARKER = "/nix/.mix-managed"
 USER = MIRROR_TEST_USERS[0]
 
-
-def _bootstrapped(container, mock_nix_server, mirror_cache):
-    create_user(container, USER, sudo=True)
-    bootstrap_as(container, USER, mock_nix_server, mirror_cache)
 
 
 def test_repair_is_a_clean_no_op_on_a_healthy_system(container, mock_nix_server):
@@ -166,8 +157,8 @@ def test_repair_fixes_independent_targets_even_when_one_target_fails(container, 
     assert container.exec("getent", "passwd", "nixbld1").returncode == 0
 
 
+@pytest.mark.bootstrapped
 def test_repair_syncs_config_without_tracking_a_stray_file(container, mock_nix_server, mirror_cache):
-    _bootstrapped(container, mock_nix_server, mirror_cache)
     state_dir = f"/home/{USER}/.local/state/mix"
     git_bin = f"/home/{USER}/.nix-profile/bin/git"
 
@@ -188,8 +179,8 @@ def test_repair_syncs_config_without_tracking_a_stray_file(container, mock_nix_s
     assert status.stdout.strip() == ""
 
 
+@pytest.mark.bootstrapped
 def test_repair_fixes_state_dir_ownership_and_mode_drift(container, mock_nix_server, mirror_cache):
-    _bootstrapped(container, mock_nix_server, mirror_cache)
     state_dir = f"/home/{USER}/.local/state/mix"
 
     container.exec("chown", "-R", "root:root", state_dir, check=True)
@@ -210,8 +201,8 @@ def test_repair_fixes_state_dir_ownership_and_mode_drift(container, mock_nix_ser
     assert healed.returncode == 0, healed.stdout + healed.stderr
 
 
+@pytest.mark.bootstrapped
 def test_repair_restores_a_wiped_state_dir(container, mock_nix_server, mirror_cache):
-    _bootstrapped(container, mock_nix_server, mirror_cache)
     state_dir = f"/home/{USER}/.local/state/mix"
     flake_nix = f"{state_dir}/flake.nix"
     home_nix = f"{state_dir}/home.nix"

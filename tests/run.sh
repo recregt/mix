@@ -14,11 +14,6 @@ done
 
 export PYTHONDONTWRITEBYTECODE=1
 dir="$(cd "$(dirname "$0")" && pwd)"
-pytest_cmd=(uv run --with-requirements "$dir/requirements.txt" pytest)
+pytest_cmd=(uv run --project "$dir" --locked pytest)
 
-count=$(grep -rh "^def test_" "$dir"/test_*.py | wc -l)
-cap="${MIX_TEST_WORKERS:-$(( $(nproc) / 2 ))}"
-workers=$(( count < cap ? count : cap ))
-[ "$workers" -lt 1 ] && workers=1
-
-exec "${pytest_cmd[@]}" -n "$workers" "$dir" "$@"
+exec "${pytest_cmd[@]}" -n "${MIX_TEST_WORKERS:-auto}" "$dir" "$@"

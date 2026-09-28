@@ -1,12 +1,9 @@
 import time
 
-from conftest import (
-    INSTALL_TEST_PACKAGE,
-    MIRROR_TEST_USERS,
-    bootstrap_as,
-    create_user,
-    mirror_args,
-)
+import pytest
+
+from support.container import create_user
+from support.mirror import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS, mirror_args
 
 USER = MIRROR_TEST_USERS[0]
 MIX = "/usr/local/bin/mix"
@@ -50,15 +47,11 @@ def _wait_for_state(container, pid: str, wanted, timeout: float = 10.0) -> str:
     raise TimeoutError(f"process {pid} never reached the wanted state, last {state!r}")
 
 
-def _bootstrapped(container, mock_nix_server, mirror_cache):
-    create_user(container, USER, sudo=True)
-    bootstrap_as(container, USER, mock_nix_server, mirror_cache)
 
-
+@pytest.mark.bootstrapped
 def test_an_interrupted_install_waits_out_a_stuck_nix_then_puts_the_list_back(
     container, mock_nix_server, mirror_cache
 ):
-    _bootstrapped(container, mock_nix_server, mirror_cache)
     state_before = container.exec("cat", f"{STATE_DIR}/state", check=True).stdout
     proc = container.start_background(
         "mix", "-v", "install", INSTALL_TEST_PACKAGE, *mirror_args(mock_nix_server, mirror_cache),
@@ -66,7 +59,7 @@ def test_an_interrupted_install_waits_out_a_stuck_nix_then_puts_the_list_back(
     )
     evaluation = _pid_of(container, NIX_EVALUATION)
     container.exec("kill", "-STOP", evaluation, check=True)
-    client = _pid_of(container, f"^mix -v install {INSTALL_TEST_PACKAGE}")
+    client = _pid_of(container, f"^mix -vvv install {INSTALL_TEST_PACKAGE}")
     assert _pgid(container, evaluation) != _pgid(container, client)
 
     started = time.time()
@@ -109,16 +102,16 @@ def test_a_second_ctrl_c_stops_the_worker_at_once_and_bootstrap_converges_after(
     assert again.returncode == 0, again.stdout + again.stderr
 
 
+@pytest.mark.bootstrapped
 def test_ctrl_z_pauses_nix_and_resuming_lets_the_install_finish(
     container, mock_nix_server, mirror_cache
 ):
-    _bootstrapped(container, mock_nix_server, mirror_cache)
     proc = container.start_background(
         "mix", "install", INSTALL_TEST_PACKAGE, *mirror_args(mock_nix_server, mirror_cache),
         user=USER,
     )
     evaluation = _pid_of(container, NIX_EVALUATION)
-    client = _pid_of(container, f"^mix install {INSTALL_TEST_PACKAGE}")
+    client = _pid_of(container, f"^mix -vvv install {INSTALL_TEST_PACKAGE}")
 
     container.exec("kill", "-TSTP", client, check=True)
 

@@ -1,6 +1,7 @@
 import time
 
-from conftest import MIRROR_TEST_USERS, create_user, mirror_args
+from support.container import create_user
+from support.mirror import MIRROR_TEST_USERS, mirror_args
 
 USER = MIRROR_TEST_USERS[0]
 MIX = "/usr/local/bin/mix"

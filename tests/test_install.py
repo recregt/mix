@@ -1,26 +1,22 @@
 import json
 
-from conftest import (
+import pytest
+
+from support.mirror import (
     INSTALL_TEST_PACKAGE,
     MIRROR_TEST_USERS,
     UNCACHED_TEST_PACKAGE,
-    bootstrap_as,
-    create_user,
     mirror_args,
 )
 
 USER = MIRROR_TEST_USERS[0]
 
 
-def _bootstrapped(container, mock_nix_server, mirror_cache):
-    create_user(container, USER, sudo=True)
-    bootstrap_as(container, USER, mock_nix_server, mirror_cache)
 
-
+@pytest.mark.bootstrapped
 def test_install_adds_a_package_as_a_regular_user_with_no_sudo(
     container, mock_nix_server, mirror_cache
 ):
-    _bootstrapped(container, mock_nix_server, mirror_cache)
     state_dir = f"/home/{USER}/.local/state/mix"
     mirror = mirror_args(mock_nix_server, mirror_cache)
 
@@ -53,10 +49,10 @@ def test_install_adds_a_package_as_a_regular_user_with_no_sudo(
     assert container.exec("cat", f"{state_dir}/state", check=True).stdout == state
 
 
+@pytest.mark.bootstrapped
 def test_install_skips_a_package_that_is_already_installed(
     container, mock_nix_server, mirror_cache
 ):
-    _bootstrapped(container, mock_nix_server, mirror_cache)
     state_dir = f"/home/{USER}/.local/state/mix"
     state_before = container.exec("cat", f"{state_dir}/state", check=True).stdout
 
@@ -69,8 +65,9 @@ def test_install_skips_a_package_that_is_already_installed(
     assert container.exec("cat", f"{state_dir}/state", check=True).stdout == state_before
 
 
+@pytest.mark.bootstrapped
+@pytest.mark.verbatim_output
 def test_install_is_script_friendly(container, mock_nix_server, mirror_cache):
-    _bootstrapped(container, mock_nix_server, mirror_cache)
     mirror = mirror_args(mock_nix_server, mirror_cache)
 
     result = container.exec(
@@ -94,8 +91,8 @@ def test_install_is_script_friendly(container, mock_nix_server, mirror_cache):
     assert "\x1b[" not in plain.stderr, "nothing should be drawn in place"
 
 
+@pytest.mark.bootstrapped
 def test_install_cannot_be_run_as_root(container, mock_nix_server, mirror_cache):
-    _bootstrapped(container, mock_nix_server, mirror_cache)
 
     result = container.exec("mix", "install", INSTALL_TEST_PACKAGE)
 
@@ -104,10 +101,11 @@ def test_install_cannot_be_run_as_root(container, mock_nix_server, mirror_cache)
     assert not container.path_exists(f"/home/{USER}/.nix-profile/bin/{INSTALL_TEST_PACKAGE}")
 
 
+@pytest.mark.bootstrapped
+@pytest.mark.verbatim_output
 def test_install_refuses_a_package_the_cache_cannot_serve(
     container, mock_nix_server, mirror_cache
 ):
-    _bootstrapped(container, mock_nix_server, mirror_cache)
     state_dir = f"/home/{USER}/.local/state/mix"
     state_before = container.exec("cat", f"{state_dir}/state", check=True).stdout
     home_before = container.exec("cat", f"{state_dir}/home.nix", check=True).stdout
@@ -137,10 +135,10 @@ def test_install_refuses_a_package_the_cache_cannot_serve(
     assert not container.path_exists(f"/home/{USER}/.nix-profile/bin/{UNCACHED_TEST_PACKAGE}")
 
 
+@pytest.mark.bootstrapped
 def test_install_with_the_build_flag_installs_a_cached_package_as_usual(
     container, mock_nix_server, mirror_cache
 ):
-    _bootstrapped(container, mock_nix_server, mirror_cache)
 
     result = container.exec(
         "mix",
@@ -155,10 +153,10 @@ def test_install_with_the_build_flag_installs_a_cached_package_as_usual(
     assert container.path_exists(f"/home/{USER}/.nix-profile/bin/{INSTALL_TEST_PACKAGE}")
 
 
+@pytest.mark.bootstrapped
 def test_install_rolls_back_state_and_home_nix_when_activation_fails(
     container, mock_nix_server, mirror_cache
 ):
-    _bootstrapped(container, mock_nix_server, mirror_cache)
     state_dir = f"/home/{USER}/.local/state/mix"
     state_before = container.exec("cat", f"{state_dir}/state", check=True).stdout
     home_before = container.exec("cat", f"{state_dir}/home.nix", check=True).stdout
