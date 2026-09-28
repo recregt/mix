@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use indicatif::ProgressStyle;
 use mix_core::{DownloadProgress, StepObserver};
+
+use crate::live::LiveLine;
 use owo_colors::OwoColorize;
 use owo_colors::colors::{Green, Red};
 use tracing::field::{Field, Visit};
@@ -19,14 +21,14 @@ use tracing_subscriber::util::SubscriberInitExt;
 /// A download knows its total, so it gets the one thing a spinner cannot give: a bar that says
 /// how much of the wait is left. `{wide_bar}` takes exactly the columns the rest of the line
 /// leaves free, so the line fits whatever the terminal's width happens to be.
-const DOWNLOAD_STYLE: &str = "{span_child_prefix}{spinner:.cyan} {span_fields} {wide_bar:.cyan/dim} {bytes}/{total_bytes} ({binary_bytes_per_sec})";
+const DOWNLOAD_STYLE: &str = "{span_child_prefix}{spinner}{span_fields} {wide_bar:.cyan/dim} {bytes}/{total_bytes} ({binary_bytes_per_sec})";
 
 /// `{wide_msg}` carries the live output of whatever the step is running. It stays empty until a
 /// command reports its first line, so a quiet step renders exactly as before, and the width it
 /// is given is measured against the real terminal: the live text is trimmed to the columns that
 /// are actually free, so a narrow terminal or a long step name can never wrap the line and set
 /// the whole display scrolling.
-const STEP_STYLE: &str = "{span_child_prefix}{spinner:.cyan} {span_fields}{wide_msg}";
+const STEP_STYLE: &str = "{span_child_prefix}{spinner}{span_fields}{wide_msg}";
 
 /// Filled, leading edge, empty. A solid bar reads as one object at a glance, where a bar of
 /// blocks reads as a row of them.
@@ -78,8 +80,17 @@ fn finished(glyph: &str, failed: bool) -> String {
 
 /// The style of a line that is still running, and of the marker it keeps once it is not.
 fn spinner_style(template: &str, finished: &str) -> ProgressStyle {
-    let mut frames: Vec<&str> = TICK_FRAMES.to_vec();
-    frames.push(finished);
+    let colors = crate::stderr_colors();
+    let paint = |glyph: &str| {
+        if colors {
+            format!("\u{1b}[36m{glyph}\u{1b}[0m ")
+        } else {
+            format!("{glyph} ")
+        }
+    };
+    let mut frames: Vec<String> = TICK_FRAMES.iter().map(|frame| paint(frame)).collect();
+    frames.push(paint(finished));
+    let frames: Vec<&str> = frames.iter().map(String::as_str).collect();
 
     ProgressStyle::with_template(template)
         .expect("progress bar template is valid")
@@ -162,7 +173,15 @@ fn log_filter(verbosity: u8) -> Targets {
     own_crates_at(level_filter(verbosity), LevelFilter::WARN)
 }
 
-struct IndicatifDownloadProgress;
+pub(crate) struct IndicatifDownloadProgress {
+    live: Option<Arc<LiveLine>>,
+}
+
+impl IndicatifDownloadProgress {
+    pub(crate) fn new(live: Option<Arc<LiveLine>>) -> Self {
+        Self { live }
+    }
+}
 
 impl DownloadProgress for IndicatifDownloadProgress {
     fn set_total(&self, total: u64) {
@@ -173,32 +192,44 @@ impl DownloadProgress for IndicatifDownloadProgress {
 
     fn add(&self, delta: u64) {
         tracing::Span::current().pb_inc(delta);
+        if let Some(live) = &self.live {
+            live.received();
+        }
     }
 }
 
-pub fn download_reporter() -> Arc<dyn DownloadProgress> {
-    Arc::new(IndicatifDownloadProgress)
+pub(crate) struct IndicatifStepObserver {
+    live: Option<Arc<LiveLine>>,
+    keep_line: bool,
 }
 
-struct IndicatifStepObserver;
+impl IndicatifStepObserver {
+    pub(crate) fn new(live: Option<Arc<LiveLine>>, keep_line: bool) -> Self {
+        Self { live, keep_line }
+    }
+}
 
 impl StepObserver for IndicatifStepObserver {
     fn on_step_span(&self, span: &tracing::Span) {
         // Persist the line instead of clearing it: `finish_using_style` always forces an
         // immediate draw regardless of the redraw rate limiter, so even a step that completes
         // in a millisecond is guaranteed to render before its line disappears.
-        span.pb_set_finish_message("");
+        if self.keep_line {
+            span.pb_set_finish_message("");
+        }
+        if let Some(live) = &self.live {
+            live.opened(span);
+        }
     }
 
-    fn on_step_failed(&self, span: &tracing::Span) {
-        // The line is about to be finished and kept on screen; without this it would keep the
-        // marker of a step that worked.
-        span.pb_set_style(&failed_step_style());
+    fn on_step_closed(&self, span: &tracing::Span, failed: bool) {
+        if failed {
+            span.pb_set_style(&failed_step_style());
+        }
+        if let Some(live) = &self.live {
+            live.closed(span);
+        }
     }
-}
-
-pub fn step_observer() -> Arc<dyn StepObserver> {
-    Arc::new(IndicatifStepObserver)
 }
 
 /// Sets up the output for the whole process.
@@ -365,7 +396,7 @@ mod tests {
             render(step_style(), ""),
             render(
                 spinner_style(
-                    "{span_child_prefix}{spinner:.cyan} {span_fields}",
+                    "{span_child_prefix}{spinner}{span_fields}",
                     &finished(DONE, false)
                 ),
                 ""

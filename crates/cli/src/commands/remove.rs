@@ -10,6 +10,7 @@ pub async fn run(
 ) -> anyhow::Result<ExitCode> {
     let (_lock, user_config) = super::acquire_profile().map_err(Error::from)?;
     let scope = mix_exec::Scope::root();
+    let reporters = mix_ui::reporters();
     let _watch = crate::interrupt::watch(&scope, crate::interrupt::CHANGE, std::future::pending());
 
     let removed = mix_app::remove::remove(
@@ -17,7 +18,11 @@ pub async fn run(
         packages,
         mirror,
         mirror_key,
-        mix_ui::activity_reporter(),
+        &mix_app::Reporters {
+            downloads: reporters.downloads,
+            steps: reporters.passing_steps,
+            activity: reporters.activity,
+        },
         &scope,
     )
     .await?;

@@ -1,8 +1,8 @@
-use std::sync::Arc;
-
+use mix_core::Scope;
 use mix_core::models::UserConfig;
 use mix_core::state::StateManifest;
-use mix_core::{ActivityReporter, Scope};
+
+use crate::Reporters;
 
 use crate::profile::BuildPolicy;
 use crate::profile::change;
@@ -42,7 +42,7 @@ pub async fn remove(
     packages: &[String],
     mirror: Option<&str>,
     mirror_key: Option<&str>,
-    activity: Arc<dyn ActivityReporter>,
+    reporters: &Reporters,
     scope: &Scope,
 ) -> Result<Removed> {
     let protected = StateManifest::protected(packages);
@@ -74,7 +74,8 @@ pub async fn remove(
             mirror_key,
             policy: BuildPolicy::AllowSource,
         },
-        &activity,
+        &reporters.activity,
+        &reporters.steps,
         scope,
     )
     .await?;
@@ -88,14 +89,20 @@ pub async fn remove(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use mix_core::NoopActivity;
     use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
     use mix_core::privilege::InvokingUser;
 
     use super::*;
 
-    fn noop() -> Arc<dyn ActivityReporter> {
-        Arc::new(NoopActivity)
+    fn noop() -> Reporters {
+        Reporters {
+            downloads: Arc::new(mix_core::NoopProgress),
+            steps: Arc::new(mix_core::NoopSteps),
+            activity: Arc::new(NoopActivity),
+        }
     }
 
     fn home_with(packages: &[&str]) -> tempfile::TempDir {
@@ -139,7 +146,7 @@ mod tests {
             &packages,
             None,
             None,
-            noop(),
+            &noop(),
             &mix_exec::Scope::root(),
         )
         .await

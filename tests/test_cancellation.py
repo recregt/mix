@@ -72,6 +72,27 @@ def test_an_interrupted_install_stops_a_frozen_nix_then_puts_the_list_back(
     assert INSTALL_TEST_PACKAGE not in home_nix
 
 
+@pytest.mark.bootstrapped
+def test_a_deadline_set_by_the_caller_rolls_the_install_back(
+    container, mock_nix_server, mirror_cache
+):
+    state_before = container.exec("cat", f"{STATE_DIR}/state", check=True).stdout
+    proc = container.start_background(
+        "timeout", "-s", "TERM", "5",
+        "mix", "-v", "install", INSTALL_TEST_PACKAGE, *mirror_args(mock_nix_server, mirror_cache),
+        user=USER,
+    )
+    evaluation = _pid_of(container, NIX_EVALUATION)
+    container.exec("kill", "-STOP", evaluation, check=True)
+
+    result = proc.wait(timeout=60)
+
+    assert result.returncode == 124, result.stdout
+    assert PUTTING_BACK in result.stdout
+    assert _gone(container, evaluation)
+    assert container.exec("cat", f"{STATE_DIR}/state", check=True).stdout == state_before
+
+
 def test_a_second_ctrl_c_stops_the_worker_at_once_and_bootstrap_converges_after(
     container, mock_nix_server, mirror_cache
 ):

@@ -28,5 +28,15 @@ pub mod target;
 
 pub use profile::resolve_existing_user_config;
 
+use std::sync::Arc;
+
+use mix_core::{ActivityReporter, DownloadProgress, StepObserver};
+
+pub struct Reporters {
+    pub downloads: Arc<dyn DownloadProgress>,
+    pub steps: Arc<dyn StepObserver>,
+    pub activity: Arc<dyn ActivityReporter>,
+}
+
 #[doc(hidden)]
 pub use exec::output;

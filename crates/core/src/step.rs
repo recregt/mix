@@ -99,9 +99,7 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
                         Either::Left((_, executing)) => (executing.await, true),
                         Either::Right((result, _)) => (result, false),
                     };
-                    if ran.0.is_err() {
-                        failed(&self.step_observer, &span);
-                    }
+                    closed(&self.step_observer, &span, ran.0.is_err());
                     ran
                 } else {
                     match select(stopped.as_mut(), step.execute(step_scope)).await {
@@ -154,7 +152,11 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
             let span = recording
                 .then(|| observed(&self.step_observer, tracing::info_span!("rollback", name)));
             let rolled_back = match span {
-                Some(span) => step.rollback(&shield).instrument(span).await,
+                Some(span) => {
+                    let rolled_back = step.rollback(&shield).instrument(span.clone()).await;
+                    closed(&self.step_observer, &span, rolled_back.is_err());
+                    rolled_back
+                }
                 None => step.rollback(&shield).await,
             };
             if let Err(e) = rolled_back {
@@ -173,9 +175,9 @@ fn observed(step_observer: &Option<Arc<dyn StepObserver>>, span: tracing::Span) 
     span
 }
 
-fn failed(step_observer: &Option<Arc<dyn StepObserver>>, span: &tracing::Span) {
+fn closed(step_observer: &Option<Arc<dyn StepObserver>>, span: &tracing::Span, failed: bool) {
     if let Some(step_observer) = step_observer {
-        step_observer.on_step_failed(span);
+        step_observer.on_step_closed(span, failed);
     }
 }
 
@@ -725,8 +727,10 @@ mod tests {
             self.0.lock().unwrap().push(name);
         }
 
-        fn on_step_failed(&self, _span: &tracing::Span) {
-            self.0.lock().unwrap().push("failed");
+        fn on_step_closed(&self, _span: &tracing::Span, failed: bool) {
+            if failed {
+                self.0.lock().unwrap().push("failed");
+            }
         }
     }
 

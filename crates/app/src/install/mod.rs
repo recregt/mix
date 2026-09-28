@@ -1,8 +1,8 @@
-use std::sync::Arc;
-
+use mix_core::Scope;
 use mix_core::models::UserConfig;
 use mix_core::state::StateManifest;
-use mix_core::{ActivityReporter, Scope};
+
+use crate::Reporters;
 
 use crate::profile::BuildPolicy;
 use crate::profile::change::{self, Result};
@@ -36,7 +36,7 @@ pub async fn install(
     packages: &[String],
     mirror: Option<&str>,
     mirror_key: Option<&str>,
-    activity: Arc<dyn ActivityReporter>,
+    reporters: &Reporters,
     allow_source_builds: bool,
     scope: &Scope,
 ) -> Result<Installed> {
@@ -70,7 +70,8 @@ pub async fn install(
             mirror_key,
             policy,
         },
-        &activity,
+        &reporters.activity,
+        &reporters.steps,
         scope,
     )
     .await?;
@@ -95,6 +96,8 @@ fn with_added(state: &StateManifest, added: &[String]) -> StateManifest {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use mix_core::NoopActivity;
     use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
     use mix_core::privilege::InvokingUser;
@@ -102,8 +105,12 @@ mod tests {
     use super::*;
     use crate::profile::change::Error;
 
-    fn noop() -> Arc<dyn ActivityReporter> {
-        Arc::new(NoopActivity)
+    fn noop() -> Reporters {
+        Reporters {
+            downloads: Arc::new(mix_core::NoopProgress),
+            steps: Arc::new(mix_core::NoopSteps),
+            activity: Arc::new(NoopActivity),
+        }
     }
 
     fn seeded_home() -> tempfile::TempDir {
@@ -141,7 +148,7 @@ mod tests {
             &["git".to_string()],
             None,
             None,
-            noop(),
+            &noop(),
             false,
             &mix_exec::Scope::root(),
         )
@@ -163,7 +170,7 @@ mod tests {
             &["git".to_string()],
             None,
             None,
-            noop(),
+            &noop(),
             false,
             &mix_exec::Scope::root(),
         )
@@ -186,7 +193,7 @@ mod tests {
             &["git".to_string(), "git".to_string()],
             None,
             None,
-            noop(),
+            &noop(),
             false,
             &mix_exec::Scope::root(),
         )
@@ -206,7 +213,7 @@ mod tests {
             &["not a valid ident".to_string()],
             None,
             None,
-            noop(),
+            &noop(),
             false,
             &mix_exec::Scope::root(),
         )

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use mix_core::models::UserConfig;
 use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
 use mix_core::state::StateManifest;
-use mix_core::{ActivityReporter, Scope};
+use mix_core::{ActivityReporter, Scope, StepObserver};
 use tracing::Instrument;
 
 use crate::fs::{remove_file, write_atomic};
@@ -68,6 +68,7 @@ pub async fn apply(
     label: &str,
     source: PackageSource<'_>,
     activity: &Arc<dyn ActivityReporter>,
+    steps: &Arc<dyn StepObserver>,
     scope: &Scope,
 ) -> Result<()> {
     let (new_state, new_home) = render_candidate(cfg, manifest)?;
@@ -76,8 +77,9 @@ pub async fn apply(
     let state_path = state_dir.join(STATE_FILE);
     let home_path = state_dir.join(HOME_NIX);
     let span = tracing::info_span!("step", name = label);
+    steps.on_step_span(&span);
 
-    async {
+    let applied = async {
         let generation = write_then_switch(&state_path, &home_path, &new_state, &new_home, || {
             profile::switch(
                 cfg,
@@ -92,8 +94,10 @@ pub async fn apply(
         profile::finish(cfg, &generation, activity, &scope.shielded()).await?;
         Ok(())
     }
-    .instrument(span)
-    .await
+    .instrument(span.clone())
+    .await;
+    steps.on_step_closed(&span, applied.is_err());
+    applied
 }
 
 pub fn label(verb: &str, packages: &[String]) -> String {

@@ -18,10 +18,13 @@ pub async fn run(
             mirror,
             mirror_key,
             force,
-            mix_app::bootstrap::Reporters {
-                downloads: mix_ui::download_reporter(),
-                steps: mix_ui::step_observer(),
-                activity: mix_ui::activity_reporter(),
+            {
+                let reporters = mix_ui::reporters();
+                mix_app::Reporters {
+                    downloads: reporters.downloads,
+                    steps: reporters.steps,
+                    activity: reporters.activity,
+                }
             },
             &scope,
         )

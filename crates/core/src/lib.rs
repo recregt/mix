@@ -17,5 +17,7 @@ pub use mix_exec::{Scope, Stop};
 pub use models::{Category, Target};
 pub use nix_log::{BuildProgress, NixLog};
 pub use nix_plan::BuildPlan;
-pub use progress::{ActivityReporter, DownloadProgress, NoopActivity, NoopProgress, StepObserver};
+pub use progress::{
+    ActivityReporter, DownloadProgress, NoopActivity, NoopProgress, NoopSteps, StepObserver,
+};
 pub use step::{Outcome, Plan, Step};

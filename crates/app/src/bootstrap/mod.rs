@@ -10,10 +10,10 @@ pub mod tarball;
 
 pub use error::{Error, Host, Result};
 
-use std::sync::Arc;
-
 use mix_core::privilege::InvokingUser;
-use mix_core::{ActivityReporter, DownloadProgress, Outcome, Plan, Scope, StepObserver, privilege};
+use mix_core::{Outcome, Plan, Scope, privilege};
+
+use crate::Reporters;
 
 pub struct Environment(());
 
@@ -21,12 +21,6 @@ impl Environment {
     pub(crate) fn new() -> Self {
         Self(())
     }
-}
-
-pub struct Reporters {
-    pub downloads: Arc<dyn DownloadProgress>,
-    pub steps: Arc<dyn StepObserver>,
-    pub activity: Arc<dyn ActivityReporter>,
 }
 
 pub async fn bootstrap(

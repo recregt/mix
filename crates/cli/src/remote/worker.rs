@@ -198,8 +198,8 @@ struct Steps(Shared);
 impl StepObserver for Steps {
     fn on_step_span(&self, _span: &tracing::Span) {}
 
-    fn on_step_failed(&self, span: &tracing::Span) {
-        if let Some(id) = span.id() {
+    fn on_step_closed(&self, span: &tracing::Span, failed: bool) {
+        if failed && let Some(id) = span.id() {
             self.0
                 .with(|forwarding| forwarding.failed.insert(id.into_u64()));
         }
@@ -248,7 +248,7 @@ impl mix_rpc::Worker for CliWorker {
                     mirror.map(|mirror| mirror.url.as_str()),
                     mirror.and_then(|mirror| mirror.key.as_deref()),
                     request.force,
-                    mix_app::bootstrap::Reporters {
+                    mix_app::Reporters {
                         downloads: Arc::new(Downloads(events.clone())),
                         steps: Arc::new(Steps(self.0.clone())),
                         activity: Arc::new(Activity(events.clone())),
