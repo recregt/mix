@@ -4,8 +4,8 @@ use mix_app::doctor::HealthReport;
 use mix_core::Category;
 
 pub async fn run(verbose: u8) -> anyhow::Result<ExitCode> {
-    let user_config = mix_app::resolve_existing_user_config();
-    let reports = mix_app::doctor::audit(user_config.as_ref(), &mix_core::Scope::root()).await;
+    let ctx = mix_app::Context::new(mix_exec::Scope::root()).with_user(super::enrolled_user());
+    let reports = mix_app::doctor::audit(&ctx).await;
     render(&reports, verbose > 0);
 
     if reports.iter().all(HealthReport::healthy) {

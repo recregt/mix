@@ -9,23 +9,19 @@ pub async fn run(
     json: bool,
 ) -> anyhow::Result<ExitCode> {
     let (_lock, user_config) = super::acquire_profile().map_err(Error::from)?;
-    let scope = mix_exec::Scope::root();
     let reporters = mix_ui::reporters();
-    let _watch = crate::interrupt::watch(&scope, crate::interrupt::CHANGE, std::future::pending());
-
-    let removed = mix_app::remove::remove(
-        &user_config,
-        packages,
-        mirror,
-        mirror_key,
-        &mix_app::Reporters {
+    let ctx = mix_app::Context::new(mix_exec::Scope::root())
+        .with_user(Some(user_config))
+        .with_reporters(mix_app::Reporters {
             downloads: reporters.downloads,
             steps: reporters.passing_steps,
             activity: reporters.activity,
-        },
-        &scope,
-    )
-    .await?;
+        })
+        .with_env(super::request_env(mirror, mirror_key));
+    let _watch =
+        crate::interrupt::watch(&ctx.scope, crate::interrupt::CHANGE, std::future::pending());
+
+    let removed = mix_app::remove::remove(&ctx, packages).await?;
 
     if let Some(note) = removed.restored.and_then(crate::explain::change::restored) {
         mix_ui::warn(note.message());

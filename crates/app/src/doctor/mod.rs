@@ -6,9 +6,9 @@
 //! two commands cannot drift apart. The words are `mix-cli`'s.
 
 use futures_util::future::join_all;
-use mix_core::Scope;
-use mix_core::models::{Category, UserConfig};
+use mix_core::models::Category;
 
+use crate::Context;
 use crate::target::{self, Finding};
 
 pub struct HealthReport {
@@ -24,10 +24,10 @@ impl HealthReport {
     }
 }
 
-pub async fn audit(user_config: Option<&UserConfig>, scope: &Scope) -> Vec<HealthReport> {
+pub async fn audit(ctx: &Context) -> Vec<HealthReport> {
     tracing::info!("auditing managed environment");
-    let items = mix_core::models::targets(user_config);
-    let findings = join_all(items.iter().map(|item| target::inspect(item, scope))).await;
+    let items = mix_core::models::targets(ctx.user.as_ref());
+    let findings = join_all(items.iter().map(|item| target::inspect(item, &ctx.scope))).await;
     items
         .iter()
         .zip(findings)
@@ -53,8 +53,8 @@ mod tests {
 
     use super::*;
 
-    fn user_config() -> UserConfig {
-        UserConfig {
+    fn user_config() -> mix_core::models::UserConfig {
+        mix_core::models::UserConfig {
             user: InvokingUser {
                 uid: 1000,
                 gid: 1000,
@@ -70,7 +70,7 @@ mod tests {
 
     #[tokio::test]
     async fn audit_reports_one_entry_per_target() {
-        let reports = audit(None, &mix_core::Scope::root()).await;
+        let reports = audit(&Context::new(mix_core::Scope::root())).await;
         assert_eq!(reports.len(), mix_core::models::targets(None).len());
     }
 
@@ -78,14 +78,15 @@ mod tests {
     async fn audit_covers_the_per_user_targets_of_the_config_it_is_given() {
         let cfg = user_config();
 
-        let reports = audit(Some(&cfg), &mix_core::Scope::root()).await;
+        let reports =
+            audit(&Context::new(mix_core::Scope::root()).with_user(Some(cfg.clone()))).await;
 
         assert_eq!(
             reports.len(),
             mix_core::models::targets(Some(&cfg)).len(),
             "every target of the injected config must be reported"
         );
-        assert!(reports.len() > audit(None, &mix_core::Scope::root()).await.len());
+        assert!(reports.len() > audit(&Context::new(mix_core::Scope::root())).await.len());
         assert!(
             reports
                 .iter()
@@ -97,7 +98,9 @@ mod tests {
     async fn a_report_is_healthy_exactly_when_nothing_was_found() {
         let cfg = user_config();
 
-        for report in audit(Some(&cfg), &mix_core::Scope::root()).await {
+        for report in
+            audit(&Context::new(mix_core::Scope::root()).with_user(Some(cfg.clone()))).await
+        {
             assert_eq!(report.healthy(), report.finding.is_none());
         }
     }

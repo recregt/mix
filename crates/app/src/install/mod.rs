@@ -1,8 +1,6 @@
-use mix_core::Scope;
-use mix_core::models::UserConfig;
 use mix_core::state::StateManifest;
 
-use crate::Reporters;
+use crate::Context;
 
 use crate::profile::BuildPolicy;
 use crate::profile::change::{self, Result};
@@ -32,14 +30,11 @@ impl Installed {
 }
 
 pub async fn install(
-    cfg: &UserConfig,
+    ctx: &Context,
     packages: &[String],
-    mirror: Option<&str>,
-    mirror_key: Option<&str>,
-    reporters: &Reporters,
     allow_source_builds: bool,
-    scope: &Scope,
 ) -> Result<Installed> {
+    let cfg = ctx.user.as_ref().ok_or(change::Error::NotBootstrapped)?;
     let (state, restored) = change::settled(cfg).await?;
     let partition = state.partition(packages);
     let skipped: Vec<String> = partition.installed.iter().map(|p| p.to_string()).collect();
@@ -66,13 +61,13 @@ pub async fn install(
         &with_added(&state, &added),
         &label,
         change::PackageSource {
-            mirror,
-            mirror_key,
+            mirror: ctx.mirror(),
+            mirror_key: ctx.mirror_key(),
             policy,
         },
-        &reporters.activity,
-        &reporters.steps,
-        scope,
+        &ctx.reporters.activity,
+        &ctx.reporters.steps,
+        &ctx.scope,
     )
     .await?;
 
@@ -96,22 +91,11 @@ fn with_added(state: &StateManifest, added: &[String]) -> StateManifest {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use mix_core::NoopActivity;
     use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
     use mix_core::privilege::InvokingUser;
 
     use super::*;
     use crate::profile::change::Error;
-
-    fn noop() -> Reporters {
-        Reporters {
-            downloads: Arc::new(mix_core::NoopProgress),
-            steps: Arc::new(mix_core::NoopSteps),
-            activity: Arc::new(NoopActivity),
-        }
-    }
 
     fn seeded_home() -> tempfile::TempDir {
         let home = tempfile::tempdir().unwrap();
@@ -124,8 +108,12 @@ mod tests {
         home
     }
 
-    fn user_config(home: &std::path::Path) -> UserConfig {
-        UserConfig {
+    fn context(home: &std::path::Path) -> Context {
+        Context::new(mix_exec::Scope::root()).with_user(Some(user_config(home)))
+    }
+
+    fn user_config(home: &std::path::Path) -> mix_core::models::UserConfig {
+        mix_core::models::UserConfig {
             user: InvokingUser {
                 uid: 1000,
                 gid: 1000,
@@ -143,17 +131,9 @@ mod tests {
     async fn install_skips_a_package_that_is_already_present() {
         let home = seeded_home();
 
-        let installed = install(
-            &user_config(home.path()),
-            &["git".to_string()],
-            None,
-            None,
-            &noop(),
-            false,
-            &mix_exec::Scope::root(),
-        )
-        .await
-        .unwrap();
+        let installed = install(&context(home.path()), &["git".to_string()], false)
+            .await
+            .unwrap();
 
         assert!(installed.changed_nothing());
         assert_eq!(installed.skipped, vec!["git".to_string()]);
@@ -165,17 +145,9 @@ mod tests {
         let state_before =
             std::fs::read_to_string(mix_state_dir(home.path()).join(STATE_FILE)).unwrap();
 
-        install(
-            &user_config(home.path()),
-            &["git".to_string()],
-            None,
-            None,
-            &noop(),
-            false,
-            &mix_exec::Scope::root(),
-        )
-        .await
-        .unwrap();
+        install(&context(home.path()), &["git".to_string()], false)
+            .await
+            .unwrap();
 
         assert_eq!(
             std::fs::read_to_string(mix_state_dir(home.path()).join(STATE_FILE)).unwrap(),
@@ -189,13 +161,9 @@ mod tests {
         let home = seeded_home();
 
         let installed = install(
-            &user_config(home.path()),
+            &context(home.path()),
             &["git".to_string(), "git".to_string()],
-            None,
-            None,
-            &noop(),
             false,
-            &mix_exec::Scope::root(),
         )
         .await
         .unwrap();
@@ -209,13 +177,9 @@ mod tests {
         let home = seeded_home();
 
         let err = install(
-            &user_config(home.path()),
+            &context(home.path()),
             &["not a valid ident".to_string()],
-            None,
-            None,
-            &noop(),
             false,
-            &mix_exec::Scope::root(),
         )
         .await
         .unwrap_err();

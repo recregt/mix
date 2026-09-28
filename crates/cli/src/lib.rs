@@ -27,8 +27,9 @@ pub async fn run() -> ExitCode {
             | Command::Install { .. }
             | Command::Remove { .. }
     ) {
-        let user_config = mix_app::resolve_existing_user_config();
-        if let Some(report) = mix_app::doctor::audit(user_config.as_ref(), &mix_core::Scope::root())
+        let ctx =
+            mix_app::Context::new(mix_exec::Scope::root()).with_user(commands::enrolled_user());
+        if let Some(report) = mix_app::doctor::audit(&ctx)
             .await
             .into_iter()
             .find(|report| !report.healthy())

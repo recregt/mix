@@ -241,21 +241,23 @@ impl mix_rpc::Worker for CliWorker {
             Err(error) => Outcome::Failure(Failure::Core(error)),
             Ok(_lock) => {
                 let mirror = request.mirror.as_ref();
-                let scope = mix_exec::Scope::root();
-                let _watch = interrupt::watch(&scope, interrupt::BOOTSTRAP, client_gone(&events));
-                let result = mix_app::bootstrap::bootstrap(
-                    mix_core::privilege::user_by_uid(caller.uid),
-                    mirror.map(|mirror| mirror.url.as_str()),
-                    mirror.and_then(|mirror| mirror.key.as_deref()),
-                    request.force,
-                    mix_app::Reporters {
+                let ctx = mix_app::Context::new(mix_exec::Scope::root())
+                    .with_user(
+                        mix_core::privilege::user_by_uid(caller.uid)
+                            .and_then(mix_app::profile::user_config_for),
+                    )
+                    .with_reporters(mix_app::Reporters {
                         downloads: Arc::new(Downloads(events.clone())),
                         steps: Arc::new(Steps(self.0.clone())),
                         activity: Arc::new(Activity(events.clone())),
-                    },
-                    &scope,
-                )
-                .await;
+                    })
+                    .with_env(mix_app::RequestEnv {
+                        mirror: mirror.map(|mirror| mirror.url.clone()),
+                        mirror_key: mirror.and_then(|mirror| mirror.key.clone()),
+                    });
+                let _watch =
+                    interrupt::watch(&ctx.scope, interrupt::BOOTSTRAP, client_gone(&events));
+                let result = mix_app::bootstrap::bootstrap(&ctx, request.force).await;
                 match result {
                     Ok(_) => Outcome::BootstrapDone,
                     Err(error) => Outcome::Failure(failure_from_bootstrap(error)),
@@ -271,11 +273,12 @@ impl mix_rpc::Worker for CliWorker {
         let outcome = match mix_core::lock::acquire_exclusive(LOCK_FILE) {
             Err(error) => Outcome::Failure(Failure::Core(error)),
             Ok(_lock) => {
-                let user_config = mix_core::privilege::user_by_uid(caller.uid)
-                    .and_then(mix_app::profile::existing_user_config_for);
-                let scope = mix_exec::Scope::root();
-                let _watch = interrupt::watch(&scope, interrupt::REPAIR, client_gone(&events));
-                let repair = mix_app::repair::repair(user_config.as_ref(), &scope).await;
+                let ctx = mix_app::Context::new(mix_exec::Scope::root()).with_user(
+                    mix_core::privilege::user_by_uid(caller.uid)
+                        .and_then(mix_app::profile::existing_user_config_for),
+                );
+                let _watch = interrupt::watch(&ctx.scope, interrupt::REPAIR, client_gone(&events));
+                let repair = mix_app::repair::repair(&ctx).await;
                 Outcome::RepairDone {
                     reports: repair.reports.into_iter().map(report_to_wire).collect(),
                     interrupted: repair.interrupted,

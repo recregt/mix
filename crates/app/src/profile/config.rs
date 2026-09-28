@@ -1,7 +1,7 @@
 use mix_core::identity::MIX_USERS_GROUP;
 use mix_core::models::UserConfig;
 use mix_core::paths::{GENERATION_STATE_FILE, HOME_NIX, STATE_FILE, mix_state_dir};
-use mix_core::privilege::{InvokingUser, invoking_user};
+use mix_core::privilege::InvokingUser;
 use mix_core::state::StateManifest;
 use mix_core::system::{Arch, Os};
 use mix_nixgen::lock::{self, LockedInput, NarHash};
@@ -61,10 +61,6 @@ pub(crate) fn render_home<S: AsRef<str>>(
     )
 }
 
-pub fn resolve_user_config() -> Option<UserConfig> {
-    user_config_for(invoking_user()?)
-}
-
 pub fn user_config_for(user: InvokingUser) -> Option<UserConfig> {
     let system = nix_system(Arch::current()?, Os::current()?);
     let flake = FlakeConfig::new(system, &user.name, NIXPKGS, HOME_MANAGER)
@@ -93,10 +89,6 @@ pub fn user_config_for(user: InvokingUser) -> Option<UserConfig> {
         home,
         restored_state,
     })
-}
-
-pub fn resolve_existing_user_config() -> Option<UserConfig> {
-    existing_user_config_for(invoking_user()?)
 }
 
 pub fn existing_user_config_for(user: InvokingUser) -> Option<UserConfig> {

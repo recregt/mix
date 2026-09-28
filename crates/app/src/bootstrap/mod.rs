@@ -10,10 +10,9 @@ pub mod tarball;
 
 pub use error::{Error, Host, Result};
 
-use mix_core::privilege::InvokingUser;
 use mix_core::{Outcome, Plan, Scope, privilege};
 
-use crate::Reporters;
+use crate::{Context, Reporters};
 
 pub struct Environment(());
 
@@ -23,14 +22,8 @@ impl Environment {
     }
 }
 
-pub async fn bootstrap(
-    user: Option<InvokingUser>,
-    mirror: Option<&str>,
-    mirror_key: Option<&str>,
-    force: bool,
-    reporters: Reporters,
-    scope: &Scope,
-) -> Result<Environment> {
+pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
+    let scope = &ctx.scope;
     if !privilege::is_root() {
         return Err(Error::NotRoot("bootstrap the managed environment"));
     }
@@ -42,8 +35,15 @@ pub async fn bootstrap(
         preflight::check_nix_not_installed(scope).await?;
     }
 
-    let user_config = user.and_then(crate::profile::user_config_for);
-    run_steps(mirror, mirror_key, force, reporters, user_config, scope).await
+    run_steps(
+        ctx.mirror(),
+        ctx.mirror_key(),
+        force,
+        ctx.reporters.clone(),
+        ctx.user.clone(),
+        scope,
+    )
+    .await
 }
 
 async fn run_steps(

@@ -9,6 +9,7 @@ use mix_core::Scope;
 use mix_core::models::{Target, UserConfig, targets};
 use mix_core::paths::{NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT, mix_state_dir};
 
+use crate::Context;
 use crate::git;
 use crate::systemd;
 use crate::target::{self, Error};
@@ -44,8 +45,10 @@ pub struct Repair {
     pub interrupted: bool,
 }
 
-pub async fn repair(user_config: Option<&UserConfig>, scope: &Scope) -> Repair {
+pub async fn repair(ctx: &Context) -> Repair {
     tracing::info!("repairing managed environment");
+    let user_config = ctx.user.as_ref();
+    let scope = &ctx.scope;
     let items = targets(user_config);
     let (mut reports, interrupted) = put_back(&items, scope).await;
 

@@ -1,8 +1,6 @@
-use mix_core::Scope;
-use mix_core::models::UserConfig;
 use mix_core::state::StateManifest;
 
-use crate::Reporters;
+use crate::Context;
 
 use crate::profile::BuildPolicy;
 use crate::profile::change;
@@ -37,14 +35,8 @@ impl Removed {
     }
 }
 
-pub async fn remove(
-    cfg: &UserConfig,
-    packages: &[String],
-    mirror: Option<&str>,
-    mirror_key: Option<&str>,
-    reporters: &Reporters,
-    scope: &Scope,
-) -> Result<Removed> {
+pub async fn remove(ctx: &Context, packages: &[String]) -> Result<Removed> {
+    let cfg = ctx.user.as_ref().ok_or(change::Error::NotBootstrapped)?;
     let protected = StateManifest::protected(packages);
     if !protected.is_empty() {
         return Err(Error::Protected(
@@ -70,13 +62,13 @@ pub async fn remove(
         &state.without(&removed),
         &change::label("Removing", &removed),
         change::PackageSource {
-            mirror,
-            mirror_key,
+            mirror: ctx.mirror(),
+            mirror_key: ctx.mirror_key(),
             policy: BuildPolicy::AllowSource,
         },
-        &reporters.activity,
-        &reporters.steps,
-        scope,
+        &ctx.reporters.activity,
+        &ctx.reporters.steps,
+        &ctx.scope,
     )
     .await?;
 
@@ -89,21 +81,10 @@ pub async fn remove(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use mix_core::NoopActivity;
     use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
     use mix_core::privilege::InvokingUser;
 
     use super::*;
-
-    fn noop() -> Reporters {
-        Reporters {
-            downloads: Arc::new(mix_core::NoopProgress),
-            steps: Arc::new(mix_core::NoopSteps),
-            activity: Arc::new(NoopActivity),
-        }
-    }
 
     fn home_with(packages: &[&str]) -> tempfile::TempDir {
         let home = tempfile::tempdir().unwrap();
@@ -120,8 +101,12 @@ mod tests {
         home
     }
 
-    fn user_config(home: &std::path::Path) -> UserConfig {
-        UserConfig {
+    fn context(home: &std::path::Path) -> Context {
+        Context::new(mix_exec::Scope::root()).with_user(Some(user_config(home)))
+    }
+
+    fn user_config(home: &std::path::Path) -> mix_core::models::UserConfig {
+        mix_core::models::UserConfig {
             user: InvokingUser {
                 uid: 1000,
                 gid: 1000,
@@ -141,15 +126,7 @@ mod tests {
 
     async fn remove_from(home: &std::path::Path, packages: &[&str]) -> Result<Removed> {
         let packages: Vec<String> = packages.iter().map(|p| p.to_string()).collect();
-        remove(
-            &user_config(home),
-            &packages,
-            None,
-            None,
-            &noop(),
-            &mix_exec::Scope::root(),
-        )
-        .await
+        remove(&context(home), &packages).await
     }
 
     #[tokio::test]
