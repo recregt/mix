@@ -4,7 +4,7 @@
 //! the same raw failure reaches a reader who ran either. The words are written once and the
 //! command they are told to re-run is passed in.
 
-use mix_app::profile::Error;
+use mix_shell::profile::Error;
 
 use super::{Diagnostic, core_error};
 

@@ -10,7 +10,7 @@ fn locked(flake: &str) -> (String, u64) {
         .arg(flake);
     let line = command.line();
     let output = command
-        .output_blocking(&mix_exec::cancel::root())
+        .output_blocking(&mix_exec::Scope::root())
         .unwrap_or_else(|error| panic!("failed to run {line}: {error}"));
     assert!(
         output.status.success(),

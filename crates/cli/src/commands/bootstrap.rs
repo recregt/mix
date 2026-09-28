@@ -8,24 +8,28 @@ pub async fn run(
     force: bool,
     verbosity: u8,
 ) -> anyhow::Result<ExitCode> {
-    if mix_core::privilege::is_root() {
+    if mix_shell::effect::accounts::is_root() {
         let _lock = super::acquire_lock()?;
-        let cancel = mix_exec::cancel::root();
-        let _watch =
-            crate::interrupt::watch(&cancel, crate::interrupt::BOOTSTRAP, std::future::pending());
-        mix_app::bootstrap::bootstrap(
-            mix_core::privilege::invoking_user(),
-            mirror,
-            mirror_key,
-            force,
-            mix_app::bootstrap::Reporters {
-                downloads: mix_ui::download_reporter(),
-                steps: mix_ui::step_observer(),
-                activity: mix_ui::activity_reporter(),
-            },
-            &cancel,
-        )
-        .await?;
+        let reporters = mix_ui::reporters();
+        let ctx = mix_shell::Context::new(mix_exec::Scope::root())
+            .with_user(
+                mix_shell::effect::accounts::invoking_user()
+                    .and_then(mix_shell::profile::user_config_for),
+            )
+            .with_reporters(mix_shell::Reporters {
+                downloads: reporters.downloads,
+                steps: reporters.steps,
+                activity: reporters.activity,
+            })
+            .with_env(super::request_env(mirror, mirror_key))
+            .with_host(super::host_config());
+        let _watch = crate::controls::watch(
+            &ctx.scope,
+            crate::controls::BOOTSTRAP,
+            std::future::pending(),
+            crate::controls::Side::Client,
+        );
+        mix_shell::ops::bootstrap::bootstrap(&ctx, force).await?;
     } else {
         crate::remote::client::bootstrap(mirror, mirror_key, force, verbosity).await?;
     }

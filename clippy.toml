@@ -1,5 +1,5 @@
 disallowed-methods = [
-    { path = "tokio_util::sync::CancellationToken::new", reason = "take the command's token, or mix_exec::cancel::shield for work that must finish" },
+    { path = "tokio_util::sync::CancellationToken::new", reason = "run in the request's mix_exec::Scope, or its shielded() scope for work that must finish" },
     { path = "std::process::Command::new", reason = "spawn through mix_exec so the child is stoppable" },
     { path = "tokio::process::Command::new", reason = "spawn through mix_exec so the child is stoppable" },
 ]

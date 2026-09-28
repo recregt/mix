@@ -1,6 +1,6 @@
 //! What `mix install` says when it cannot finish.
 
-use mix_app::profile::change::Error;
+use mix_shell::profile::change::Error;
 
 use super::{Diagnostic, change, failed, packages_action};
 
@@ -131,7 +131,7 @@ mod tests {
     #[test]
     fn a_refusal_ends_with_the_command_to_repeat() {
         let error = anyhow::Error::from(Error::Activation(
-            mix_app::profile::Error::SourceBuildRequired {
+            mix_shell::profile::Error::SourceBuildRequired {
                 packages: Some(vec!["cowsay-3.8.4".to_string()]),
             },
         ));

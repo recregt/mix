@@ -1,6 +1,6 @@
 //! What `mix bootstrap` says when it cannot finish.
 
-use mix_app::bootstrap::{Error, Host};
+use mix_shell::ops::bootstrap::{Error, Host};
 
 use super::{Diagnostic, core_error, failed};
 

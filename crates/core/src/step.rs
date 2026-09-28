@@ -1,23 +1,20 @@
-use std::future::Future;
-use std::pin::pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures_util::future::{Either, select};
 use tracing::Instrument;
 
 use crate::progress::StepObserver;
-use mix_exec::cancel::{self, CancellationToken};
+use mix_exec::Scope;
 
 #[async_trait]
 pub trait Step: Send + Sync {
     type Error: std::error::Error + Send + Sync + 'static;
 
     fn name(&self) -> &'static str;
-    async fn check(&self) -> Result<bool, Self::Error>;
-    async fn execute(&mut self, token: &CancellationToken) -> Result<(), Self::Error>;
+    async fn check(&self, scope: &Scope) -> Result<bool, Self::Error>;
+    async fn execute(&mut self, scope: &Scope) -> Result<(), Self::Error>;
 
-    async fn rollback(&mut self, _token: &CancellationToken) -> Result<(), Self::Error> {
+    async fn rollback(&mut self, _scope: &Scope) -> Result<(), Self::Error> {
         Ok(())
     }
 }
@@ -56,110 +53,76 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
         &self.failed_rollbacks
     }
 
-    pub async fn run(&mut self) -> Result<(), E> {
-        match self.run_until(std::future::pending(), None).await {
-            Outcome::Completed(result) => result,
-            Outcome::Interrupted => unreachable!("a shield is never cancelled"),
-        }
-    }
-
-    pub async fn run_cancellable(&mut self, cancel: &CancellationToken) -> Outcome<E> {
-        self.run_until(cancel.cancelled(), Some(cancel)).await
-    }
-
-    async fn run_until(
-        &mut self,
-        cancel: impl Future<Output = ()>,
-        parent: Option<&CancellationToken>,
-    ) -> Outcome<E> {
-        let mut cancel = pin!(cancel);
-        let mut token: Option<CancellationToken> = None;
+    pub async fn run(&mut self, scope: &Scope) -> Outcome<E> {
         let recording = tracing::Level::INFO <= tracing::level_filters::LevelFilter::current();
         let mut attempted = Attempted::default();
 
         let stop = 'run: {
             for (idx, step) in self.steps.iter_mut().enumerate() {
-                let check = match select(cancel.as_mut(), step.check()).await {
-                    Either::Left(((), _)) => break 'run Some(StopReason::Interrupted),
-                    Either::Right((result, _)) => result,
-                };
-
-                match check {
+                match step.check(scope).await {
                     Ok(true) => {
                         tracing::debug!("skipping (already satisfied): {}", step.name());
                         continue;
                     }
                     Ok(false) => {}
+                    Err(_) if scope.is_stopped() => break 'run Some(StopReason::Interrupted),
                     Err(e) => {
                         tracing::debug!("check failed: {} ({e})", step.name());
                         break 'run Some(StopReason::Failed(e));
                     }
                 }
 
-                let name = step.name();
-                tracing::info!("running: {name}");
+                if scope.is_stopped() {
+                    break 'run Some(StopReason::Interrupted);
+                }
                 attempted.insert(idx);
 
-                let token = token.get_or_insert_with(|| {
-                    parent.map_or_else(cancel::shield, CancellationToken::child_token)
-                });
-                let (executed, interrupted) = if recording {
+                let executed = if recording {
+                    let name = step.name();
+                    tracing::info!("running: {name}");
                     let span = observed(&self.step_observer, tracing::info_span!("step", name));
                     // The span outlives the step's own future on purpose: closing it is what
                     // finishes the line it drew, and a finished line keeps the marker it was
                     // left with, so a failure has to be reported before that happens.
-                    let ran = match select(
-                        cancel.as_mut(),
-                        step.execute(token).instrument(span.clone()),
-                    )
-                    .await
-                    {
-                        Either::Left(((), executing)) => (executing.await, true),
-                        Either::Right((result, _)) => (result, false),
-                    };
-                    if ran.0.is_err() {
-                        failed(&self.step_observer, &span);
-                    }
-                    ran
+                    let executed = step.execute(scope).instrument(span.clone()).await;
+                    closed(&self.step_observer, &span, executed.is_err());
+                    executed
                 } else {
-                    match select(cancel.as_mut(), step.execute(token)).await {
-                        Either::Left(((), executing)) => (executing.await, true),
-                        Either::Right((result, _)) => (result, false),
-                    }
+                    step.execute(scope).await
                 };
                 match executed {
-                    Err(e) if interrupted => {
-                        tracing::debug!("step stopped by the interrupt: {name} ({e})");
+                    Err(e) if scope.is_stopped() => {
+                        tracing::debug!("step stopped by the interrupt: {} ({e})", step.name());
                         break 'run Some(StopReason::Interrupted);
                     }
                     Err(e) => {
-                        tracing::debug!("step failed: {name} ({e})");
+                        tracing::debug!("step failed: {} ({e})", step.name());
                         break 'run Some(StopReason::Failed(e));
                     }
-                    Ok(()) if interrupted => break 'run Some(StopReason::Interrupted),
+                    Ok(()) if scope.is_stopped() => break 'run Some(StopReason::Interrupted),
                     Ok(()) => {}
                 }
             }
 
-            None
+            scope.is_stopped().then_some(StopReason::Interrupted)
         };
 
         match stop {
             Some(StopReason::Failed(e)) => {
-                Box::pin(self.unwind(&attempted, recording)).await;
+                Box::pin(self.unwind(&attempted, scope, recording)).await;
                 Outcome::Completed(Err(e))
             }
             Some(StopReason::Interrupted) => {
                 tracing::info!("interrupted, rolling back");
-                Box::pin(self.unwind(&attempted, recording)).await;
+                Box::pin(self.unwind(&attempted, scope, recording)).await;
                 Outcome::Interrupted
             }
             None => Outcome::Completed(Ok(())),
         }
     }
 
-    async fn unwind(&mut self, attempted: &Attempted, recording: bool) {
-        let shield = cancel::shield();
+    async fn unwind(&mut self, attempted: &Attempted, scope: &Scope, recording: bool) {
+        let shield = scope.shielded();
         for idx in (0..self.steps.len()).rev() {
             if !attempted.contains(idx) {
                 continue;
@@ -172,7 +135,11 @@ impl<E: std::error::Error + Send + Sync + 'static> Plan<E> {
             let span = recording
                 .then(|| observed(&self.step_observer, tracing::info_span!("rollback", name)));
             let rolled_back = match span {
-                Some(span) => step.rollback(&shield).instrument(span).await,
+                Some(span) => {
+                    let rolled_back = step.rollback(&shield).instrument(span.clone()).await;
+                    closed(&self.step_observer, &span, rolled_back.is_err());
+                    rolled_back
+                }
                 None => step.rollback(&shield).await,
             };
             if let Err(e) = rolled_back {
@@ -191,9 +158,9 @@ fn observed(step_observer: &Option<Arc<dyn StepObserver>>, span: tracing::Span) 
     span
 }
 
-fn failed(step_observer: &Option<Arc<dyn StepObserver>>, span: &tracing::Span) {
+fn closed(step_observer: &Option<Arc<dyn StepObserver>>, span: &tracing::Span, failed: bool) {
     if let Some(step_observer) = step_observer {
-        step_observer.on_step_failed(span);
+        step_observer.on_step_closed(span, failed);
     }
 }
 
@@ -252,16 +219,16 @@ mod tests {
     #[error("probe error")]
     struct ProbeError;
 
-    fn cancel_once(ready: impl Fn() -> bool + Send + 'static) -> CancellationToken {
-        let cancel = cancel::root();
-        let cancelling = cancel.clone();
+    fn cancel_once(ready: impl Fn() -> bool + Send + 'static) -> Scope {
+        let scope = Scope::root();
+        let cancelling = scope.clone();
         tokio::spawn(async move {
             while !ready() {
                 tokio::task::yield_now().await;
             }
             cancelling.cancel();
         });
-        cancel
+        scope
     }
 
     struct Noop {
@@ -277,11 +244,11 @@ mod tests {
             "noop"
         }
 
-        async fn check(&self) -> Result<bool, ProbeError> {
+        async fn check(&self, _scope: &Scope) -> Result<bool, ProbeError> {
             Ok(self.satisfied)
         }
 
-        async fn execute(&mut self, _token: &CancellationToken) -> Result<(), ProbeError> {
+        async fn execute(&mut self, _scope: &Scope) -> Result<(), ProbeError> {
             if self.fail { Err(ProbeError) } else { Ok(()) }
         }
     }
@@ -293,7 +260,10 @@ mod tests {
             fail: false,
         })];
         let mut plan = Plan::new(steps);
-        assert!(plan.run().await.is_ok());
+        assert!(matches!(
+            plan.run(&Scope::root()).await,
+            Outcome::Completed(Ok(()))
+        ));
     }
 
     #[tokio::test]
@@ -303,7 +273,10 @@ mod tests {
             fail: true,
         })];
         let mut plan = Plan::new(steps);
-        assert!(matches!(plan.run().await, Err(ProbeError)));
+        assert!(matches!(
+            plan.run(&Scope::root()).await,
+            Outcome::Completed(Err(ProbeError))
+        ));
     }
 
     #[tokio::test]
@@ -312,7 +285,7 @@ mod tests {
             satisfied: false,
             fail: false,
         };
-        assert!(step.rollback(&cancel::root()).await.is_ok());
+        assert!(step.rollback(&Scope::root()).await.is_ok());
     }
 
     struct Recorder {
@@ -330,11 +303,11 @@ mod tests {
             self.name
         }
 
-        async fn check(&self) -> Result<bool, ProbeError> {
+        async fn check(&self, _scope: &Scope) -> Result<bool, ProbeError> {
             Ok(false)
         }
 
-        async fn execute(&mut self, _token: &CancellationToken) -> Result<(), ProbeError> {
+        async fn execute(&mut self, _scope: &Scope) -> Result<(), ProbeError> {
             self.log
                 .lock()
                 .unwrap()
@@ -346,7 +319,7 @@ mod tests {
             }
         }
 
-        async fn rollback(&mut self, _token: &CancellationToken) -> Result<(), ProbeError> {
+        async fn rollback(&mut self, _scope: &Scope) -> Result<(), ProbeError> {
             self.log
                 .lock()
                 .unwrap()
@@ -383,7 +356,10 @@ mod tests {
             }),
         ];
         let mut plan = Plan::new(steps);
-        assert!(matches!(plan.run().await, Err(ProbeError)));
+        assert!(matches!(
+            plan.run(&Scope::root()).await,
+            Outcome::Completed(Err(ProbeError))
+        ));
 
         assert_eq!(
             *log.lock().unwrap(),
@@ -422,7 +398,10 @@ mod tests {
             }),
         ];
         let mut plan = Plan::new(steps);
-        assert!(matches!(plan.run().await, Err(ProbeError)));
+        assert!(matches!(
+            plan.run(&Scope::root()).await,
+            Outcome::Completed(Err(ProbeError))
+        ));
 
         assert_eq!(
             *log.lock().unwrap(),
@@ -463,7 +442,10 @@ mod tests {
         }));
 
         let mut plan = Plan::new(steps);
-        assert!(matches!(plan.run().await, Err(ProbeError)));
+        assert!(matches!(
+            plan.run(&Scope::root()).await,
+            Outcome::Completed(Err(ProbeError))
+        ));
 
         let log = log.lock().unwrap();
         assert_eq!(log.len(), 130);
@@ -488,7 +470,10 @@ mod tests {
             }),
         ];
         let mut plan = Plan::new(steps);
-        assert!(matches!(plan.run().await, Err(ProbeError)));
+        assert!(matches!(
+            plan.run(&Scope::root()).await,
+            Outcome::Completed(Err(ProbeError))
+        ));
         assert_eq!(*log.lock().unwrap(), vec!["execute:b", "rollback:b"]);
     }
 
@@ -506,18 +491,18 @@ mod tests {
             "partially-mutating"
         }
 
-        async fn check(&self) -> Result<bool, ProbeError> {
+        async fn check(&self, _scope: &Scope) -> Result<bool, ProbeError> {
             Ok(false)
         }
 
-        async fn execute(&mut self, _token: &CancellationToken) -> Result<(), ProbeError> {
+        async fn execute(&mut self, _scope: &Scope) -> Result<(), ProbeError> {
             while self.progress < self.fail_at {
                 self.progress += 1;
             }
             Err(ProbeError)
         }
 
-        async fn rollback(&mut self, _token: &CancellationToken) -> Result<(), ProbeError> {
+        async fn rollback(&mut self, _scope: &Scope) -> Result<(), ProbeError> {
             while self.progress > 0 {
                 self.progress -= 1;
                 self.log.lock().unwrap().push(self.progress);
@@ -535,7 +520,10 @@ mod tests {
             log: log.clone(),
         })];
         let mut plan = Plan::new(steps);
-        assert!(matches!(plan.run().await, Err(ProbeError)));
+        assert!(matches!(
+            plan.run(&Scope::root()).await,
+            Outcome::Completed(Err(ProbeError))
+        ));
 
         assert_eq!(*log.lock().unwrap(), vec![2, 1, 0]);
     }
@@ -551,16 +539,16 @@ mod tests {
         })];
         let mut plan = Plan::new(steps);
 
-        let cancel = cancel::root();
-        cancel.cancel();
-        let outcome = plan.run_cancellable(&cancel).await;
+        let scope = Scope::root();
+        scope.cancel();
+        let outcome = plan.run(&scope).await;
 
         assert!(matches!(outcome, Outcome::Interrupted));
         assert!(log.lock().unwrap().is_empty());
     }
 
     struct InterruptsDuringExecute {
-        interrupt: CancellationToken,
+        interrupt: Scope,
         log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     }
 
@@ -572,17 +560,17 @@ mod tests {
             "a"
         }
 
-        async fn check(&self) -> Result<bool, ProbeError> {
+        async fn check(&self, _scope: &Scope) -> Result<bool, ProbeError> {
             Ok(false)
         }
 
-        async fn execute(&mut self, _token: &CancellationToken) -> Result<(), ProbeError> {
+        async fn execute(&mut self, _scope: &Scope) -> Result<(), ProbeError> {
             self.log.lock().unwrap().push("execute:a".to_string());
             self.interrupt.cancel();
             Ok(())
         }
 
-        async fn rollback(&mut self, _token: &CancellationToken) -> Result<(), ProbeError> {
+        async fn rollback(&mut self, _scope: &Scope) -> Result<(), ProbeError> {
             self.log.lock().unwrap().push("rollback:a".to_string());
             Ok(())
         }
@@ -591,10 +579,10 @@ mod tests {
     #[tokio::test]
     async fn interrupting_after_a_step_rolls_back_only_that_step() {
         let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let cancel = cancel::root();
+        let scope = Scope::root();
         let steps: Vec<Box<dyn Step<Error = ProbeError>>> = vec![
             Box::new(InterruptsDuringExecute {
-                interrupt: cancel.clone(),
+                interrupt: scope.clone(),
                 log: log.clone(),
             }),
             Box::new(Recorder {
@@ -605,7 +593,7 @@ mod tests {
             }),
         ];
         let mut plan = Plan::new(steps);
-        let outcome = plan.run_cancellable(&cancel).await;
+        let outcome = plan.run(&scope).await;
 
         assert!(matches!(outcome, Outcome::Interrupted));
         assert_eq!(*log.lock().unwrap(), vec!["execute:a", "rollback:a"]);
@@ -624,13 +612,13 @@ mod tests {
             "cooperative"
         }
 
-        async fn check(&self) -> Result<bool, ProbeError> {
+        async fn check(&self, _scope: &Scope) -> Result<bool, ProbeError> {
             Ok(false)
         }
 
-        async fn execute(&mut self, token: &CancellationToken) -> Result<(), ProbeError> {
+        async fn execute(&mut self, token: &Scope) -> Result<(), ProbeError> {
             for i in 0..self.total_iterations {
-                if token.is_cancelled() {
+                if token.is_stopped() {
                     self.log.lock().unwrap().push(format!("cancelled-at:{i}"));
                     return Ok(());
                 }
@@ -653,9 +641,9 @@ mod tests {
         let mut plan = Plan::new(steps);
 
         let checkpoint_log = log.clone();
-        let cancel = cancel_once(move || checkpoint_log.lock().unwrap().len() >= 3);
+        let scope = cancel_once(move || checkpoint_log.lock().unwrap().len() >= 3);
 
-        let outcome = plan.run_cancellable(&cancel).await;
+        let outcome = plan.run(&scope).await;
 
         assert!(matches!(outcome, Outcome::Interrupted));
         let log = log.lock().unwrap();
@@ -679,17 +667,17 @@ mod tests {
             "fails-when-cancelled"
         }
 
-        async fn check(&self) -> Result<bool, ProbeError> {
+        async fn check(&self, _scope: &Scope) -> Result<bool, ProbeError> {
             Ok(false)
         }
 
-        async fn execute(&mut self, token: &CancellationToken) -> Result<(), ProbeError> {
+        async fn execute(&mut self, token: &Scope) -> Result<(), ProbeError> {
             self.log.lock().unwrap().push("execute".to_string());
-            token.cancelled().await;
+            token.stopped().await;
             Err(ProbeError)
         }
 
-        async fn rollback(&mut self, _token: &CancellationToken) -> Result<(), ProbeError> {
+        async fn rollback(&mut self, _scope: &Scope) -> Result<(), ProbeError> {
             self.log.lock().unwrap().push("rollback".to_string());
             Ok(())
         }
@@ -703,9 +691,9 @@ mod tests {
         let mut plan = Plan::new(steps);
 
         let started = log.clone();
-        let cancel = cancel_once(move || !started.lock().unwrap().is_empty());
+        let scope = cancel_once(move || !started.lock().unwrap().is_empty());
 
-        let outcome = plan.run_cancellable(&cancel).await;
+        let outcome = plan.run(&scope).await;
 
         assert!(matches!(outcome, Outcome::Interrupted));
         assert_eq!(*log.lock().unwrap(), vec!["execute", "rollback"]);
@@ -722,8 +710,10 @@ mod tests {
             self.0.lock().unwrap().push(name);
         }
 
-        fn on_step_failed(&self, _span: &tracing::Span) {
-            self.0.lock().unwrap().push("failed");
+        fn on_step_closed(&self, _span: &tracing::Span, failed: bool) {
+            if failed {
+                self.0.lock().unwrap().push("failed");
+            }
         }
     }
 
@@ -773,7 +763,10 @@ mod tests {
         // test reaching the same span callsite without a subscriber can otherwise leave these spans
         // disabled and strip their metadata.
         let _ = tracing::subscriber::set_global_default(EnablingSubscriber);
-        assert!(matches!(runtime.block_on(plan.run()), Err(ProbeError)));
+        assert!(matches!(
+            runtime.block_on(plan.run(&Scope::root())),
+            Outcome::Completed(Err(ProbeError))
+        ));
 
         // The failure is reported while the failed step's span is still open, so a presentation
         // layer can still reach the line that span is drawing.

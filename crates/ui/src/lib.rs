@@ -3,11 +3,12 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub mod activity;
+mod live;
 pub mod message;
 mod progress;
 
-pub use activity::activity_reporter;
-pub use progress::{download_reporter, init_tracing, step_observer, step_style};
+pub use live::{Reporters, reporters};
+pub use progress::{init_tracing, step_style};
 
 /// Whether anything may be drawn in place. Set once by [`init_tracing`], so a caller that never
 /// initialises the output keeps the default.

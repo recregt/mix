@@ -1,9 +1,9 @@
-pub mod cancel;
 pub mod group;
+pub mod scope;
 
 mod error;
 mod run;
 
-pub use cancel::CancellationToken;
 pub use error::Error;
 pub use run::{Command, Drain, Foreground};
+pub use scope::{Scope, Stop};

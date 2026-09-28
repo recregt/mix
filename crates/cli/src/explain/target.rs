@@ -4,7 +4,7 @@
 //! from it, and `mix bootstrap` declares the per-user configuration through it — so what a
 //! finding and a reason read like is written once, here.
 
-use mix_app::target::{Error, Unfixable};
+use mix_shell::target::{Error, Unfixable};
 
 use super::{Diagnostic, core_error};
 

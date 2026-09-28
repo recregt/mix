@@ -8,9 +8,7 @@ license = "MPL-2.0"
 [dependencies]
 mix-exec = { path = "../exec" }
 async-trait = { workspace = true }
-futures-util = { workspace = true }
 memchr = { workspace = true }
-nix = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -18,7 +16,6 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 divan = { workspace = true }
-tempfile = { workspace = true }
 tokio = { workspace = true }
 
 [[bench]]

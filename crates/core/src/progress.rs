@@ -17,9 +17,9 @@ impl DownloadProgress for NoopProgress {
 pub trait StepObserver: Send + Sync {
     fn on_step_span(&self, span: &tracing::Span);
 
-    /// Called before the span of a step that failed is closed, so a presentation layer can mark
-    /// the line it is about to keep on screen as a failure rather than as a success.
-    fn on_step_failed(&self, _span: &tracing::Span) {}
+    /// Called before a step's span is closed, so a presentation layer can mark the line it is
+    /// about to keep on screen as a failure rather than as a success.
+    fn on_step_closed(&self, _span: &tracing::Span, _failed: bool) {}
 }
 
 /// Receives a long-running child process's output as it is produced, one display line at a time.
@@ -38,6 +38,12 @@ pub trait ActivityReporter: Send + Sync {
     fn clear(&self);
 
     fn build_started(&self, _derivation: &str) {}
+}
+
+pub struct NoopSteps;
+
+impl StepObserver for NoopSteps {
+    fn on_step_span(&self, _span: &tracing::Span) {}
 }
 
 pub struct NoopActivity;

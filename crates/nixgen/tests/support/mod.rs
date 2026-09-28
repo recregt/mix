@@ -5,7 +5,7 @@ use std::io::Write as _;
 fn finished(command: mix_exec::Command) -> std::process::Output {
     let line = command.line();
     command
-        .output_blocking(&mix_exec::cancel::root())
+        .output_blocking(&mix_exec::Scope::root())
         .unwrap_or_else(|error| panic!("failed to run {line}: {error}"))
 }
 

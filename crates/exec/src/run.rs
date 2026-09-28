@@ -7,7 +7,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tracing::Instrument;
 
 use crate::group;
-use crate::{CancellationToken, Error};
+use crate::{Error, Scope, Stop};
 
 /// Read size for a streamed pipe: large enough that a burst of output costs one syscall,
 /// small enough that a single slow line still reaches the screen immediately.
@@ -130,9 +130,9 @@ impl Command {
             .map_err(|source| Error::spawn(line, source))
     }
 
-    pub async fn run(self, token: &CancellationToken) -> Result<Output, Error> {
+    pub async fn run(self, scope: &Scope) -> Result<Output, Error> {
         let line = self.line();
-        let output = self.output(token).await?;
+        let output = self.output(scope).await?;
         if output.status.success() {
             Ok(output)
         } else {
@@ -140,15 +140,15 @@ impl Command {
         }
     }
 
-    pub fn run_blocking(self, token: &CancellationToken) -> Result<Output, Error> {
-        blocking(self.run(token))
+    pub fn run_blocking(self, scope: &Scope) -> Result<Output, Error> {
+        blocking(self.run(scope))
     }
 
-    pub fn output_blocking(self, token: &CancellationToken) -> Result<Output, Error> {
-        blocking(self.output(token))
+    pub fn output_blocking(self, scope: &Scope) -> Result<Output, Error> {
+        blocking(self.output(scope))
     }
 
-    pub async fn output(self, token: &CancellationToken) -> Result<Output, Error> {
+    pub async fn output(self, scope: &Scope) -> Result<Output, Error> {
         let line = self.line();
         tracing::debug!("running command: {line}");
 
@@ -161,8 +161,8 @@ impl Command {
             })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let (mut child, group) =
-            group::spawn(&mut process).map_err(|source| Error::spawn(line.clone(), source))?;
+        let (mut child, group) = group::spawn(&mut process, scope.processes())
+            .map_err(|source| Error::spawn(line.clone(), source))?;
 
         let stdin_task = self.input.map(|input| {
             let mut stdin = child.stdin.take().expect("stdin was piped");
@@ -186,14 +186,14 @@ impl Command {
 
         let status = tokio::select! {
             status = child.wait() => status.map_err(|source| Error::spawn(line.clone(), source))?,
-            () = token.cancelled() => {
-                group.stop(&mut child, group::GRACE).await;
+            stop = scope.stopped() => {
+                group.stop(&mut child).await;
                 stdout_task.abort();
                 stderr_task.abort();
                 if let Some(stdin_task) = &stdin_task {
                     stdin_task.abort();
                 }
-                return Err(Error::Cancelled { command: line });
+                return Err(Error::stopped(line, stop));
             }
         };
 
@@ -231,6 +231,12 @@ fn blocking(work: impl Future<Output = Result<Output, Error>>) -> Result<Output,
 impl Error {
     fn spawn(command: String, source: std::io::Error) -> Self {
         Self::Spawn { command, source }
+    }
+
+    fn stopped(command: String, stop: Stop) -> Self {
+        match stop {
+            Stop::Cancelled => Self::Cancelled { command },
+        }
     }
 }
 

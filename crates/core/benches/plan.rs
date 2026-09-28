@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use mix_core::{CancellationToken, Plan, Result, Step};
+use mix_core::{Outcome, Plan, Result, Scope, Step};
 
 fn main() {
     divan::main();
@@ -18,11 +18,11 @@ impl Step for NoopStep {
         "noop"
     }
 
-    async fn check(&self) -> Result<bool> {
+    async fn check(&self, _scope: &Scope) -> Result<bool> {
         Ok(self.satisfied)
     }
 
-    async fn execute(&mut self, _token: &CancellationToken) -> Result<()> {
+    async fn execute(&mut self, _scope: &Scope) -> Result<()> {
         if self.fail {
             Err(mix_core::Error::TaskPanicked(String::new()))
         } else {
@@ -66,23 +66,41 @@ fn runtime() -> tokio::runtime::Runtime {
 #[divan::bench(args = [1, 8, 64])]
 fn run_satisfied_steps(bencher: divan::Bencher, steps: usize) {
     let runtime = runtime();
+    let scope = Scope::root();
     bencher
         .with_inputs(|| plan(steps, true))
-        .bench_local_values(|mut plan| runtime.block_on(plan.run()).unwrap());
+        .bench_local_values(|mut plan| {
+            assert!(matches!(
+                runtime.block_on(plan.run(&scope)),
+                Outcome::Completed(Ok(()))
+            ))
+        });
 }
 
 #[divan::bench(args = [1, 8, 64])]
 fn run_executed_steps(bencher: divan::Bencher, steps: usize) {
     let runtime = runtime();
+    let scope = Scope::root();
     bencher
         .with_inputs(|| plan(steps, false))
-        .bench_local_values(|mut plan| runtime.block_on(plan.run()).unwrap());
+        .bench_local_values(|mut plan| {
+            assert!(matches!(
+                runtime.block_on(plan.run(&scope)),
+                Outcome::Completed(Ok(()))
+            ))
+        });
 }
 
 #[divan::bench(args = [8, 64, 128])]
 fn rollback_after_a_failed_step(bencher: divan::Bencher, steps: usize) {
     let runtime = runtime();
+    let scope = Scope::root();
     bencher
         .with_inputs(|| failing_plan(steps))
-        .bench_local_values(|mut plan| runtime.block_on(plan.run()).unwrap_err());
+        .bench_local_values(|mut plan| {
+            assert!(matches!(
+                runtime.block_on(plan.run(&scope)),
+                Outcome::Completed(Err(_))
+            ))
+        });
 }

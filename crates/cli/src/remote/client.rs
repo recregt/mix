@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures_util::{Stream, StreamExt};
-use mix_app::repair::Repair;
-use mix_app::target::Error as TargetError;
 use mix_core::{ActivityReporter, DownloadProgress, StepObserver};
 use mix_rpc::{BootstrapRequest, Client, Event, Failure, Level, Mirror, Outcome, RepairRequest};
+use mix_shell::ops::repair::Repair;
+use mix_shell::target::Error as TargetError;
 
 use super::convert::{bootstrap_error_from, report_from_wire, target_error_from};
 
@@ -31,12 +31,18 @@ struct Replay {
 
 impl Replay {
     fn new() -> Self {
+        let mix_ui::Reporters {
+            activity,
+            steps,
+            downloads,
+            ..
+        } = mix_ui::reporters();
         Self {
             spans: HashMap::new(),
             open: Vec::new(),
-            steps: mix_ui::step_observer(),
-            downloads: mix_ui::download_reporter(),
-            activity: mix_ui::activity_reporter(),
+            steps,
+            downloads,
+            activity,
         }
     }
 
@@ -70,10 +76,8 @@ impl Replay {
                 self.open.push(id);
             }
             Event::SpanClosed { id, failed } => {
-                if let Some(span) = self.spans.remove(&id)
-                    && failed
-                {
-                    self.steps.on_step_failed(&span);
+                if let Some(span) = self.spans.remove(&id) {
+                    self.steps.on_step_closed(&span, failed);
                 }
                 self.open.retain(|open| *open != id);
             }

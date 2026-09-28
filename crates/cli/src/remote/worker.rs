@@ -13,7 +13,7 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 
-use crate::interrupt;
+use crate::controls;
 
 use super::convert::{failure_from_bootstrap, report_to_wire};
 
@@ -198,8 +198,8 @@ struct Steps(Shared);
 impl StepObserver for Steps {
     fn on_step_span(&self, _span: &tracing::Span) {}
 
-    fn on_step_failed(&self, span: &tracing::Span) {
-        if let Some(id) = span.id() {
+    fn on_step_closed(&self, span: &tracing::Span, failed: bool) {
+        if failed && let Some(id) = span.id() {
             self.0
                 .with(|forwarding| forwarding.failed.insert(id.into_u64()));
         }
@@ -237,25 +237,32 @@ impl mix_rpc::Worker for CliWorker {
         events: Events,
     ) -> Outcome {
         self.0.start(events.clone(), request.log_level);
-        let outcome = match mix_core::lock::acquire_exclusive(LOCK_FILE) {
+        let outcome = match mix_shell::effect::lock::acquire_exclusive(LOCK_FILE) {
             Err(error) => Outcome::Failure(Failure::Core(error)),
             Ok(_lock) => {
                 let mirror = request.mirror.as_ref();
-                let cancel = mix_exec::cancel::root();
-                let _watch = interrupt::watch(&cancel, interrupt::BOOTSTRAP, client_gone(&events));
-                let result = mix_app::bootstrap::bootstrap(
-                    mix_core::privilege::user_by_uid(caller.uid),
-                    mirror.map(|mirror| mirror.url.as_str()),
-                    mirror.and_then(|mirror| mirror.key.as_deref()),
-                    request.force,
-                    mix_app::bootstrap::Reporters {
+                let ctx = mix_shell::Context::new(mix_exec::Scope::root())
+                    .with_user(
+                        mix_shell::effect::accounts::user_by_uid(caller.uid)
+                            .and_then(mix_shell::profile::user_config_for),
+                    )
+                    .with_reporters(mix_shell::Reporters {
                         downloads: Arc::new(Downloads(events.clone())),
                         steps: Arc::new(Steps(self.0.clone())),
                         activity: Arc::new(Activity(events.clone())),
-                    },
-                    &cancel,
-                )
-                .await;
+                    })
+                    .with_env(mix_shell::RequestEnv {
+                        mirror: mirror.map(|mirror| mirror.url.clone()),
+                        mirror_key: mirror.and_then(|mirror| mirror.key.clone()),
+                    })
+                    .with_host(crate::commands::host_config());
+                let _watch = controls::watch(
+                    &ctx.scope,
+                    controls::BOOTSTRAP,
+                    client_gone(&events),
+                    controls::Side::Worker,
+                );
+                let result = mix_shell::ops::bootstrap::bootstrap(&ctx, request.force).await;
                 match result {
                     Ok(_) => Outcome::BootstrapDone,
                     Err(error) => Outcome::Failure(failure_from_bootstrap(error)),
@@ -268,14 +275,22 @@ impl mix_rpc::Worker for CliWorker {
 
     async fn repair(&self, caller: Caller, request: RepairRequest, events: Events) -> Outcome {
         self.0.start(events.clone(), request.log_level);
-        let outcome = match mix_core::lock::acquire_exclusive(LOCK_FILE) {
+        let outcome = match mix_shell::effect::lock::acquire_exclusive(LOCK_FILE) {
             Err(error) => Outcome::Failure(Failure::Core(error)),
             Ok(_lock) => {
-                let user_config = mix_core::privilege::user_by_uid(caller.uid)
-                    .and_then(mix_app::profile::existing_user_config_for);
-                let cancel = mix_exec::cancel::root();
-                let _watch = interrupt::watch(&cancel, interrupt::REPAIR, client_gone(&events));
-                let repair = mix_app::repair::repair(user_config.as_ref(), &cancel).await;
+                let ctx = mix_shell::Context::new(mix_exec::Scope::root())
+                    .with_user(
+                        mix_shell::effect::accounts::user_by_uid(caller.uid)
+                            .and_then(mix_shell::profile::existing_user_config_for),
+                    )
+                    .with_host(crate::commands::host_config());
+                let _watch = controls::watch(
+                    &ctx.scope,
+                    controls::REPAIR,
+                    client_gone(&events),
+                    controls::Side::Worker,
+                );
+                let repair = mix_shell::ops::repair::repair(&ctx).await;
                 Outcome::RepairDone {
                     reports: repair.reports.into_iter().map(report_to_wire).collect(),
                     interrupted: repair.interrupted,
@@ -296,7 +311,7 @@ pub async fn run() -> ExitCode {
     {
         return ExitCode::FAILURE;
     }
-    if !mix_core::privilege::is_root() {
+    if !mix_shell::effect::accounts::is_root() {
         eprintln!("mix worker must be started by mix itself, as root");
         return ExitCode::FAILURE;
     }

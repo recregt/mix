@@ -1,14 +1,15 @@
 //! Showing a long-running command's output without turning the terminal into a flicker box.
 
 use std::borrow::Cow;
-use std::io::IsTerminal;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use mix_core::{ActivityReporter, BuildProgress, NoopActivity};
+use mix_core::{ActivityReporter, BuildProgress};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 use unicode_width::UnicodeWidthChar;
+
+use crate::live::LiveLine;
 
 /// How often the live text is redrawn, matching the interval the spinner advances at.
 ///
@@ -349,43 +350,42 @@ impl FrameBuffer {
     pub fn forget(&mut self) {
         self.drawn.clear();
     }
+
+    pub fn drawn(&self) -> &str {
+        &self.drawn
+    }
 }
 
-struct SpanActivity {
+pub(crate) struct SpanActivity {
     throttle: Throttle,
     /// Whether nix is reporting counters. Once it is, they own the line: a stray log line must
     /// not fight them for it, and dropping those lines costs an atomic load.
     counting: AtomicBool,
-    /// The frame being drawn and the one it replaces. Uncontended in practice: one reader
-    /// drains the process's output.
-    frame: Mutex<FrameBuffer>,
+    live: Arc<LiveLine>,
 }
 
 impl SpanActivity {
-    fn new() -> Self {
+    pub(crate) fn new(live: Arc<LiveLine>) -> Self {
         Self {
             throttle: Throttle::new(),
             counting: AtomicBool::new(false),
-            frame: Mutex::new(FrameBuffer::new()),
+            live,
         }
     }
 
     /// Builds a frame in the reporter's own buffer and hands it to the step's line, unless it is
     /// the frame that is already there.
     fn draw(&self, fill: impl FnOnce(&mut String)) {
-        let Ok(mut frame) = self.frame.lock() else {
-            return;
-        };
-        if let Some(frame) = frame.build(fill) {
+        let mut line = self.live.lock();
+        if let Some(frame) = line.frame.build(fill) {
             tracing::Span::current().pb_set_message(frame);
+            line.restart(Instant::now());
         }
     }
 
     /// Takes the line back, after something else has drawn over it.
     fn cleared(&self) {
-        if let Ok(mut frame) = self.frame.lock() {
-            frame.forget();
-        }
+        self.live.lock().frame.forget();
         tracing::Span::current().pb_set_message("");
     }
 }
@@ -426,7 +426,7 @@ impl ActivityReporter for SpanActivity {
 
 /// Forwards the output to the log instead of drawing it, for pipes and CI logs where a redrawn
 /// line would just be noise. Costs nothing until `-vv` turns the level on.
-struct LoggedActivity;
+pub(crate) struct LoggedActivity;
 
 impl ActivityReporter for LoggedActivity {
     fn line(&self, line: &str) {
@@ -439,20 +439,6 @@ impl ActivityReporter for LoggedActivity {
 
     fn build_started(&self, derivation: &str) {
         tracing::debug!("building {derivation}");
-    }
-}
-
-/// The reporter to hand to a long-running command, chosen once for the process.
-///
-/// Nothing is drawn unless progress was left on and there is a terminal watching: a script that
-/// asked for plain output pays nothing per line.
-pub fn activity_reporter() -> Arc<dyn ActivityReporter> {
-    if crate::progress_enabled() && std::io::stderr().is_terminal() {
-        Arc::new(SpanActivity::new())
-    } else if tracing::enabled!(tracing::Level::DEBUG) {
-        Arc::new(LoggedActivity)
-    } else {
-        Arc::new(NoopActivity)
     }
 }
 
@@ -565,7 +551,7 @@ mod tests {
 
     #[test]
     fn reporting_a_line_without_a_progress_bar_is_harmless() {
-        let reporter = SpanActivity::new();
+        let reporter = SpanActivity::new(Arc::new(LiveLine::new()));
         reporter.line("no subscriber is installed");
         reporter.progress(&BuildProgress {
             builds_done: 1,
@@ -761,7 +747,7 @@ mod tests {
 
     #[test]
     fn counters_take_the_line_over_from_free_form_output() {
-        let reporter = SpanActivity::new();
+        let reporter = SpanActivity::new(Arc::new(LiveLine::new()));
         reporter.progress(&progress());
         assert!(reporter.counting.load(Ordering::Relaxed));
 
@@ -772,7 +758,7 @@ mod tests {
 
     #[test]
     fn an_idle_snapshot_hands_the_line_back_to_free_form_output() {
-        let reporter = SpanActivity::new();
+        let reporter = SpanActivity::new(Arc::new(LiveLine::new()));
         reporter.progress(&progress());
         reporter.progress(&BuildProgress::default());
         assert!(!reporter.counting.load(Ordering::Relaxed));

@@ -5,7 +5,7 @@ members = [
     "crates/core",
     "crates/pins",
     "crates/nixgen",
-    "crates/app",
+    "crates/shell",
     "crates/ui",
     "crates/cli",
     "crates/rpc",
