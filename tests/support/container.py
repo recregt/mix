@@ -1,11 +1,15 @@
 import fcntl
+import functools
 import json
 import os
+import pathlib
+import re
 import subprocess
 import time
 
 import pytest
 
+from support import resources
 from support.paths import CACHE_DIR, REPO_ROOT, TESTS_ROOT
 
 NIX_BINARY = "/nix/var/nix/profiles/default/bin/nix"
@@ -15,6 +19,7 @@ NIX_CONF_DEST = "/etc/nix/nix.conf"
 
 IMAGE_TAG = "mix-bootstrap-test:latest"
 REMOTE_IMAGE = os.environ.get("MIX_TEST_IMAGE")
+CONTAINER_NAME = re.compile(r"mix-test-(\d+)-\d+")
 
 
 def literal(text: str) -> str:
@@ -123,8 +128,7 @@ class Container:
         return self.exec("test", "-e", path).returncode == 0
 
 
-def _start_container(image: str) -> str:
-    name = f"mix-test-{os.getpid()}-{time.time_ns()}"
+def _start_container(image: str, name: str) -> str:
     subprocess.run(
         ["podman", "run", "-d", "--systemd=always", "--cap-add=SYS_ADMIN", "--name", name, image],
         check=True,
@@ -203,11 +207,46 @@ def container_image():
     return IMAGE_TAG
 
 
+def reap_orphans() -> None:
+    names = subprocess.run(
+        ["podman", "ps", "-a", "--format", "{{.Names}}"], capture_output=True, text=True
+    ).stdout.split()
+    for name in names:
+        match = CONTAINER_NAME.fullmatch(name)
+        if match and not resources.alive(int(match.group(1))):
+            subprocess.run(["podman", "rm", "-f", name], capture_output=True)
+
+
+def _cgroup_of(name: str) -> pathlib.Path:
+    path = subprocess.run(
+        ["podman", "inspect", "-f", "{{.State.CgroupPath}}", name],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    return resources.CGROUP_ROOT / path.lstrip("/")
+
+
+@functools.cache
+def _known() -> dict[str, resources.Demand]:
+    return resources.snapshotted(os.environ.get("MIX_TEST_SESSION", ""))
+
+
 @pytest.fixture()
-def container(container_image, mix_binary):
-    name = _start_container(container_image)
+def container(request, container_image, mix_binary):
+    test = request.node.nodeid
+    name = f"mix-test-{os.getpid()}-{time.time_ns()}"
+    waited = resources.admit(name, test, resources.demand_for(test, _known()))
+    started = time.monotonic()
+    cgroup = None
     try:
+        _start_container(container_image, name)
+        cgroup = _cgroup_of(name)
+        resources.attach(name, cgroup)
         subprocess.run(["podman", "cp", str(mix_binary), f"{name}:/usr/local/bin/mix"], check=True)
         yield Container(name)
     finally:
+        if cgroup is not None:
+            resources.record(test, cgroup, time.monotonic() - started, waited)
         subprocess.run(["podman", "rm", "-f", name], capture_output=True)
+        resources.release(name)
