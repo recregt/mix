@@ -9,7 +9,7 @@ pub mod output;
 use std::sync::Arc;
 
 use mix_core::nix_plan::DryRun;
-use mix_core::paths::DEFAULT_PROFILE_BIN;
+use mix_core::paths::{DEFAULT_PROFILE_BIN, HOME_MANAGER_PROFILE_NAME, nix_profiles_dir};
 use mix_core::privilege::InvokingUser;
 use mix_core::{ActivityReporter, Result, Scope};
 use mix_exec::{Command, Drain};
@@ -19,11 +19,12 @@ use crate::exec::output::StreamDrain;
 /// How much of a streamed process's output is kept to explain a failure with.
 const STREAM_TAIL: usize = 64 * 1024;
 
-fn path_with_nix_profile() -> String {
-    match std::env::var("PATH") {
-        Ok(path) => format!("{DEFAULT_PROFILE_BIN}:{path}"),
-        Err(_) => DEFAULT_PROFILE_BIN.to_string(),
-    }
+fn search_path(user: &InvokingUser) -> String {
+    let generation = nix_profiles_dir(&user.home).join(HOME_MANAGER_PROFILE_NAME);
+    format!(
+        "{}/home-path/bin:{DEFAULT_PROFILE_BIN}:/usr/bin:/bin",
+        generation.display()
+    )
 }
 
 fn command_as(user: &InvokingUser, program: &str, args: &[&str]) -> Command {
@@ -32,7 +33,7 @@ fn command_as(user: &InvokingUser, program: &str, args: &[&str]) -> Command {
         .as_user(user.uid, user.gid)
         .env("HOME", &user.home)
         .env("USER", &user.name)
-        .env("PATH", path_with_nix_profile())
+        .env("PATH", search_path(user))
 }
 
 /// Hands every line to `activity` as it arrives and keeps only what a later error message would

@@ -16,6 +16,12 @@ pub fn enrolled_user() -> Option<UserConfig> {
     mix_core::privilege::invoking_user().and_then(mix_app::profile::existing_user_config_for)
 }
 
+pub fn host_config() -> mix_app::HostConfig {
+    mix_app::HostConfig {
+        git_binary: std::env::var_os("MIX_GIT_PATH").map(std::path::PathBuf::from),
+    }
+}
+
 pub fn request_env(mirror: Option<&str>, mirror_key: Option<&str>) -> mix_app::RequestEnv {
     mix_app::RequestEnv {
         mirror: mirror.map(str::to_string),

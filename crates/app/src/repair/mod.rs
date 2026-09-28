@@ -9,10 +9,10 @@ use mix_core::Scope;
 use mix_core::models::{Target, UserConfig, targets};
 use mix_core::paths::{NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT, mix_state_dir};
 
-use crate::Context;
 use crate::git;
 use crate::systemd;
 use crate::target::{self, Error};
+use crate::{Context, HostConfig};
 
 pub struct RepairReport {
     pub name: String,
@@ -58,7 +58,7 @@ pub async fn repair(ctx: &Context) -> Repair {
     }
 
     if let Some(cfg) = user_config {
-        commit_the_tracked_state(cfg, &shielded, &mut reports).await;
+        commit_the_tracked_state(cfg, &ctx.host, &shielded, &mut reports).await;
     }
 
     Repair {
@@ -127,13 +127,14 @@ async fn restart_the_daemon(scope: &Scope, reports: &mut Vec<RepairReport>) {
 /// Configuration mix rewrote is drift the user should be able to see in git.
 async fn commit_the_tracked_state(
     cfg: &UserConfig,
+    host: &HostConfig,
     scope: &Scope,
     reports: &mut Vec<RepairReport>,
 ) {
     const NAME: &str = "git-tracked state";
 
     let state_dir = mix_state_dir(&cfg.user.home);
-    let git = git::Git::resolve(&cfg.user).await;
+    let git = git::Git::resolve(&cfg.user, host.git_binary.as_deref()).await;
     match git.sync(&cfg.user, &state_dir, scope).await {
         Ok(true) => {
             tracing::debug!("committed drift in git-tracked state");

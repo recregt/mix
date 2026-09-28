@@ -12,7 +12,7 @@ pub use error::{Error, Host, Result};
 
 use mix_core::{Outcome, Plan, Scope, privilege};
 
-use crate::{Context, Reporters};
+use crate::{Context, HostConfig, Reporters};
 
 pub struct Environment(());
 
@@ -41,6 +41,7 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
         force,
         ctx.reporters.clone(),
         ctx.user.clone(),
+        ctx.host.clone(),
         scope,
     )
     .await
@@ -52,6 +53,7 @@ async fn run_steps(
     force: bool,
     reporters: Reporters,
     user_config: Option<mix_core::models::UserConfig>,
+    host: HostConfig,
     scope: &Scope,
 ) -> Result<Environment> {
     let mut plan = Plan::new(planner::bootstrap_steps(
@@ -61,6 +63,7 @@ async fn run_steps(
         reporters.downloads,
         reporters.activity,
         user_config,
+        host,
     ))
     .with_step_observer(reporters.steps);
     let cause = match plan.run(scope).await {

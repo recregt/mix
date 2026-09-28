@@ -26,6 +26,7 @@ pub mod remove;
 pub mod repair;
 pub mod target;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use mix_core::models::UserConfig;
@@ -51,6 +52,11 @@ impl Reporters {
 }
 
 #[derive(Debug, Clone, Default)]
+pub struct HostConfig {
+    pub git_binary: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct RequestEnv {
     pub mirror: Option<String>,
     pub mirror_key: Option<String>,
@@ -61,6 +67,7 @@ pub struct Context {
     pub scope: Scope,
     pub reporters: Reporters,
     pub env: RequestEnv,
+    pub host: HostConfig,
 }
 
 impl Context {
@@ -70,6 +77,7 @@ impl Context {
             scope,
             reporters: Reporters::silent(),
             env: RequestEnv::default(),
+            host: HostConfig::default(),
         }
     }
 
@@ -85,6 +93,11 @@ impl Context {
 
     pub fn with_env(mut self, env: RequestEnv) -> Self {
         self.env = env;
+        self
+    }
+
+    pub fn with_host(mut self, host: HostConfig) -> Self {
+        self.host = host;
         self
     }
 

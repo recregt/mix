@@ -17,7 +17,8 @@ pub async fn run(
             steps: reporters.passing_steps,
             activity: reporters.activity,
         })
-        .with_env(super::request_env(mirror, mirror_key));
+        .with_env(super::request_env(mirror, mirror_key))
+        .with_host(super::host_config());
     let _watch =
         crate::interrupt::watch(&ctx.scope, crate::interrupt::CHANGE, std::future::pending());
 

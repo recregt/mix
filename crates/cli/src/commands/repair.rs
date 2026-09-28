@@ -8,7 +8,9 @@ pub async fn run(verbosity: u8) -> anyhow::Result<ExitCode> {
         interrupted,
     } = if mix_core::privilege::is_root() {
         let _lock = super::acquire_lock()?;
-        let ctx = mix_app::Context::new(mix_exec::Scope::root()).with_user(super::enrolled_user());
+        let ctx = mix_app::Context::new(mix_exec::Scope::root())
+            .with_user(super::enrolled_user())
+            .with_host(super::host_config());
         let _watch =
             crate::interrupt::watch(&ctx.scope, crate::interrupt::REPAIR, std::future::pending());
         mix_app::repair::repair(&ctx).await

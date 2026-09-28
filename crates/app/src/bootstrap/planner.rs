@@ -3,6 +3,7 @@ use std::sync::Arc;
 use mix_core::models::UserConfig;
 use mix_core::{ActivityReporter, DownloadProgress, Step};
 
+use crate::HostConfig;
 use crate::bootstrap::error::Error;
 use crate::bootstrap::steps::{
     ActivateHomeManagerConfig, ConfigureNixConf, ConfigureSystemdService, CreateNixDir,
@@ -17,8 +18,17 @@ pub fn bootstrap_steps(
     progress: Arc<dyn DownloadProgress>,
     activity: Arc<dyn ActivityReporter>,
     user_config: Option<UserConfig>,
+    host: HostConfig,
 ) -> Vec<Box<dyn Step<Error = Error>>> {
-    steps_for(mirror, mirror_key, force, progress, activity, user_config)
+    steps_for(
+        mirror,
+        mirror_key,
+        force,
+        progress,
+        activity,
+        user_config,
+        host,
+    )
 }
 
 fn steps_for(
@@ -28,6 +38,7 @@ fn steps_for(
     progress: Arc<dyn DownloadProgress>,
     activity: Arc<dyn ActivityReporter>,
     user_config: Option<UserConfig>,
+    host: HostConfig,
 ) -> Vec<Box<dyn Step<Error = Error>>> {
     let mut steps: Vec<Box<dyn Step<Error = Error>>> = Vec::new();
     if force {
@@ -45,6 +56,7 @@ fn steps_for(
         mirror,
         mirror_key,
         activity,
+        host,
     )));
     steps
 }
@@ -90,6 +102,7 @@ mod tests {
             Arc::new(NoopProgress),
             noop_activity(),
             Some(user_config()),
+            HostConfig::default(),
         );
         let names = step_names(&steps);
         assert_eq!(
@@ -107,6 +120,7 @@ mod tests {
             Arc::new(NoopProgress),
             noop_activity(),
             None,
+            HostConfig::default(),
         );
         assert_eq!(step_names(&steps)[0], "remove the existing installation");
     }
@@ -120,6 +134,7 @@ mod tests {
             Arc::new(NoopProgress),
             noop_activity(),
             Some(user_config()),
+            HostConfig::default(),
         );
         let without_user = steps_for(
             None,
@@ -128,6 +143,7 @@ mod tests {
             Arc::new(NoopProgress),
             noop_activity(),
             None,
+            HostConfig::default(),
         );
         assert_eq!(step_names(&with_user), step_names(&without_user));
     }

@@ -254,7 +254,8 @@ impl mix_rpc::Worker for CliWorker {
                     .with_env(mix_app::RequestEnv {
                         mirror: mirror.map(|mirror| mirror.url.clone()),
                         mirror_key: mirror.and_then(|mirror| mirror.key.clone()),
-                    });
+                    })
+                    .with_host(crate::commands::host_config());
                 let _watch =
                     interrupt::watch(&ctx.scope, interrupt::BOOTSTRAP, client_gone(&events));
                 let result = mix_app::bootstrap::bootstrap(&ctx, request.force).await;
@@ -273,10 +274,12 @@ impl mix_rpc::Worker for CliWorker {
         let outcome = match mix_core::lock::acquire_exclusive(LOCK_FILE) {
             Err(error) => Outcome::Failure(Failure::Core(error)),
             Ok(_lock) => {
-                let ctx = mix_app::Context::new(mix_exec::Scope::root()).with_user(
-                    mix_core::privilege::user_by_uid(caller.uid)
-                        .and_then(mix_app::profile::existing_user_config_for),
-                );
+                let ctx = mix_app::Context::new(mix_exec::Scope::root())
+                    .with_user(
+                        mix_core::privilege::user_by_uid(caller.uid)
+                            .and_then(mix_app::profile::existing_user_config_for),
+                    )
+                    .with_host(crate::commands::host_config());
                 let _watch = interrupt::watch(&ctx.scope, interrupt::REPAIR, client_gone(&events));
                 let repair = mix_app::repair::repair(&ctx).await;
                 Outcome::RepairDone {

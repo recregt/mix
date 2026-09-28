@@ -15,6 +15,7 @@ use mix_core::paths::{
 use mix_core::{ActivityReporter, BuildProgress, Scope};
 use mix_nixgen::{AttrPath, FlakeRef, Installable};
 
+use crate::HostConfig;
 use crate::exec::{plan_as, run_as_reporting, run_as_with_input};
 use crate::fs;
 use crate::git;
@@ -193,11 +194,12 @@ pub async fn activate(
     mirror: Option<&str>,
     mirror_key: Option<&str>,
     activity: &Arc<dyn ActivityReporter>,
+    host: &HostConfig,
     scope: &Scope,
     policy: BuildPolicy,
 ) -> Result<bool> {
     let generation = switch(cfg, mirror, mirror_key, activity, scope, policy).await?;
-    finish(cfg, &generation, activity, scope).await
+    finish(cfg, &generation, activity, host, scope).await
 }
 
 pub async fn switch(
@@ -263,16 +265,17 @@ pub async fn finish(
     cfg: &UserConfig,
     generation: &str,
     activity: &Arc<dyn ActivityReporter>,
+    host: &HostConfig,
     scope: &Scope,
 ) -> Result<bool> {
     let activate = format!("{generation}/activate");
     run_as_reporting(&cfg.user, &activate, &[], scope, Some(Arc::clone(activity))).await?;
-    Ok(record(cfg, scope).await)
+    Ok(record(cfg, host, scope).await)
 }
 
-async fn record(cfg: &UserConfig, scope: &Scope) -> bool {
+async fn record(cfg: &UserConfig, host: &HostConfig, scope: &Scope) -> bool {
     let state_dir = mix_state_dir(&cfg.user.home);
-    let git = git::Git::resolve(&cfg.user).await;
+    let git = git::Git::resolve(&cfg.user, host.git_binary.as_deref()).await;
     let created_git_dir = !fs::exists(state_dir.join(".git")).await;
     if created_git_dir && let Err(error) = git.init(&cfg.user, &state_dir, scope).await {
         tracing::info!("could not record the change in git: {error}");

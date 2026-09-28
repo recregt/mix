@@ -17,7 +17,6 @@ const AUTHOR_NAME: &str = "mix";
 const AUTHOR_EMAIL: &str = "mix@localhost";
 const COMMIT_MESSAGE: &str = "mix: sync generated home-manager config";
 
-const GIT_BINARY_ENV: &str = "MIX_GIT_PATH";
 const PROFILE_GIT: &str = ".nix-profile/bin/git";
 const GITIGNORE: &str = ".gitignore";
 
@@ -30,9 +29,13 @@ pub struct Git {
 }
 
 impl Git {
-    pub async fn resolve(user: &InvokingUser) -> Self {
+    pub async fn resolve(user: &InvokingUser, configured: Option<&Path>) -> Self {
         Self {
-            binary: resolve_binary(user, std::env::var(GIT_BINARY_ENV).ok()).await,
+            binary: resolve_binary(
+                user,
+                configured.map(|path| path.to_string_lossy().into_owned()),
+            )
+            .await,
         }
     }
 
@@ -185,8 +188,13 @@ mod tests {
     }
 
     fn git() -> Git {
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let binary = std::env::split_paths(&path)
+            .map(|directory| directory.join("git"))
+            .find(|candidate| candidate.is_file())
+            .expect("the tests need git on PATH");
         Git {
-            binary: "git".to_string(),
+            binary: binary.to_string_lossy().into_owned(),
         }
     }
 

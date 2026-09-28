@@ -5,6 +5,7 @@ use mix_core::models::UserConfig;
 use mix_core::paths::mix_state_dir;
 use mix_core::{ActivityReporter, Scope, Step};
 
+use crate::HostConfig;
 use crate::bootstrap::error::{Error, Result};
 use crate::fs;
 use crate::profile::{self, BuildPolicy};
@@ -14,6 +15,7 @@ pub struct ActivateHomeManagerConfig {
     mirror: Option<String>,
     mirror_key: Option<String>,
     activity: Arc<dyn ActivityReporter>,
+    host: HostConfig,
     created_git_dir: bool,
 }
 
@@ -23,12 +25,14 @@ impl ActivateHomeManagerConfig {
         mirror: Option<&str>,
         mirror_key: Option<&str>,
         activity: Arc<dyn ActivityReporter>,
+        host: HostConfig,
     ) -> Self {
         Self {
             user_config,
             mirror: mirror.map(String::from),
             mirror_key: mirror_key.map(String::from),
             activity,
+            host,
             created_git_dir: false,
         }
     }
@@ -60,6 +64,7 @@ impl Step for ActivateHomeManagerConfig {
             self.mirror.as_deref(),
             self.mirror_key.as_deref(),
             &self.activity,
+            &self.host,
             scope,
             BuildPolicy::AllowSource,
         )
@@ -109,7 +114,7 @@ mod tests {
     #[tokio::test]
     async fn check_passes_without_a_user_config() {
         assert!(
-            ActivateHomeManagerConfig::new(None, None, None, noop())
+            ActivateHomeManagerConfig::new(None, None, None, noop(), HostConfig::default())
                 .check(&mix_exec::Scope::root())
                 .await
                 .unwrap()
@@ -119,8 +124,13 @@ mod tests {
     #[tokio::test]
     async fn check_reports_unconfigured_state_when_git_tracking_is_missing() {
         let home = tempfile::tempdir().unwrap();
-        let step =
-            ActivateHomeManagerConfig::new(Some(user_config(home.path())), None, None, noop());
+        let step = ActivateHomeManagerConfig::new(
+            Some(user_config(home.path())),
+            None,
+            None,
+            noop(),
+            HostConfig::default(),
+        );
         assert!(!step.check(&mix_exec::Scope::root()).await.unwrap());
     }
 
@@ -128,21 +138,27 @@ mod tests {
     async fn check_passes_once_the_state_dir_is_git_tracked() {
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(mix_state_dir(home.path()).join(".git")).unwrap();
-        let step =
-            ActivateHomeManagerConfig::new(Some(user_config(home.path())), None, None, noop());
+        let step = ActivateHomeManagerConfig::new(
+            Some(user_config(home.path())),
+            None,
+            None,
+            noop(),
+            HostConfig::default(),
+        );
         assert!(step.check(&mix_exec::Scope::root()).await.unwrap());
     }
 
     #[tokio::test]
     async fn execute_is_a_no_op_without_a_user_config() {
-        let mut step = ActivateHomeManagerConfig::new(None, None, None, noop());
+        let mut step =
+            ActivateHomeManagerConfig::new(None, None, None, noop(), HostConfig::default());
         step.execute(&mix_exec::Scope::root()).await.unwrap();
         assert!(!step.created_git_dir);
     }
 
     #[tokio::test]
     async fn rollback_is_a_no_op_without_a_user_config() {
-        ActivateHomeManagerConfig::new(None, None, None, noop())
+        ActivateHomeManagerConfig::new(None, None, None, noop(), HostConfig::default())
             .rollback(&mix_exec::Scope::root())
             .await
             .unwrap();
@@ -154,8 +170,13 @@ mod tests {
         let git_dir = mix_state_dir(home.path()).join(".git");
         std::fs::create_dir_all(&git_dir).unwrap();
 
-        let mut step =
-            ActivateHomeManagerConfig::new(Some(user_config(home.path())), None, None, noop());
+        let mut step = ActivateHomeManagerConfig::new(
+            Some(user_config(home.path())),
+            None,
+            None,
+            noop(),
+            HostConfig::default(),
+        );
         step.created_git_dir = true;
         step.rollback(&mix_exec::Scope::root()).await.unwrap();
 
@@ -169,8 +190,13 @@ mod tests {
         let git_dir = mix_state_dir(home.path()).join(".git");
         std::fs::create_dir_all(&git_dir).unwrap();
 
-        let mut step =
-            ActivateHomeManagerConfig::new(Some(user_config(home.path())), None, None, noop());
+        let mut step = ActivateHomeManagerConfig::new(
+            Some(user_config(home.path())),
+            None,
+            None,
+            noop(),
+            HostConfig::default(),
+        );
         step.rollback(&mix_exec::Scope::root()).await.unwrap();
 
         assert!(git_dir.exists());

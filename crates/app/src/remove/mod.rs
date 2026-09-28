@@ -58,17 +58,11 @@ pub async fn remove(ctx: &Context, packages: &[String]) -> Result<Removed> {
     }
 
     change::apply(
+        ctx,
         cfg,
         &state.without(&removed),
         &change::label("Removing", &removed),
-        change::PackageSource {
-            mirror: ctx.mirror(),
-            mirror_key: ctx.mirror_key(),
-            policy: BuildPolicy::AllowSource,
-        },
-        &ctx.reporters.activity,
-        &ctx.reporters.steps,
-        &ctx.scope,
+        BuildPolicy::AllowSource,
     )
     .await?;
 

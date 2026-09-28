@@ -56,20 +56,7 @@ pub async fn install(
     // were.
     let policy = BuildPolicy::from_allowing_source(allow_source_builds);
 
-    change::apply(
-        cfg,
-        &with_added(&state, &added),
-        &label,
-        change::PackageSource {
-            mirror: ctx.mirror(),
-            mirror_key: ctx.mirror_key(),
-            policy,
-        },
-        &ctx.reporters.activity,
-        &ctx.reporters.steps,
-        &ctx.scope,
-    )
-    .await?;
+    change::apply(ctx, cfg, &with_added(&state, &added), &label, policy).await?;
 
     Ok(Installed {
         added,

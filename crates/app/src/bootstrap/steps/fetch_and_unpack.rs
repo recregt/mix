@@ -514,7 +514,7 @@ fn nix_as_root(program: PathBuf) -> mix_exec::Command {
 }
 
 fn root_home() -> String {
-    root_home_with(std::env::var("HOME").ok(), || {
+    root_home_from(|| {
         User::from_uid(Uid::from_raw(0))
             .ok()
             .flatten()
@@ -522,14 +522,7 @@ fn root_home() -> String {
     })
 }
 
-fn root_home_with(
-    home_env: Option<String>,
-    passwd_dir: impl FnOnce() -> Option<PathBuf>,
-) -> String {
-    if let Some(home) = home_env.filter(|home| !home.is_empty()) {
-        return home;
-    }
-
+fn root_home_from(passwd_dir: impl FnOnce() -> Option<PathBuf>) -> String {
     passwd_dir()
         .and_then(|dir| dir.to_str().map(str::to_string))
         .unwrap_or_else(|| "/root".to_string())
@@ -555,34 +548,16 @@ mod tests {
     }
 
     #[test]
-    fn root_home_with_prefers_non_empty_home_env() {
+    fn the_root_home_comes_from_the_password_database() {
         assert_eq!(
-            root_home_with(Some("/home/nix".to_string()), || Some(PathBuf::from(
-                "/should-not-be-used"
-            ))),
-            "/home/nix"
-        );
-    }
-
-    #[test]
-    fn root_home_with_falls_back_to_passwd_dir_when_home_is_missing() {
-        assert_eq!(
-            root_home_with(None, || Some(PathBuf::from("/var/lib/root"))),
+            root_home_from(|| Some(PathBuf::from("/var/lib/root"))),
             "/var/lib/root"
         );
     }
 
     #[test]
-    fn root_home_with_falls_back_to_passwd_dir_when_home_is_empty() {
-        assert_eq!(
-            root_home_with(Some(String::new()), || Some(PathBuf::from("/root"))),
-            "/root"
-        );
-    }
-
-    #[test]
-    fn root_home_with_falls_back_to_slash_root_when_passwd_lookup_fails() {
-        assert_eq!(root_home_with(None, || None), "/root");
+    fn the_root_home_falls_back_to_slash_root_when_the_lookup_fails() {
+        assert_eq!(root_home_from(|| None), "/root");
     }
 
     #[test]

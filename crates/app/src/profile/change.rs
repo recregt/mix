@@ -1,13 +1,12 @@
 use std::future::Future;
 use std::path::Path;
-use std::sync::Arc;
 
 use mix_core::models::UserConfig;
 use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
 use mix_core::state::StateManifest;
-use mix_core::{ActivityReporter, Scope, StepObserver};
 use tracing::Instrument;
 
+use crate::Context;
 use crate::fs::{remove_file, write_atomic};
 use crate::profile::config::render_home;
 use crate::profile::state::{self, Invalid, Settled, Source};
@@ -56,21 +55,16 @@ pub async fn settled(cfg: &UserConfig) -> Result<(StateManifest, Option<Source>)
     }
 }
 
-pub struct PackageSource<'a> {
-    pub mirror: Option<&'a str>,
-    pub mirror_key: Option<&'a str>,
-    pub policy: BuildPolicy,
-}
-
 pub async fn apply(
+    ctx: &Context,
     cfg: &UserConfig,
     manifest: &StateManifest,
     label: &str,
-    source: PackageSource<'_>,
-    activity: &Arc<dyn ActivityReporter>,
-    steps: &Arc<dyn StepObserver>,
-    scope: &Scope,
+    policy: BuildPolicy,
 ) -> Result<()> {
+    let activity = &ctx.reporters.activity;
+    let steps = &ctx.reporters.steps;
+    let scope = &ctx.scope;
     let (new_state, new_home) = render_candidate(cfg, manifest)?;
 
     let state_dir = mix_state_dir(&cfg.user.home);
@@ -81,17 +75,10 @@ pub async fn apply(
 
     let applied = async {
         let generation = write_then_switch(&state_path, &home_path, &new_state, &new_home, || {
-            profile::switch(
-                cfg,
-                source.mirror,
-                source.mirror_key,
-                activity,
-                scope,
-                source.policy,
-            )
+            profile::switch(cfg, ctx.mirror(), ctx.mirror_key(), activity, scope, policy)
         })
         .await?;
-        profile::finish(cfg, &generation, activity, &scope.shielded()).await?;
+        profile::finish(cfg, &generation, activity, &ctx.host, &scope.shielded()).await?;
         Ok(())
     }
     .instrument(span.clone())
