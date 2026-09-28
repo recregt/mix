@@ -1,7 +1,7 @@
 mod cli;
 mod commands;
+mod controls;
 pub mod explain;
-mod interrupt;
 mod remote;
 
 use std::process::ExitCode;
@@ -28,8 +28,8 @@ pub async fn run() -> ExitCode {
             | Command::Remove { .. }
     ) {
         let ctx =
-            mix_app::Context::new(mix_exec::Scope::root()).with_user(commands::enrolled_user());
-        if let Some(report) = mix_app::doctor::audit(&ctx)
+            mix_shell::Context::new(mix_exec::Scope::root()).with_user(commands::enrolled_user());
+        if let Some(report) = mix_shell::ops::doctor::audit(&ctx)
             .await
             .into_iter()
             .find(|report| !report.healthy())

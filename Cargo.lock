@@ -1263,32 +1263,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mix-app"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "codspeed-divan-compat",
- "futures-util",
- "liblzma",
- "mix-core",
- "mix-exec",
- "mix-nixgen",
- "mix-pins",
- "mockito",
- "nix",
- "proptest",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "tar",
- "tempfile",
- "thiserror",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "mix-bin"
 version = "0.1.0"
 dependencies = [
@@ -1304,11 +1278,11 @@ dependencies = [
  "clap",
  "codspeed-divan-compat",
  "futures-util",
- "mix-app",
  "mix-core",
  "mix-exec",
  "mix-nixgen",
  "mix-rpc",
+ "mix-shell",
  "mix-ui",
  "nix",
  "tokio",
@@ -1325,10 +1299,8 @@ dependencies = [
  "futures-util",
  "memchr",
  "mix-exec",
- "nix",
  "serde",
  "serde_json",
- "tempfile",
  "thiserror",
  "tokio",
  "tracing",
@@ -1382,6 +1354,32 @@ dependencies = [
  "tonic-prost",
  "tonic-prost-build",
  "tower",
+]
+
+[[package]]
+name = "mix-shell"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "codspeed-divan-compat",
+ "futures-util",
+ "liblzma",
+ "mix-core",
+ "mix-exec",
+ "mix-nixgen",
+ "mix-pins",
+ "mockito",
+ "nix",
+ "proptest",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tar",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

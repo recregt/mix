@@ -1,6 +1,6 @@
 //! What `mix repair` says when it cannot finish.
 
-use mix_app::target::Error;
+use mix_shell::target::Error;
 
 use super::{Diagnostic, failed};
 
@@ -21,7 +21,7 @@ pub fn explain(error: &anyhow::Error) -> Diagnostic {
 
 #[cfg(test)]
 mod tests {
-    use mix_app::target::Unfixable;
+    use mix_shell::target::Unfixable;
 
     use super::*;
 

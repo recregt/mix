@@ -1,5 +1,5 @@
-use mix_app::profile::change::Error;
-use mix_app::profile::state::{Invalid, Source};
+use mix_shell::profile::change::Error;
+use mix_shell::profile::state::{Invalid, Source};
 
 use super::{Diagnostic, bug, core_error};
 

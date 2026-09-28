@@ -6,10 +6,10 @@ authors = ["Ömer Tekin"]
 license = "MPL-2.0"
 
 [features]
-embed-tarball = ["mix-app/embed-tarball"]
+embed-tarball = ["mix-shell/embed-tarball"]
 
 [dependencies]
-mix-app = { path = "../app" }
+mix-shell = { path = "../shell" }
 mix-core = { path = "../core" }
 mix-exec = { path = "../exec" }
 mix-rpc = { path = "../rpc" }

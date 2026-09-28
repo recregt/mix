@@ -11,7 +11,7 @@ import threading
 import time
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-CONTAINERFILE = REPO_ROOT / "tests" / "Containerfile"
+CONTAINERFILE = REPO_ROOT / "e2e" / "Containerfile"
 MIX_BINARY = REPO_ROOT / "target" / "release" / "mix"
 LOCAL_IMAGE = "mix-bootstrap-test:latest"
 CACHE_DIR = (
@@ -117,7 +117,7 @@ def serve_offline_cache() -> tuple[http.server.ThreadingHTTPServer, dict[str, st
     tarballs = list(CACHE_DIR.glob("nix-*.tar.xz"))
     if not tarballs or not MIRROR_KEY_FILE.exists():
         fail(
-            f"no local cache in {CACHE_DIR}; run the E2E suite once (bash tests/run.sh) "
+            f"no local cache in {CACHE_DIR}; run the E2E suite once (bash e2e/run.sh) "
             "or drop --offline to use the internet"
         )
     handler = functools.partial(QuietHandler, directory=str(CACHE_DIR))

@@ -1,6 +1,6 @@
 //! What `mix remove` says when it cannot finish.
 
-use mix_app::remove::Error;
+use mix_shell::ops::remove::Error;
 
 use super::{Diagnostic, change, failed, packages_action};
 
@@ -30,7 +30,7 @@ fn protected(packages: &[String]) -> Diagnostic {
 
 #[cfg(test)]
 mod tests {
-    use mix_app::profile::change;
+    use mix_shell::profile::change;
 
     use super::*;
 

@@ -35,6 +35,8 @@ jobs:
 
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      - run: scripts/check-core-purity.sh
+
   machete:
     name: Unused Dependencies (machete)
     runs-on: ubuntu-latest

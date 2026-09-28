@@ -9,23 +9,23 @@ pub async fn run(
 ) -> anyhow::Result<ExitCode> {
     let (_lock, user_config) = super::acquire_profile()?;
     let reporters = mix_ui::reporters();
-    let ctx = mix_app::Context::new(mix_exec::Scope::root())
+    let ctx = mix_shell::Context::new(mix_exec::Scope::root())
         .with_user(Some(user_config))
-        .with_reporters(mix_app::Reporters {
+        .with_reporters(mix_shell::Reporters {
             downloads: reporters.downloads,
             steps: reporters.passing_steps,
             activity: reporters.activity,
         })
         .with_env(super::request_env(mirror, mirror_key))
         .with_host(super::host_config());
-    let _watch = crate::interrupt::watch(
+    let _watch = crate::controls::watch(
         &ctx.scope,
-        crate::interrupt::CHANGE,
+        crate::controls::CHANGE,
         std::future::pending(),
-        crate::interrupt::Side::Client,
+        crate::controls::Side::Client,
     );
 
-    let installed = mix_app::install::install(&ctx, packages, build).await?;
+    let installed = mix_shell::ops::install::install(&ctx, packages, build).await?;
 
     if let Some(note) = installed
         .restored

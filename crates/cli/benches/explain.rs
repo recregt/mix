@@ -1,9 +1,9 @@
-use mix_app::doctor::HealthReport;
-use mix_app::profile::Error as ActivationError;
-use mix_app::profile::change::Error as InstallError;
-use mix_app::target::{Error as TargetError, Finding, Unfixable};
 use mix_cli::explain;
 use mix_core::Category;
+use mix_shell::ops::doctor::HealthReport;
+use mix_shell::profile::Error as ActivationError;
+use mix_shell::profile::change::Error as InstallError;
+use mix_shell::target::{Error as TargetError, Finding, Unfixable};
 
 static PACKAGES: std::sync::LazyLock<Vec<String>> =
     std::sync::LazyLock::new(|| vec!["package".to_string()]);

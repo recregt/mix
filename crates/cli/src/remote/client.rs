@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures_util::{Stream, StreamExt};
-use mix_app::repair::Repair;
-use mix_app::target::Error as TargetError;
 use mix_core::{ActivityReporter, DownloadProgress, StepObserver};
 use mix_rpc::{BootstrapRequest, Client, Event, Failure, Level, Mirror, Outcome, RepairRequest};
+use mix_shell::ops::repair::Repair;
+use mix_shell::target::Error as TargetError;
 
 use super::convert::{bootstrap_error_from, report_from_wire, target_error_from};
 

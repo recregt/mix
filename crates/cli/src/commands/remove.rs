@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 
-use mix_app::remove::Error;
+use mix_shell::ops::remove::Error;
 
 pub async fn run(
     packages: &[String],
@@ -10,23 +10,23 @@ pub async fn run(
 ) -> anyhow::Result<ExitCode> {
     let (_lock, user_config) = super::acquire_profile().map_err(Error::from)?;
     let reporters = mix_ui::reporters();
-    let ctx = mix_app::Context::new(mix_exec::Scope::root())
+    let ctx = mix_shell::Context::new(mix_exec::Scope::root())
         .with_user(Some(user_config))
-        .with_reporters(mix_app::Reporters {
+        .with_reporters(mix_shell::Reporters {
             downloads: reporters.downloads,
             steps: reporters.passing_steps,
             activity: reporters.activity,
         })
         .with_env(super::request_env(mirror, mirror_key))
         .with_host(super::host_config());
-    let _watch = crate::interrupt::watch(
+    let _watch = crate::controls::watch(
         &ctx.scope,
-        crate::interrupt::CHANGE,
+        crate::controls::CHANGE,
         std::future::pending(),
-        crate::interrupt::Side::Client,
+        crate::controls::Side::Client,
     );
 
-    let removed = mix_app::remove::remove(&ctx, packages).await?;
+    let removed = mix_shell::ops::remove::remove(&ctx, packages).await?;
 
     if let Some(note) = removed.restored.and_then(crate::explain::change::restored) {
         mix_ui::warn(note.message());
