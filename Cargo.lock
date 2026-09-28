@@ -1321,11 +1321,13 @@ dependencies = [
  "pbjson",
  "pbjson-build",
  "pbjson-types",
+ "proptest",
  "prost",
  "prost-build",
  "protox",
  "serde",
  "serde_json",
+ "thiserror",
 ]
 
 [[package]]

@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 79ab72309ff223ba3ec830ffcb1a0fa3672f6fced3f47a5317155d6354ad0c98 # shrinks to shape = Shape { planned: false, rollback: false, unreached: 0, end: Succeeded, ops: [Child(Shape { planned: false, rollback: false, unreached: 0, end: Succeeded, ops: [] }), Child(Shape { planned: false, rollback: true, unreached: 0, end: Succeeded, ops: [] })] }, pick = Index(0)

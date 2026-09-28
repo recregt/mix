@@ -6,8 +6,10 @@ pub mod v1 {
 
 mod stamp;
 mod tree;
+mod validate;
 
 pub use stamp::{Clock, Stamper, SystemClock};
 pub use tree::{Ending, Node, ROOT, Sink, Stopped};
+pub use validate::{Entry, Outcome, Validated, Validator, Violation, validate};
 
 pub const SCHEMA_MINOR: u32 = 0;
