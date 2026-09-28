@@ -23,11 +23,11 @@ pub async fn run(
             })
             .with_env(super::request_env(mirror, mirror_key))
             .with_host(super::host_config());
-        let _watch = crate::interrupt::watch(
+        let _watch = crate::controls::watch(
             &ctx.scope,
-            crate::interrupt::BOOTSTRAP,
+            crate::controls::BOOTSTRAP,
             std::future::pending(),
-            crate::interrupt::Side::Client,
+            crate::controls::Side::Client,
         );
         mix_shell::ops::bootstrap::bootstrap(&ctx, force).await?;
     } else {

@@ -19,11 +19,11 @@ pub async fn run(
         })
         .with_env(super::request_env(mirror, mirror_key))
         .with_host(super::host_config());
-    let _watch = crate::interrupt::watch(
+    let _watch = crate::controls::watch(
         &ctx.scope,
-        crate::interrupt::CHANGE,
+        crate::controls::CHANGE,
         std::future::pending(),
-        crate::interrupt::Side::Client,
+        crate::controls::Side::Client,
     );
 
     let removed = mix_shell::ops::remove::remove(&ctx, packages).await?;

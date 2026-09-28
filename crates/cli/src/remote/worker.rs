@@ -13,7 +13,7 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 
-use crate::interrupt;
+use crate::controls;
 
 use super::convert::{failure_from_bootstrap, report_to_wire};
 
@@ -256,11 +256,11 @@ impl mix_rpc::Worker for CliWorker {
                         mirror_key: mirror.and_then(|mirror| mirror.key.clone()),
                     })
                     .with_host(crate::commands::host_config());
-                let _watch = interrupt::watch(
+                let _watch = controls::watch(
                     &ctx.scope,
-                    interrupt::BOOTSTRAP,
+                    controls::BOOTSTRAP,
                     client_gone(&events),
-                    interrupt::Side::Worker,
+                    controls::Side::Worker,
                 );
                 let result = mix_shell::ops::bootstrap::bootstrap(&ctx, request.force).await;
                 match result {
@@ -284,11 +284,11 @@ impl mix_rpc::Worker for CliWorker {
                             .and_then(mix_shell::profile::existing_user_config_for),
                     )
                     .with_host(crate::commands::host_config());
-                let _watch = interrupt::watch(
+                let _watch = controls::watch(
                     &ctx.scope,
-                    interrupt::REPAIR,
+                    controls::REPAIR,
                     client_gone(&events),
-                    interrupt::Side::Worker,
+                    controls::Side::Worker,
                 );
                 let repair = mix_shell::ops::repair::repair(&ctx).await;
                 Outcome::RepairDone {

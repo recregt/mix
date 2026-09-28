@@ -1,7 +1,7 @@
 mod cli;
 mod commands;
+mod controls;
 pub mod explain;
-mod interrupt;
 mod remote;
 
 use std::process::ExitCode;
