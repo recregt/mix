@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/exec",
+    "crates/events",
     "crates/core",
     "crates/pins",
     "crates/nixgen",

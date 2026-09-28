@@ -1,0 +1,412 @@
+syntax = "proto3";
+
+package mix.events.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+message Envelope {
+  uint64 seq = 1;
+  google.protobuf.Timestamp time = 2;
+  string request = 3;
+  oneof event {
+    NodeStarted node_started = 10;
+    NodeProgress node_progress = 11;
+    NodeFinished node_finished = 12;
+    NotRun not_run = 13;
+    Log log = 14;
+    Diagnostic diagnostic = 15;
+  }
+}
+
+message NodeStarted {
+  fixed64 id = 1;
+  fixed64 parent = 2;
+  string key = 3;
+  repeated string planned = 4;
+  oneof kind {
+    Command command = 10;
+    Plan plan = 11;
+    Step step = 12;
+    Rollback rollback = 13;
+    Process process = 14;
+    Download download = 15;
+    Inspection inspection = 16;
+    LockWait lock_wait = 17;
+    NixActivity nix_activity = 18;
+  }
+}
+
+message Command {
+  string mix_version = 1;
+  uint32 schema_minor = 2;
+  oneof request {
+    BootstrapRequest bootstrap = 10;
+    InstallRequest install = 11;
+    RemoveRequest remove = 12;
+    RepairRequest repair = 13;
+    DoctorRequest doctor = 14;
+  }
+}
+
+message BootstrapRequest {
+  bool force = 1;
+  optional string mirror = 2;
+}
+
+message InstallRequest {
+  repeated string packages = 1;
+  bool allow_source_builds = 2;
+}
+
+message RemoveRequest {
+  repeated string packages = 1;
+}
+
+message RepairRequest {}
+
+message DoctorRequest {}
+
+message Plan {
+  string title = 1;
+}
+
+message Step {
+  string title = 1;
+}
+
+message Rollback {
+  fixed64 undoes = 1;
+}
+
+message Process {
+  string program = 1;
+  repeated string args = 2;
+}
+
+message Download {
+  string artifact = 1;
+  string url = 2;
+}
+
+enum Category {
+  CATEGORY_UNSPECIFIED = 0;
+  CATEGORY_FILESYSTEM = 1;
+  CATEGORY_IDENTITY = 2;
+  CATEGORY_SERVICES = 3;
+  CATEGORY_CONFIGURATION = 4;
+}
+
+message Inspection {
+  string target = 1;
+  Category category = 2;
+}
+
+message LockWait {
+  string lock = 1;
+  optional string holder = 2;
+}
+
+message NixActivity {
+  string activity_type = 1;
+  string text = 2;
+}
+
+message NodeProgress {
+  fixed64 id = 1;
+  oneof progress {
+    Bytes bytes = 2;
+    Builds builds = 3;
+    OutputLine line = 4;
+  }
+}
+
+message Bytes {
+  uint64 done = 1;
+  uint64 total = 2;
+}
+
+message Builds {
+  uint64 builds_done = 1;
+  uint64 builds_expected = 2;
+  uint64 builds_running = 3;
+  uint64 downloads_done = 4;
+  uint64 downloads_expected = 5;
+  uint64 downloads_running = 6;
+  uint64 bytes_done = 7;
+  uint64 bytes_expected = 8;
+}
+
+message OutputLine {
+  string text = 1;
+}
+
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_SUCCEEDED = 1;
+  STATUS_ALREADY_SATISFIED = 2;
+  STATUS_FAILED = 3;
+  STATUS_CANCELLED = 4;
+}
+
+message NodeFinished {
+  fixed64 id = 1;
+  Status status = 2;
+  google.protobuf.Duration elapsed = 3;
+  Diagnostic diagnostic = 4;
+  uint32 exit_code = 5;
+  oneof result {
+    BootstrapResult bootstrap = 10;
+    InstallResult install = 11;
+    RemoveResult remove = 12;
+    RepairResult repair = 13;
+    DoctorResult doctor = 14;
+    InspectionResult inspection = 15;
+  }
+}
+
+message BootstrapResult {}
+
+message InstallResult {
+  repeated string added = 1;
+  repeated string skipped = 2;
+  bool restored = 3;
+}
+
+message RemoveResult {
+  repeated string removed = 1;
+  repeated string skipped = 2;
+  bool restored = 3;
+}
+
+message RepairResult {
+  repeated RepairReport reports = 1;
+}
+
+message RepairReport {
+  string target = 1;
+  bool fixed = 2;
+  Diagnostic failure = 3;
+}
+
+message DoctorResult {
+  repeated InspectionReport reports = 1;
+}
+
+message InspectionReport {
+  string target = 1;
+  Category category = 2;
+  Finding finding = 3;
+}
+
+message InspectionResult {
+  Finding finding = 1;
+}
+
+message Finding {
+  oneof kind {
+    google.protobuf.Empty missing = 1;
+    Unreadable unreadable = 2;
+    google.protobuf.Empty not_a_directory = 3;
+    Mode mode = 4;
+    Ids owner = 5;
+    google.protobuf.Empty content_drift = 6;
+    google.protobuf.Empty group_missing = 7;
+    Gid group_gid = 8;
+    NotAMember not_a_member = 9;
+    google.protobuf.Empty no_such_user = 10;
+    google.protobuf.Empty user_missing = 11;
+    Ids user_ids = 12;
+    google.protobuf.Empty unit_missing = 13;
+    google.protobuf.Empty unit_drift = 14;
+    google.protobuf.Empty unit_inactive = 15;
+    google.protobuf.Empty runtime_missing = 16;
+  }
+}
+
+message Unreadable {
+  string kind = 1;
+}
+
+message Mode {
+  uint32 actual = 1;
+  uint32 expected = 2;
+}
+
+message Ids {
+  uint32 actual_uid = 1;
+  uint32 actual_gid = 2;
+  uint32 expected_uid = 3;
+  uint32 expected_gid = 4;
+}
+
+message Gid {
+  uint32 actual = 1;
+  uint32 expected = 2;
+}
+
+message NotAMember {
+  string group = 1;
+}
+
+enum NotRunReason {
+  NOT_RUN_REASON_UNSPECIFIED = 0;
+  NOT_RUN_REASON_NOT_REACHED = 1;
+  NOT_RUN_REASON_SKIPPED = 2;
+}
+
+message NotRun {
+  fixed64 parent = 1;
+  string key = 2;
+  NotRunReason reason = 3;
+}
+
+enum Level {
+  LEVEL_UNSPECIFIED = 0;
+  LEVEL_ERROR = 1;
+  LEVEL_WARN = 2;
+  LEVEL_INFO = 3;
+  LEVEL_DEBUG = 4;
+  LEVEL_TRACE = 5;
+}
+
+message Log {
+  Level level = 1;
+  string target = 2;
+  string message = 3;
+  map<string, string> fields = 4;
+  fixed64 node = 5;
+}
+
+enum Severity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_ERROR = 1;
+  SEVERITY_WARNING = 2;
+}
+
+enum Code {
+  CODE_UNSPECIFIED = 0;
+  CODE_INTERNAL = 1;
+  CODE_IO = 2;
+  CODE_PERMISSION_DENIED = 3;
+  CODE_COMMAND_FAILED = 4;
+  CODE_SPAWN_FAILED = 5;
+  CODE_LOCKED = 6;
+  CODE_LOCK_MISSING = 7;
+  CODE_NETWORK = 20;
+  CODE_INTEGRITY = 21;
+  CODE_UNSUPPORTED_TARGET = 22;
+  CODE_DECOMPRESSION = 23;
+  CODE_MALFORMED_ARCHIVE = 24;
+  CODE_NOT_ROOT = 25;
+  CODE_UNSUPPORTED_HOST = 26;
+  CODE_UNSUPPORTED_KERNEL = 27;
+  CODE_SYSTEMD_NOT_READY = 28;
+  CODE_ALREADY_MANAGED = 29;
+  CODE_CROSS_DEVICE_STORE = 30;
+  CODE_ROLLBACK_INCOMPLETE = 31;
+  CODE_SOURCE_BUILD_REQUIRED = 40;
+  CODE_NOT_BOOTSTRAPPED = 41;
+  CODE_ROOT_NOT_ALLOWED = 42;
+  CODE_INVALID_PACKAGE = 43;
+  CODE_INVALID_STATE = 44;
+  CODE_NEWER_STATE = 45;
+  CODE_PROTECTED_PACKAGE = 46;
+  CODE_UNREPAIRABLE = 60;
+  CODE_PRIVILEGES_UNAVAILABLE = 70;
+  CODE_WORKER_ENDED = 71;
+}
+
+enum Host {
+  HOST_UNSPECIFIED = 0;
+  HOST_NATIVE = 1;
+  HOST_WSL = 2;
+  HOST_NIXOS = 3;
+}
+
+enum Unfixable {
+  UNFIXABLE_UNSPECIFIED = 0;
+  UNFIXABLE_NOT_A_DIRECTORY = 1;
+  UNFIXABLE_MISSING_USER = 2;
+  UNFIXABLE_MISSING_RUNTIME = 3;
+}
+
+message Diagnostic {
+  Code code = 1;
+  Severity severity = 2;
+  fixed64 node = 3;
+  string message = 4;
+  repeated Diagnostic causes = 5;
+  oneof detail {
+    IoDetail io = 10;
+    CommandDetail command = 11;
+    NetworkDetail network = 12;
+    IntegrityDetail integrity = 13;
+    TargetDetail target = 14;
+    HostDetail host = 15;
+    PathDetail path = 16;
+    PackagesDetail packages = 17;
+    FormatDetail format = 18;
+    UnrepairableDetail unrepairable = 19;
+    LockDetail lock = 20;
+    StepsDetail steps = 21;
+  }
+}
+
+message IoDetail {
+  string path = 1;
+  string kind = 2;
+}
+
+message CommandDetail {
+  string command = 1;
+  optional int32 exit_status = 2;
+  string output_tail = 3;
+}
+
+message NetworkDetail {
+  string url = 1;
+}
+
+message IntegrityDetail {
+  string artifact = 1;
+  string expected = 2;
+  string actual = 3;
+}
+
+message TargetDetail {
+  string arch = 1;
+  string os = 2;
+}
+
+message HostDetail {
+  Host host = 1;
+  string state = 2;
+}
+
+message PathDetail {
+  string path = 1;
+}
+
+message PackagesDetail {
+  repeated string packages = 1;
+}
+
+message FormatDetail {
+  uint32 format = 1;
+}
+
+message UnrepairableDetail {
+  string artifact = 1;
+  Unfixable reason = 2;
+}
+
+message LockDetail {
+  string path = 1;
+  optional string holder = 2;
+}
+
+message StepsDetail {
+  repeated string steps = 1;
+}
