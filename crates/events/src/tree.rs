@@ -3,28 +3,21 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
+use crate::outbox::Outbox;
 use crate::v1::{
-    Builds, Bytes, Cancellation, Command, Diagnostic, Envelope, NodeFinished, NodeProgress,
-    NodeStarted, NotRun, NotRunReason, OutputLine, Status, Stream, envelope::Event, node_finished,
+    Builds, Bytes, Cancellation, Command, Diagnostic, NodeFinished, NodeProgress, NodeStarted,
+    NotRun, NotRunReason, OutputLine, Status, Stream, envelope::Event, node_finished,
     node_progress::Progress, node_started,
 };
-
-pub trait Sink: Send + Sync {
-    fn emit(&self, envelope: Envelope);
-}
 
 pub type Stopped = Arc<dyn Fn() -> Option<Cancellation> + Send + Sync>;
 
 pub const ROOT: u64 = 1;
 
-const UNKNOWN_TOTAL_STEP: u64 = 1 << 20;
-
 struct Shared {
-    sink: Arc<dyn Sink>,
+    outbox: Arc<Outbox>,
     stopped: Stopped,
-    request: String,
     next: AtomicU64,
-    seq: Mutex<u64>,
 }
 
 impl Shared {
@@ -33,13 +26,7 @@ impl Shared {
     }
 
     fn emit(&self, event: Event) {
-        let mut seq = self.seq.lock().unwrap_or_else(PoisonError::into_inner);
-        *seq += 1;
-        self.sink.emit(Envelope {
-            seq: *seq,
-            request: self.request.clone(),
-            event: Some(event),
-        });
+        self.outbox.push(event);
     }
 }
 
@@ -147,39 +134,13 @@ struct State {
 }
 
 impl State {
-    fn worth_sending(&mut self, progress: &Progress) -> bool {
+    fn changed(&mut self, progress: &Progress) -> bool {
         match progress {
             Progress::Line(_) => true,
-            Progress::Builds(builds) => {
-                let changed = self.builds.as_ref() != Some(builds);
-                self.builds = Some(*builds);
-                changed
-            }
-            Progress::Bytes(bytes) => {
-                let send = self.bytes.is_none_or(|last| bytes_advanced(&last, bytes));
-                if send {
-                    self.bytes = Some(*bytes);
-                }
-                send
-            }
+            Progress::Builds(builds) => self.builds.replace(*builds) != Some(*builds),
+            Progress::Bytes(bytes) => self.bytes.replace(*bytes) != Some(*bytes),
         }
     }
-}
-
-fn bytes_advanced(last: &Bytes, next: &Bytes) -> bool {
-    if last.total != next.total {
-        return true;
-    }
-    match next.total {
-        Some(total) if next.done >= total => last.done < total,
-        Some(total) if total > 0 => percent(next.done, total) > percent(last.done, total),
-        Some(_) => false,
-        None => next.done / UNKNOWN_TOTAL_STEP > last.done / UNKNOWN_TOTAL_STEP,
-    }
-}
-
-fn percent(done: u64, total: u64) -> u128 {
-    u128::from(done) * 100 / u128::from(total)
 }
 
 pub struct Node<'parent> {
@@ -191,19 +152,12 @@ pub struct Node<'parent> {
 }
 
 impl Node<'static> {
-    pub fn root(
-        sink: Arc<dyn Sink>,
-        stopped: Stopped,
-        request: impl Into<String>,
-        start: Start,
-    ) -> Self {
+    pub fn root(outbox: Arc<Outbox>, stopped: Stopped, start: Start) -> Self {
         debug_assert!(matches!(start.kind, node_started::Kind::Command(_)));
         let shared = Arc::new(Shared {
-            sink,
+            outbox,
             stopped,
-            request: request.into(),
             next: AtomicU64::new(ROOT),
-            seq: Mutex::new(0),
         });
         Self::open(shared, 0, start)
     }
@@ -252,7 +206,7 @@ impl<'parent> Node<'parent> {
     }
 
     pub fn progress(&self, progress: Progress) {
-        if !self.state().worth_sending(&progress) {
+        if !self.state().changed(&progress) {
             return;
         }
         self.shared.emit(Event::NodeProgress(NodeProgress {
@@ -330,20 +284,19 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     use super::*;
-    use crate::v1::{Plan, Step};
+    use crate::v1::{Envelope, Plan, Step};
 
-    #[derive(Default)]
-    struct Recorded(Mutex<Vec<Envelope>>);
+    struct Recorded(Arc<Outbox>);
 
-    impl Sink for Recorded {
-        fn emit(&self, envelope: Envelope) {
-            self.0.lock().unwrap().push(envelope);
+    impl Default for Recorded {
+        fn default() -> Self {
+            Self(Arc::new(Outbox::new("request", || {})))
         }
     }
 
     impl Recorded {
         fn envelopes(&self) -> Vec<Envelope> {
-            std::mem::take(&mut self.0.lock().unwrap())
+            self.0.drain()
         }
 
         fn take(&self) -> Vec<Event> {
@@ -360,9 +313,8 @@ mod tests {
 
     fn root(sink: &Arc<Recorded>, stopped: Stopped, planned: &[&str]) -> Node<'static> {
         Node::root(
-            sink.clone(),
+            sink.0.clone(),
             stopped,
-            "request",
             Start::command("bootstrap", Command::default()).planned(planned.iter().copied()),
         )
     }
@@ -588,62 +540,131 @@ mod tests {
         assert!(child.shielded);
     }
 
-    fn sent_bytes(updates: impl IntoIterator<Item = Bytes>) -> Vec<u64> {
+    fn bytes(done: u64) -> Progress {
+        Progress::Bytes(Bytes {
+            done,
+            total: Some(100),
+        })
+    }
+
+    fn progress_of(envelope: &Envelope) -> Option<u64> {
+        match &envelope.event {
+            Some(Event::NodeProgress(NodeProgress {
+                progress: Some(Progress::Bytes(bytes)),
+                ..
+            })) => Some(bytes.done),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_consumer_that_keeps_up_sees_every_change() {
         let sink = Arc::new(Recorded::default());
         let root = root(&sink, never(), &[]);
-        for bytes in updates {
-            root.progress(Progress::Bytes(bytes));
+        let mut seen = Vec::new();
+        for done in 0..=100 {
+            root.progress(bytes(done));
+            seen.extend(sink.envelopes().iter().filter_map(progress_of));
         }
-        sink.take()
-            .into_iter()
-            .filter_map(|event| match event {
-                Event::NodeProgress(NodeProgress {
-                    progress: Some(Progress::Bytes(bytes)),
+
+        assert_eq!(seen, (0..=100).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_consumer_that_falls_behind_gets_only_the_latest_snapshot_in_order() {
+        let sink = Arc::new(Recorded::default());
+        let root = root(&sink, never(), &[]);
+        let download = root.child("download", step());
+        for done in 0..=60 {
+            download.progress(bytes(done));
+        }
+        download.progress(output(b"verifying", Stream::Stdout));
+        for done in 61..=100 {
+            download.progress(bytes(done));
+        }
+        download.finish(Ending::succeeded());
+        root.finish(Ending::succeeded());
+
+        let envelopes = sink.envelopes();
+        let seqs: Vec<u64> = envelopes.iter().map(|envelope| envelope.seq).collect();
+        let kinds: Vec<&str> = envelopes
+            .iter()
+            .map(|envelope| match &envelope.event {
+                Some(Event::NodeStarted(_)) => "started",
+                Some(Event::NodeProgress(NodeProgress {
+                    progress: Some(Progress::Line(_)),
                     ..
-                }) => Some(bytes.done),
+                })) => "line",
+                Some(Event::NodeProgress(_)) => "bytes",
+                Some(Event::NodeFinished(_)) => "finished",
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect();
+        assert_eq!(seqs, (1..=6).collect::<Vec<_>>());
+        assert_eq!(
+            kinds,
+            [
+                "started", "started", "line", "bytes", "finished", "finished"
+            ]
+        );
+        assert_eq!(envelopes.iter().find_map(progress_of), Some(100));
+    }
+
+    #[test]
+    fn output_lines_are_never_superseded() {
+        let sink = Arc::new(Recorded::default());
+        let root = root(&sink, never(), &[]);
+        for _ in 0..50 {
+            root.progress(output(b"line", Stream::Stderr));
+        }
+
+        let lines = sink
+            .take()
+            .into_iter()
+            .filter(|event| matches!(event, Event::NodeProgress(_)))
+            .count();
+        assert_eq!(lines, 50);
+    }
+
+    #[test]
+    fn each_node_keeps_its_own_latest_snapshot() {
+        let sink = Arc::new(Recorded::default());
+        let root = root(&sink, never(), &[]);
+        let first = root.child("first", step());
+        let second = root.child("second", step());
+        first.progress(bytes(10));
+        second.progress(bytes(20));
+        first.progress(bytes(30));
+
+        let latest: Vec<(u64, u64)> = sink
+            .envelopes()
+            .iter()
+            .filter_map(|envelope| match &envelope.event {
+                Some(Event::NodeProgress(progress)) => {
+                    progress_of(envelope).map(|done| (progress.id, done))
+                }
                 _ => None,
             })
-            .collect()
+            .collect();
+        assert_eq!(latest, [(3, 20), (2, 30)]);
     }
 
     #[test]
-    fn a_download_of_known_size_reports_each_percent_once_and_its_end() {
-        let total = 27_100_000;
-        let sent = sent_bytes((0..=total).step_by(4096).chain([total]).map(|done| Bytes {
-            done,
-            total: Some(total),
+    fn every_push_wakes_the_consumer() {
+        let woken = Arc::new(AtomicU64::new(0));
+        let count = woken.clone();
+        let outbox = Arc::new(Outbox::new("request", move || {
+            count.fetch_add(1, Ordering::Relaxed);
         }));
-
-        assert_eq!(sent.len(), 101);
-        assert_eq!(sent.first(), Some(&0));
-        assert_eq!(sent.last(), Some(&total));
-    }
-
-    #[test]
-    fn a_download_of_unknown_size_reports_each_mebibyte() {
-        let sent = sent_bytes(
-            (0..=10 * UNKNOWN_TOTAL_STEP)
-                .step_by(65_536)
-                .map(|done| Bytes { done, total: None }),
+        let root = Node::root(
+            outbox,
+            never(),
+            Start::command("doctor", Command::default()),
         );
+        root.progress(bytes(1));
+        root.finish(Ending::succeeded());
 
-        assert_eq!(sent.len(), 11);
-    }
-
-    #[test]
-    fn learning_the_total_is_reported_at_once() {
-        let sent = sent_bytes([
-            Bytes {
-                done: 10,
-                total: None,
-            },
-            Bytes {
-                done: 11,
-                total: Some(1_000),
-            },
-        ]);
-
-        assert_eq!(sent, [10, 11]);
+        assert_eq!(woken.load(Ordering::Relaxed), 3);
     }
 
     #[test]
@@ -654,15 +675,16 @@ mod tests {
             builds_done: 1,
             ..Builds::default()
         };
+        let mut sent = 0;
         for builds in [Builds::default(), Builds::default(), one, one] {
             root.progress(Progress::Builds(builds));
+            sent += sink
+                .take()
+                .into_iter()
+                .filter(|event| matches!(event, Event::NodeProgress(_)))
+                .count();
         }
 
-        let sent = sink
-            .take()
-            .into_iter()
-            .filter(|event| matches!(event, Event::NodeProgress(_)))
-            .count();
         assert_eq!(sent, 2);
     }
 

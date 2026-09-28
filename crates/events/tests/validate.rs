@@ -1,32 +1,54 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use mix_events::v1::{
     Bytes, Cancellation, Command, Diagnostic, Envelope, Log, NotRunReason, Plan, ProcessResult,
     Rollback, Status, Step, envelope::Event, node_finished, node_progress, node_started,
 };
-use mix_events::{Ending, Node, Outcome, Sink, Start, Validated, Violation, validate};
+use mix_events::{Ending, Node, Outbox, Outcome, Start, Validated, Violation, validate};
 use proptest::prelude::*;
 
-#[derive(Default)]
-struct Recorded(Mutex<Vec<Envelope>>);
+struct Consumer {
+    outbox: Arc<Outbox>,
+    seen: Mutex<Vec<Envelope>>,
+    latest: Mutex<HashMap<u64, u64>>,
+}
 
-impl Sink for Recorded {
-    fn emit(&self, envelope: Envelope) {
-        self.0.lock().unwrap().push(envelope);
+impl Consumer {
+    fn consume(&self) {
+        self.seen.lock().unwrap().extend(self.outbox.drain());
     }
 }
 
-fn record(run: impl FnOnce(Arc<dyn Sink>)) -> Vec<Envelope> {
-    let recorded = Arc::new(Recorded::default());
-    run(recorded.clone());
-    std::mem::take(&mut recorded.0.lock().unwrap())
+fn record(run: impl FnOnce(&Consumer)) -> Vec<Envelope> {
+    let consumer = Consumer {
+        outbox: Arc::new(Outbox::new("request", || {})),
+        seen: Mutex::new(Vec::new()),
+        latest: Mutex::new(HashMap::new()),
+    };
+    run(&consumer);
+    consumer.consume();
+    consumer.seen.into_inner().unwrap()
 }
 
-fn root(sink: Arc<dyn Sink>, planned: &[&str]) -> Node<'static> {
+fn recorded_with_latest(run: impl FnOnce(&Consumer)) -> (Vec<Envelope>, HashMap<u64, u64>) {
+    let consumer = Consumer {
+        outbox: Arc::new(Outbox::new("request", || {})),
+        seen: Mutex::new(Vec::new()),
+        latest: Mutex::new(HashMap::new()),
+    };
+    run(&consumer);
+    consumer.consume();
+    (
+        consumer.seen.into_inner().unwrap(),
+        consumer.latest.into_inner().unwrap(),
+    )
+}
+
+fn root(consumer: &Consumer, planned: &[&str]) -> Node<'static> {
     Node::root(
-        sink,
+        consumer.outbox.clone(),
         Arc::new(|| None),
-        "request",
         Start::command("bootstrap", Command::default()).planned(planned.iter().copied()),
     )
 }
@@ -42,8 +64,8 @@ fn renumber(stream: &mut [Envelope]) {
 }
 
 fn interrupted_bootstrap() -> Vec<Envelope> {
-    record(|sink| {
-        let root = root(sink, &["plan"]);
+    record(|consumer| {
+        let root = root(consumer, &["plan"]);
         let plan = root.start(
             Start::new("plan", node_started::Kind::Plan(Plan::default())).planned([
                 "create-nix-dir",
@@ -310,8 +332,8 @@ fn a_result_belongs_to_the_kind_of_node_that_carries_it() {
 
 #[test]
 fn a_process_node_carries_how_the_process_ended() {
-    let stream = record(|sink| {
-        let root = root(sink, &[]);
+    let stream = record(|consumer| {
+        let root = root(consumer, &[]);
         root.child("nix", node_started::Kind::Process(Default::default()))
             .finish(Ending::failed(Diagnostic::default()).with_result(
                 node_finished::Result::Process(ProcessResult {
@@ -338,7 +360,8 @@ enum End {
 enum Op {
     Child(Shape),
     NotRun(bool),
-    Progress,
+    Progress(u8),
+    Consume,
     Warn,
 }
 
@@ -384,7 +407,8 @@ fn shape() -> impl Strategy<Value = Shape> {
                 prop_oneof![
                     4 => inner.prop_map(Op::Child),
                     1 => any::<bool>().prop_map(Op::NotRun),
-                    1 => Just(Op::Progress),
+                    2 => any::<u8>().prop_map(Op::Progress),
+                    1 => Just(Op::Consume),
                     1 => Just(Op::Warn),
                 ],
                 0..6,
@@ -421,7 +445,7 @@ fn plan_of(shape: &Shape) -> Vec<String> {
     planned
 }
 
-fn run(node: &Node<'_>, ops: &[Op]) {
+fn run(consumer: &Consumer, node: &Node<'_>, ops: &[Op]) {
     let mut last_step = None;
     for (index, op) in ops.iter().enumerate() {
         let key = format!("k{index}");
@@ -438,7 +462,7 @@ fn run(node: &Node<'_>, ops: &[Op]) {
                 } else {
                     start
                 });
-                run(&child, &shape.ops);
+                run(consumer, &child, &shape.ops);
                 if is_step {
                     last_step = Some(child.id());
                 }
@@ -452,7 +476,18 @@ fn run(node: &Node<'_>, ops: &[Op]) {
                     NotRunReason::NotReached
                 },
             ),
-            Op::Progress => node.progress(node_progress::Progress::Bytes(Bytes::default())),
+            Op::Progress(done) => {
+                consumer
+                    .latest
+                    .lock()
+                    .unwrap()
+                    .insert(node.id(), u64::from(*done));
+                node.progress(node_progress::Progress::Bytes(Bytes {
+                    done: u64::from(*done),
+                    total: None,
+                }));
+            }
+            Op::Consume => consumer.consume(),
             Op::Warn => node.warn(Diagnostic::default()),
         }
     }
@@ -469,14 +504,17 @@ fn end_node(node: Node<'_>, end: End) {
 }
 
 fn produced(shape: &Shape) -> Vec<Envelope> {
-    record(|sink| {
+    produced_with_latest(shape).0
+}
+
+fn produced_with_latest(shape: &Shape) -> (Vec<Envelope>, HashMap<u64, u64>) {
+    recorded_with_latest(|consumer| {
         let root = Node::root(
-            sink,
+            consumer.outbox.clone(),
             Arc::new(|| None),
-            "request",
             Start::command("command", Command::default()).planned(plan_of(shape)),
         );
-        run(&root, &shape.ops);
+        run(consumer, &root, &shape.ops);
         end_node(root, shape.end);
     })
 }
@@ -491,6 +529,21 @@ fn indices(stream: &[Envelope], matches: impl Fn(&Event) -> bool) -> Vec<usize> 
 }
 
 proptest! {
+    #[test]
+    fn a_consumer_at_any_pace_ends_with_every_node_s_latest_progress(shape in shape()) {
+        let (stream, latest) = produced_with_latest(&shape);
+
+        let mut delivered = HashMap::new();
+        for envelope in &stream {
+            if let Some(Event::NodeProgress(progress)) = &envelope.event
+                && let Some(node_progress::Progress::Bytes(bytes)) = &progress.progress
+            {
+                delivered.insert(progress.id, bytes.done);
+            }
+        }
+        prop_assert_eq!(delivered, latest);
+    }
+
     #[test]
     fn whatever_the_producer_emits_is_valid(shape in shape()) {
         let stream = produced(&shape);
