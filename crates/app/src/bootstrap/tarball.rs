@@ -548,7 +548,7 @@ mod tests {
             .args(["cJf", "-", "-C"])
             .arg(dir)
             .arg(".")
-            .output_blocking(&mix_exec::cancel::root())
+            .output_blocking(&mix_exec::Scope::root())
             .expect("tar must be on PATH to build test fixtures")
     }
 
@@ -556,7 +556,7 @@ mod tests {
         let output = mix_exec::Command::new("xz")
             .args(["-z", "-c"])
             .input(bytes.to_vec())
-            .output_blocking(&mix_exec::cancel::root())
+            .output_blocking(&mix_exec::Scope::root())
             .expect("xz must be on PATH to build test fixtures");
         assert!(output.status.success());
         output.stdout

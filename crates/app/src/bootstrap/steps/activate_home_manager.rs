@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use mix_core::models::UserConfig;
 use mix_core::paths::mix_state_dir;
-use mix_core::{ActivityReporter, CancellationToken, Step};
+use mix_core::{ActivityReporter, Scope, Step};
 
 use crate::bootstrap::error::{Error, Result};
 use crate::fs;
@@ -42,14 +42,14 @@ impl Step for ActivateHomeManagerConfig {
         "activate home-manager config"
     }
 
-    async fn check(&self) -> Result<bool> {
+    async fn check(&self, _scope: &Scope) -> Result<bool> {
         let Some(cfg) = &self.user_config else {
             return Ok(true);
         };
         Ok(fs::exists(mix_state_dir(&cfg.user.home).join(".git")).await)
     }
 
-    async fn execute(&mut self, token: &CancellationToken) -> Result<()> {
+    async fn execute(&mut self, scope: &Scope) -> Result<()> {
         let Some(cfg) = &self.user_config else {
             return Ok(());
         };
@@ -60,14 +60,14 @@ impl Step for ActivateHomeManagerConfig {
             self.mirror.as_deref(),
             self.mirror_key.as_deref(),
             &self.activity,
-            token,
+            scope,
             BuildPolicy::AllowSource,
         )
         .await?;
         Ok(())
     }
 
-    async fn rollback(&mut self, _token: &CancellationToken) -> Result<()> {
+    async fn rollback(&mut self, _scope: &Scope) -> Result<()> {
         let Some(cfg) = &self.user_config else {
             return Ok(());
         };
@@ -110,7 +110,7 @@ mod tests {
     async fn check_passes_without_a_user_config() {
         assert!(
             ActivateHomeManagerConfig::new(None, None, None, noop())
-                .check()
+                .check(&mix_exec::Scope::root())
                 .await
                 .unwrap()
         );
@@ -121,7 +121,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let step =
             ActivateHomeManagerConfig::new(Some(user_config(home.path())), None, None, noop());
-        assert!(!step.check().await.unwrap());
+        assert!(!step.check(&mix_exec::Scope::root()).await.unwrap());
     }
 
     #[tokio::test]
@@ -130,20 +130,20 @@ mod tests {
         std::fs::create_dir_all(mix_state_dir(home.path()).join(".git")).unwrap();
         let step =
             ActivateHomeManagerConfig::new(Some(user_config(home.path())), None, None, noop());
-        assert!(step.check().await.unwrap());
+        assert!(step.check(&mix_exec::Scope::root()).await.unwrap());
     }
 
     #[tokio::test]
     async fn execute_is_a_no_op_without_a_user_config() {
         let mut step = ActivateHomeManagerConfig::new(None, None, None, noop());
-        step.execute(&mix_exec::cancel::root()).await.unwrap();
+        step.execute(&mix_exec::Scope::root()).await.unwrap();
         assert!(!step.created_git_dir);
     }
 
     #[tokio::test]
     async fn rollback_is_a_no_op_without_a_user_config() {
         ActivateHomeManagerConfig::new(None, None, None, noop())
-            .rollback(&mix_exec::cancel::root())
+            .rollback(&mix_exec::Scope::root())
             .await
             .unwrap();
     }
@@ -157,7 +157,7 @@ mod tests {
         let mut step =
             ActivateHomeManagerConfig::new(Some(user_config(home.path())), None, None, noop());
         step.created_git_dir = true;
-        step.rollback(&mix_exec::cancel::root()).await.unwrap();
+        step.rollback(&mix_exec::Scope::root()).await.unwrap();
 
         assert!(!git_dir.exists());
         assert!(mix_state_dir(home.path()).exists());
@@ -171,7 +171,7 @@ mod tests {
 
         let mut step =
             ActivateHomeManagerConfig::new(Some(user_config(home.path())), None, None, noop());
-        step.rollback(&mix_exec::cancel::root()).await.unwrap();
+        step.rollback(&mix_exec::Scope::root()).await.unwrap();
 
         assert!(git_dir.exists());
     }

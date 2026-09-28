@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use mix_core::{CancellationToken, Plan, Result, Step, StepObserver};
+use mix_core::{Outcome, Plan, Result, Scope, Step, StepObserver};
 
 fn main() {
     divan::main();
@@ -19,11 +19,11 @@ impl Step for NoopStep {
         "noop"
     }
 
-    async fn check(&self) -> Result<bool> {
+    async fn check(&self, _scope: &Scope) -> Result<bool> {
         Ok(false)
     }
 
-    async fn execute(&mut self, _token: &CancellationToken) -> Result<()> {
+    async fn execute(&mut self, _scope: &Scope) -> Result<()> {
         Ok(())
     }
 }
@@ -70,8 +70,14 @@ fn runtime() -> tokio::runtime::Runtime {
 #[divan::bench(args = [1, 8, 64])]
 fn run_observed_steps(bencher: divan::Bencher, steps: usize) {
     let runtime = runtime();
+    let scope = Scope::root();
     let _guard = tracing::subscriber::set_default(EnablingSubscriber);
     bencher
         .with_inputs(|| plan(steps))
-        .bench_local_values(|mut plan| runtime.block_on(plan.run()).unwrap());
+        .bench_local_values(|mut plan| {
+            assert!(matches!(
+                runtime.block_on(plan.run(&scope)),
+                Outcome::Completed(Ok(()))
+            ))
+        });
 }

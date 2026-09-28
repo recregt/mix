@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use mix_core::models::UserConfig;
 use mix_core::state::StateManifest;
-use mix_core::{ActivityReporter, CancellationToken};
+use mix_core::{ActivityReporter, Scope};
 
 use crate::profile::BuildPolicy;
 use crate::profile::change;
@@ -43,7 +43,7 @@ pub async fn remove(
     mirror: Option<&str>,
     mirror_key: Option<&str>,
     activity: Arc<dyn ActivityReporter>,
-    cancel: &CancellationToken,
+    scope: &Scope,
 ) -> Result<Removed> {
     let protected = StateManifest::protected(packages);
     if !protected.is_empty() {
@@ -75,7 +75,7 @@ pub async fn remove(
             policy: BuildPolicy::AllowSource,
         },
         &activity,
-        cancel,
+        scope,
     )
     .await?;
 
@@ -140,7 +140,7 @@ mod tests {
             None,
             None,
             noop(),
-            &mix_exec::cancel::root(),
+            &mix_exec::Scope::root(),
         )
         .await
     }

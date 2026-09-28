@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use mix_core::paths::{FLAKE_LOCK, FLAKE_NIX, HOME_NIX, STATE_FILE};
 use mix_core::privilege::InvokingUser;
-use mix_core::{CancellationToken, Error, Result};
+use mix_core::{Error, Result, Scope};
 
 use crate::exec::{run, run_as, status_as};
 use crate::fs::exists;
@@ -36,24 +36,14 @@ impl Git {
         }
     }
 
-    pub async fn init(
-        &self,
-        user: &InvokingUser,
-        state_dir: &Path,
-        token: &CancellationToken,
-    ) -> Result<()> {
+    pub async fn init(&self, user: &InvokingUser, state_dir: &Path, scope: &Scope) -> Result<()> {
         let state_dir_str = state_dir.to_string_lossy().into_owned();
-        self.run_as(user, &["-C", &state_dir_str, "init", "-q"], token)
+        self.run_as(user, &["-C", &state_dir_str, "init", "-q"], scope)
             .await?;
         write_gitignore(user, state_dir).await
     }
 
-    pub async fn sync(
-        &self,
-        user: &InvokingUser,
-        state_dir: &Path,
-        token: &CancellationToken,
-    ) -> Result<bool> {
+    pub async fn sync(&self, user: &InvokingUser, state_dir: &Path, scope: &Scope) -> Result<bool> {
         let git_dir = state_dir.join(".git");
         if !exists(&git_dir).await {
             return Ok(false);
@@ -65,12 +55,12 @@ impl Git {
                 &format!("{}:{}", user.uid, user.gid),
                 &git_dir.to_string_lossy(),
             ],
-            token,
+            scope,
         )
         .await?;
 
         let state_dir_str = state_dir.to_string_lossy().into_owned();
-        let staged = self.stage(user, &state_dir_str, state_dir, token).await?;
+        let staged = self.stage(user, &state_dir_str, state_dir, scope).await?;
         if !staged {
             return Ok(false);
         }
@@ -79,7 +69,7 @@ impl Git {
             .status_as(
                 user,
                 &["-C", &state_dir_str, "diff", "--cached", "--quiet"],
-                token,
+                scope,
             )
             .await?;
         if clean {
@@ -100,7 +90,7 @@ impl Git {
                 "-m",
                 COMMIT_MESSAGE,
             ],
-            token,
+            scope,
         )
         .await?;
 
@@ -114,11 +104,11 @@ impl Git {
         user: &InvokingUser,
         state_dir_str: &str,
         state_dir: &Path,
-        token: &CancellationToken,
+        scope: &Scope,
     ) -> Result<bool> {
         let mut args = vec!["-C", state_dir_str, "ls-files", "--"];
         args.extend(MANAGED_FILES);
-        let tracked = self.run_as(user, &args, token).await?;
+        let tracked = self.run_as(user, &args, scope).await?;
 
         let mut paths: Vec<&str> = Vec::new();
         for file in MANAGED_FILES {
@@ -132,26 +122,16 @@ impl Git {
 
         let mut args = vec!["-C", state_dir_str, "add", "-A", "--"];
         args.extend(&paths);
-        self.run_as(user, &args, token).await?;
+        self.run_as(user, &args, scope).await?;
         Ok(true)
     }
 
-    async fn run_as(
-        &self,
-        user: &InvokingUser,
-        args: &[&str],
-        token: &CancellationToken,
-    ) -> Result<String> {
-        run_as(user, &self.binary, args, token).await
+    async fn run_as(&self, user: &InvokingUser, args: &[&str], scope: &Scope) -> Result<String> {
+        run_as(user, &self.binary, args, scope).await
     }
 
-    async fn status_as(
-        &self,
-        user: &InvokingUser,
-        args: &[&str],
-        token: &CancellationToken,
-    ) -> Result<bool> {
-        status_as(user, &self.binary, args, token).await
+    async fn status_as(&self, user: &InvokingUser, args: &[&str], scope: &Scope) -> Result<bool> {
+        status_as(user, &self.binary, args, scope).await
     }
 }
 
@@ -214,7 +194,7 @@ mod tests {
         let state_dir = mix_core::paths::mix_state_dir(home);
         tokio::fs::create_dir_all(&state_dir).await.unwrap();
         git()
-            .init(&user(home), &state_dir, &mix_exec::cancel::root())
+            .init(&user(home), &state_dir, &mix_exec::Scope::root())
             .await
             .unwrap();
         state_dir
@@ -223,7 +203,7 @@ mod tests {
     async fn committed_files(state_dir: &Path) -> Vec<String> {
         let output = mix_exec::Command::new("git")
             .args(["-C", &state_dir.to_string_lossy(), "ls-files"])
-            .output(&mix_exec::cancel::root())
+            .output(&mix_exec::Scope::root())
             .await
             .unwrap();
         String::from_utf8_lossy(&output.stdout)
@@ -268,7 +248,7 @@ mod tests {
         tokio::fs::create_dir_all(&state_dir).await.unwrap();
 
         let committed = git()
-            .sync(&user(home.path()), &state_dir, &mix_exec::cancel::root())
+            .sync(&user(home.path()), &state_dir, &mix_exec::Scope::root())
             .await
             .unwrap();
 
@@ -298,7 +278,7 @@ mod tests {
         std::fs::write(state_dir.join(HOME_NIX), "home-content").unwrap();
 
         let committed = git()
-            .sync(&user(home.path()), &state_dir, &mix_exec::cancel::root())
+            .sync(&user(home.path()), &state_dir, &mix_exec::Scope::root())
             .await
             .unwrap();
 
@@ -324,7 +304,7 @@ mod tests {
         std::fs::write(state_dir.join("result/out"), "build output").unwrap();
 
         git()
-            .sync(&user(home.path()), &state_dir, &mix_exec::cancel::root())
+            .sync(&user(home.path()), &state_dir, &mix_exec::Scope::root())
             .await
             .unwrap();
 
@@ -342,12 +322,12 @@ mod tests {
 
         let git = git();
         assert!(
-            git.sync(&user(home.path()), &state_dir, &mix_exec::cancel::root())
+            git.sync(&user(home.path()), &state_dir, &mix_exec::Scope::root())
                 .await
                 .unwrap()
         );
         assert!(
-            !git.sync(&user(home.path()), &state_dir, &mix_exec::cancel::root())
+            !git.sync(&user(home.path()), &state_dir, &mix_exec::Scope::root())
                 .await
                 .unwrap()
         );
@@ -359,14 +339,14 @@ mod tests {
         let state_dir = repository(home.path()).await;
         std::fs::write(state_dir.join(FLAKE_NIX), "flake-content").unwrap();
         let git = git();
-        git.sync(&user(home.path()), &state_dir, &mix_exec::cancel::root())
+        git.sync(&user(home.path()), &state_dir, &mix_exec::Scope::root())
             .await
             .unwrap();
 
         std::fs::write(state_dir.join(FLAKE_NIX), "repaired-content").unwrap();
 
         assert!(
-            git.sync(&user(home.path()), &state_dir, &mix_exec::cancel::root())
+            git.sync(&user(home.path()), &state_dir, &mix_exec::Scope::root())
                 .await
                 .unwrap()
         );

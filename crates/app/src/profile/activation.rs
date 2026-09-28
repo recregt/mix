@@ -12,7 +12,7 @@ use mix_core::nix_plan::{self, Approved};
 use mix_core::paths::{
     DEFAULT_PROFILE_NIX, HOME_MANAGER_PROFILE_NAME, mix_state_dir, nix_profiles_dir,
 };
-use mix_core::{ActivityReporter, BuildProgress, CancellationToken};
+use mix_core::{ActivityReporter, BuildProgress, Scope};
 use mix_nixgen::{AttrPath, FlakeRef, Installable};
 
 use crate::exec::{plan_as, run_as_reporting, run_as_with_input};
@@ -109,10 +109,10 @@ async fn refuse_source_builds(
     cfg: &UserConfig,
     installable: &str,
     options: &[String],
-    token: &CancellationToken,
+    scope: &Scope,
 ) -> Result<Approved> {
     let args = nix_dry_run_args(installable, options);
-    let dry_run = plan_as(&cfg.user, DEFAULT_PROFILE_NIX, &as_refs(&args), token).await?;
+    let dry_run = plan_as(&cfg.user, DEFAULT_PROFILE_NIX, &as_refs(&args), scope).await?;
 
     let spans = {
         let plan = match dry_run.plan() {
@@ -131,7 +131,7 @@ async fn refuse_source_builds(
             DEFAULT_PROFILE_NIX,
             &DERIVATION_SHOW_ARGS,
             plan.to_build().join("\n").into_bytes(),
-            token,
+            scope,
         )
         .await?;
         let classified = nix_plan::classify(plan.to_build(), &shown);
@@ -164,7 +164,7 @@ struct SourceBuildGuard {
     inner: Arc<dyn ActivityReporter>,
     approved: Approved,
     refused: OnceLock<String>,
-    token: CancellationToken,
+    scope: Scope,
 }
 
 impl ActivityReporter for SourceBuildGuard {
@@ -182,7 +182,7 @@ impl ActivityReporter for SourceBuildGuard {
 
     fn build_started(&self, derivation: &str) {
         if !self.approved.contains(derivation) && self.refused.set(derivation.to_string()).is_ok() {
-            self.token.cancel();
+            self.scope.cancel();
         }
         self.inner.build_started(derivation);
     }
@@ -193,11 +193,11 @@ pub async fn activate(
     mirror: Option<&str>,
     mirror_key: Option<&str>,
     activity: &Arc<dyn ActivityReporter>,
-    token: &CancellationToken,
+    scope: &Scope,
     policy: BuildPolicy,
 ) -> Result<bool> {
-    let generation = switch(cfg, mirror, mirror_key, activity, token, policy).await?;
-    finish(cfg, &generation, activity, token).await
+    let generation = switch(cfg, mirror, mirror_key, activity, scope, policy).await?;
+    finish(cfg, &generation, activity, scope).await
 }
 
 pub async fn switch(
@@ -205,7 +205,7 @@ pub async fn switch(
     mirror: Option<&str>,
     mirror_key: Option<&str>,
     activity: &Arc<dyn ActivityReporter>,
-    token: &CancellationToken,
+    scope: &Scope,
     policy: BuildPolicy,
 ) -> Result<String> {
     let flake_attr = Installable::new(
@@ -222,9 +222,9 @@ pub async fn switch(
     let guard = match policy {
         BuildPolicy::CacheOnly => Some(Arc::new(SourceBuildGuard {
             inner: Arc::clone(activity),
-            approved: refuse_source_builds(cfg, &flake_attr, &options, token).await?,
+            approved: refuse_source_builds(cfg, &flake_attr, &options, scope).await?,
             refused: OnceLock::new(),
-            token: token.child_token(),
+            scope: scope.child(),
         })),
         BuildPolicy::AllowSource => None,
     };
@@ -236,7 +236,7 @@ pub async fn switch(
                 &cfg.user,
                 DEFAULT_PROFILE_NIX,
                 &as_refs(&args),
-                &guard.token,
+                &guard.scope,
                 Some(Arc::clone(guard) as Arc<dyn ActivityReporter>),
             )
             .await
@@ -246,7 +246,7 @@ pub async fn switch(
                 &cfg.user,
                 DEFAULT_PROFILE_NIX,
                 &as_refs(&args),
-                token,
+                scope,
                 Some(Arc::clone(activity)),
             )
             .await
@@ -263,22 +263,22 @@ pub async fn finish(
     cfg: &UserConfig,
     generation: &str,
     activity: &Arc<dyn ActivityReporter>,
-    token: &CancellationToken,
+    scope: &Scope,
 ) -> Result<bool> {
     let activate = format!("{generation}/activate");
-    run_as_reporting(&cfg.user, &activate, &[], token, Some(Arc::clone(activity))).await?;
-    Ok(record(cfg, token).await)
+    run_as_reporting(&cfg.user, &activate, &[], scope, Some(Arc::clone(activity))).await?;
+    Ok(record(cfg, scope).await)
 }
 
-async fn record(cfg: &UserConfig, token: &CancellationToken) -> bool {
+async fn record(cfg: &UserConfig, scope: &Scope) -> bool {
     let state_dir = mix_state_dir(&cfg.user.home);
     let git = git::Git::resolve(&cfg.user).await;
     let created_git_dir = !fs::exists(state_dir.join(".git")).await;
-    if created_git_dir && let Err(error) = git.init(&cfg.user, &state_dir, token).await {
+    if created_git_dir && let Err(error) = git.init(&cfg.user, &state_dir, scope).await {
         tracing::info!("could not record the change in git: {error}");
         return false;
     }
-    if let Err(error) = git.sync(&cfg.user, &state_dir, token).await {
+    if let Err(error) = git.sync(&cfg.user, &state_dir, scope).await {
         tracing::info!("could not record the change in git: {error}");
     }
     created_git_dir
@@ -450,7 +450,7 @@ mod tests {
             inner: Arc::clone(&recorded) as Arc<dyn ActivityReporter>,
             approved: approved_set(approved),
             refused: OnceLock::new(),
-            token: mix_exec::cancel::root(),
+            scope: mix_exec::Scope::root(),
         };
         (guard, recorded)
     }
@@ -461,7 +461,7 @@ mod tests {
 
         guard.build_started("/nix/store/a-home-manager-path.drv");
 
-        assert!(!guard.token.is_cancelled());
+        assert!(!guard.scope.is_stopped());
         assert!(guard.refused.get().is_none());
     }
 
@@ -471,7 +471,7 @@ mod tests {
 
         guard.build_started("/nix/store/b-cowsay-3.8.4.drv");
 
-        assert!(guard.token.is_cancelled());
+        assert!(guard.scope.is_stopped());
         assert_eq!(
             guard.refused.get().map(String::as_str),
             Some("/nix/store/b-cowsay-3.8.4.drv")
@@ -484,7 +484,7 @@ mod tests {
 
         guard.build_started("/nix/store/a-home-manager-path.drv");
 
-        assert!(guard.token.is_cancelled());
+        assert!(guard.scope.is_stopped());
     }
 
     #[test]
@@ -515,14 +515,14 @@ mod tests {
 
     #[test]
     fn stopping_a_build_does_not_cancel_the_run_it_belongs_to() {
-        let parent = mix_exec::cancel::root();
+        let parent = mix_exec::Scope::root();
         let (mut guard, _) = guard(&[]);
-        guard.token = parent.child_token();
+        guard.scope = parent.child();
 
         guard.build_started("/nix/store/a.drv");
 
-        assert!(guard.token.is_cancelled());
-        assert!(!parent.is_cancelled());
+        assert!(guard.scope.is_stopped());
+        assert!(!parent.is_stopped());
     }
 
     #[test]

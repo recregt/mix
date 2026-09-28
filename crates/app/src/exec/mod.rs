@@ -11,7 +11,7 @@ use std::sync::Arc;
 use mix_core::nix_plan::DryRun;
 use mix_core::paths::DEFAULT_PROFILE_BIN;
 use mix_core::privilege::InvokingUser;
-use mix_core::{ActivityReporter, CancellationToken, Result};
+use mix_core::{ActivityReporter, Result, Scope};
 use mix_exec::{Command, Drain};
 
 use crate::exec::output::StreamDrain;
@@ -64,8 +64,8 @@ fn stdout_of(output: &std::process::Output) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
-pub async fn run(program: &str, args: &[&str], token: &CancellationToken) -> Result<()> {
-    Command::new(program).args(args).run(token).await?;
+pub async fn run(program: &str, args: &[&str], scope: &Scope) -> Result<()> {
+    Command::new(program).args(args).run(scope).await?;
     Ok(())
 }
 
@@ -73,9 +73,9 @@ pub async fn run_as(
     user: &InvokingUser,
     program: &str,
     args: &[&str],
-    token: &CancellationToken,
+    scope: &Scope,
 ) -> Result<String> {
-    run_as_reporting(user, program, args, token, None).await
+    run_as_reporting(user, program, args, scope, None).await
 }
 
 /// Like [`run_as`], but reports the command's output line by line while it runs.
@@ -83,14 +83,14 @@ pub async fn run_as_reporting(
     user: &InvokingUser,
     program: &str,
     args: &[&str],
-    token: &CancellationToken,
+    scope: &Scope,
     activity: Option<Arc<dyn ActivityReporter>>,
 ) -> Result<String> {
     let mut command = command_as(user, program, args);
     if let Some(activity) = activity {
         command = command.stderr(reported(activity));
     }
-    Ok(stdout_of(&command.run(token).await?))
+    Ok(stdout_of(&command.run(scope).await?))
 }
 
 pub async fn run_as_with_input(
@@ -98,11 +98,11 @@ pub async fn run_as_with_input(
     program: &str,
     args: &[&str],
     input: Vec<u8>,
-    token: &CancellationToken,
+    scope: &Scope,
 ) -> Result<String> {
     let output = command_as(user, program, args)
         .input(input)
-        .run(token)
+        .run(scope)
         .await?;
     Ok(stdout_of(&output))
 }
@@ -116,9 +116,9 @@ pub async fn plan_as(
     user: &InvokingUser,
     program: &str,
     args: &[&str],
-    token: &CancellationToken,
+    scope: &Scope,
 ) -> Result<DryRun> {
-    let output = command_as(user, program, args).run(token).await?;
+    let output = command_as(user, program, args).run(scope).await?;
     let stderr = String::from_utf8(output.stderr)
         .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned());
     Ok(DryRun::new(stderr))
@@ -128,9 +128,9 @@ pub async fn status_as(
     user: &InvokingUser,
     program: &str,
     args: &[&str],
-    token: &CancellationToken,
+    scope: &Scope,
 ) -> Result<bool> {
-    let output = command_as(user, program, args).output(token).await?;
+    let output = command_as(user, program, args).output(scope).await?;
     Ok(output.status.success())
 }
 
@@ -173,7 +173,7 @@ mod tests {
                 "printf 'this derivation will be built:\\n  \
                  /nix/store/00000000000000000000000000000001-hello.drv\\n' >&2",
             ],
-            &mix_exec::cancel::root(),
+            &mix_exec::Scope::root(),
         )
         .await
         .unwrap();
@@ -194,7 +194,7 @@ mod tests {
                 "printf 'these 1 derivations are going to be built:\\n  \
                  /nix/store/00000000000000000000000000000001-hello.drv\\n' >&2",
             ],
-            &mix_exec::cancel::root(),
+            &mix_exec::Scope::root(),
         )
         .await
         .unwrap();
@@ -216,7 +216,7 @@ mod tests {
                 "/bin/cat",
                 &[],
                 input.clone(),
-                &mix_exec::cancel::root(),
+                &mix_exec::Scope::root(),
             ),
         )
         .await
@@ -235,7 +235,7 @@ mod tests {
                 "/bin/sh",
                 &["-c", "echo done"],
                 vec![b'x'; 1024 * 1024],
-                &mix_exec::cancel::root(),
+                &mix_exec::Scope::root(),
             ),
         )
         .await
@@ -251,7 +251,7 @@ mod tests {
             &current_user(),
             "/bin/sh",
             &["-c", "echo \"error: attribute 'nope' missing\" >&2; exit 1"],
-            &mix_exec::cancel::root(),
+            &mix_exec::Scope::root(),
         )
         .await
         .unwrap_err();
@@ -261,8 +261,8 @@ mod tests {
 
     #[tokio::test]
     async fn run_reports_the_full_command_line_on_failure() {
-        let token = mix_exec::cancel::root();
-        match run("false", &["--gid", "30000", "nixbld1"], &token).await {
+        let scope = mix_exec::Scope::root();
+        match run("false", &["--gid", "30000", "nixbld1"], &scope).await {
             Err(Error::Command { command, .. }) => {
                 assert_eq!(command, "false --gid 30000 nixbld1");
             }
@@ -272,11 +272,11 @@ mod tests {
 
     #[tokio::test]
     async fn run_preserves_the_source_error_when_the_command_cannot_be_spawned() {
-        let token = mix_exec::cancel::root();
+        let scope = mix_exec::Scope::root();
         match run(
             "mix-test-nonexistent-binary-xyz",
             &["--gid", "30000"],
-            &token,
+            &scope,
         )
         .await
         {
@@ -290,10 +290,10 @@ mod tests {
 
     #[tokio::test]
     async fn run_kills_and_reaps_the_child_when_cancelled() {
-        let token = mix_exec::cancel::root();
-        token.cancel();
+        let scope = mix_exec::Scope::root();
+        scope.cancel();
 
-        match run("sleep", &["5"], &token).await {
+        match run("sleep", &["5"], &scope).await {
             Err(Error::Cancelled { command }) => {
                 assert_eq!(command, "sleep 5");
             }
@@ -303,11 +303,11 @@ mod tests {
 
     #[tokio::test]
     async fn run_does_not_deadlock_on_output_larger_than_a_pipe_buffer() {
-        let token = mix_exec::cancel::root();
+        let scope = mix_exec::Scope::root();
 
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            run("sh", &["-c", "head -c 200000 /dev/zero"], &token),
+            run("sh", &["-c", "head -c 200000 /dev/zero"], &scope),
         )
         .await;
 
@@ -450,13 +450,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_streamed_command_reports_its_progress_and_still_returns_its_output() {
-        let token = mix_exec::cancel::root();
+        let scope = mix_exec::Scope::root();
         let recorder = Arc::new(Recorder::default());
         let cmd = Command::new("sh")
             .args(["-c", "echo building >&2; echo done >&2; echo /nix/store/x"])
             .stderr(reported(Arc::clone(&recorder) as Arc<dyn ActivityReporter>));
 
-        let output = cmd.output(&token).await.unwrap();
+        let output = cmd.output(&scope).await.unwrap();
 
         assert!(output.status.success());
         assert_eq!(
@@ -470,7 +470,7 @@ mod tests {
     /// handed to the reporter that draws them.
     #[tokio::test]
     async fn a_streamed_command_reports_structured_progress_end_to_end() {
-        let token = mix_exec::cancel::root();
+        let scope = mix_exec::Scope::root();
         let recorder = Arc::new(Recorder::default());
         let cmd = Command::new("sh")
             .args([
@@ -484,7 +484,7 @@ mod tests {
         ])
             .stderr(reported(Arc::clone(&recorder) as Arc<dyn ActivityReporter>));
 
-        let output = cmd.output(&token).await.unwrap();
+        let output = cmd.output(&scope).await.unwrap();
 
         assert!(output.status.success());
         let progress = recorder.last_progress().expect("counters were reported");
@@ -501,13 +501,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_streamed_command_keeps_only_the_tail_of_a_flood_of_output() {
-        let token = mix_exec::cancel::root();
+        let scope = mix_exec::Scope::root();
         let recorder = Arc::new(Recorder::default());
         let cmd = Command::new("sh")
             .args(["-c", "seq 1 60000 >&2"])
             .stderr(reported(Arc::clone(&recorder) as Arc<dyn ActivityReporter>));
 
-        let output = tokio::time::timeout(std::time::Duration::from_secs(30), cmd.output(&token))
+        let output = tokio::time::timeout(std::time::Duration::from_secs(30), cmd.output(&scope))
             .await
             .expect("streaming a flood of output should not deadlock")
             .unwrap();

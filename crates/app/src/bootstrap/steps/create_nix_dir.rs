@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use mix_core::paths::NIX_OWNERSHIP_MARKER;
-use mix_core::{CancellationToken, Step};
+use mix_core::{Scope, Step};
 
 use crate::bootstrap::error::{Error, Result};
 use crate::fs::{create_dir, dir_has_mode, is_file, remove_dir_all, remove_file, set_mode};
@@ -21,14 +21,14 @@ impl Step for CreateNixDir {
         "create /nix"
     }
 
-    async fn check(&self) -> Result<bool> {
+    async fn check(&self, _scope: &Scope) -> Result<bool> {
         if !is_file(NIX_OWNERSHIP_MARKER).await {
             return Ok(false);
         }
         Ok(dir_has_mode("/nix", MODE).await)
     }
 
-    async fn execute(&mut self, _token: &CancellationToken) -> Result<()> {
+    async fn execute(&mut self, _scope: &Scope) -> Result<()> {
         self.created_dir = !exists("/nix").await;
         if self.created_dir {
             create_dir("/nix", MODE).await?;
@@ -39,7 +39,7 @@ impl Step for CreateNixDir {
         Ok(())
     }
 
-    async fn rollback(&mut self, _token: &CancellationToken) -> Result<()> {
+    async fn rollback(&mut self, _scope: &Scope) -> Result<()> {
         if self.created_dir {
             remove_dir_all("/nix").await?;
         } else {

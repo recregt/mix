@@ -3,7 +3,7 @@ use mix_core::identity::{
     self, MIX_USERS_GID, MIX_USERS_GROUP, NIXBLD_GID, NIXBLD_GROUP, NIXBLD_HOME, NIXBLD_SHELL,
     NIXBLD_UID_BASE, NIXBLD_USER_COUNT, user_name,
 };
-use mix_core::{CancellationToken, Step};
+use mix_core::{Scope, Step};
 
 use crate::bootstrap::cleanup::warn_on_failure;
 use crate::bootstrap::error::{Error, Result};
@@ -24,21 +24,21 @@ impl Step for CreateUsersAndGroups {
         "create the managed groups and build users"
     }
 
-    async fn check(&self) -> Result<bool> {
+    async fn check(&self, _scope: &Scope) -> Result<bool> {
         Ok(identity::group_has_gid(NIXBLD_GROUP, NIXBLD_GID)
             && identity::group_has_gid(MIX_USERS_GROUP, MIX_USERS_GID)
             && all_users_valid())
     }
 
-    async fn execute(&mut self, token: &CancellationToken) -> Result<()> {
+    async fn execute(&mut self, scope: &Scope) -> Result<()> {
         if !is_dir(NIXBLD_HOME).await {
             create_dir_all(NIXBLD_HOME).await?;
             set_mode(NIXBLD_HOME, 0o555).await?;
         }
 
-        self.reconcile_group(NIXBLD_GROUP, NIXBLD_GID, token)
+        self.reconcile_group(NIXBLD_GROUP, NIXBLD_GID, scope)
             .await?;
-        self.reconcile_group(MIX_USERS_GROUP, MIX_USERS_GID, token)
+        self.reconcile_group(MIX_USERS_GROUP, MIX_USERS_GID, scope)
             .await?;
 
         for n in 1..=NIXBLD_USER_COUNT {
@@ -47,11 +47,11 @@ impl Step for CreateUsersAndGroups {
             if identity::user_exists(&name) {
                 if !identity::user_has_gid(&name, NIXBLD_GID) {
                     let gid = NIXBLD_GID.to_string();
-                    run("usermod", &["--gid", &gid, &name], token).await?;
+                    run("usermod", &["--gid", &gid, &name], scope).await?;
                 }
                 if !identity::user_has_uid(&name, uid) {
                     let uid = uid.to_string();
-                    run("usermod", &["--uid", &uid, &name], token).await?;
+                    run("usermod", &["--uid", &uid, &name], scope).await?;
                 }
                 continue;
             }
@@ -78,7 +78,7 @@ impl Step for CreateUsersAndGroups {
                     &comment,
                     &name,
                 ],
-                token,
+                scope,
             )
             .await;
             if identity::user_exists(&name) {
@@ -90,13 +90,13 @@ impl Step for CreateUsersAndGroups {
         Ok(())
     }
 
-    async fn rollback(&mut self, token: &CancellationToken) -> Result<()> {
+    async fn rollback(&mut self, scope: &Scope) -> Result<()> {
         for name in self.created_users.drain(..).rev() {
-            delete_user(&name, token).await;
+            delete_user(&name, scope).await;
         }
 
         for name in self.created_groups.drain(..).rev() {
-            warn_on_failure("delete group", run("groupdel", &[name], token).await);
+            warn_on_failure("delete group", run("groupdel", &[name], scope).await);
         }
 
         Ok(())
@@ -104,22 +104,17 @@ impl Step for CreateUsersAndGroups {
 }
 
 impl CreateUsersAndGroups {
-    async fn reconcile_group(
-        &mut self,
-        name: &'static str,
-        gid: u32,
-        token: &CancellationToken,
-    ) -> Result<()> {
+    async fn reconcile_group(&mut self, name: &'static str, gid: u32, scope: &Scope) -> Result<()> {
         if identity::group_exists(name) {
             if !identity::group_has_gid(name, gid) {
                 let gid = gid.to_string();
-                run("groupmod", &["--gid", &gid, name], token).await?;
+                run("groupmod", &["--gid", &gid, name], scope).await?;
             }
             return Ok(());
         }
 
         let gid = gid.to_string();
-        let result = run("groupadd", &["--system", "--gid", &gid, name], token).await;
+        let result = run("groupadd", &["--system", "--gid", &gid, name], scope).await;
         if identity::group_exists(name) {
             self.created_groups.push(name);
         }
@@ -128,15 +123,15 @@ impl CreateUsersAndGroups {
     }
 }
 
-pub(crate) async fn delete_user(name: &str, token: &CancellationToken) {
-    terminate_processes(name, token).await;
-    warn_on_failure("delete build user", run("userdel", &[name], token).await);
+pub(crate) async fn delete_user(name: &str, scope: &Scope) {
+    terminate_processes(name, scope).await;
+    warn_on_failure("delete build user", run("userdel", &[name], scope).await);
 }
 
-async fn terminate_processes(name: &str, token: &CancellationToken) {
+async fn terminate_processes(name: &str, scope: &Scope) {
     match mix_exec::Command::new("pkill")
         .args(["-u", name])
-        .output(token)
+        .output(scope)
         .await
     {
         Ok(output) if output.status.success() || output.status.code() == Some(1) => {}

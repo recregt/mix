@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use mix_core::paths::{NIX_TREE_MODE, NIX_TREE_PATHS};
-use mix_core::{CancellationToken, Step};
+use mix_core::{Scope, Step};
 
 use crate::bootstrap::cleanup::warn_on_failure;
 use crate::bootstrap::error::{Error, Result};
@@ -19,7 +19,7 @@ impl Step for CreateNixTree {
         "create managed runtime directory tree"
     }
 
-    async fn check(&self) -> Result<bool> {
+    async fn check(&self, _scope: &Scope) -> Result<bool> {
         for &path in NIX_TREE_PATHS {
             if !dir_matches(path, NIX_TREE_MODE).await {
                 return Ok(false);
@@ -28,11 +28,11 @@ impl Step for CreateNixTree {
         Ok(true)
     }
 
-    async fn execute(&mut self, _token: &CancellationToken) -> Result<()> {
+    async fn execute(&mut self, _scope: &Scope) -> Result<()> {
         provision_all(NIX_TREE_PATHS, NIX_TREE_MODE, &mut self.created).await
     }
 
-    async fn rollback(&mut self, _token: &CancellationToken) -> Result<()> {
+    async fn rollback(&mut self, _scope: &Scope) -> Result<()> {
         for path in self.created.drain(..).rev() {
             warn_on_failure("remove managed directory", remove_dir_all(path).await);
         }

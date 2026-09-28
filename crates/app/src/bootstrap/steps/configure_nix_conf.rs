@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use mix_core::{CancellationToken, Step};
+use mix_core::{Scope, Step};
 
 use mix_core::models::{NIX_CONF, PROFILE_SNIPPET};
 use mix_core::paths::{NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT, PROFILE_SNIPPET_DEST};
@@ -30,12 +30,12 @@ impl Step for ConfigureNixConf {
         "write runtime configuration"
     }
 
-    async fn check(&self) -> Result<bool> {
+    async fn check(&self, _scope: &Scope) -> Result<bool> {
         Ok(matches_expected(NIX_CONF_DEST, NIX_CONF).await
             && matches_expected(PROFILE_SNIPPET_DEST, PROFILE_SNIPPET).await)
     }
 
-    async fn execute(&mut self, token: &CancellationToken) -> Result<()> {
+    async fn execute(&mut self, scope: &Scope) -> Result<()> {
         let previous = previous_contents(NIX_CONF_DEST).await;
         let restart_daemon = daemon_needs_the_new_config(previous.as_deref());
         let created_dir = write(NIX_CONF_DEST, NIX_CONF).await?;
@@ -54,13 +54,13 @@ impl Step for ConfigureNixConf {
         });
 
         if restart_daemon {
-            restart_running_daemon(token).await;
+            restart_running_daemon(scope).await;
         }
 
         Ok(())
     }
 
-    async fn rollback(&mut self, _token: &CancellationToken) -> Result<()> {
+    async fn rollback(&mut self, _scope: &Scope) -> Result<()> {
         for written in self.written.drain(..).rev() {
             warn_on_failure(
                 "restore runtime configuration file",
@@ -83,10 +83,10 @@ fn daemon_needs_the_new_config(previous: Option<&[u8]>) -> bool {
 
 /// nix-daemon reads `trusted-users` once, at startup, so a rewritten nix.conf
 /// only reaches a running daemon if it is restarted.
-async fn restart_running_daemon(token: &CancellationToken) {
+async fn restart_running_daemon(scope: &Scope) {
     warn_on_failure(
         "restart nix-daemon",
-        restart_if_active(NIX_DAEMON_SERVICE_UNIT, token).await,
+        restart_if_active(NIX_DAEMON_SERVICE_UNIT, scope).await,
     );
 }
 
@@ -229,7 +229,7 @@ mod tests {
                 created_dir,
             }],
         };
-        step.rollback(&mix_exec::cancel::root()).await.unwrap();
+        step.rollback(&mix_exec::Scope::root()).await.unwrap();
 
         assert!(!dir.path().join("a").exists());
     }

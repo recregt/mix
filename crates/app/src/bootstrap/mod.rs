@@ -13,9 +13,7 @@ pub use error::{Error, Host, Result};
 use std::sync::Arc;
 
 use mix_core::privilege::InvokingUser;
-use mix_core::{
-    ActivityReporter, CancellationToken, DownloadProgress, Outcome, Plan, StepObserver, privilege,
-};
+use mix_core::{ActivityReporter, DownloadProgress, Outcome, Plan, Scope, StepObserver, privilege};
 
 pub struct Environment(());
 
@@ -37,7 +35,7 @@ pub async fn bootstrap(
     mirror_key: Option<&str>,
     force: bool,
     reporters: Reporters,
-    cancel: &CancellationToken,
+    scope: &Scope,
 ) -> Result<Environment> {
     if !privilege::is_root() {
         return Err(Error::NotRoot("bootstrap the managed environment"));
@@ -47,11 +45,11 @@ pub async fn bootstrap(
     preflight::check_not_wsl1().await?;
     preflight::check_systemd_ready().await?;
     if !force {
-        preflight::check_nix_not_installed().await?;
+        preflight::check_nix_not_installed(scope).await?;
     }
 
     let user_config = user.and_then(crate::profile::user_config_for);
-    run_steps(mirror, mirror_key, force, reporters, user_config, cancel).await
+    run_steps(mirror, mirror_key, force, reporters, user_config, scope).await
 }
 
 async fn run_steps(
@@ -60,7 +58,7 @@ async fn run_steps(
     force: bool,
     reporters: Reporters,
     user_config: Option<mix_core::models::UserConfig>,
-    cancel: &CancellationToken,
+    scope: &Scope,
 ) -> Result<Environment> {
     let mut plan = Plan::new(planner::bootstrap_steps(
         mirror,
@@ -71,7 +69,7 @@ async fn run_steps(
         user_config,
     ))
     .with_step_observer(reporters.steps);
-    let cause = match plan.run_cancellable(cancel).await {
+    let cause = match plan.run(scope).await {
         Outcome::Completed(Ok(())) => return Ok(Environment::new()),
         Outcome::Completed(Err(cause)) => cause,
         Outcome::Interrupted => Error::Interrupted,

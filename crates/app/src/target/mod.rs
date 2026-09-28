@@ -20,7 +20,7 @@ pub use finding::{Finding, Unfixable};
 pub use inspect::inspect;
 pub use reconcile::reconcile;
 
-use mix_core::CancellationToken;
+use mix_core::Scope;
 use mix_core::models::Target;
 
 /// What reconciling a target could not do.
@@ -43,8 +43,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// The measurement decides both halves of that: whether there is anything to do, and whether it
 /// is something repair can do at all — [`Finding::unfixable`] is what binds a finding to the
 /// reason it cannot, so a caller never has to guess what it can promise a reader.
-pub async fn apply(target: &Target, token: &CancellationToken) -> Result<bool> {
-    let Some(finding) = inspect(target).await else {
+pub async fn apply(target: &Target, scope: &Scope) -> Result<bool> {
+    let Some(finding) = inspect(target, scope).await else {
         return Ok(false);
     };
     if let Some(reason) = finding.unfixable() {
@@ -53,7 +53,7 @@ pub async fn apply(target: &Target, token: &CancellationToken) -> Result<bool> {
             reason,
         });
     }
-    reconcile(target, finding, token).await?;
+    reconcile(target, finding, scope).await?;
     Ok(true)
 }
 
@@ -72,7 +72,7 @@ mod tests {
             owner: None,
         };
 
-        assert!(!apply(&target, &mix_exec::cancel::root()).await.unwrap());
+        assert!(!apply(&target, &mix_exec::Scope::root()).await.unwrap());
     }
 
     #[tokio::test]
@@ -86,7 +86,7 @@ mod tests {
             owner: None,
         };
 
-        let error = apply(&target, &mix_exec::cancel::root()).await.unwrap_err();
+        let error = apply(&target, &mix_exec::Scope::root()).await.unwrap_err();
 
         match error {
             Error::Unrepairable { artifact, reason } => {
@@ -107,7 +107,7 @@ mod tests {
             owner: None,
         };
 
-        assert!(apply(&target, &mix_exec::cancel::root()).await.unwrap());
+        assert!(apply(&target, &mix_exec::Scope::root()).await.unwrap());
         assert!(path.is_dir());
     }
 
@@ -120,7 +120,7 @@ mod tests {
             path: "/does/not/exist/nix-env",
         };
 
-        let error = apply(&target, &mix_exec::cancel::root()).await.unwrap_err();
+        let error = apply(&target, &mix_exec::Scope::root()).await.unwrap_err();
 
         assert!(matches!(
             error,
@@ -140,6 +140,6 @@ mod tests {
             owner: None,
         };
 
-        assert!(!apply(&target, &mix_exec::cancel::root()).await.unwrap());
+        assert!(!apply(&target, &mix_exec::Scope::root()).await.unwrap());
     }
 }

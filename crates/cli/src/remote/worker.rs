@@ -241,8 +241,8 @@ impl mix_rpc::Worker for CliWorker {
             Err(error) => Outcome::Failure(Failure::Core(error)),
             Ok(_lock) => {
                 let mirror = request.mirror.as_ref();
-                let cancel = mix_exec::cancel::root();
-                let _watch = interrupt::watch(&cancel, interrupt::BOOTSTRAP, client_gone(&events));
+                let scope = mix_exec::Scope::root();
+                let _watch = interrupt::watch(&scope, interrupt::BOOTSTRAP, client_gone(&events));
                 let result = mix_app::bootstrap::bootstrap(
                     mix_core::privilege::user_by_uid(caller.uid),
                     mirror.map(|mirror| mirror.url.as_str()),
@@ -253,7 +253,7 @@ impl mix_rpc::Worker for CliWorker {
                         steps: Arc::new(Steps(self.0.clone())),
                         activity: Arc::new(Activity(events.clone())),
                     },
-                    &cancel,
+                    &scope,
                 )
                 .await;
                 match result {
@@ -273,9 +273,9 @@ impl mix_rpc::Worker for CliWorker {
             Ok(_lock) => {
                 let user_config = mix_core::privilege::user_by_uid(caller.uid)
                     .and_then(mix_app::profile::existing_user_config_for);
-                let cancel = mix_exec::cancel::root();
-                let _watch = interrupt::watch(&cancel, interrupt::REPAIR, client_gone(&events));
-                let repair = mix_app::repair::repair(user_config.as_ref(), &cancel).await;
+                let scope = mix_exec::Scope::root();
+                let _watch = interrupt::watch(&scope, interrupt::REPAIR, client_gone(&events));
+                let repair = mix_app::repair::repair(user_config.as_ref(), &scope).await;
                 Outcome::RepairDone {
                     reports: repair.reports.into_iter().map(report_to_wire).collect(),
                     interrupted: repair.interrupted,

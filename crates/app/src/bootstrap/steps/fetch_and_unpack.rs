@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use mix_core::{CancellationToken, DownloadProgress, Error as CoreError, Step};
+use mix_core::{DownloadProgress, Error as CoreError, Scope, Step};
 use nix::unistd::{Gid, Uid, User};
 
 use mix_core::identity::NIXBLD_GID;
@@ -48,17 +48,17 @@ impl Step for FetchAndUnpack {
         "fetch and activate the managed runtime"
     }
 
-    async fn check(&self) -> Result<bool> {
+    async fn check(&self, _scope: &Scope) -> Result<bool> {
         Ok(is_file(Path::new(DEFAULT_PROFILE).join("bin/nix-env")).await)
     }
 
-    async fn execute(&mut self, token: &CancellationToken) -> Result<()> {
+    async fn execute(&mut self, scope: &Scope) -> Result<()> {
         let bytes = tarball::bytes(self.mirror.as_deref(), self.progress.as_ref()).await?;
 
-        let token = token.clone();
+        let scope = scope.clone();
         let (installed, result) = tokio::task::spawn_blocking(move || {
             let mut installed = Installed::default();
-            let result = provision(&bytes, &mut installed, &token);
+            let result = provision(&bytes, &mut installed, &scope);
             (installed, result)
         })
         .await
@@ -68,7 +68,7 @@ impl Step for FetchAndUnpack {
         result
     }
 
-    async fn rollback(&mut self, _token: &CancellationToken) -> Result<()> {
+    async fn rollback(&mut self, _scope: &Scope) -> Result<()> {
         let Some(installed) = self.installed.take() else {
             return Ok(());
         };
@@ -81,11 +81,7 @@ impl Step for FetchAndUnpack {
     }
 }
 
-fn provision(
-    tarball_bytes: &[u8],
-    installed: &mut Installed,
-    token: &CancellationToken,
-) -> Result<()> {
+fn provision(tarball_bytes: &[u8], installed: &mut Installed, scope: &Scope) -> Result<()> {
     let scratch_root = match recover_scratch() {
         Some(path) => path,
         None => {
@@ -106,9 +102,9 @@ fn provision(
     let unpacked_root = find_single_child(&scratch_root, |name| name.starts_with("nix-"))?;
     tracing::debug!("moving Nix store into place");
     installed.store_dir_created = !Path::new(NIX_STORE).exists();
-    move_store_into_place(&unpacked_root, &mut installed.store_paths, token)?;
+    move_store_into_place(&unpacked_root, &mut installed.store_paths, scope)?;
 
-    if token.is_cancelled() {
+    if scope.is_stopped() {
         return Ok(());
     }
     let nix_pkg = resolve_backlink(&unpacked_root, |name| {
@@ -116,19 +112,19 @@ fn provision(
     })?;
     let nss_cacert_pkg = resolve_backlink(&unpacked_root, |name| name.contains("-nss-cacert-"))?;
 
-    if token.is_cancelled() {
+    if scope.is_stopped() {
         return Ok(());
     }
     tracing::debug!("loading Nix database");
-    load_db(&nix_pkg, &unpacked_root.join(".reginfo"), token)?;
-    forget_vanished_paths(&nix_pkg, token)?;
+    load_db(&nix_pkg, &unpacked_root.join(".reginfo"), scope)?;
+    forget_vanished_paths(&nix_pkg, scope)?;
 
-    if token.is_cancelled() {
+    if scope.is_stopped() {
         return Ok(());
     }
     installed.profile_created = !Path::new(DEFAULT_PROFILE).exists();
     tracing::debug!("activating default profile");
-    activate_default_profile(&nix_pkg, &nss_cacert_pkg, token)?;
+    activate_default_profile(&nix_pkg, &nss_cacert_pkg, scope)?;
 
     remove_manifest();
     let _ = std::fs::remove_dir_all(&scratch_root);
@@ -315,7 +311,7 @@ fn resolve_backlink(unpacked_root: &Path, pred: impl Fn(&str) -> bool) -> Result
 fn move_store_into_place(
     unpacked_root: &Path,
     created: &mut Vec<PathBuf>,
-    token: &CancellationToken,
+    scope: &Scope,
 ) -> Result<()> {
     move_entries_into(
         &unpacked_root.join("store"),
@@ -323,7 +319,7 @@ fn move_store_into_place(
         created,
         Uid::from_raw(0),
         Gid::from_raw(NIXBLD_GID),
-        token,
+        scope,
     )
 }
 
@@ -333,7 +329,7 @@ fn move_entries_into(
     created: &mut Vec<PathBuf>,
     uid: Uid,
     gid: Gid,
-    token: &CancellationToken,
+    scope: &Scope,
 ) -> Result<()> {
     std::fs::create_dir_all(dest_store).map_err(|e| CoreError::Io {
         path: dest_store.to_path_buf(),
@@ -352,7 +348,7 @@ fn move_entries_into(
         })?;
 
     for entry in entries {
-        if token.is_cancelled() {
+        if scope.is_stopped() {
             break;
         }
 
@@ -476,7 +472,7 @@ fn strip_write_bit(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn load_db(nix_pkg: &Path, reginfo_path: &Path, token: &CancellationToken) -> Result<()> {
+fn load_db(nix_pkg: &Path, reginfo_path: &Path, scope: &Scope) -> Result<()> {
     let reginfo = std::fs::read(reginfo_path).map_err(|e| CoreError::Io {
         path: reginfo_path.to_path_buf(),
         source: e,
@@ -484,24 +480,20 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path, token: &CancellationToken) -> Re
     nix_as_root(nix_pkg.join("bin/nix-store"))
         .arg("--load-db")
         .input(reginfo)
-        .run_blocking(token)
+        .run_blocking(scope)
         .map_err(CoreError::from)?;
     Ok(())
 }
 
-fn forget_vanished_paths(nix_pkg: &Path, token: &CancellationToken) -> Result<()> {
+fn forget_vanished_paths(nix_pkg: &Path, scope: &Scope) -> Result<()> {
     nix_as_root(nix_pkg.join("bin/nix-store"))
         .arg("--verify")
-        .run_blocking(token)
+        .run_blocking(scope)
         .map_err(CoreError::from)?;
     Ok(())
 }
 
-fn activate_default_profile(
-    nix_pkg: &Path,
-    nss_cacert_pkg: &Path,
-    token: &CancellationToken,
-) -> Result<()> {
+fn activate_default_profile(nix_pkg: &Path, nss_cacert_pkg: &Path, scope: &Scope) -> Result<()> {
     nix_as_root(nix_pkg.join("bin/nix-env"))
         .arg("--profile")
         .arg(DEFAULT_PROFILE)
@@ -510,7 +502,7 @@ fn activate_default_profile(
         .arg(nss_cacert_pkg)
         .args(["--option", "substitute", "false"])
         .args(["--option", "post-build-hook", ""])
-        .run_blocking(token)
+        .run_blocking(scope)
         .map_err(CoreError::from)?;
     Ok(())
 }
@@ -558,7 +550,7 @@ mod tests {
             created,
             Uid::current(),
             Gid::current(),
-            &mix_exec::cancel::root(),
+            &mix_exec::Scope::root(),
         )
     }
 
@@ -769,8 +761,8 @@ mod tests {
         let dest = tempfile::tempdir().unwrap();
         let dest_store = dest.path().join("store");
 
-        let token = mix_exec::cancel::root();
-        token.cancel();
+        let scope = mix_exec::Scope::root();
+        scope.cancel();
 
         let mut created = Vec::new();
         move_entries_into(
@@ -779,7 +771,7 @@ mod tests {
             &mut created,
             Uid::current(),
             Gid::current(),
-            &token,
+            &scope,
         )
         .unwrap();
 

@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use mix_core::Scope;
 use mix_core::paths::NIX_OWNERSHIP_MARKER;
 
 use crate::bootstrap::detect::{self, Wsl};
@@ -19,7 +20,7 @@ async fn check_not_nixos_at(marker: &Path) -> Result<()> {
     Ok(())
 }
 
-pub async fn check_nix_not_installed() -> Result<()> {
+pub async fn check_nix_not_installed(scope: &Scope) -> Result<()> {
     tracing::debug!("checking for a pre-existing, unmanaged Nix installation");
     if is_file(NIX_OWNERSHIP_MARKER).await {
         return Ok(());
@@ -27,7 +28,7 @@ pub async fn check_nix_not_installed() -> Result<()> {
 
     let on_path = mix_exec::Command::new("nix-env")
         .arg("--version")
-        .output(&mix_exec::cancel::shield())
+        .output(scope)
         .await
         .is_ok();
 

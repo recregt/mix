@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use mix_core::CancellationToken;
+use mix_core::Scope;
 use nix::sys::signal::Signal;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::task::JoinHandle;
@@ -41,7 +41,7 @@ fn listen(signal_number: Signal) -> tokio::signal::unix::Signal {
 }
 
 pub fn watch(
-    cancel: &CancellationToken,
+    scope: &Scope,
     stopping: Stopping,
     client_gone: impl Future<Output = ()> + Send + 'static,
 ) -> Watch {
@@ -49,7 +49,7 @@ pub fn watch(
     let mut terminate = listen(Signal::SIGTERM);
     let mut suspend = listen(Signal::SIGTSTP);
     let mut resume = listen(Signal::SIGCONT);
-    let cancel = cancel.clone();
+    let scope = scope.clone();
     Watch(tokio::spawn(async move {
         let mut client_gone = std::pin::pin!(client_gone);
         let mut client_left = false;
@@ -59,28 +59,28 @@ pub fn watch(
                 _ = terminate.recv() => {}
                 () = &mut client_gone, if !client_left => {
                     client_left = true;
-                    if cancel.is_cancelled() {
+                    if scope.is_stopped() {
                         continue;
                     }
                 }
                 _ = suspend.recv() => {
-                    mix_exec::group::pause_all();
+                    scope.processes().pause();
                     let _ = nix::sys::signal::raise(Signal::SIGSTOP);
                     continue;
                 }
                 _ = resume.recv() => {
-                    mix_exec::group::resume_all();
+                    scope.processes().resume();
                     continue;
                 }
             }
-            if cancel.is_cancelled() {
+            if scope.is_stopped() {
                 tracing::warn!("{}", stopping.forced);
-                mix_exec::group::kill_all();
+                scope.processes().kill();
                 mix_ui::restore_terminal();
                 std::process::exit(FORCED_EXIT);
             }
             tracing::warn!("{}", stopping.first);
-            cancel.cancel();
+            scope.cancel();
         }
     }))
 }
@@ -95,58 +95,58 @@ mod tests {
 
     static ONE_WATCH_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-    async fn cancelled_within_a_few_seconds(cancel: &CancellationToken) {
-        tokio::time::timeout(Duration::from_secs(5), cancel.cancelled())
+    async fn cancelled_within_a_few_seconds(scope: &Scope) {
+        tokio::time::timeout(Duration::from_secs(5), scope.stopped())
             .await
-            .expect("the token should be cancelled");
+            .expect("the scope should be stopped");
     }
 
     #[tokio::test]
     async fn sigint_cancels_the_token() {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
-        let cancel = mix_exec::cancel::root();
-        let _watch = watch(&cancel, BOOTSTRAP, std::future::pending());
+        let scope = mix_exec::Scope::root();
+        let _watch = watch(&scope, BOOTSTRAP, std::future::pending());
 
         signal::raise(Signal::SIGINT).unwrap();
 
-        cancelled_within_a_few_seconds(&cancel).await;
+        cancelled_within_a_few_seconds(&scope).await;
     }
 
     #[tokio::test]
     async fn sigterm_cancels_the_token() {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
-        let cancel = mix_exec::cancel::root();
-        let _watch = watch(&cancel, BOOTSTRAP, std::future::pending());
+        let scope = mix_exec::Scope::root();
+        let _watch = watch(&scope, BOOTSTRAP, std::future::pending());
 
         signal::raise(Signal::SIGTERM).unwrap();
 
-        cancelled_within_a_few_seconds(&cancel).await;
+        cancelled_within_a_few_seconds(&scope).await;
     }
 
     #[tokio::test]
     async fn a_client_that_leaves_cancels_the_token() {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
-        let cancel = mix_exec::cancel::root();
+        let scope = mix_exec::Scope::root();
         let (leave, left) = tokio::sync::oneshot::channel::<()>();
-        let _watch = watch(&cancel, BOOTSTRAP, async {
+        let _watch = watch(&scope, BOOTSTRAP, async {
             let _ = left.await;
         });
 
         drop(leave);
 
-        cancelled_within_a_few_seconds(&cancel).await;
+        cancelled_within_a_few_seconds(&scope).await;
     }
 
     #[tokio::test]
     async fn a_client_that_leaves_after_an_interrupt_does_not_count_as_a_second_one() {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
-        let cancel = mix_exec::cancel::root();
+        let scope = mix_exec::Scope::root();
         let (leave, left) = tokio::sync::oneshot::channel::<()>();
-        let watch = watch(&cancel, BOOTSTRAP, async {
+        let watch = watch(&scope, BOOTSTRAP, async {
             let _ = left.await;
         });
         signal::raise(Signal::SIGINT).unwrap();
-        cancelled_within_a_few_seconds(&cancel).await;
+        cancelled_within_a_few_seconds(&scope).await;
 
         drop(leave);
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -157,9 +157,9 @@ mod tests {
     #[tokio::test]
     async fn a_finished_watch_cancels_nothing() {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
-        let cancel = mix_exec::cancel::root();
+        let scope = mix_exec::Scope::root();
         let (leave, left) = tokio::sync::oneshot::channel::<()>();
-        let watch = watch(&cancel, BOOTSTRAP, async {
+        let watch = watch(&scope, BOOTSTRAP, async {
             let _ = left.await;
         });
 
@@ -167,6 +167,6 @@ mod tests {
         drop(leave);
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        assert!(!cancel.is_cancelled());
+        assert!(!scope.is_stopped());
     }
 }

@@ -7,14 +7,14 @@
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 
-use mix_core::identity;
 use mix_core::models::Target;
+use mix_core::{Scope, identity};
 
 use crate::fs::{DIR_MODE_MASK, Owner, exists};
 use crate::systemd::unit_is_active;
 use crate::target::Finding;
 
-pub async fn inspect(target: &Target) -> Option<Finding> {
+pub async fn inspect(target: &Target, scope: &Scope) -> Option<Finding> {
     match target {
         Target::Directory { path, mode, owner } => {
             tracing::debug!("checking directory: {}", path.display());
@@ -52,7 +52,7 @@ pub async fn inspect(target: &Target) -> Option<Finding> {
             must_be_active,
         } => {
             tracing::debug!("checking systemd unit: {name}");
-            inspect_systemd_unit(name, src, dest, *must_be_active).await
+            inspect_systemd_unit(name, src, dest, *must_be_active, scope).await
         }
         Target::PathExists { name, path } => {
             tracing::debug!("checking path: {path} ({name})");
@@ -167,6 +167,7 @@ async fn inspect_systemd_unit(
     src: &str,
     dest: &str,
     must_be_active: bool,
+    scope: &Scope,
 ) -> Option<Finding> {
     // The installed unit is read once: whether it is there and whether it is the one mix ships
     // are the same read.
@@ -179,7 +180,7 @@ async fn inspect_systemd_unit(
             }
         }
     }
-    if must_be_active && !unit_is_active(name).await {
+    if must_be_active && !unit_is_active(name, scope).await {
         return Some(Finding::UnitInactive);
     }
     None
@@ -429,7 +430,8 @@ mod tests {
                 "nix-daemon.service",
                 src.to_str().unwrap(),
                 dest.to_str().unwrap(),
-                false
+                false,
+                &Scope::root()
             )
             .await,
             Some(Finding::UnitMissing)
@@ -441,7 +443,8 @@ mod tests {
                 "nix-daemon.service",
                 src.to_str().unwrap(),
                 dest.to_str().unwrap(),
-                false
+                false,
+                &Scope::root()
             )
             .await,
             Some(Finding::UnitDrift)
@@ -453,7 +456,8 @@ mod tests {
                 "nix-daemon.service",
                 src.to_str().unwrap(),
                 dest.to_str().unwrap(),
-                false
+                false,
+                &Scope::root()
             )
             .await
             .is_none()

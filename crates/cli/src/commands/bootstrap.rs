@@ -10,9 +10,9 @@ pub async fn run(
 ) -> anyhow::Result<ExitCode> {
     if mix_core::privilege::is_root() {
         let _lock = super::acquire_lock()?;
-        let cancel = mix_exec::cancel::root();
+        let scope = mix_exec::Scope::root();
         let _watch =
-            crate::interrupt::watch(&cancel, crate::interrupt::BOOTSTRAP, std::future::pending());
+            crate::interrupt::watch(&scope, crate::interrupt::BOOTSTRAP, std::future::pending());
         mix_app::bootstrap::bootstrap(
             mix_core::privilege::invoking_user(),
             mirror,
@@ -23,7 +23,7 @@ pub async fn run(
                 steps: mix_ui::step_observer(),
                 activity: mix_ui::activity_reporter(),
             },
-            &cancel,
+            &scope,
         )
         .await?;
     } else {

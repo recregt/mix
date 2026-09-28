@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use nix::sys::signal::{Signal, killpg};
@@ -8,13 +8,45 @@ use tokio::process::{Child, Command};
 
 pub const GRACE: Duration = Duration::from_secs(10);
 
-static LIVE: Mutex<BTreeSet<i32>> = Mutex::new(BTreeSet::new());
+#[derive(Debug, Clone, Default)]
+pub struct ProcessSet(Arc<Mutex<BTreeSet<i32>>>);
 
-pub struct Group(i32);
+impl ProcessSet {
+    fn live(&self) -> std::sync::MutexGuard<'_, BTreeSet<i32>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn signal(&self, signal: Signal) {
+        for pgid in self.live().iter() {
+            let _ = killpg(Pid::from_raw(*pgid), signal);
+        }
+    }
+
+    pub fn kill(&self) {
+        self.signal(Signal::SIGKILL);
+    }
+
+    pub fn pause(&self) {
+        self.signal(Signal::SIGTSTP);
+    }
+
+    pub fn resume(&self) {
+        self.signal(Signal::SIGCONT);
+    }
+
+    pub fn same_set(&self, other: &ProcessSet) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+pub struct Group {
+    pgid: i32,
+    set: ProcessSet,
+}
 
 impl Group {
     fn signal(&self, signal: Signal) {
-        let _ = killpg(Pid::from_raw(self.0), signal);
+        let _ = killpg(Pid::from_raw(self.pgid), signal);
     }
 
     pub async fn stop(&self, child: &mut Child, grace: Duration) {
@@ -29,39 +61,26 @@ impl Group {
 
 impl Drop for Group {
     fn drop(&mut self) {
-        LIVE.lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&self.0);
+        self.set.live().remove(&self.pgid);
     }
 }
 
-pub(crate) fn spawn(command: &mut Command) -> std::io::Result<(Child, Group)> {
-    let mut live = LIVE.lock().unwrap_or_else(PoisonError::into_inner);
+pub(crate) fn spawn(command: &mut Command, set: &ProcessSet) -> std::io::Result<(Child, Group)> {
+    let mut live = set.live();
     let child = command.process_group(0).kill_on_drop(true).spawn()?;
     let pgid = child
         .id()
         .and_then(|pid| i32::try_from(pid).ok())
         .ok_or_else(|| std::io::Error::other("the child exited before it could be tracked"))?;
     live.insert(pgid);
-    Ok((child, Group(pgid)))
-}
-
-fn signal_all(signal: Signal) {
-    for pgid in LIVE.lock().unwrap_or_else(PoisonError::into_inner).iter() {
-        let _ = killpg(Pid::from_raw(*pgid), signal);
-    }
-}
-
-pub fn kill_all() {
-    signal_all(Signal::SIGKILL);
-}
-
-pub fn pause_all() {
-    signal_all(Signal::SIGTSTP);
-}
-
-pub fn resume_all() {
-    signal_all(Signal::SIGCONT);
+    drop(live);
+    Ok((
+        child,
+        Group {
+            pgid,
+            set: set.clone(),
+        },
+    ))
 }
 
 #[cfg(test)]
@@ -109,7 +128,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_child_leads_its_own_process_group() {
-        let (child, group) = spawn(&mut sh("sleep 5")).unwrap();
+        let (child, group) = spawn(&mut sh("sleep 5"), &ProcessSet::default()).unwrap();
 
         let pid = child.id().unwrap() as i32;
         assert_eq!(
@@ -124,7 +143,8 @@ mod tests {
 
     #[tokio::test]
     async fn stop_asks_first_and_the_whole_group_goes() {
-        let (mut child, group) = spawn(&mut sh("sleep 30 & echo $!; wait")).unwrap();
+        let (mut child, group) =
+            spawn(&mut sh("sleep 30 & echo $!; wait"), &ProcessSet::default()).unwrap();
         let grandchild = read_pid(&mut child).await;
 
         group.stop(&mut child, Duration::from_secs(5)).await;
@@ -138,9 +158,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_child_that_ignores_the_request_is_killed_after_the_grace_period() {
-        let (mut child, group) = spawn(&mut sh(
-            "trap '' TERM; echo $$; while :; do sleep 0.1; done",
-        ))
+        let (mut child, group) = spawn(
+            &mut sh("trap '' TERM; echo $$; while :; do sleep 0.1; done"),
+            &ProcessSet::default(),
+        )
         .unwrap();
         let _ = read_pid(&mut child).await;
 
@@ -153,17 +174,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_finished_child_is_no_longer_tracked() {
-        let (mut child, group) = spawn(&mut sh("true")).unwrap();
-        let pgid = group.0;
+        let set = ProcessSet::default();
+        let (mut child, group) = spawn(&mut sh("true"), &set).unwrap();
+        let pgid = group.pgid;
         child.wait().await.unwrap();
 
         drop(group);
 
-        assert!(
-            !LIVE
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .contains(&pgid)
-        );
+        assert!(!set.live().contains(&pgid));
     }
 }

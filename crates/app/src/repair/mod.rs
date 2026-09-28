@@ -5,7 +5,7 @@
 //! `mix repair` decides the order it walks the environment in, what a change means for the
 //! nix-daemon and for the git-tracked state, and what it hands the caller to print.
 
-use mix_core::CancellationToken;
+use mix_core::Scope;
 use mix_core::models::{Target, UserConfig, targets};
 use mix_core::paths::{NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT, mix_state_dir};
 
@@ -44,18 +44,18 @@ pub struct Repair {
     pub interrupted: bool,
 }
 
-pub async fn repair(user_config: Option<&UserConfig>, cancel: &CancellationToken) -> Repair {
+pub async fn repair(user_config: Option<&UserConfig>, scope: &Scope) -> Repair {
     tracing::info!("repairing managed environment");
     let items = targets(user_config);
-    let (mut reports, interrupted) = put_back(&items, cancel).await;
+    let (mut reports, interrupted) = put_back(&items, scope).await;
 
-    let token = mix_exec::cancel::shield();
+    let shielded = scope.shielded();
     if rewrote_nix_conf(&reports) {
-        restart_the_daemon(&token, &mut reports).await;
+        restart_the_daemon(&shielded, &mut reports).await;
     }
 
     if let Some(cfg) = user_config {
-        commit_the_tracked_state(cfg, &token, &mut reports).await;
+        commit_the_tracked_state(cfg, &shielded, &mut reports).await;
     }
 
     Repair {
@@ -64,18 +64,19 @@ pub async fn repair(user_config: Option<&UserConfig>, cancel: &CancellationToken
     }
 }
 
-async fn put_back(items: &[Target], cancel: &CancellationToken) -> (Vec<RepairReport>, bool) {
-    let token = mix_exec::cancel::shield();
+async fn put_back(items: &[Target], scope: &Scope) -> (Vec<RepairReport>, bool) {
+    let shielded = scope.shielded();
 
     // Measuring does not change anything, so every target is measured at once; putting them back
     // is done in the order they are declared in, because a target can be what the next one needs.
-    let findings = futures_util::future::join_all(items.iter().map(target::inspect)).await;
+    let findings =
+        futures_util::future::join_all(items.iter().map(|item| target::inspect(item, scope))).await;
 
     let mut reports = Vec::new();
     for (item, finding) in items.iter().zip(findings) {
         let Some(finding) = finding else { continue };
         let name = item.label();
-        if cancel.is_cancelled() {
+        if scope.is_stopped() {
             tracing::info!("stopped before repairing {name}");
             return (reports, true);
         }
@@ -90,7 +91,7 @@ async fn put_back(items: &[Target], cancel: &CancellationToken) -> (Vec<RepairRe
             continue;
         }
 
-        match target::reconcile(item, finding, &token).await {
+        match target::reconcile(item, finding, &shielded).await {
             Ok(()) => {
                 tracing::debug!("repaired: {name}");
                 reports.push(RepairReport::repaired(name.into_owned()));
@@ -112,8 +113,8 @@ fn rewrote_nix_conf(reports: &[RepairReport]) -> bool {
         .any(|report| report.fixed && report.name == NIX_CONF_DEST)
 }
 
-async fn restart_the_daemon(token: &CancellationToken, reports: &mut Vec<RepairReport>) {
-    match systemd::restart_if_active(NIX_DAEMON_SERVICE_UNIT, token).await {
+async fn restart_the_daemon(scope: &Scope, reports: &mut Vec<RepairReport>) {
+    match systemd::restart_if_active(NIX_DAEMON_SERVICE_UNIT, scope).await {
         Ok(false) => {}
         Ok(true) => reports.push(RepairReport::repaired(NIX_DAEMON_SERVICE_UNIT)),
         Err(e) => reports.push(RepairReport::failed(NIX_DAEMON_SERVICE_UNIT, e)),
@@ -123,14 +124,14 @@ async fn restart_the_daemon(token: &CancellationToken, reports: &mut Vec<RepairR
 /// Configuration mix rewrote is drift the user should be able to see in git.
 async fn commit_the_tracked_state(
     cfg: &UserConfig,
-    token: &CancellationToken,
+    scope: &Scope,
     reports: &mut Vec<RepairReport>,
 ) {
     const NAME: &str = "git-tracked state";
 
     let state_dir = mix_state_dir(&cfg.user.home);
     let git = git::Git::resolve(&cfg.user).await;
-    match git.sync(&cfg.user, &state_dir, token).await {
+    match git.sync(&cfg.user, &state_dir, scope).await {
         Ok(true) => {
             tracing::debug!("committed drift in git-tracked state");
             reports.push(RepairReport::repaired(NAME));
@@ -202,7 +203,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
 
         let (reports, interrupted) =
-            put_back(&drifted_files(dir.path()), &mix_exec::cancel::root()).await;
+            put_back(&drifted_files(dir.path()), &mix_exec::Scope::root()).await;
 
         assert!(!interrupted);
         assert_eq!(reports.len(), 2);
@@ -216,10 +217,10 @@ mod tests {
     #[tokio::test]
     async fn a_stopped_repair_starts_nothing_new_and_says_it_was_stopped() {
         let dir = tempfile::tempdir().unwrap();
-        let cancel = mix_exec::cancel::root();
-        cancel.cancel();
+        let scope = mix_exec::Scope::root();
+        scope.cancel();
 
-        let (reports, interrupted) = put_back(&drifted_files(dir.path()), &cancel).await;
+        let (reports, interrupted) = put_back(&drifted_files(dir.path()), &scope).await;
 
         assert!(interrupted);
         assert!(reports.is_empty());
@@ -232,8 +233,8 @@ mod tests {
     #[tokio::test]
     async fn a_stop_with_nothing_left_to_repair_is_not_an_interruption() {
         let dir = tempfile::tempdir().unwrap();
-        let cancel = mix_exec::cancel::root();
-        cancel.cancel();
+        let scope = mix_exec::Scope::root();
+        scope.cancel();
         let healthy = Target::File {
             path: dir.path().join("healthy").into(),
             expected: Some("expected".to_string().into()),
@@ -241,7 +242,7 @@ mod tests {
         };
         std::fs::write(dir.path().join("healthy"), "expected").unwrap();
 
-        let (reports, interrupted) = put_back(&[healthy], &cancel).await;
+        let (reports, interrupted) = put_back(&[healthy], &scope).await;
 
         assert!(!interrupted);
         assert!(reports.is_empty());

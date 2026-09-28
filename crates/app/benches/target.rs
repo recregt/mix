@@ -57,13 +57,14 @@ fn mode_of(path: &std::path::Path) -> u32 {
 fn inspect_the_declared_targets(bencher: divan::Bencher, n: usize) {
     let root = tempfile::tempdir().unwrap();
     let targets = declared_tree(root.path(), n);
+    let scope = mix_exec::Scope::root();
     let rt = runtime();
 
     bencher.bench_local(|| {
         rt.block_on(async {
             let mut drifted = 0usize;
             for item in divan::black_box(&targets) {
-                drifted += usize::from(target::inspect(item).await.is_some());
+                drifted += usize::from(target::inspect(item, &scope).await.is_some());
             }
             drifted
         })
@@ -76,14 +77,14 @@ fn inspect_the_declared_targets(bencher: divan::Bencher, n: usize) {
 fn apply_the_declared_targets(bencher: divan::Bencher, n: usize) {
     let root = tempfile::tempdir().unwrap();
     let targets = declared_tree(root.path(), n);
-    let token = mix_exec::cancel::root();
+    let scope = mix_exec::Scope::root();
     let rt = runtime();
 
     bencher.bench_local(|| {
         rt.block_on(async {
             let mut repaired = 0usize;
             for item in divan::black_box(&targets) {
-                repaired += usize::from(target::apply(item, &token).await.unwrap());
+                repaired += usize::from(target::apply(item, &scope).await.unwrap());
             }
             repaired
         })
@@ -100,14 +101,14 @@ fn reconcile_a_file_that_drifted(bencher: divan::Bencher) {
         expected: Some("build-users-group = nixbld\n".to_string().into()),
         owner: None,
     };
-    let token = mix_exec::cancel::root();
+    let scope = mix_exec::Scope::root();
     let rt = runtime();
 
     bencher.bench_local(|| {
         rt.block_on(target::reconcile(
             divan::black_box(&target),
             Finding::ContentDrift,
-            &token,
+            &scope,
         ))
         .unwrap()
     });
@@ -131,14 +132,14 @@ fn reconcile_an_owner_that_drifted(bencher: divan::Bencher) {
         actual: (0, 0),
         expected: owner,
     };
-    let token = mix_exec::cancel::root();
+    let scope = mix_exec::Scope::root();
     let rt = runtime();
 
     bencher.bench_local(|| {
         rt.block_on(target::reconcile(
             divan::black_box(&target),
             finding,
-            &token,
+            &scope,
         ))
         .unwrap()
     });

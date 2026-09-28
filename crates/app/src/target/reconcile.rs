@@ -9,14 +9,14 @@ use std::path::Path;
 
 use mix_core::identity;
 use mix_core::models::Target;
-use mix_core::{CancellationToken, Result};
+use mix_core::{Result, Scope};
 
 use crate::exec::run;
 use crate::fs::{self, Owner};
 use crate::systemd;
 use crate::target::Finding;
 
-pub async fn reconcile(target: &Target, finding: Finding, token: &CancellationToken) -> Result<()> {
+pub async fn reconcile(target: &Target, finding: Finding, scope: &Scope) -> Result<()> {
     match target {
         Target::Directory { path, mode, owner } => {
             tracing::debug!("reconciling directory: {}", path.display());
@@ -36,15 +36,15 @@ pub async fn reconcile(target: &Target, finding: Finding, token: &CancellationTo
         }
         Target::Group { name, gid } => {
             tracing::debug!("reconciling group: {name}");
-            group(name, *gid, finding, token).await
+            group(name, *gid, finding, scope).await
         }
         Target::GroupMember { group, user } => {
             tracing::debug!("reconciling {group} membership: {user}");
-            run("gpasswd", &["--add", user, group], token).await
+            run("gpasswd", &["--add", user, group], scope).await
         }
         Target::User { n, uid, gid } => {
             tracing::debug!("reconciling user: {}", identity::user_name(*n));
-            user(*n, *uid, *gid, finding, token).await
+            user(*n, *uid, *gid, finding, scope).await
         }
         Target::SystemdUnit {
             name,
@@ -53,7 +53,7 @@ pub async fn reconcile(target: &Target, finding: Finding, token: &CancellationTo
             must_be_active,
         } => {
             tracing::debug!("reconciling systemd unit: {name}");
-            systemd_unit(name, src, dest, *must_be_active, finding, token).await
+            systemd_unit(name, src, dest, *must_be_active, finding, scope).await
         }
         // Part of the Nix installation rather than of the declared environment: a missing one is
         // bound to `Unfixable::MissingRuntime` and never reaches here.
@@ -102,21 +102,15 @@ async fn seeded_file(path: &Path, seed: &str, owner: Owner, finding: Finding) ->
     }
 }
 
-async fn group(name: &str, gid: u32, finding: Finding, token: &CancellationToken) -> Result<()> {
+async fn group(name: &str, gid: u32, finding: Finding, scope: &Scope) -> Result<()> {
     let gid = gid.to_string();
     match finding {
-        Finding::GroupGid { .. } => run("groupmod", &["--gid", &gid, name], token).await,
-        _ => run("groupadd", &["--system", "--gid", &gid, name], token).await,
+        Finding::GroupGid { .. } => run("groupmod", &["--gid", &gid, name], scope).await,
+        _ => run("groupadd", &["--system", "--gid", &gid, name], scope).await,
     }
 }
 
-async fn user(
-    n: u32,
-    uid: u32,
-    gid: u32,
-    finding: Finding,
-    token: &CancellationToken,
-) -> Result<()> {
+async fn user(n: u32, uid: u32, gid: u32, finding: Finding, scope: &Scope) -> Result<()> {
     let name = identity::user_name(n);
 
     // The ids the account carries were read by the inspection, so only the ones that actually
@@ -127,10 +121,10 @@ async fn user(
     } = finding
     {
         if actual_gid != gid {
-            run("usermod", &["--gid", &gid.to_string(), &name], token).await?;
+            run("usermod", &["--gid", &gid.to_string(), &name], scope).await?;
         }
         if actual_uid != uid {
-            run("usermod", &["--uid", &uid.to_string(), &name], token).await?;
+            run("usermod", &["--uid", &uid.to_string(), &name], scope).await?;
         }
         return Ok(());
     }
@@ -155,7 +149,7 @@ async fn user(
             &format!("mix build user {n}"),
             &name,
         ],
-        token,
+        scope,
     )
     .await
 }
@@ -166,18 +160,18 @@ async fn systemd_unit(
     dest: &str,
     must_be_active: bool,
     finding: Finding,
-    token: &CancellationToken,
+    scope: &Scope,
 ) -> Result<()> {
     // The unit file is there and is the one mix ships; it is only stopped.
     if finding == Finding::UnitInactive {
-        return systemd::enable_now(name, token).await;
+        return systemd::enable_now(name, scope).await;
     }
 
     fs::copy_atomic(src, dest).await?;
-    systemd::daemon_reload(token).await?;
+    systemd::daemon_reload(scope).await?;
 
-    if must_be_active && !systemd::unit_is_active(name).await {
-        systemd::enable_now(name, token).await?;
+    if must_be_active && !systemd::unit_is_active(name, scope).await {
+        systemd::enable_now(name, scope).await?;
     }
     Ok(())
 }
@@ -191,8 +185,8 @@ mod tests {
     use super::*;
     use crate::target::{Error, apply};
 
-    fn token() -> CancellationToken {
-        mix_exec::cancel::root()
+    fn scope() -> Scope {
+        mix_exec::Scope::root()
     }
 
     #[tokio::test]
@@ -265,7 +259,7 @@ mod tests {
             owner: None,
         };
 
-        assert!(apply(&target, &token()).await.unwrap());
+        assert!(apply(&target, &scope()).await.unwrap());
 
         let meta = tokio::fs::metadata(dir.path()).await.unwrap();
         assert_eq!(meta.permissions().mode() & 0o7777, 0o755);
@@ -303,7 +297,7 @@ mod tests {
             owner: None,
         };
 
-        assert!(apply(&target, &token()).await.unwrap());
+        assert!(apply(&target, &scope()).await.unwrap());
 
         assert_eq!(
             std::fs::read_to_string(dir.path().join("nix.conf")).unwrap(),
@@ -357,7 +351,7 @@ mod tests {
             owner: None,
         };
 
-        assert!(apply(&target, &token()).await.unwrap());
+        assert!(apply(&target, &scope()).await.unwrap());
 
         assert_eq!(
             std::fs::read_to_string(dir.path().join("state")).unwrap(),
@@ -378,7 +372,7 @@ mod tests {
             owner: None,
         };
 
-        assert!(!apply(&target, &token()).await.unwrap());
+        assert!(!apply(&target, &scope()).await.unwrap());
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             "installed by the user since"
@@ -392,7 +386,7 @@ mod tests {
             user: "root".to_string(),
         };
 
-        assert!(!apply(&target, &token()).await.unwrap());
+        assert!(!apply(&target, &scope()).await.unwrap());
     }
 
     #[tokio::test]
@@ -402,7 +396,7 @@ mod tests {
             user: "mix-test-nonexistent-user-xyz".to_string(),
         };
 
-        let error = apply(&target, &token()).await.unwrap_err();
+        let error = apply(&target, &scope()).await.unwrap_err();
 
         assert!(matches!(
             error,

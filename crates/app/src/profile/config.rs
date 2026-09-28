@@ -153,7 +153,7 @@ mod tests {
                  extraBuilderCommands = o.extraBuilderCommands.type.name; }",
             )
             .arg(options);
-        let output = command.output_blocking(&mix_exec::cancel::root()).unwrap();
+        let output = command.output_blocking(&mix_exec::Scope::root()).unwrap();
         assert!(
             output.status.success(),
             "{}",

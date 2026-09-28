@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use mix_core::{CancellationToken, Step};
+use mix_core::{Scope, Step};
 
 use mix_core::paths::{
     NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC,
@@ -25,15 +25,15 @@ impl Step for ConfigureSystemdService {
         "configure the managed background service"
     }
 
-    async fn check(&self) -> Result<bool> {
+    async fn check(&self, scope: &Scope) -> Result<bool> {
         Ok(
             files_match(NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SERVICE_DEST).await
                 && files_match(NIX_DAEMON_SOCKET_SRC, NIX_DAEMON_SOCKET_DEST).await
-                && unit_is_active("nix-daemon.socket").await,
+                && unit_is_active("nix-daemon.socket", scope).await,
         )
     }
 
-    async fn execute(&mut self, token: &CancellationToken) -> Result<()> {
+    async fn execute(&mut self, scope: &Scope) -> Result<()> {
         self.written.push((
             NIX_DAEMON_SERVICE_DEST,
             previous_contents(NIX_DAEMON_SERVICE_DEST).await,
@@ -46,18 +46,18 @@ impl Step for ConfigureSystemdService {
         ));
         copy_atomic(NIX_DAEMON_SOCKET_SRC, NIX_DAEMON_SOCKET_DEST).await?;
 
-        run("systemctl", &["daemon-reload"], token).await?;
+        run("systemctl", &["daemon-reload"], scope).await?;
         self.started_socket = true;
         run(
             "systemctl",
             &["enable", "--now", "nix-daemon.socket"],
-            token,
+            scope,
         )
         .await?;
         Ok(())
     }
 
-    async fn rollback(&mut self, token: &CancellationToken) -> Result<()> {
+    async fn rollback(&mut self, scope: &Scope) -> Result<()> {
         if self.started_socket {
             warn_on_failure(
                 "disable nix-daemon.socket",
@@ -69,7 +69,7 @@ impl Step for ConfigureSystemdService {
                         "nix-daemon.socket",
                         "nix-daemon.service",
                     ],
-                    token,
+                    scope,
                 )
                 .await,
             );
@@ -88,7 +88,7 @@ impl Step for ConfigureSystemdService {
 
         warn_on_failure(
             "reload systemd",
-            run("systemctl", &["daemon-reload"], token).await,
+            run("systemctl", &["daemon-reload"], scope).await,
         );
         Ok(())
     }

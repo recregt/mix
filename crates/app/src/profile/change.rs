@@ -5,7 +5,7 @@ use std::sync::Arc;
 use mix_core::models::UserConfig;
 use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
 use mix_core::state::StateManifest;
-use mix_core::{ActivityReporter, CancellationToken};
+use mix_core::{ActivityReporter, Scope};
 use tracing::Instrument;
 
 use crate::fs::{remove_file, write_atomic};
@@ -68,7 +68,7 @@ pub async fn apply(
     label: &str,
     source: PackageSource<'_>,
     activity: &Arc<dyn ActivityReporter>,
-    cancel: &CancellationToken,
+    scope: &Scope,
 ) -> Result<()> {
     let (new_state, new_home) = render_candidate(cfg, manifest)?;
 
@@ -84,12 +84,12 @@ pub async fn apply(
                 source.mirror,
                 source.mirror_key,
                 activity,
-                cancel,
+                scope,
                 source.policy,
             )
         })
         .await?;
-        profile::finish(cfg, &generation, activity, &mix_exec::cancel::shield()).await?;
+        profile::finish(cfg, &generation, activity, &scope.shielded()).await?;
         Ok(())
     }
     .instrument(span)
