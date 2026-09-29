@@ -279,6 +279,28 @@ fn supplementary_groups(user: &str) -> Vec<String> {
         .collect()
 }
 
+async fn stop_processes(user: &str, scope: &Scope) -> Result<(), Failure> {
+    let output = root_command("pkill")?
+        .args(["--signal", "KILL", "--uid", user])
+        .output(scope)
+        .await
+        .map_err(|error| match error {
+            mix_exec::Error::Cancelled { .. } => Failure::Cancelled,
+            _ => Failure::SpawnFailed {
+                program: "pkill".to_string(),
+                kind: std::io::ErrorKind::Other,
+            },
+        })?;
+    match output.status.code() {
+        Some(0 | 1) => Ok(()),
+        status => Err(Failure::CommandFailed {
+            program: "pkill".to_string(),
+            status,
+            output_tail: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        }),
+    }
+}
+
 pub async fn perform(
     action: &Action,
     scope: &Scope,
@@ -289,6 +311,9 @@ pub async fn perform(
         async {
             let undo = precondition(action)?;
             prepared(&undo)?;
+            if let Action::DeleteUser { name, .. } = action {
+                stop_processes(name, scope).await?;
+            }
             let output = root_command(tool)?
                 .args(&args)
                 .output(scope)
