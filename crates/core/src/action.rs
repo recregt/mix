@@ -136,6 +136,12 @@ pub enum Action {
         from: PathBuf,
         expect: Expect,
     },
+    ReclaimTree {
+        path: PathBuf,
+        expect: FileId,
+        owner: Owner,
+        mode: u32,
+    },
     AddGroup {
         name: String,
         gid: u32,

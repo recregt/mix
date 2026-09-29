@@ -398,6 +398,56 @@ impl World {
                     expect: Expect::Absent,
                 }])
             }
+            Action::ReclaimTree {
+                path,
+                expect,
+                owner,
+                mode,
+            } => {
+                self.matches(path, Expect::Present(*expect))?;
+                let aside = self.sibling(path, "aside");
+                let mut copy = Vec::new();
+                for old in self.subtree(path) {
+                    let entry = &self.files[&old];
+                    let top = old == *path;
+                    copy.push((
+                        old.clone(),
+                        Entry {
+                            content: entry.content.clone(),
+                            mode: if top { *mode } else { entry.mode & !0o6000 },
+                            owner: *owner,
+                            id: FileId {
+                                dev: 0,
+                                ino: 0,
+                                born: None,
+                            },
+                            changed: entry.changed,
+                        },
+                    ));
+                }
+                self.move_tree(path, &aside);
+                let mut top = None;
+                for (at, mut entry) in copy {
+                    entry.id = self.fresh();
+                    entry.changed = entry.id.ino;
+                    if at == *path {
+                        top = Some(entry.id);
+                    }
+                    self.files.insert(at, entry);
+                }
+                self.pending.push(aside.clone());
+                done(vec![
+                    Action::RemoveCreatedTree {
+                        path: path.clone(),
+                        expect: top.expect("the top was copied"),
+                    },
+                    Action::Restore {
+                        path: path.clone(),
+                        from: aside,
+                        expect: Expect::Absent,
+                    },
+                ])
+            }
             Action::RemoveCreated { path, expect } => {
                 self.matches(path, Expect::Present(*expect))?;
                 if self.has_children(path) {
@@ -773,6 +823,15 @@ impl World {
             Action::RemoveCreated { path, .. } | Action::RemoveCreatedTree { path, .. } => {
                 !self.files.contains_key(path)
             }
+            Action::ReclaimTree {
+                path,
+                expect,
+                owner,
+                ..
+            } => self
+                .files
+                .get(path)
+                .is_some_and(|entry| entry.owner == *owner && entry.id != *expect),
             Action::AddGroup { name, gid } | Action::SetGroupGid { name, gid, .. } => {
                 self.groups.get(name).is_some_and(|group| group.gid == *gid)
             }
@@ -974,6 +1033,36 @@ mod tests {
 
     fn id_of(world: &World, path: &str) -> FileId {
         world.files[Path::new(path)].id
+    }
+
+    #[test]
+    fn a_tree_root_took_over_is_copied_back_to_its_owner_and_can_be_undone() {
+        let alice = (1000, 1000);
+        let mut world = World::default();
+        world
+            .with_dir("/home/alice", 0o700, alice)
+            .with_dir("/home/alice/state", 0o755, ROOT)
+            .with_file("/home/alice/state/flake.nix", b"{}", 0o4644, ROOT);
+        let before = world.clone();
+        let expect = id_of(&world, "/home/alice/state");
+
+        let journal = run(
+            &mut world,
+            &[Action::ReclaimTree {
+                path: "/home/alice/state".into(),
+                expect,
+                owner: alice,
+                mode: 0o700,
+            }],
+        );
+
+        let state = &world.files[Path::new("/home/alice/state")];
+        let flake = &world.files[Path::new("/home/alice/state/flake.nix")];
+        assert_eq!((state.owner, state.mode), (alice, 0o700));
+        assert_eq!((flake.owner, flake.mode), (alice, 0o644));
+        assert_eq!(flake.content, Content::File(Arc::from(&b"{}"[..])));
+        roll_back(&mut world, &journal);
+        assert_eq!(world, before);
     }
 
     #[test]
