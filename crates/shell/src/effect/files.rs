@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
@@ -30,7 +31,14 @@ pub struct Files {
     request: String,
     pending: Vec<PathBuf>,
     next: u64,
-    seen: std::sync::Mutex<Option<(PathBuf, OwnedFd, OsString)>>,
+    seen: std::sync::Mutex<Seen>,
+}
+
+#[derive(Default)]
+struct Seen {
+    path: OsString,
+    dir: Option<OwnedFd>,
+    name: OsString,
 }
 
 struct Pinned {
@@ -123,7 +131,7 @@ impl Files {
             request: request.into(),
             pending: Vec::new(),
             next: 0,
-            seen: std::sync::Mutex::new(None),
+            seen: std::sync::Mutex::new(Seen::default()),
         })
     }
 
@@ -149,25 +157,32 @@ impl Files {
 
     fn forget(&self) {
         if let Ok(mut seen) = self.seen.lock() {
-            *seen = None;
+            seen.dir = None;
         }
     }
 
-    fn remember(&self, path: &Path, place: Place) {
+    fn remember(&self, path: &Path, dir: OwnedFd, name: &OsStr) {
         if let Ok(mut seen) = self.seen.lock() {
-            *seen = Some((path.to_path_buf(), place.dir, place.name));
+            seen.path.clear();
+            seen.path.push(path.as_os_str());
+            seen.name.clear();
+            seen.name.push(name);
+            seen.dir = Some(dir);
         }
     }
 
-    fn recall(&self, path: &Path) -> Option<(OwnedFd, OsString)> {
+    fn open_seen(&self, path: &Path) -> Option<Result<OwnedFd, Errno>> {
         let mut seen = self.seen.lock().ok()?;
-        match seen.take() {
-            Some((at, dir, name)) if at == path => Some((dir, name)),
-            other => {
-                *seen = other;
-                None
-            }
+        if seen.dir.is_none() || seen.path.as_bytes() != path.as_os_str().as_bytes() {
+            return None;
         }
+        let dir = seen.dir.take()?;
+        Some(sys::openat(
+            &dir,
+            &seen.name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        ))
     }
 
     fn place_for_reading(&self, path: &Path) -> Result<Place, Failure> {
@@ -175,46 +190,57 @@ impl Files {
         Ok(Place {
             path: path.to_path_buf(),
             dir,
-            name,
+            name: name.into_owned(),
         })
     }
 
-    fn resolve(&self, path: &Path, follow_last: bool) -> Result<(OwnedFd, OsString), Failure> {
-        let mut parts = path.components().peekable();
-        let mut dir = sys::openat(
+    fn resolve<'p>(
+        &self,
+        path: &'p Path,
+        follow_last: bool,
+    ) -> Result<(OwnedFd, Cow<'p, OsStr>), Failure> {
+        let bytes = path.as_os_str().as_bytes();
+        let Some(slash) = bytes.iter().rposition(|byte| *byte == b'/') else {
+            return self.resolve_owned(path, follow_last);
+        };
+        let name = &bytes[slash + 1..];
+        if matches!(name, b"" | b"." | b"..") {
+            return self.resolve_owned(path, follow_last);
+        }
+        let parent = match bytes[..slash].iter().position(|byte| *byte != b'/') {
+            Some(start) => OsStr::from_bytes(&bytes[start..slash]),
+            None => OsStr::new("."),
+        };
+        let name = OsStr::from_bytes(name);
+        let dir = match sys::openat2(
             &self.root,
-            ".",
+            parent,
             OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
             Mode::empty(),
-        )
-        .map_err(|errno| io(path, errno))?;
-        while let Some(component) = parts.next() {
-            let name = match component {
-                Component::RootDir => continue,
-                Component::Normal(name) => name,
-                _ => return self.resolve_through_links(path, follow_last),
-            };
-            let last = parts.peek().is_none();
-            let stat = match sys::statx(&dir, name, AtFlags::SYMLINK_NOFOLLOW, WANTED) {
-                Ok(stat) => stat,
-                Err(Errno::NOENT) if last => return Ok((dir, name.to_os_string())),
-                Err(errno) => return Err(io(path, errno)),
-            };
-            if kind(&stat) == Kind::Symlink && (!last || follow_last) {
-                return self.resolve_through_links(path, follow_last);
+            ResolveFlags::NO_SYMLINKS | ResolveFlags::BENEATH,
+        ) {
+            Ok(dir) => dir,
+            Err(Errno::LOOP | Errno::XDEV | Errno::AGAIN) => {
+                return self.resolve_owned(path, follow_last);
             }
-            if last {
-                return Ok((dir, name.to_os_string()));
-            }
-            dir = sys::openat(
-                &dir,
-                name,
-                OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                Mode::empty(),
-            )
-            .map_err(|errno| io(path, errno))?;
+            Err(errno) => return Err(io(path, errno)),
+        };
+        if follow_last
+            && let Ok(stat) = sys::statx(&dir, name, AtFlags::SYMLINK_NOFOLLOW, WANTED)
+            && kind(&stat) == Kind::Symlink
+        {
+            return self.resolve_owned(path, follow_last);
         }
-        Err(conflict(path, "a path below the root", "the root itself"))
+        Ok((dir, Cow::Borrowed(name)))
+    }
+
+    fn resolve_owned<'p>(
+        &self,
+        path: &Path,
+        follow_last: bool,
+    ) -> Result<(OwnedFd, Cow<'p, OsStr>), Failure> {
+        self.resolve_through_links(path, follow_last)
+            .map(|(dir, name)| (dir, Cow::Owned(name)))
     }
 
     fn resolve_through_links(
@@ -1126,12 +1152,12 @@ impl Files {
                 ..missing.clone()
             },
         };
-        let place = match self.place_for_reading(path) {
-            Ok(place) => place,
+        let (dir, name) = match self.resolve(path, false) {
+            Ok(resolved) => resolved,
             Err(failure) => return unreadable(failure),
         };
-        match Self::stat(&place, &place.name) {
-            Ok(Some(stat)) => {
+        match sys::statx(&dir, &*name, AtFlags::SYMLINK_NOFOLLOW, WANTED) {
+            Ok(stat) => {
                 let facts = PathFacts {
                     kind: kind(&stat),
                     mode: mode(&stat),
@@ -1141,26 +1167,28 @@ impl Files {
                     changed: Some((stat.stx_mtime.tv_sec, stat.stx_mtime.tv_nsec)),
                 };
                 if facts.kind != Kind::Symlink {
-                    self.remember(path, place);
+                    self.remember(path, dir, &name);
                 }
                 facts
             }
-            Ok(None) => missing,
-            Err(failure) => unreadable(failure),
+            Err(Errno::NOENT) => missing,
+            Err(errno) => unreadable(io(path, errno)),
         }
     }
 
     fn contents(&self, path: &Path) -> Option<Vec<u8>> {
-        let (dir, name) = match self.recall(path) {
-            Some(resolved) => resolved,
-            None => self.resolve(path, true).ok()?,
-        };
-        let node = sys::openat(
-            &dir,
-            &name,
-            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        )
+        let node = match self.open_seen(path) {
+            Some(node) => node,
+            None => {
+                let (dir, name) = self.resolve(path, true).ok()?;
+                sys::openat(
+                    &dir,
+                    &*name,
+                    OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )
+            }
+        }
         .ok()?;
         if kind(&statx_fd(&node).ok()?) != Kind::File {
             return None;
