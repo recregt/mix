@@ -4,22 +4,13 @@
 //! replace a file do it by rename: a destination is either what it was or what it is being made
 //! into, never half of either.
 
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use mix_core::{Error, Result};
 use nix::fcntl::{AT_FDCWD, AtFlags};
 use nix::unistd::{Gid, Uid, fchownat};
 use tokio::io::AsyncWriteExt;
-
-/// Who a declared file or directory belongs to, when mix declares an owner for it at all.
-pub type Owner = Option<(u32, u32)>;
-
-/// The bits of a mode that are compared against the one mix declares.
-pub(crate) const DIR_MODE_MASK: u32 = 0o7777;
-
-/// The mode given to a directory created only to hold the one that was asked for.
-pub(crate) const INTERMEDIATE_DIR_MODE: u32 = 0o755;
 
 pub async fn exists(path: impl AsRef<Path>) -> bool {
     tokio::fs::try_exists(path.as_ref()).await.unwrap_or(false)
@@ -60,18 +51,6 @@ pub async fn write_atomic(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) ->
 
     sync_dir(dir).await;
     Ok(())
-}
-
-pub async fn copy_atomic(src: impl AsRef<Path>, dest: impl AsRef<Path>) -> Result<()> {
-    let src = src.as_ref();
-    let dest = dest.as_ref();
-    tracing::debug!(
-        "copying file atomically: {} -> {}",
-        src.display(),
-        dest.display()
-    );
-    let contents = tokio::fs::read(src).await.map_err(|e| io_error(src, e))?;
-    write_atomic(dest, contents).await
 }
 
 fn next_temp_nonce() -> u64 {
@@ -119,59 +98,6 @@ async fn write_and_sync(path: &Path, contents: &[u8]) -> Result<()> {
     file.sync_all().await.map_err(|e| io_error(path, e))
 }
 
-/// Writes a declared file, creating the directory it belongs in if it is not there yet.
-pub async fn write(path: &Path, contents: &str) -> Result<()> {
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        create_dir_all(parent).await?;
-    }
-    write_atomic(path, contents).await
-}
-
-pub async fn create_dir_all(path: impl AsRef<Path>) -> Result<()> {
-    let path = path.as_ref();
-    tracing::debug!("creating directory: {}", path.display());
-    tokio::fs::create_dir_all(path)
-        .await
-        .map_err(|e| io_error(path, e))
-}
-
-/// Creates `path` and every directory it needs, giving each of them an owner.
-///
-/// The directories that only exist to hold the one that was asked for get a mode that can be
-/// traversed; the leaf gets the mode it was declared with.
-pub async fn create_dir_all_owned(path: &Path, mode: u32, owner: Owner) -> Result<()> {
-    let mut missing = Vec::new();
-    let mut cur = path;
-    loop {
-        if tokio::fs::metadata(cur).await.is_ok() {
-            break;
-        }
-        missing.push(cur);
-        match cur.parent() {
-            Some(parent) => cur = parent,
-            None => break,
-        }
-    }
-
-    for dir in missing.into_iter().rev() {
-        tracing::debug!("creating directory: {}", dir.display());
-        match tokio::fs::create_dir(dir).await {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(io_error(dir, e)),
-        }
-        let dir_mode = if dir == path {
-            mode
-        } else {
-            INTERMEDIATE_DIR_MODE
-        };
-        set_mode(dir, dir_mode).await?;
-        set_owner(dir, owner).await?;
-    }
-
-    Ok(())
-}
-
 pub async fn remove_file(path: impl AsRef<Path>) -> Result<()> {
     let path = path.as_ref();
     tracing::debug!("removing file: {}", path.display());
@@ -180,48 +106,6 @@ pub async fn remove_file(path: impl AsRef<Path>) -> Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(io_error(path, e)),
     }
-}
-
-pub async fn set_mode(path: impl AsRef<Path>, mode: u32) -> Result<()> {
-    let path = path.as_ref();
-    tracing::debug!("setting permissions: {} ({mode:o})", path.display());
-    tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
-        .await
-        .map_err(|e| io_error(path, e))
-}
-
-/// Gives `path` an owner, if it is declared to have one.
-pub async fn set_owner(path: &Path, owner: Owner) -> Result<()> {
-    let Some((uid, gid)) = owner else {
-        return Ok(());
-    };
-    chown(path, uid, gid).await
-}
-
-/// Gives `path` an owner it does not already have, and says whether it had to.
-pub async fn set_owner_if_needed(path: &Path, owner: Owner) -> Result<bool> {
-    let Some((uid, gid)) = owner else {
-        return Ok(false);
-    };
-    let meta = tokio::fs::metadata(path)
-        .await
-        .map_err(|e| io_error(path, e))?;
-    if meta.uid() == uid && meta.gid() == gid {
-        return Ok(false);
-    }
-    chown(path, uid, gid).await?;
-    Ok(true)
-}
-
-async fn chown(path: &Path, uid: u32, gid: u32) -> Result<()> {
-    tracing::debug!("setting owner: {} ({uid}:{gid})", path.display());
-    let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || {
-        nix::unistd::chown(&path, Some(Uid::from_raw(uid)), Some(Gid::from_raw(gid)))
-            .map_err(|e| io_error(&path, std::io::Error::from(e)))
-    })
-    .await
-    .map_err(|e| Error::TaskPanicked(e.to_string()))?
 }
 
 /// Gives everything under `root` the same owner, without following a symlink out of it.
@@ -431,17 +315,5 @@ mod tests {
         let gid = nix::unistd::Gid::current();
 
         assert!(chown_tree(dir.path(), uid, gid).is_ok());
-    }
-
-    #[tokio::test]
-    async fn copy_atomic_copies_content_to_the_destination() {
-        let dir = tempfile::tempdir().unwrap();
-        let src = dir.path().join("src");
-        let dest = dir.path().join("dest");
-        std::fs::write(&src, b"unit-file-content").unwrap();
-
-        copy_atomic(&src, &dest).await.unwrap();
-
-        assert_eq!(std::fs::read(&dest).unwrap(), b"unit-file-content");
     }
 }

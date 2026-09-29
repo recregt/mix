@@ -13,8 +13,8 @@ use mix_core::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
 use mix_core::paths::mix_state_dir;
 use mix_core::plan::{Input, Next, Report, Runner};
 use mix_core::privilege::InvokingUser;
-use mix_events::v1::Bytes;
 use mix_events::v1::node_progress::Progress;
+use mix_events::v1::{Bytes, Cancellation};
 use mix_events::{Stopped, Tree};
 use mix_exec::Scope;
 
@@ -109,9 +109,8 @@ impl Performer {
             .filter(|uid| *uid != running)
         {
             Some(uid) => {
-                self.agent(uid, path, scope)?
-                    .perform(action, prepared)
-                    .await
+                let agent = self.agent(uid, path, scope)?;
+                Box::pin(agent.perform(action, prepared)).await
             }
             None => self.files.perform(action, prepared).expect("a file action"),
         }
@@ -249,12 +248,17 @@ impl Performer {
                     total: AtomicU64::new(0),
                     done: AtomicU64::new(0),
                 };
-                return runtime::install(url, sha256, *size, &relay, scope, prepared).await;
+                return Box::pin(runtime::install(
+                    url, sha256, *size, &relay, scope, prepared,
+                ))
+                .await;
             }
             Action::RemoveRuntime { created, kept } => {
-                return runtime::remove(created, kept).await;
+                return Box::pin(runtime::remove(created, kept)).await;
             }
-            Action::RecordState { user } => return self.record(user, prepared, scope).await,
+            Action::RecordState { user } => {
+                return Box::pin(self.record(user, prepared, scope)).await;
+            }
             Action::InstallUnit {
                 unit,
                 contents,
@@ -281,7 +285,7 @@ impl Performer {
                 performed.undo.push(Action::DaemonReload);
                 return Ok(performed);
             }
-            Action::Commit => return self.commit(prepared).await,
+            Action::Commit => return Box::pin(self.commit(prepared)).await,
             _ => {}
         }
         if let Some(path) = home::path_of(action) {
@@ -299,7 +303,7 @@ impl Performer {
                         ..
                     }),
                 ) => {
-                    self.reclaim_by_copy(path, *expect, *owner, *mode, scope, prepared)
+                    Box::pin(self.reclaim_by_copy(path, *expect, *owner, *mode, scope, prepared))
                         .await
                 }
                 (Action::ReclaimTree { .. }, Ok(performed)) => {
@@ -311,21 +315,23 @@ impl Performer {
                             _ => None,
                         })
                         .collect();
-                    self.adopt(asides, scope).await?;
+                    Box::pin(self.adopt(asides, scope)).await?;
                     Ok(performed)
                 }
                 (_, outcome) => outcome,
             };
         }
-        if let Some(outcome) = identity::perform(action, scope, prepared).await {
+        if let Some(outcome) = Box::pin(identity::perform(action, scope, prepared)).await {
             return outcome;
         }
         if let Some(profile) = &self.profile
-            && let Some(outcome) = generations::perform(action, profile, scope, prepared).await
+            && let Some(outcome) =
+                Box::pin(generations::perform(action, profile, scope, prepared)).await
         {
             return outcome;
         }
-        if let Some(outcome) = self.units().await?.perform(action, scope, prepared).await {
+        let units = Box::pin(self.units()).await?;
+        if let Some(outcome) = Box::pin(units.perform(action, scope, prepared)).await {
             return outcome;
         }
         Err(Failure::CommandFailed {
@@ -386,6 +392,16 @@ fn keep(journal: &mut dyn Journal, record: &Record) {
     if let Err(failure) = journal.append(record) {
         tracing::warn!("could not record {record:?} in the journal: {failure:?}");
     }
+}
+
+pub fn stopped_by(scope: &Scope) -> Stopped {
+    let watched = scope.clone();
+    std::sync::Arc::new(move || match watched.reason()? {
+        mix_exec::Reason::Interrupted => Some(Cancellation::Interrupted),
+        mix_exec::Reason::Terminated => Some(Cancellation::Terminated),
+        mix_exec::Reason::ClientGone => Some(Cancellation::ClientGone),
+        mix_exec::Reason::Abandoned => None,
+    })
 }
 
 pub async fn drive(

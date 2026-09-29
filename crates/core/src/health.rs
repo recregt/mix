@@ -1,6 +1,15 @@
-use crate::action::{Fact, Kind, Query};
+use std::borrow::Cow;
+use std::path::Path;
+use std::sync::Arc;
+
+use crate::action::{Action, Expect, Fact, Failure, Kind, Owner, PathFacts, Query, UserSpec};
+use crate::bootstrap::stale_restart;
 use crate::identity;
 use crate::models::Target;
+use crate::paths::{NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT};
+use crate::plan::StepSpec;
+
+const FILE_MODE: u32 = 0o644;
 
 /// Why an artifact is beyond repair's reach.
 ///
@@ -145,7 +154,7 @@ pub fn queries(target: &Target<'_>) -> Vec<Query> {
     }
 }
 
-fn path(facts: &[Fact], index: usize) -> &crate::action::PathFacts {
+fn path_facts(facts: &[Fact], index: usize) -> &PathFacts {
     match &facts[index] {
         Fact::Path(facts) => facts,
         other => panic!("fact {index} is not a path: {other:?}"),
@@ -175,7 +184,7 @@ fn owner_drift(actual: (u32, u32), owner: Option<(u32, u32)>) -> Option<Finding>
 pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
     match target {
         Target::Directory { mode, owner, .. } => {
-            let found = path(facts, 0);
+            let found = path_facts(facts, 0);
             if let Some(finding) = absent(found.kind) {
                 return Some(finding);
             }
@@ -193,7 +202,7 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
         Target::File {
             expected, owner, ..
         } => {
-            let found = path(facts, 0);
+            let found = path_facts(facts, 0);
             match expected {
                 Some(expected) => {
                     if let Some(finding) = absent(found.kind) {
@@ -218,7 +227,7 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
             }
         }
         Target::SeededFile { owner, .. } => {
-            let found = path(facts, 0);
+            let found = path_facts(facts, 0);
             absent(found.kind).or_else(|| owner_drift(found.owner, *owner))
         }
         Target::Group { gid, .. } => match &facts[0] {
@@ -251,7 +260,7 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
         Target::SystemdUnit { must_be_active, .. } => {
             let installed = contents(facts, 0);
             let Some(installed) = installed else {
-                return match path(facts, 2).kind {
+                return match path_facts(facts, 2).kind {
                     Kind::Missing => Some(Finding::UnitMissing),
                     Kind::Unreadable(kind) => Some(Finding::Unreadable { kind }),
                     _ => Some(Finding::UnitDrift),
@@ -267,9 +276,258 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
             (*must_be_active && !active).then_some(Finding::UnitInactive)
         }
         Target::PathExists { .. } => {
-            (path(facts, 0).kind == Kind::Missing).then_some(Finding::RuntimeMissing)
+            (path_facts(facts, 0).kind == Kind::Missing).then_some(Finding::RuntimeMissing)
         }
     }
+}
+
+fn tree_owner(facts: &[Fact], index: usize) -> Option<u32> {
+    match facts.get(index) {
+        Some(Fact::TreeOwner(owner)) => *owner,
+        _ => None,
+    }
+}
+
+fn own_again(
+    path: &Path,
+    found: &PathFacts,
+    owner: Option<Owner>,
+    tree: Option<u32>,
+) -> Vec<Action> {
+    let Some(owner) = owner else {
+        return Vec::new();
+    };
+    if found.owner == owner {
+        return Vec::new();
+    }
+    match found.id {
+        Some(expect) if owner.0 != 0 && tree == Some(owner.0) => vec![Action::ReclaimTree {
+            path: path.to_path_buf(),
+            expect,
+            owner,
+            mode: found.mode,
+        }],
+        _ => vec![Action::SetOwner {
+            path: path.to_path_buf(),
+            owner,
+            expect: found.owner,
+        }],
+    }
+}
+
+pub fn fix(
+    target: &Target<'_>,
+    finding: Finding,
+    facts: &[Fact],
+    request: &str,
+) -> Result<Vec<Action>, Unfixable> {
+    if let Some(reason) = finding.unfixable() {
+        return Err(reason);
+    }
+    Ok(match target {
+        Target::Directory { path, mode, owner } => {
+            let found = path_facts(facts, 0);
+            match found.kind {
+                Kind::Missing | Kind::Unreadable(_) => vec![Action::CreateDirs {
+                    path: path.to_path_buf(),
+                    mode: *mode,
+                    owner: *owner,
+                }],
+                _ => {
+                    let mut actions = own_again(path, found, *owner, tree_owner(facts, 1));
+                    match actions.first_mut() {
+                        Some(Action::ReclaimTree {
+                            mode: reclaimed, ..
+                        }) => *reclaimed = *mode,
+                        _ if found.mode != *mode => actions.insert(
+                            0,
+                            Action::SetMode {
+                                path: path.to_path_buf(),
+                                mode: *mode,
+                                expect: found.mode,
+                            },
+                        ),
+                        _ => {}
+                    }
+                    actions
+                }
+            }
+        }
+        Target::File {
+            path,
+            expected,
+            owner,
+        } => {
+            let found = path_facts(facts, 0);
+            let tree = tree_owner(facts, 2);
+            match expected {
+                Some(expected) if contents(facts, 1) != Some(expected.as_bytes()) => {
+                    vec![Action::PutFile {
+                        path: path.to_path_buf(),
+                        contents: Arc::from(expected.as_bytes()),
+                        mode: if found.kind == Kind::File {
+                            found.mode
+                        } else {
+                            FILE_MODE
+                        },
+                        owner: *owner,
+                        expect: found.id.map_or(Expect::Absent, Expect::Present),
+                    }]
+                }
+                _ => own_again(path, found, *owner, tree),
+            }
+        }
+        Target::SeededFile { path, seed, owner } => {
+            let found = path_facts(facts, 0);
+            match found.kind {
+                Kind::Missing | Kind::Unreadable(_) => vec![Action::PutFile {
+                    path: path.to_path_buf(),
+                    contents: Arc::from(seed.as_bytes()),
+                    mode: FILE_MODE,
+                    owner: *owner,
+                    expect: found.id.map_or(Expect::Absent, Expect::Present),
+                }],
+                _ => own_again(path, found, *owner, tree_owner(facts, 1)),
+            }
+        }
+        Target::Group { name, gid } => match finding {
+            Finding::GroupGid { actual, .. } => vec![Action::SetGroupGid {
+                name: (*name).to_string(),
+                gid: *gid,
+                expect: actual,
+            }],
+            _ => vec![Action::AddGroup {
+                name: (*name).to_string(),
+                gid: *gid,
+            }],
+        },
+        Target::GroupMember { group, user } => vec![Action::AddMember {
+            group: (*group).to_string(),
+            user: user.clone(),
+        }],
+        Target::User { n, uid, gid } => match finding {
+            Finding::UserIds { actual, .. } => vec![Action::SetUserIds {
+                name: identity::user_name(*n).into_owned(),
+                ids: (*uid, *gid),
+                expect: actual,
+            }],
+            _ => vec![Action::AddUser(UserSpec {
+                name: identity::user_name(*n).into_owned(),
+                uid: *uid,
+                gid: *gid,
+                home: identity::NIXBLD_HOME.into(),
+                shell: identity::NIXBLD_SHELL.into(),
+                comment: format!("mix build user {n} for request {request}"),
+                groups: vec![identity::NIXBLD_GROUP.to_string()],
+            })],
+        },
+        Target::SystemdUnit {
+            name,
+            must_be_active,
+            ..
+        } => {
+            let mut actions = Vec::new();
+            if finding != Finding::UnitInactive {
+                let wanted = contents(facts, 1).ok_or(Unfixable::MissingRuntime)?;
+                actions.push(Action::InstallUnit {
+                    unit: (*name).to_string(),
+                    contents: Arc::from(wanted),
+                    expect: path_facts(facts, 2)
+                        .id
+                        .map_or(Expect::Absent, Expect::Present),
+                });
+                actions.push(Action::DaemonReload);
+            }
+            if *must_be_active || finding == Finding::UnitInactive {
+                actions.push(Action::EnableUnit {
+                    unit: (*name).to_string(),
+                });
+                actions.push(Action::StartUnit {
+                    unit: (*name).to_string(),
+                });
+            }
+            actions
+        }
+        Target::PathExists { .. } => return Err(Unfixable::MissingRuntime),
+    })
+}
+
+pub struct TargetStep {
+    target: Target<'static>,
+    label: String,
+    request: String,
+}
+
+impl StepSpec for TargetStep {
+    fn key(&self) -> Cow<'static, str> {
+        Cow::Owned(self.label.clone())
+    }
+
+    fn title(&self) -> Cow<'static, str> {
+        Cow::Owned(self.label.clone())
+    }
+
+    fn queries(&self) -> Vec<Query> {
+        queries(&self.target)
+    }
+
+    fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
+        let Some(finding) = classify(&self.target, facts) else {
+            return Ok(Vec::new());
+        };
+        fix(&self.target, finding, facts, &self.request).map_err(|reason| Failure::Unrepairable {
+            artifact: self.label.clone(),
+            reason,
+        })
+    }
+}
+
+struct RestartIfStale;
+
+impl StepSpec for RestartIfStale {
+    fn key(&self) -> Cow<'static, str> {
+        NIX_DAEMON_SERVICE_UNIT.into()
+    }
+
+    fn title(&self) -> Cow<'static, str> {
+        "restart the nix daemon if its configuration changed".into()
+    }
+
+    fn queries(&self) -> Vec<Query> {
+        vec![
+            Query::Unit(NIX_DAEMON_SERVICE_UNIT.to_string()),
+            Query::Path(NIX_CONF_DEST.into()),
+        ]
+    }
+
+    fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
+        let Fact::Unit(service) = &facts[0] else {
+            return Ok(Vec::new());
+        };
+        Ok(stale_restart(service, path_facts(facts, 1).changed)
+            .into_iter()
+            .collect())
+    }
+}
+
+pub fn repair_steps(targets: Vec<Target<'_>>, request: &str) -> Vec<Box<dyn StepSpec>> {
+    let mut steps = target_steps(targets, request);
+    steps.push(Box::new(RestartIfStale));
+    steps
+}
+
+pub fn target_steps(targets: Vec<Target<'_>>, request: &str) -> Vec<Box<dyn StepSpec>> {
+    targets
+        .into_iter()
+        .map(|target| {
+            let target = target.into_owned();
+            Box::new(TargetStep {
+                label: target.label().into_owned(),
+                target,
+                request: request.to_string(),
+            }) as Box<dyn StepSpec>
+        })
+        .collect()
 }
 
 #[cfg(test)]

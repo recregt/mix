@@ -15,14 +15,13 @@ use mix_core::action::{Digest, Failure};
 use mix_core::bootstrap::{Runtime, Settings, steps};
 use mix_core::plan::{Report, Runner, Verdict, diagnostic};
 use mix_events::v1::{
-    BootstrapRequest, Cancellation, Command, Diagnostic, Severity, Step, command, node_started,
+    BootstrapRequest, Command, Diagnostic, Severity, Step, command, node_started,
 };
 use mix_events::{Ending, Outbox, ROOT, Start, Stopped, Tree};
-use mix_exec::Reason;
 
 use crate::Context;
 use crate::bridge::Bridge;
-use crate::drive::{Observer, Performer, drive};
+use crate::drive::{Observer, Performer, drive, stopped_by};
 use crate::effect::files::Files;
 use crate::effect::generations::ProfileContext;
 use crate::effect::journal::{FileJournal, JOURNAL_DIR, recover_all, unfinished};
@@ -36,7 +35,7 @@ impl Environment {
     }
 }
 
-fn request_id() -> String {
+pub(crate) fn request_id() -> String {
     uuid::Uuid::now_v7().to_string()
 }
 
@@ -181,13 +180,7 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
     });
     let outbox = Arc::new(Outbox::new(request.clone(), || {}));
     let mut bridge = Bridge::new(Arc::clone(&outbox), ctx.reporters.clone());
-    let watched = scope.clone();
-    let stopped: Stopped = Arc::new(move || match watched.reason()? {
-        Reason::Interrupted => Some(Cancellation::Interrupted),
-        Reason::Terminated => Some(Cancellation::Terminated),
-        Reason::ClientGone => Some(Cancellation::ClientGone),
-        Reason::Abandoned => None,
-    });
+    let stopped: Stopped = stopped_by(scope);
     let mut tree = Tree::new(
         outbox,
         Arc::clone(&stopped),

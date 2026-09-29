@@ -580,18 +580,20 @@ impl StepSpec for ConfigureDaemon {
                 unit: NIX_DAEMON_SOCKET_UNIT.to_string(),
             });
         }
-        let service = facts.unit(7);
-        let configured = facts.path(8).changed;
-        if service.active_state == "active"
-            && let (Some(since), Some(configured)) = (service.active_since, configured)
-            && configured > since
-        {
-            actions.push(Action::RestartUnit {
-                unit: NIX_DAEMON_SERVICE_UNIT.to_string(),
-            });
-        }
+        actions.extend(stale_restart(facts.unit(7), facts.path(8).changed));
         Ok(actions)
     }
+}
+
+pub fn stale_restart(service: &UnitFacts, configured: Option<(i64, u32)>) -> Option<Action> {
+    (service.active_state == "active"
+        && matches!(
+            (service.active_since, configured),
+            (Some(since), Some(configured)) if configured > since
+        ))
+    .then(|| Action::RestartUnit {
+        unit: NIX_DAEMON_SERVICE_UNIT.to_string(),
+    })
 }
 
 struct WriteHomeConfig(UserConfig);

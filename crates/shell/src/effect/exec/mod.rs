@@ -74,15 +74,6 @@ fn stdout_of(output: &std::process::Output) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
-pub async fn run(program: &str, args: &[&str], scope: &Scope) -> Result<()> {
-    Command::new(program)
-        .args(args)
-        .run(scope)
-        .await
-        .map_err(exec_error)?;
-    Ok(())
-}
-
 pub async fn run_as(
     user: &InvokingUser,
     program: &str,
@@ -283,7 +274,14 @@ mod tests {
     #[tokio::test]
     async fn run_reports_the_full_command_line_on_failure() {
         let scope = mix_exec::Scope::root();
-        match run("false", &["--gid", "30000", "nixbld1"], &scope).await {
+        match run_as(
+            &current_user(),
+            "false",
+            &["--gid", "30000", "nixbld1"],
+            &scope,
+        )
+        .await
+        {
             Err(Error::Command { command, .. }) => {
                 assert_eq!(command, "false --gid 30000 nixbld1");
             }
@@ -294,7 +292,8 @@ mod tests {
     #[tokio::test]
     async fn run_preserves_the_source_error_when_the_command_cannot_be_spawned() {
         let scope = mix_exec::Scope::root();
-        match run(
+        match run_as(
+            &current_user(),
             "mix-test-nonexistent-binary-xyz",
             &["--gid", "30000"],
             &scope,
@@ -314,7 +313,7 @@ mod tests {
         let scope = mix_exec::Scope::root();
         scope.cancel(mix_exec::Reason::Interrupted);
 
-        match run("sleep", &["5"], &scope).await {
+        match run_as(&current_user(), "sleep", &["5"], &scope).await {
             Err(Error::Cancelled { command }) => {
                 assert_eq!(command, "sleep 5");
             }
@@ -328,12 +327,17 @@ mod tests {
 
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            run("sh", &["-c", "head -c 200000 /dev/zero"], &scope),
+            run_as(
+                &current_user(),
+                "sh",
+                &["-c", "head -c 200000 /dev/zero"],
+                &scope,
+            ),
         )
         .await;
 
         match result {
-            Ok(run_result) => run_result.unwrap(),
+            Ok(run_result) => drop(run_result.unwrap()),
             Err(_) => panic!("run() did not return within the timeout, likely deadlocked"),
         }
     }

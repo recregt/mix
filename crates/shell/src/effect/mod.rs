@@ -10,6 +10,5 @@ pub mod journal;
 pub mod lock;
 pub(crate) mod mirror;
 pub mod runtime;
-pub(crate) mod systemd;
 pub mod tools;
 pub mod units;
