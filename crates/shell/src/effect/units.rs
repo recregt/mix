@@ -259,16 +259,7 @@ impl Units {
             Action::DisableUnit { unit } => self.disable(unit, prepared).await,
             Action::StartUnit { unit } => self.start(unit, scope, prepared).await,
             Action::StopUnit { unit } => self.stop(unit, scope, prepared).await,
-            Action::RestartUnit { unit } => {
-                let undo = vec![Action::RestartUnit { unit: unit.clone() }];
-                match prepared(&undo) {
-                    Err(failure) => Err(failure),
-                    Ok(()) => self
-                        .job(Job::Restart, unit, scope)
-                        .await
-                        .and_then(|()| done(undo)),
-                }
-            }
+            Action::RestartUnit { unit } => self.restart(unit, scope, prepared).await,
             _ => return None,
         })
     }
@@ -282,6 +273,14 @@ impl Units {
             .await
             .map_err(|error| bus_failure(operation, "systemd", error))?;
         done(vec![Action::DaemonReload])
+    }
+
+    async fn reload_after(&self, operation: UnitOperation, unit: &str) -> Result<(), Failure> {
+        self.manager(operation)
+            .await?
+            .call::<_, _, ()>("Reload", &())
+            .await
+            .map_err(|error| bus_failure(operation, unit, error))
     }
 
     async fn enable(&self, unit: &str, prepared: &mut Prepared<'_>) -> Outcome {
@@ -299,6 +298,7 @@ impl Units {
             .call("EnableUnitFiles", &(vec![unit], false, false))
             .await
             .map_err(|error| bus_failure(operation, unit, error))?;
+        self.reload_after(operation, unit).await?;
         done(vec![Action::DisableUnit {
             unit: unit.to_string(),
         }])
@@ -319,9 +319,23 @@ impl Units {
             .call("DisableUnitFiles", &(vec![unit], false))
             .await
             .map_err(|error| bus_failure(operation, unit, error))?;
+        self.reload_after(operation, unit).await?;
         done(vec![Action::EnableUnit {
             unit: unit.to_string(),
         }])
+    }
+
+    async fn restart(&self, unit: &str, scope: &Scope, prepared: &mut Prepared<'_>) -> Outcome {
+        let facts = self.observe(unit).await?;
+        if facts.active_state != "active" && facts.active_state != "activating" {
+            return done(Vec::new());
+        }
+        let undo = vec![Action::RestartUnit {
+            unit: unit.to_string(),
+        }];
+        prepared(&undo)?;
+        self.job(Job::Restart, unit, scope).await?;
+        done(undo)
     }
 
     async fn start(&self, unit: &str, scope: &Scope, prepared: &mut Prepared<'_>) -> Outcome {
