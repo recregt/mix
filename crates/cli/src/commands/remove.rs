@@ -2,12 +2,7 @@ use std::process::ExitCode;
 
 use mix_shell::ops::remove::Error;
 
-pub async fn run(
-    packages: &[String],
-    mirror: Option<&str>,
-    mirror_key: Option<&str>,
-    json: bool,
-) -> anyhow::Result<ExitCode> {
+pub async fn run(packages: &[String], json: bool) -> anyhow::Result<ExitCode> {
     let (_lock, user_config) = super::acquire_profile().map_err(Error::from)?;
     let reporters = mix_ui::reporters();
     let ctx = mix_shell::Context::new(mix_exec::Scope::root())
@@ -17,7 +12,7 @@ pub async fn run(
             steps: reporters.passing_steps,
             activity: reporters.activity,
         })
-        .with_env(super::request_env(mirror, mirror_key))
+        .with_policy(super::policy())
         .with_host(super::host_config());
     let _watch = crate::controls::watch(
         &ctx.scope,

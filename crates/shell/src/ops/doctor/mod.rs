@@ -26,7 +26,7 @@ impl HealthReport {
 
 pub async fn audit(ctx: &Context) -> Vec<HealthReport> {
     tracing::info!("auditing managed environment");
-    let items = mix_core::models::targets(ctx.user.as_ref());
+    let items = mix_core::models::targets(ctx.user.as_ref(), &ctx.policy);
     let findings = join_all(items.iter().map(|item| target::inspect(item, &ctx.scope))).await;
     items
         .iter()
@@ -71,7 +71,10 @@ mod tests {
     #[tokio::test]
     async fn audit_reports_one_entry_per_target() {
         let reports = audit(&Context::new(mix_core::Scope::root())).await;
-        assert_eq!(reports.len(), mix_core::models::targets(None).len());
+        assert_eq!(
+            reports.len(),
+            mix_core::models::targets(None, &mix_core::policy::Policy::default()).len()
+        );
     }
 
     #[tokio::test]
@@ -83,7 +86,7 @@ mod tests {
 
         assert_eq!(
             reports.len(),
-            mix_core::models::targets(Some(&cfg)).len(),
+            mix_core::models::targets(Some(&cfg), &mix_core::policy::Policy::default()).len(),
             "every target of the injected config must be reported"
         );
         assert!(reports.len() > audit(&Context::new(mix_core::Scope::root())).await.len());

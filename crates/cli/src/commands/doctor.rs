@@ -4,7 +4,9 @@ use mix_core::Category;
 use mix_shell::ops::doctor::HealthReport;
 
 pub async fn run(verbose: u8) -> anyhow::Result<ExitCode> {
-    let ctx = mix_shell::Context::new(mix_exec::Scope::root()).with_user(super::enrolled_user());
+    let ctx = mix_shell::Context::new(mix_exec::Scope::root())
+        .with_user(super::enrolled_user())
+        .with_policy(super::policy());
     let reports = mix_shell::ops::doctor::audit(&ctx).await;
     render(&reports, verbose > 0);
 

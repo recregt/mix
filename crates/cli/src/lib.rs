@@ -74,26 +74,10 @@ pub async fn run() -> ExitCode {
         }
         Command::Install {
             packages,
-            mirror,
-            mirror_key,
             json,
             build,
-        } => {
-            commands::install::run(
-                packages,
-                mirror.as_deref(),
-                mirror_key.as_deref(),
-                *json,
-                *build,
-            )
-            .await
-        }
-        Command::Remove {
-            packages,
-            mirror,
-            mirror_key,
-            json,
-        } => commands::remove::run(packages, mirror.as_deref(), mirror_key.as_deref(), *json).await,
+        } => commands::install::run(packages, *json, *build).await,
+        Command::Remove { packages, json } => commands::remove::run(packages, *json).await,
         Command::Doctor => commands::doctor::run(cli.verbose).await,
         Command::Repair | Command::Worker => commands::repair::run(cli.verbose).await,
     };

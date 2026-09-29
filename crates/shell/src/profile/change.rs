@@ -75,7 +75,7 @@ pub async fn apply(
 
     let applied = async {
         let generation = write_then_switch(&state_path, &home_path, &new_state, &new_home, || {
-            profile::switch(cfg, ctx.mirror(), ctx.mirror_key(), activity, scope, policy)
+            profile::switch(cfg, ctx.mirror(), activity, scope, policy)
         })
         .await?;
         profile::finish(cfg, &generation, activity, &ctx.host, &scope.shielded()).await?;

@@ -37,6 +37,7 @@ pub mod paths {
 
     pub const NIX_CONF_DEST: &str = "/etc/nix/nix.conf";
     pub const PROFILE_SNIPPET_DEST: &str = "/etc/profile.d/mix-nix.sh";
+    pub const POLICY_FILE: &str = "/etc/mix/policy.json";
 
     pub const LOCK_FILE: &str = "/var/lib/mix/lock";
 

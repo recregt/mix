@@ -43,7 +43,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// The measurement decides both halves of that: whether there is anything to do, and whether it
 /// is something repair can do at all — [`Finding::unfixable`] is what binds a finding to the
 /// reason it cannot, so a caller never has to guess what it can promise a reader.
-pub async fn apply(target: &Target, scope: &Scope) -> Result<bool> {
+pub async fn apply(target: &Target<'_>, scope: &Scope) -> Result<bool> {
     let Some(finding) = inspect(target, scope).await else {
         return Ok(false);
     };

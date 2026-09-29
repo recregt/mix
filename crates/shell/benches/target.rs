@@ -14,7 +14,7 @@ fn runtime() -> tokio::runtime::Runtime {
 
 /// A tree shaped like the one mix declares: directories with a mode, a file it writes, a file it
 /// only owns, and a seeded file it never rewrites.
-fn declared_tree(root: &std::path::Path, n: usize) -> Vec<Target> {
+fn declared_tree(root: &std::path::Path, n: usize) -> Vec<Target<'static>> {
     let mut items = Vec::with_capacity(n * 4);
     for i in 0..n {
         let dir = root.join(format!("store/{i}"));

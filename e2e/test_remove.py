@@ -3,7 +3,7 @@ import json
 import pytest
 
 from support.container import create_user
-from support.mirror import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS, bootstrap_as, mirror_args
+from support.mirror import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS, bootstrap_as
 
 USER = MIRROR_TEST_USERS[0]
 STATE_DIR = f"/home/{USER}/.local/state/mix"
@@ -13,11 +13,9 @@ PROFILE_BIN = f"/home/{USER}/.nix-profile/bin"
 def _bootstrap_with_the_test_package(container, mock_nix_server, mirror_cache):
     create_user(container, USER, sudo=True)
     bootstrap_as(container, USER, mock_nix_server, mirror_cache)
-    mirror = mirror_args(mock_nix_server, mirror_cache)
-    result = container.exec("mix", "install", INSTALL_TEST_PACKAGE, *mirror, user=USER)
+    result = container.exec("mix", "install", INSTALL_TEST_PACKAGE, user=USER)
     assert result.returncode == 0, result.stderr
     assert container.path_exists(f"{PROFILE_BIN}/{INSTALL_TEST_PACKAGE}")
-    return mirror
 
 
 def _read(container, name):
@@ -27,9 +25,9 @@ def _read(container, name):
 def test_remove_drops_a_package_as_a_regular_user_with_no_sudo(
     container, mock_nix_server, mirror_cache
 ):
-    mirror = _bootstrap_with_the_test_package(container, mock_nix_server, mirror_cache)
+    _bootstrap_with_the_test_package(container, mock_nix_server, mirror_cache)
 
-    result = container.exec("mix", "remove", INSTALL_TEST_PACKAGE, *mirror, user=USER)
+    result = container.exec("mix", "remove", INSTALL_TEST_PACKAGE, user=USER)
 
     assert result.returncode == 0, result.stderr
     assert INSTALL_TEST_PACKAGE in (result.stdout + result.stderr).lower()
@@ -49,7 +47,7 @@ def test_remove_drops_a_package_as_a_regular_user_with_no_sudo(
     status = container.exec(git_bin, "-C", STATE_DIR, "status", "--short", user=USER, check=True)
     assert status.stdout.strip() == ""
 
-    again = container.exec("mix", "remove", INSTALL_TEST_PACKAGE, *mirror, user=USER)
+    again = container.exec("mix", "remove", INSTALL_TEST_PACKAGE, user=USER)
     assert again.returncode == 0, again.stderr
     assert "not installed" in (again.stdout + again.stderr).lower()
     assert _read(container, "state") == state
@@ -57,10 +55,10 @@ def test_remove_drops_a_package_as_a_regular_user_with_no_sudo(
 
 @pytest.mark.verbatim_output
 def test_remove_is_script_friendly(container, mock_nix_server, mirror_cache):
-    mirror = _bootstrap_with_the_test_package(container, mock_nix_server, mirror_cache)
+    _bootstrap_with_the_test_package(container, mock_nix_server, mirror_cache)
 
     result = container.exec(
-        "mix", "remove", "--json", INSTALL_TEST_PACKAGE, "notinstalled", *mirror, user=USER
+        "mix", "remove", "--json", INSTALL_TEST_PACKAGE, "notinstalled", user=USER
     )
 
     assert result.returncode == 0, result.stderr
@@ -69,23 +67,23 @@ def test_remove_is_script_friendly(container, mock_nix_server, mirror_cache):
         "skipped": ["notinstalled"],
     }
 
-    again = container.exec("mix", "remove", "--json", INSTALL_TEST_PACKAGE, *mirror, user=USER)
+    again = container.exec("mix", "remove", "--json", INSTALL_TEST_PACKAGE, user=USER)
     assert again.returncode == 0, again.stderr
     assert json.loads(again.stdout) == {"removed": [], "skipped": [INSTALL_TEST_PACKAGE]}
 
-    plain = container.exec("mix", "--no-progress", "remove", INSTALL_TEST_PACKAGE, *mirror, user=USER)
+    plain = container.exec("mix", "--no-progress", "remove", INSTALL_TEST_PACKAGE, user=USER)
     assert plain.returncode == 0, plain.stderr
     assert "not installed" in (plain.stdout + plain.stderr).lower()
     assert "\x1b[" not in plain.stderr, "nothing should be drawn in place"
 
 
 def test_remove_refuses_a_package_mix_relies_on(container, mock_nix_server, mirror_cache):
-    mirror = _bootstrap_with_the_test_package(container, mock_nix_server, mirror_cache)
+    _bootstrap_with_the_test_package(container, mock_nix_server, mirror_cache)
     state_before = _read(container, "state")
     home_before = _read(container, "home.nix")
 
     for packages in (["git"], [INSTALL_TEST_PACKAGE, "git"]):
-        result = container.exec("mix", "remove", *packages, *mirror, user=USER)
+        result = container.exec("mix", "remove", *packages, user=USER)
 
         assert result.returncode != 0
         output = (result.stdout + result.stderr).lower()

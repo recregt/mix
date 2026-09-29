@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use mix_core::models::UserConfig;
+use mix_core::policy::{Mirror, Policy};
 use mix_core::{
     ActivityReporter, DownloadProgress, NoopActivity, NoopProgress, NoopSteps, Scope, StepObserver,
 };
@@ -28,17 +29,11 @@ pub struct HostConfig {
     pub git_binary: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct RequestEnv {
-    pub mirror: Option<String>,
-    pub mirror_key: Option<String>,
-}
-
 pub struct Context {
     pub user: Option<UserConfig>,
     pub scope: Scope,
     pub reporters: Reporters,
-    pub env: RequestEnv,
+    pub policy: Policy,
     pub host: HostConfig,
 }
 
@@ -48,7 +43,7 @@ impl Context {
             user: None,
             scope,
             reporters: Reporters::silent(),
-            env: RequestEnv::default(),
+            policy: Policy::default(),
             host: HostConfig::default(),
         }
     }
@@ -63,8 +58,8 @@ impl Context {
         self
     }
 
-    pub fn with_env(mut self, env: RequestEnv) -> Self {
-        self.env = env;
+    pub fn with_policy(mut self, policy: Policy) -> Self {
+        self.policy = policy;
         self
     }
 
@@ -74,10 +69,6 @@ impl Context {
     }
 
     pub(crate) fn mirror(&self) -> Option<&str> {
-        self.env.mirror.as_deref()
-    }
-
-    pub(crate) fn mirror_key(&self) -> Option<&str> {
-        self.env.mirror_key.as_deref()
+        self.policy.mirror().map(Mirror::url)
     }
 }

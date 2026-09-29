@@ -49,7 +49,7 @@ pub async fn repair(ctx: &Context) -> Repair {
     tracing::info!("repairing managed environment");
     let user_config = ctx.user.as_ref();
     let scope = &ctx.scope;
-    let items = targets(user_config);
+    let items = targets(user_config, &ctx.policy);
     let (mut reports, interrupted) = put_back(&items, scope).await;
 
     let shielded = scope.shielded();
@@ -67,7 +67,7 @@ pub async fn repair(ctx: &Context) -> Repair {
     }
 }
 
-async fn put_back(items: &[Target], scope: &Scope) -> (Vec<RepairReport>, bool) {
+async fn put_back(items: &[Target<'_>], scope: &Scope) -> (Vec<RepairReport>, bool) {
     let shielded = scope.shielded();
 
     // Measuring does not change anything, so every target is measured at once; putting them back
@@ -187,7 +187,7 @@ mod tests {
         assert!(!failed.fixed && failed.error.is_some());
     }
 
-    fn drifted_files(dir: &std::path::Path) -> Vec<Target> {
+    fn drifted_files(dir: &std::path::Path) -> Vec<Target<'static>> {
         ["one", "two"]
             .into_iter()
             .map(|name| {

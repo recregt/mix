@@ -9,12 +9,11 @@ use crate::paths::{
     DEFAULT_PROFILE_NIX_ENV, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, MIX_STATE_DIR_MODE, NIX_CONF_DEST,
     NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SERVICE_UNIT,
     NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC, NIX_DAEMON_SOCKET_UNIT, NIX_OWNERSHIP_MARKER,
-    NIX_PROFILES_DIR_MODE, NIX_STORE, NIX_TREE_MODE, NIX_TREE_PATHS, PROFILE_SNIPPET_DEST,
-    STATE_FILE, mix_state_dir, nix_profiles_dir,
+    NIX_PROFILES_DIR_MODE, NIX_STORE, NIX_TREE_MODE, NIX_TREE_PATHS, POLICY_FILE,
+    PROFILE_SNIPPET_DEST, STATE_FILE, mix_state_dir, nix_profiles_dir,
 };
+use crate::policy::Policy;
 use crate::privilege::InvokingUser;
-
-pub const NIX_CONF: &str = "build-users-group = nixbld\nexperimental-features = nix-command flakes\ntrusted-users = root @mix-users\n";
 
 pub const PROFILE_SNIPPET: &str = "# Managed by mix -- do not edit, changes are overwritten and will trip `mix doctor`.\nif [ -e '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh' ]; then\n    . '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'\nfi\n";
 
@@ -56,20 +55,20 @@ impl Category {
 type Owner = Option<(u32, u32)>;
 
 #[derive(Debug, Clone)]
-pub enum Target {
+pub enum Target<'a> {
     Directory {
-        path: Cow<'static, Path>,
+        path: Cow<'a, Path>,
         mode: u32,
         owner: Owner,
     },
     File {
-        path: Cow<'static, Path>,
-        expected: Option<Cow<'static, str>>,
+        path: Cow<'a, Path>,
+        expected: Option<Cow<'a, str>>,
         owner: Owner,
     },
     SeededFile {
-        path: Cow<'static, Path>,
-        seed: Cow<'static, str>,
+        path: Cow<'a, Path>,
+        seed: Cow<'a, str>,
         owner: Owner,
     },
     Group {
@@ -97,7 +96,7 @@ pub enum Target {
     },
 }
 
-impl Target {
+impl Target<'_> {
     pub fn label(&self) -> Cow<'_, str> {
         match self {
             Target::Directory { path, .. } => path.to_string_lossy(),
@@ -114,12 +113,7 @@ impl Target {
     pub fn category(&self) -> Category {
         match self {
             Target::Directory { .. } => Category::Filesystem,
-            Target::File { path, .. }
-                if path.as_ref() == Path::new(NIX_CONF_DEST)
-                    || path.as_ref() == Path::new(PROFILE_SNIPPET_DEST) =>
-            {
-                Category::Configuration
-            }
+            Target::File { path, .. } if is_configuration(path) => Category::Configuration,
             Target::File { .. } => Category::Filesystem,
             Target::SeededFile { .. } => Category::Filesystem,
             Target::Group { .. } | Target::GroupMember { .. } | Target::User { .. } => {
@@ -131,7 +125,14 @@ impl Target {
     }
 }
 
-fn push_user_targets(items: &mut Vec<Target>, cfg: &UserConfig) {
+fn is_configuration(path: &Path) -> bool {
+    let path = path.as_os_str().as_encoded_bytes();
+    [NIX_CONF_DEST, POLICY_FILE, PROFILE_SNIPPET_DEST]
+        .iter()
+        .any(|configuration| configuration.as_bytes() == path)
+}
+
+fn push_user_targets<'a>(items: &mut Vec<Target<'a>>, cfg: &'a UserConfig) {
     let state_dir = mix_state_dir(&cfg.user.home);
     let owner = Some((cfg.user.uid, cfg.user.gid));
     items.push(Target::Directory {
@@ -146,23 +147,23 @@ fn push_user_targets(items: &mut Vec<Target>, cfg: &UserConfig) {
     });
     items.push(Target::File {
         path: Cow::Owned(state_dir.join(HOME_NIX)),
-        expected: Some(Cow::Owned(cfg.home.clone())),
+        expected: Some(Cow::Borrowed(&cfg.home)),
         owner,
     });
     items.push(Target::File {
         path: Cow::Owned(state_dir.join(FLAKE_NIX)),
-        expected: Some(Cow::Owned(cfg.flake.clone())),
+        expected: Some(Cow::Borrowed(&cfg.flake)),
         owner,
     });
     items.push(Target::File {
         path: Cow::Owned(state_dir.join(FLAKE_LOCK)),
-        expected: Some(Cow::Owned(cfg.lock.clone())),
+        expected: Some(Cow::Borrowed(&cfg.lock)),
         owner,
     });
     match &cfg.restored_state {
         Some(restored) => items.push(Target::File {
             path: Cow::Owned(state_dir.join(STATE_FILE)),
-            expected: Some(Cow::Owned(restored.clone())),
+            expected: Some(Cow::Borrowed(restored)),
             owner,
         }),
         None => items.push(Target::SeededFile {
@@ -177,16 +178,16 @@ fn push_user_targets(items: &mut Vec<Target>, cfg: &UserConfig) {
     });
 }
 
-const SYSTEM_TARGET_COUNT: usize = 10 + NIX_TREE_PATHS.len() + NIXBLD_USER_COUNT as usize;
+const SYSTEM_TARGET_COUNT: usize = 11 + NIX_TREE_PATHS.len() + NIXBLD_USER_COUNT as usize;
 const USER_TARGET_COUNT: usize = 7;
 
-pub fn user_targets(cfg: &UserConfig) -> Vec<Target> {
+pub fn user_targets(cfg: &UserConfig) -> Vec<Target<'_>> {
     let mut items = Vec::with_capacity(USER_TARGET_COUNT);
     push_user_targets(&mut items, cfg);
     items
 }
 
-pub fn targets(user_config: Option<&UserConfig>) -> Vec<Target> {
+pub fn targets<'a>(user_config: Option<&'a UserConfig>, policy: &'a Policy) -> Vec<Target<'a>> {
     let mut items = Vec::with_capacity(
         SYSTEM_TARGET_COUNT
             + if user_config.is_some() {
@@ -216,8 +217,13 @@ pub fn targets(user_config: Option<&UserConfig>) -> Vec<Target> {
         owner: None,
     });
     items.push(Target::File {
+        path: Cow::Borrowed(Path::new(POLICY_FILE)),
+        expected: Some(Cow::Borrowed(policy.render())),
+        owner: None,
+    });
+    items.push(Target::File {
         path: Cow::Borrowed(Path::new(NIX_CONF_DEST)),
-        expected: Some(Cow::Borrowed(NIX_CONF)),
+        expected: Some(Cow::Borrowed(policy.nix_conf())),
         owner: None,
     });
     items.push(Target::File {
@@ -268,6 +274,11 @@ mod tests {
 
     use super::*;
 
+    fn default_policy() -> &'static Policy {
+        static POLICY: std::sync::OnceLock<Policy> = std::sync::OnceLock::new();
+        POLICY.get_or_init(Policy::default)
+    }
+
     fn sample_user_config() -> UserConfig {
         UserConfig {
             user: InvokingUser {
@@ -306,7 +317,7 @@ mod tests {
     #[test]
     fn label_borrows_instead_of_allocating_for_every_target() {
         let cfg = sample_user_config();
-        for target in targets(Some(&cfg)) {
+        for target in targets(Some(&cfg), default_policy()) {
             assert!(
                 matches!(target.label(), Cow::Borrowed(_)),
                 "label() allocated for {target:?}"
@@ -341,7 +352,7 @@ mod tests {
         assert_eq!(
             Target::File {
                 path: PathBuf::from(NIX_CONF_DEST).into(),
-                expected: Some(NIX_CONF.to_string().into()),
+                expected: Some(default_policy().nix_conf().into()),
                 owner: None,
             }
             .category(),
@@ -415,7 +426,7 @@ mod tests {
 
     #[test]
     fn targets_include_every_directory_in_the_managed_nix_tree() {
-        let items = targets(None);
+        let items = targets(None, default_policy());
         for &path in NIX_TREE_PATHS {
             assert!(
                 items.iter().any(|t| matches!(
@@ -430,7 +441,7 @@ mod tests {
 
     #[test]
     fn targets_include_all_build_users() {
-        let items = targets(None);
+        let items = targets(None, default_policy());
         let user_count = items
             .iter()
             .filter(|t| matches!(t, Target::User { .. }))
@@ -440,7 +451,7 @@ mod tests {
 
     #[test]
     fn targets_excludes_per_user_entries_when_no_user_is_given() {
-        let items = targets(None);
+        let items = targets(None, default_policy());
         assert!(
             !items
                 .iter()
@@ -451,7 +462,7 @@ mod tests {
     #[test]
     fn targets_includes_per_user_entries_when_a_user_is_given() {
         let cfg = sample_user_config();
-        let items = targets(Some(&cfg));
+        let items = targets(Some(&cfg), default_policy());
 
         assert!(items.iter().any(|t| matches!(
             t,
@@ -471,25 +482,36 @@ mod tests {
     }
 
     #[test]
-    fn the_nix_conf_trusts_the_managed_group_rather_than_individual_users() {
-        assert!(NIX_CONF.contains("trusted-users = root @mix-users\n"));
+    fn the_declared_nix_conf_and_policy_follow_the_policy() {
+        let policy = Policy::new(Some("https://mirror.internal"), Some("m:AAAA")).unwrap();
+
+        let items = targets(None, &policy);
+
+        let expected = |wanted: &Path| {
+            items.iter().find_map(|target| match target {
+                Target::File { path, expected, .. } if path.as_ref() == wanted => {
+                    expected.clone().map(Cow::into_owned)
+                }
+                _ => None,
+            })
+        };
         assert_eq!(
-            NIX_CONF
-                .lines()
-                .filter(|line| line.starts_with("trusted-users"))
-                .count(),
-            1
+            expected(Path::new(NIX_CONF_DEST)).as_deref(),
+            Some(policy.nix_conf())
         );
-        assert!(NIX_CONF.ends_with('\n'));
+        assert_eq!(
+            expected(Path::new(POLICY_FILE)).as_deref(),
+            Some(policy.render())
+        );
     }
 
     #[test]
     fn the_target_lists_are_built_at_their_exact_size() {
         let cfg = sample_user_config();
-        assert_eq!(targets(None).len(), SYSTEM_TARGET_COUNT);
+        assert_eq!(targets(None, default_policy()).len(), SYSTEM_TARGET_COUNT);
         assert_eq!(user_targets(&cfg).len(), USER_TARGET_COUNT);
         assert_eq!(
-            targets(Some(&cfg)).len(),
+            targets(Some(&cfg), default_policy()).len(),
             SYSTEM_TARGET_COUNT + USER_TARGET_COUNT
         );
     }
@@ -497,9 +519,10 @@ mod tests {
     #[test]
     fn every_user_gets_the_same_nix_conf() {
         let cfg = sample_user_config();
-        let expected: Option<Cow<'static, str>> = Some(Cow::Borrowed(NIX_CONF));
+        let policy = Policy::default();
+        let expected: Option<Cow<'_, str>> = Some(Cow::Borrowed(policy.nix_conf()));
 
-        for items in [targets(None), targets(Some(&cfg))] {
+        for items in [targets(None, &policy), targets(Some(&cfg), &policy)] {
             assert!(items.iter().any(|t| matches!(
                 t,
                 Target::File { path, expected: actual, .. }
@@ -510,7 +533,7 @@ mod tests {
 
     #[test]
     fn targets_include_the_group_the_nix_conf_trusts() {
-        assert!(targets(None).iter().any(|t| matches!(
+        assert!(targets(None, default_policy()).iter().any(|t| matches!(
             t,
             Target::Group { name, gid } if *name == MIX_USERS_GROUP && *gid == MIX_USERS_GID
         )));

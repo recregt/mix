@@ -43,11 +43,7 @@ impl BuildPolicy {
     }
 }
 
-/// Where every nix invocation in this path fetches its inputs and its binaries from.
-///
-/// Resolved once and shared, so the mirror's key is fetched once no matter how many times nix is
-/// called.
-async fn nix_options(mirror: Option<&str>, mirror_key: Option<&str>, scope: &Scope) -> Vec<String> {
+fn nix_options(mirror: Option<&str>) -> Vec<String> {
     let Some(base) = mirror::filter_mirror(mirror) else {
         return Vec::new();
     };
@@ -59,12 +55,6 @@ async fn nix_options(mirror: Option<&str>, mirror_key: Option<&str>, scope: &Sco
         "--override-input".to_string(),
         "home-manager".to_string(),
         mirror::home_manager_override(base),
-        "--option".to_string(),
-        "substituters".to_string(),
-        mirror::substituter(base),
-        "--option".to_string(),
-        "trusted-public-keys".to_string(),
-        mirror::trusted_public_keys(base, mirror_key, scope).await,
     ]
 }
 
@@ -192,20 +182,18 @@ impl ActivityReporter for SourceBuildGuard {
 pub async fn activate(
     cfg: &UserConfig,
     mirror: Option<&str>,
-    mirror_key: Option<&str>,
     activity: &Arc<dyn ActivityReporter>,
     host: &HostConfig,
     scope: &Scope,
     policy: BuildPolicy,
 ) -> Result<bool> {
-    let generation = switch(cfg, mirror, mirror_key, activity, scope, policy).await?;
+    let generation = switch(cfg, mirror, activity, scope, policy).await?;
     finish(cfg, &generation, activity, host, scope).await
 }
 
 pub async fn switch(
     cfg: &UserConfig,
     mirror: Option<&str>,
-    mirror_key: Option<&str>,
     activity: &Arc<dyn ActivityReporter>,
     scope: &Scope,
     policy: BuildPolicy,
@@ -219,7 +207,7 @@ pub async fn switch(
     .render();
     let profile = nix_profiles_dir(&cfg.user.home).join(HOME_MANAGER_PROFILE_NAME);
     let profile_str = profile.to_string_lossy().into_owned();
-    let options = nix_options(mirror, mirror_key, scope).await;
+    let options = nix_options(mirror);
 
     let guard = match policy {
         BuildPolicy::CacheOnly => Some(Arc::new(SourceBuildGuard {
@@ -291,57 +279,45 @@ async fn record(cfg: &UserConfig, host: &HostConfig, scope: &Scope) -> bool {
 mod tests {
     use super::*;
 
-    const UNREACHABLE_MIRROR: &str = "http://127.0.0.1:1";
+    const MIRROR: &str = "http://mirror.internal";
 
-    #[tokio::test]
-    async fn nix_options_are_empty_when_no_mirror_is_set() {
-        assert!(nix_options(None, None, &Scope::root()).await.is_empty());
+    #[test]
+    fn nix_options_are_empty_when_no_mirror_is_set() {
+        assert!(nix_options(None).is_empty());
     }
 
-    #[tokio::test]
-    async fn nix_build_args_omits_mirror_flags_when_no_mirror_is_set() {
-        let args = nix_build_args(
-            "path:/state#x",
-            "/profile",
-            &nix_options(None, None, &Scope::root()).await,
-        );
-        assert!(!args.iter().any(|a| a == "--override-input"));
-        assert!(!args.iter().any(|a| a == "substituters"));
-    }
+    #[test]
+    fn a_mirror_only_redirects_the_pinned_inputs() {
+        let args = nix_build_args("path:/state#x", "/profile", &nix_options(Some(MIRROR)));
 
-    #[tokio::test]
-    async fn nix_build_args_adds_override_inputs_and_a_substituter_when_mirrored() {
-        let args = nix_build_args(
-            "path:/state#x",
-            "/profile",
-            &nix_options(Some(UNREACHABLE_MIRROR), None, &Scope::root()).await,
-        );
         assert!(args.iter().any(|a| a == "nixpkgs"));
         assert!(args.iter().any(|a| a == "home-manager"));
-        assert!(
-            args.iter()
-                .any(|a| a.starts_with(&format!("tarball+{UNREACHABLE_MIRROR}/nixpkgs-")))
-        );
-        assert!(
-            args.iter()
-                .any(|a| a.starts_with(&format!("tarball+{UNREACHABLE_MIRROR}/home-manager-")))
-        );
-        assert!(
-            args.iter()
-                .any(|a| a == &format!("{UNREACHABLE_MIRROR}/cache"))
-        );
-        assert!(args.iter().any(|a| a == "trusted-public-keys"));
-        assert!(args.iter().any(|a| a.starts_with("cache.nixos.org-1:")));
+        assert!(args.iter().any(
+            |a| a.starts_with(&format!("tarball+{MIRROR}/nixpkgs-")) && a.contains("narHash=")
+        ));
+        assert!(args.iter().any(
+            |a| a.starts_with(&format!("tarball+{MIRROR}/home-manager-")) && a.contains("narHash=")
+        ));
     }
 
-    #[tokio::test]
-    async fn nix_build_args_always_start_with_the_build_invocation() {
-        for mirror in [None, Some(UNREACHABLE_MIRROR)] {
-            let args = nix_build_args(
-                "path:/state#x",
-                "/profile",
-                &nix_options(mirror, None, &Scope::root()).await,
+    #[test]
+    fn a_user_never_hands_the_daemon_a_substituter_or_a_key() {
+        for mirror in [None, Some(MIRROR)] {
+            let args = nix_build_args("path:/state#x", "/profile", &nix_options(mirror));
+
+            assert!(!args.iter().any(|a| a == "--option"), "{args:?}");
+            assert!(!args.iter().any(|a| a.contains("substituters")), "{args:?}");
+            assert!(
+                !args.iter().any(|a| a.contains("trusted-public-keys")),
+                "{args:?}"
             );
+        }
+    }
+
+    #[test]
+    fn nix_build_args_always_start_with_the_build_invocation() {
+        for mirror in [None, Some(MIRROR)] {
+            let args = nix_build_args("path:/state#x", "/profile", &nix_options(mirror));
             assert_eq!(
                 args[..8],
                 [
@@ -356,37 +332,6 @@ mod tests {
                 ]
             );
         }
-    }
-
-    #[tokio::test]
-    async fn nix_build_args_trusts_a_key_supplied_out_of_band() {
-        const KEY: &str = "mix-mirror-1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-
-        let args = nix_build_args(
-            "path:/state#x",
-            "/profile",
-            &nix_options(Some(UNREACHABLE_MIRROR), Some(KEY), &Scope::root()).await,
-        );
-
-        let keys = args
-            .iter()
-            .skip_while(|a| *a != "trusted-public-keys")
-            .nth(1)
-            .expect("the trusted-public-keys option is passed");
-        assert!(
-            keys.ends_with(KEY),
-            "{keys:?} should end with the mirror key"
-        );
-    }
-
-    #[tokio::test]
-    async fn nix_build_args_ignores_a_blank_mirror() {
-        let args = nix_build_args(
-            "path:/state#x",
-            "/profile",
-            &nix_options(Some("   "), None, &Scope::root()).await,
-        );
-        assert!(!args.iter().any(|a| a == "--override-input"));
     }
 
     #[test]

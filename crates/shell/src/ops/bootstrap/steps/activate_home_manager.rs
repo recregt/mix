@@ -13,7 +13,6 @@ use crate::profile::{self, BuildPolicy};
 pub struct ActivateHomeManagerConfig {
     user_config: Option<UserConfig>,
     mirror: Option<String>,
-    mirror_key: Option<String>,
     activity: Arc<dyn ActivityReporter>,
     host: HostConfig,
     created_git_dir: bool,
@@ -23,14 +22,12 @@ impl ActivateHomeManagerConfig {
     pub fn new(
         user_config: Option<UserConfig>,
         mirror: Option<&str>,
-        mirror_key: Option<&str>,
         activity: Arc<dyn ActivityReporter>,
         host: HostConfig,
     ) -> Self {
         Self {
             user_config,
             mirror: mirror.map(String::from),
-            mirror_key: mirror_key.map(String::from),
             activity,
             host,
             created_git_dir: false,
@@ -62,7 +59,6 @@ impl Step for ActivateHomeManagerConfig {
         self.created_git_dir = profile::activate(
             cfg,
             self.mirror.as_deref(),
-            self.mirror_key.as_deref(),
             &self.activity,
             &self.host,
             scope,
@@ -114,7 +110,7 @@ mod tests {
     #[tokio::test]
     async fn check_passes_without_a_user_config() {
         assert!(
-            ActivateHomeManagerConfig::new(None, None, None, noop(), HostConfig::default())
+            ActivateHomeManagerConfig::new(None, None, noop(), HostConfig::default())
                 .check(&mix_exec::Scope::root())
                 .await
                 .unwrap()
@@ -126,7 +122,6 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let step = ActivateHomeManagerConfig::new(
             Some(user_config(home.path())),
-            None,
             None,
             noop(),
             HostConfig::default(),
@@ -141,7 +136,6 @@ mod tests {
         let step = ActivateHomeManagerConfig::new(
             Some(user_config(home.path())),
             None,
-            None,
             noop(),
             HostConfig::default(),
         );
@@ -150,15 +144,14 @@ mod tests {
 
     #[tokio::test]
     async fn execute_is_a_no_op_without_a_user_config() {
-        let mut step =
-            ActivateHomeManagerConfig::new(None, None, None, noop(), HostConfig::default());
+        let mut step = ActivateHomeManagerConfig::new(None, None, noop(), HostConfig::default());
         step.execute(&mix_exec::Scope::root()).await.unwrap();
         assert!(!step.created_git_dir);
     }
 
     #[tokio::test]
     async fn rollback_is_a_no_op_without_a_user_config() {
-        ActivateHomeManagerConfig::new(None, None, None, noop(), HostConfig::default())
+        ActivateHomeManagerConfig::new(None, None, noop(), HostConfig::default())
             .rollback(&mix_exec::Scope::root())
             .await
             .unwrap();
@@ -172,7 +165,6 @@ mod tests {
 
         let mut step = ActivateHomeManagerConfig::new(
             Some(user_config(home.path())),
-            None,
             None,
             noop(),
             HostConfig::default(),
@@ -192,7 +184,6 @@ mod tests {
 
         let mut step = ActivateHomeManagerConfig::new(
             Some(user_config(home.path())),
-            None,
             None,
             noop(),
             HostConfig::default(),

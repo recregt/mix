@@ -36,8 +36,7 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
     }
 
     run_steps(
-        ctx.mirror(),
-        ctx.mirror_key(),
+        &ctx.policy,
         force,
         ctx.reporters.clone(),
         ctx.user.clone(),
@@ -48,8 +47,7 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
 }
 
 async fn run_steps(
-    mirror: Option<&str>,
-    mirror_key: Option<&str>,
+    policy: &mix_core::policy::Policy,
     force: bool,
     reporters: Reporters,
     user_config: Option<mix_core::models::UserConfig>,
@@ -57,8 +55,7 @@ async fn run_steps(
     scope: &Scope,
 ) -> Result<Environment> {
     let mut plan = Plan::new(planner::bootstrap_steps(
-        mirror,
-        mirror_key,
+        policy,
         force,
         reporters.downloads,
         reporters.activity,

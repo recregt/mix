@@ -23,11 +23,17 @@ pub fn host_config() -> mix_shell::HostConfig {
     }
 }
 
-pub fn request_env(mirror: Option<&str>, mirror_key: Option<&str>) -> mix_shell::RequestEnv {
-    mix_shell::RequestEnv {
-        mirror: mirror.map(str::to_string),
-        mirror_key: mirror_key.map(str::to_string),
-    }
+pub fn policy() -> mix_core::policy::Policy {
+    let stored = std::fs::read_to_string(mix_core::paths::POLICY_FILE).ok();
+    mix_core::policy::Policy::load(stored.as_deref())
+}
+
+pub fn requested_policy(
+    mirror: Option<&str>,
+    mirror_key: Option<&str>,
+) -> Result<mix_core::policy::Policy, mix_shell::ops::bootstrap::Error> {
+    mix_core::policy::Policy::new(mirror, mirror_key)
+        .map_err(|invalid| mix_shell::ops::bootstrap::Error::InvalidMirror(invalid.to_string()))
 }
 
 pub fn acquire_lock() -> anyhow::Result<LockGuard> {

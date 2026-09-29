@@ -31,6 +31,9 @@ pub enum Error {
     #[error("unsupported platform: {0}")]
     UnsupportedTarget(String),
 
+    #[error("{0}")]
+    InvalidMirror(String),
+
     #[error(transparent)]
     Target(#[from] crate::target::Error),
 

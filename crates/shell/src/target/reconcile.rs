@@ -16,7 +16,7 @@ use crate::effect::fs::{self, Owner};
 use crate::effect::systemd;
 use crate::target::Finding;
 
-pub async fn reconcile(target: &Target, finding: Finding, scope: &Scope) -> Result<()> {
+pub async fn reconcile(target: &Target<'_>, finding: Finding, scope: &Scope) -> Result<()> {
     match target {
         Target::Directory { path, mode, owner } => {
             tracing::debug!("reconciling directory: {}", path.display());

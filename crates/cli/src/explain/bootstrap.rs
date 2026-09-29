@@ -42,6 +42,11 @@ pub(crate) fn describe(error: &Error, command: &str) -> Diagnostic {
             "If you use `--mirror`, check that it serves the right files",
         ),
 
+        Error::InvalidMirror(reason) => Diagnostic::hinting(
+            format!("the mirror settings aren't valid: {reason}"),
+            "Pass `--mirror` as an http or https URL, and `--mirror-key` as a single <name>:<key> entry",
+        ),
+
         Error::UnsupportedTarget(target) => Diagnostic::hinting(
             format!("`mix` doesn't support this system ({target}) yet"),
             "It runs on 64-bit Intel, AMD and ARM Linux",

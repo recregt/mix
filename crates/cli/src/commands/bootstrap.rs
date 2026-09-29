@@ -8,6 +8,7 @@ pub async fn run(
     force: bool,
     verbosity: u8,
 ) -> anyhow::Result<ExitCode> {
+    let policy = super::requested_policy(mirror, mirror_key)?;
     if mix_shell::effect::accounts::is_root() {
         let _lock = super::acquire_lock()?;
         let reporters = mix_ui::reporters();
@@ -21,7 +22,7 @@ pub async fn run(
                 steps: reporters.steps,
                 activity: reporters.activity,
             })
-            .with_env(super::request_env(mirror, mirror_key))
+            .with_policy(policy)
             .with_host(super::host_config());
         let _watch = crate::controls::watch(
             &ctx.scope,

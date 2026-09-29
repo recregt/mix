@@ -1,4 +1,3 @@
-import ast
 import contextlib
 import fcntl
 import hashlib
@@ -7,6 +6,7 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -55,15 +55,22 @@ def _source_rev(const_name: str) -> str:
     return match.group(1)
 
 
-def _nix_conf_content() -> str:
-    models_src = (REPO_ROOT / "crates/core/src/models.rs").read_text()
-    match = re.search(r'NIX_CONF:\s*&str\s*=\s*(".*?");', models_src, re.S)
-    if not match:
-        raise RuntimeError("could not find the NIX_CONF constant in models.rs")
-    return ast.literal_eval(match.group(1))
+CACHE_NIXOS_ORG_KEY = "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
+POLICY_FILE = "/etc/mix/policy.json"
 
 
-NIX_CONF_CONTENT = _nix_conf_content()
+def nix_conf_content(mirror: str | None = None, key: str | None = None) -> str:
+    """The nix.conf mix renders for a policy: root alone is trusted, the mirror is the cache."""
+    conf = (
+        "build-users-group = nixbld\n"
+        "experimental-features = nix-command flakes\n"
+        "trusted-users = root\n"
+    )
+    if mirror is not None:
+        conf += f"substituters = {mirror.rstrip('/')}/cache\n"
+        if key is not None:
+            conf += f"trusted-public-keys = {CACHE_NIXOS_ORG_KEY} {key}\n"
+    return conf
 
 NIX_URL, NIX_SHA256 = _pin("x86_64-linux")
 NIX_FILENAME = NIX_URL.rsplit("/", 1)[-1]
@@ -334,9 +341,29 @@ def silent_mirror():
             connection.close()
 
 
+def mirror_key(mirror_cache) -> str:
+    return (mirror_cache / "mix-mirror.pub").read_text().strip()
+
+
 def mirror_args(mock_nix_server, mirror_cache):
-    mirror_key = (mirror_cache / "mix-mirror.pub").read_text().strip()
-    return ["--mirror", mock_nix_server["url"], "--mirror-key", mirror_key]
+    return ["--mirror", mock_nix_server["url"], "--mirror-key", mirror_key(mirror_cache)]
+
+
+@contextlib.contextmanager
+def policy_mirror(container, url: str):
+    """Points the machine's policy at another mirror for the duration, as an administrator would."""
+    before = container.exec("cat", POLICY_FILE, check=True).stdout
+    policy = json.loads(before)
+    policy["mirror"]["url"] = url
+    container.exec(
+        "bash", "-c", f"printf '%s' {shlex.quote(json.dumps(policy))} > {POLICY_FILE}", check=True
+    )
+    try:
+        yield
+    finally:
+        container.exec(
+            "bash", "-c", f"printf '%s' {shlex.quote(before)} > {POLICY_FILE}", check=True
+        )
 
 
 def bootstrap_root(container, mock_nix_server):

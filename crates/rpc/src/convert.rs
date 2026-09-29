@@ -263,6 +263,7 @@ fn failure_to_wire(failure: Failure) -> proto::Failure {
             Kind::Integrity(proto::Integrity { artifact, detail })
         }
         Failure::UnsupportedTarget(target) => Kind::UnsupportedTarget(detail(target)),
+        Failure::InvalidMirror(reason) => Kind::InvalidMirror(detail(reason)),
         Failure::Target(failure) => Kind::Target(target_failure_to_wire(failure)),
         Failure::Decompression(message) => Kind::Decompression(detail(message)),
         Failure::MalformedArchive(message) => Kind::MalformedArchive(detail(message)),
@@ -304,6 +305,7 @@ fn failure_from_wire(failure: proto::Failure) -> Result<Failure, Malformed> {
                 detail: integrity.detail,
             },
             Kind::UnsupportedTarget(detail) => Failure::UnsupportedTarget(detail.detail),
+            Kind::InvalidMirror(detail) => Failure::InvalidMirror(detail.detail),
             Kind::Target(failure) => Failure::Target(target_failure_from_wire(failure)?),
             Kind::Decompression(detail) => Failure::Decompression(detail.detail),
             Kind::MalformedArchive(detail) => Failure::MalformedArchive(detail.detail),
@@ -601,6 +603,7 @@ mod tests {
                 detail: "sha256 mismatch".into(),
             },
             Failure::UnsupportedTarget("armv7l-linux".into()),
+            Failure::InvalidMirror("the mirror must be an http or https URL".into()),
             Failure::Target(TargetFailure::Unrepairable {
                 artifact: "/nix".into(),
                 reason: Unfixable::NotADirectory,

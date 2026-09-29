@@ -4,6 +4,7 @@ pub mod error;
 pub mod models;
 pub mod nix_log;
 pub mod nix_plan;
+pub mod policy;
 pub mod privilege;
 pub mod progress;
 pub mod state;

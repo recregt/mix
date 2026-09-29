@@ -17,7 +17,7 @@ def test_install_works_in_the_same_session_as_bootstrap(container, mock_nix_serv
     result = container.exec(
         "bash",
         "-c",
-        f"mix bootstrap {mirror} && mix install {INSTALL_TEST_PACKAGE} {mirror}",
+        f"mix bootstrap {mirror} && mix install {INSTALL_TEST_PACKAGE}",
         user=USER,
     )
 
@@ -40,7 +40,7 @@ def test_a_missing_lock_is_explained_and_bootstrap_puts_it_back(
     container.exec("rm", LOCK, check=True)
 
     refused = container.exec(
-        "mix", "install", INSTALL_TEST_PACKAGE, *mirror_args(mock_nix_server, mirror_cache), user=USER
+        "mix", "install", INSTALL_TEST_PACKAGE, user=USER
     )
 
     assert refused.returncode != 0
@@ -52,7 +52,7 @@ def test_a_missing_lock_is_explained_and_bootstrap_puts_it_back(
     again = container.exec("mix", "bootstrap", *mirror_args(mock_nix_server, mirror_cache), user=USER)
     assert again.returncode == 0, again.stderr
     installed = container.exec(
-        "mix", "install", INSTALL_TEST_PACKAGE, *mirror_args(mock_nix_server, mirror_cache), user=USER
+        "mix", "install", INSTALL_TEST_PACKAGE, user=USER
     )
     assert installed.returncode == 0, installed.stderr
     assert container.path_exists(PACKAGE_BIN)
