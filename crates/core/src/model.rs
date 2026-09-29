@@ -1071,6 +1071,22 @@ impl World {
             ),
         ];
         let mut created = Vec::new();
+        let store = Path::new(crate::paths::NIX_STORE);
+        if !self.files.contains_key(store) {
+            self.parent_is_dir(store)?;
+            let id = self.fresh();
+            self.files.insert(
+                store.to_path_buf(),
+                Entry {
+                    content: Content::Directory,
+                    mode: 0o1775,
+                    owner: ROOT,
+                    id,
+                    changed: id.ino,
+                },
+            );
+            created.push(store.to_path_buf());
+        }
         for (file, contents) in files {
             let file = Path::new(file);
             let mut missing: Vec<&Path> = file
