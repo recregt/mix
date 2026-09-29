@@ -93,6 +93,11 @@ pub enum Failure {
     },
     UnsupportedTarget(String),
     InvalidMirror(String),
+    Conflict {
+        subject: String,
+        expected: String,
+        found: String,
+    },
     Target(TargetFailure),
     Decompression(String),
     MalformedArchive(String),
@@ -101,6 +106,13 @@ pub enum Failure {
     UnsupportedKernel,
     SystemdNotReady {
         host: Host,
+    },
+    SystemdUnreachable,
+    Unit {
+        operation: String,
+        unit: String,
+        detail: String,
+        invocation: Option<String>,
     },
     AlreadyManaged,
     CrossDeviceStore {

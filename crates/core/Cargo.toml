@@ -5,18 +5,20 @@ edition = "2024"
 authors = ["Ömer Tekin"]
 license = "MPL-2.0"
 
+[features]
+model = []
+
 [dependencies]
-mix-exec = { path = "../exec" }
-async-trait = { workspace = true }
+mix-events = { path = "../events" }
 memchr = { workspace = true }
-serde = { workspace = true }
+serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+proptest = { workspace = true }
 divan = { workspace = true }
-tokio = { workspace = true }
 
 [[bench]]
 name = "nix_log"
@@ -27,11 +29,7 @@ name = "nix_plan"
 harness = false
 
 [[bench]]
-name = "plan"
-harness = false
-
-[[bench]]
-name = "plan_observed"
+name = "runner"
 harness = false
 
 [[bench]]

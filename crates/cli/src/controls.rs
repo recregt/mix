@@ -1,6 +1,7 @@
 use std::future::Future;
 
-use mix_core::Scope;
+use mix_exec::Reason;
+use mix_exec::Scope;
 use nix::sys::signal::Signal;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::task::JoinHandle;
@@ -38,7 +39,7 @@ pub enum Received {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Control {
-    Cancel,
+    Cancel(Reason),
     ForceStop,
     Pause,
     Resume,
@@ -65,14 +66,18 @@ impl Translator {
                 let first = !self.client_left && !self.cancelled;
                 self.client_left = true;
                 self.cancelled = true;
-                first.then_some(Control::Cancel)
+                first.then_some(Control::Cancel(Reason::ClientGone))
             }
             Received::Interrupt | Received::Terminate => {
                 if self.cancelled {
                     return Some(Control::ForceStop);
                 }
                 self.cancelled = true;
-                Some(Control::Cancel)
+                Some(Control::Cancel(if received == Received::Interrupt {
+                    Reason::Interrupted
+                } else {
+                    Reason::Terminated
+                }))
             }
         }
     }
@@ -80,9 +85,9 @@ impl Translator {
 
 pub fn apply(scope: &Scope, stopping: &Stopping, control: Control) {
     match control {
-        Control::Cancel => {
+        Control::Cancel(reason) => {
             tracing::warn!("{}", stopping.first);
-            scope.cancel();
+            scope.cancel(reason);
         }
         Control::ForceStop => {
             tracing::warn!("{}", stopping.forced);
@@ -167,20 +172,29 @@ mod tests {
     fn a_first_interrupt_cancels_and_a_second_forces_a_stop() {
         assert_eq!(
             translated(&[Received::Interrupt, Received::Interrupt]),
-            [Some(Control::Cancel), Some(Control::ForceStop)]
+            [
+                Some(Control::Cancel(Reason::Interrupted)),
+                Some(Control::ForceStop)
+            ]
         );
         assert_eq!(
             translated(&[Received::Terminate, Received::Interrupt]),
-            [Some(Control::Cancel), Some(Control::ForceStop)]
+            [
+                Some(Control::Cancel(Reason::Terminated)),
+                Some(Control::ForceStop)
+            ]
         );
     }
 
     #[test]
     fn a_client_that_leaves_cancels_once_and_never_forces_a_stop() {
-        assert_eq!(translated(&[Received::ClientGone]), [Some(Control::Cancel)]);
+        assert_eq!(
+            translated(&[Received::ClientGone]),
+            [Some(Control::Cancel(Reason::ClientGone))]
+        );
         assert_eq!(
             translated(&[Received::Interrupt, Received::ClientGone]),
-            [Some(Control::Cancel), None]
+            [Some(Control::Cancel(Reason::Interrupted)), None]
         );
     }
 
@@ -188,7 +202,10 @@ mod tests {
     fn an_interrupt_after_the_client_left_forces_a_stop() {
         assert_eq!(
             translated(&[Received::ClientGone, Received::Interrupt]),
-            [Some(Control::Cancel), Some(Control::ForceStop)]
+            [
+                Some(Control::Cancel(Reason::ClientGone)),
+                Some(Control::ForceStop)
+            ]
         );
     }
 
@@ -204,7 +221,10 @@ mod tests {
     fn suspending_does_not_count_as_an_interrupt() {
         assert_eq!(
             translated(&[Received::Suspend, Received::Interrupt]),
-            [Some(Control::Pause), Some(Control::Cancel)]
+            [
+                Some(Control::Pause),
+                Some(Control::Cancel(Reason::Interrupted))
+            ]
         );
     }
 
@@ -216,8 +236,8 @@ mod tests {
         apply(&scope, &BOOTSTRAP, Control::Resume);
         assert!(!scope.is_stopped());
 
-        apply(&scope, &BOOTSTRAP, Control::Cancel);
-        assert!(scope.is_stopped());
+        apply(&scope, &BOOTSTRAP, Control::Cancel(Reason::Terminated));
+        assert_eq!(scope.reason(), Some(Reason::Terminated));
     }
 
     async fn cancelled_within_a_few_seconds(scope: &Scope) {
@@ -246,6 +266,7 @@ mod tests {
         signal::raise(Signal::SIGTERM).unwrap();
 
         cancelled_within_a_few_seconds(&scope).await;
+        assert_eq!(scope.reason(), Some(Reason::Terminated));
     }
 
     #[tokio::test]
@@ -265,6 +286,7 @@ mod tests {
         drop(leave);
 
         cancelled_within_a_few_seconds(&scope).await;
+        assert_eq!(scope.reason(), Some(Reason::ClientGone));
     }
 
     #[tokio::test]

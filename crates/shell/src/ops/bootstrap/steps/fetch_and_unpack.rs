@@ -1,27 +1,20 @@
 use std::io::Write as _;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
-use async_trait::async_trait;
-use mix_core::{DownloadProgress, Error as CoreError, Scope, Step};
+use mix_core::Error as CoreError;
+use mix_exec::Scope;
 use nix::unistd::{Gid, Uid, User};
 
 use mix_core::identity::NIXBLD_GID;
 use mix_core::paths::{NIX_PROVISIONING_MANIFEST, NIX_STORE};
 
-use crate::effect::fs::{chown_tree, is_file};
+use crate::effect::fs::chown_tree;
 use crate::ops::bootstrap::error::{Error, Result};
 use crate::ops::bootstrap::tarball;
 use mix_pins::NIX_VERSION;
 
 const DEFAULT_PROFILE: &str = "/nix/var/nix/profiles/default";
-
-pub struct FetchAndUnpack {
-    mirror: Option<String>,
-    progress: Arc<dyn DownloadProgress>,
-    installed: Option<Installed>,
-}
 
 #[derive(Default)]
 struct Installed {
@@ -30,55 +23,40 @@ struct Installed {
     profile_created: bool,
 }
 
-impl FetchAndUnpack {
-    pub fn new(mirror: Option<&str>, progress: Arc<dyn DownloadProgress>) -> Self {
-        Self {
-            mirror: mirror.map(String::from),
-            progress,
-            installed: None,
+impl Installed {
+    fn created(&self) -> Vec<PathBuf> {
+        let mut created = Vec::new();
+        if self.profile_created {
+            created.push(PathBuf::from(DEFAULT_PROFILE));
         }
+        if self.store_dir_created {
+            created.push(PathBuf::from(NIX_STORE));
+        } else {
+            created.extend(self.store_paths.iter().rev().cloned());
+        }
+        created
     }
 }
 
-#[async_trait]
-impl Step for FetchAndUnpack {
-    type Error = Error;
+pub(crate) fn provision_runtime(tarball_bytes: &[u8], scope: &Scope) -> (Vec<PathBuf>, Result<()>) {
+    let mut installed = Installed::default();
+    let result = provision(tarball_bytes, &mut installed, scope);
+    (installed.created(), result)
+}
 
-    fn name(&self) -> &'static str {
-        "fetch and activate the managed runtime"
+pub(crate) fn remove_runtime(created: &[PathBuf]) -> Result<()> {
+    for path in created {
+        if path == Path::new(DEFAULT_PROFILE) {
+            remove_profile_default()?;
+        } else {
+            remove_path(path)?;
+        }
     }
-
-    async fn check(&self, _scope: &Scope) -> Result<bool> {
-        Ok(is_file(Path::new(DEFAULT_PROFILE).join("bin/nix-env")).await)
+    if let Some(scratch_root) = read_manifest() {
+        remove_path(&scratch_root)?;
     }
-
-    async fn execute(&mut self, scope: &Scope) -> Result<()> {
-        let bytes = tarball::bytes(self.mirror.as_deref(), self.progress.as_ref(), scope).await?;
-
-        let scope = scope.clone();
-        let (installed, result) = tokio::task::spawn_blocking(move || {
-            let mut installed = Installed::default();
-            let result = provision(&bytes, &mut installed, &scope);
-            (installed, result)
-        })
-        .await
-        .map_err(|e| CoreError::TaskPanicked(e.to_string()))?;
-
-        self.installed = Some(installed);
-        result
-    }
-
-    async fn rollback(&mut self, _scope: &Scope) -> Result<()> {
-        let Some(installed) = self.installed.take() else {
-            return Ok(());
-        };
-
-        tokio::task::spawn_blocking(move || teardown(installed))
-            .await
-            .map_err(|e| CoreError::TaskPanicked(e.to_string()))??;
-
-        Ok(())
-    }
+    remove_manifest();
+    Ok(())
 }
 
 fn provision(tarball_bytes: &[u8], installed: &mut Installed, scope: &Scope) -> Result<()> {
@@ -128,30 +106,6 @@ fn provision(tarball_bytes: &[u8], installed: &mut Installed, scope: &Scope) -> 
 
     remove_manifest();
     let _ = std::fs::remove_dir_all(&scratch_root);
-
-    Ok(())
-}
-
-fn teardown(installed: Installed) -> Result<()> {
-    if installed.profile_created {
-        tracing::debug!("removing default profile");
-        remove_profile_default()?;
-    }
-
-    if installed.store_dir_created {
-        tracing::debug!("removing Nix store directory created by this run");
-        remove_path(Path::new(NIX_STORE))?;
-    } else {
-        tracing::debug!("removing Nix store paths added by this run");
-        for path in installed.store_paths.iter().rev() {
-            remove_path(path)?;
-        }
-    }
-
-    if let Some(scratch_root) = read_manifest() {
-        remove_path(&scratch_root)?;
-    }
-    remove_manifest();
 
     Ok(())
 }
@@ -481,7 +435,7 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path, scope: &Scope) -> Result<()> {
         .arg("--load-db")
         .input(reginfo)
         .run_blocking(scope)
-        .map_err(CoreError::from)?;
+        .map_err(crate::effect::exec::exec_error)?;
     Ok(())
 }
 
@@ -489,7 +443,7 @@ fn forget_vanished_paths(nix_pkg: &Path, scope: &Scope) -> Result<()> {
     nix_as_root(nix_pkg.join("bin/nix-store"))
         .arg("--verify")
         .run_blocking(scope)
-        .map_err(CoreError::from)?;
+        .map_err(crate::effect::exec::exec_error)?;
     Ok(())
 }
 
@@ -503,7 +457,7 @@ fn activate_default_profile(nix_pkg: &Path, nss_cacert_pkg: &Path, scope: &Scope
         .args(["--option", "substitute", "false"])
         .args(["--option", "post-build-hook", ""])
         .run_blocking(scope)
-        .map_err(CoreError::from)?;
+        .map_err(crate::effect::exec::exec_error)?;
     Ok(())
 }
 
@@ -737,7 +691,7 @@ mod tests {
         let dest_store = dest.path().join("store");
 
         let scope = mix_exec::Scope::root();
-        scope.cancel();
+        scope.cancel(mix_exec::Reason::Interrupted);
 
         let mut created = Vec::new();
         move_entries_into(

@@ -33,12 +33,36 @@ pub struct Command {
     args: Vec<OsString>,
     env: Vec<(OsString, OsString)>,
     env_remove: Vec<OsString>,
+    env_clear: bool,
     user: Option<(u32, u32)>,
     input: Option<Vec<u8>>,
     stderr: Option<Box<dyn Drain>>,
 }
 
 pub struct Foreground(tokio::process::Child);
+
+pub struct Session {
+    child: tokio::process::Child,
+    _group: group::Group,
+    stderr: tokio::task::JoinHandle<Vec<u8>>,
+    line: String,
+}
+
+impl Session {
+    pub async fn finish(mut self) -> Result<Output, Error> {
+        let status = self
+            .child
+            .wait()
+            .await
+            .map_err(|source| Error::spawn(self.line.clone(), source))?;
+        let stderr = self.stderr.await.unwrap_or_default();
+        Ok(Output {
+            status,
+            stdout: Vec::new(),
+            stderr,
+        })
+    }
+}
 
 impl Foreground {
     pub async fn wait(&mut self) -> std::io::Result<ExitStatus> {
@@ -53,6 +77,7 @@ impl Command {
             args: Vec::new(),
             env: Vec::new(),
             env_remove: Vec::new(),
+            env_clear: false,
             user: None,
             input: None,
             stderr: None,
@@ -85,6 +110,11 @@ impl Command {
         self
     }
 
+    pub fn env_clear(mut self) -> Self {
+        self.env_clear = true;
+        self
+    }
+
     pub fn as_user(mut self, uid: u32, gid: u32) -> Self {
         self.user = Some((uid, gid));
         self
@@ -110,6 +140,9 @@ impl Command {
     pub(crate) fn process(&self) -> tokio::process::Command {
         let mut process = tokio::process::Command::new(&self.program);
         process.args(&self.args);
+        if self.env_clear {
+            process.env_clear();
+        }
         for key in &self.env_remove {
             process.env_remove(key);
         }
@@ -128,6 +161,42 @@ impl Command {
             .spawn()
             .map(Foreground)
             .map_err(|source| Error::spawn(line, source))
+    }
+
+    pub fn session(
+        self,
+        scope: &Scope,
+    ) -> Result<
+        (
+            Session,
+            tokio::process::ChildStdin,
+            tokio::process::ChildStdout,
+        ),
+        Error,
+    > {
+        let line = self.line();
+        tracing::debug!("starting a session: {line}");
+        let mut process = self.process();
+        process
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let (mut child, group) = group::spawn(&mut process, scope.processes())
+            .map_err(|source| Error::spawn(line.clone(), source))?;
+        let stdin = child.stdin.take().expect("stdin was piped");
+        let stdout = child.stdout.take().expect("stdout was piped");
+        let stderr = child.stderr.take().expect("stderr was piped");
+        let stderr = tokio::spawn(drain(stderr, Box::new(Vec::new())));
+        Ok((
+            Session {
+                child,
+                _group: group,
+                stderr,
+                line,
+            },
+            stdin,
+            stdout,
+        ))
     }
 
     pub async fn run(self, scope: &Scope) -> Result<Output, Error> {

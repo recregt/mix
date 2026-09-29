@@ -6,3 +6,4 @@
 # everyone who runs the test benefits from these saved cases.
 cc 79ab72309ff223ba3ec830ffcb1a0fa3672f6fced3f47a5317155d6354ad0c98 # shrinks to shape = Shape { planned: false, rollback: false, unreached: 0, end: Succeeded, ops: [Child(Shape { planned: false, rollback: false, unreached: 0, end: Succeeded, ops: [] }), Child(Shape { planned: false, rollback: true, unreached: 0, end: Succeeded, ops: [] })] }, pick = Index(0)
 cc 6ac09edfbcdee7fbeb529f56f9c5f3868b52a59212eac2f928bc518cf0a329e5 # shrinks to shape = Shape { planned: false, shielded: false, rollback: false, unreached: 0, end: Succeeded, ops: [Child(Shape { planned: false, shielded: false, rollback: false, unreached: 0, end: Succeeded, ops: [Progress(0), Progress(1)] })] }
+cc 7295b857c5fce5806e66756ca162d96bb3d52840f9ea78fd4e5fcb56c3035da3 # shrinks to ops = [Start(Index(0), 0), Finish(Index(0))], stopped = false

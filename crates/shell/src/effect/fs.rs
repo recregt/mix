@@ -37,13 +37,6 @@ pub async fn is_dir(path: impl AsRef<Path>) -> bool {
         .is_ok_and(|meta| meta.is_dir())
 }
 
-pub async fn dir_has_mode(path: impl AsRef<Path>, mode: u32) -> bool {
-    match tokio::fs::metadata(path.as_ref()).await {
-        Ok(meta) => meta.is_dir() && meta.permissions().mode() & DIR_MODE_MASK == mode,
-        Err(_) => false,
-    }
-}
-
 pub async fn write_atomic(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) -> Result<()> {
     let path = path.as_ref();
     tracing::debug!("writing file atomically: {}", path.display());
@@ -134,35 +127,6 @@ pub async fn write(path: &Path, contents: &str) -> Result<()> {
     write_atomic(path, contents).await
 }
 
-pub async fn files_match(a: &str, b: &str) -> bool {
-    let (a, b) = (tokio::fs::read(a).await, tokio::fs::read(b).await);
-    matches!((a, b), (Ok(a), Ok(b)) if a == b)
-}
-
-pub async fn create_dir(path: impl AsRef<Path>, mode: u32) -> Result<()> {
-    let path = path.as_ref();
-    tracing::debug!(
-        "creating directory with mode: {} ({mode:o})",
-        path.display()
-    );
-
-    tokio::fs::DirBuilder::new()
-        .mode(mode)
-        .create(path)
-        .await
-        .map_err(|e| io_error(path, e))?;
-
-    // A umask the process did not set is still applied to the mode a directory is created with.
-    if !dir_has_mode(path, mode).await {
-        set_mode(path, mode).await?;
-    }
-
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        sync_dir(parent).await;
-    }
-    Ok(())
-}
-
 pub async fn create_dir_all(path: impl AsRef<Path>) -> Result<()> {
     let path = path.as_ref();
     tracing::debug!("creating directory: {}", path.display());
@@ -206,16 +170,6 @@ pub async fn create_dir_all_owned(path: &Path, mode: u32, owner: Owner) -> Resul
     }
 
     Ok(())
-}
-
-pub async fn remove_dir_all(path: impl AsRef<Path>) -> Result<()> {
-    let path = path.as_ref();
-    tracing::debug!("removing directory: {}", path.display());
-    match tokio::fs::remove_dir_all(path).await {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(io_error(path, e)),
-    }
 }
 
 pub async fn remove_file(path: impl AsRef<Path>) -> Result<()> {
@@ -419,35 +373,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn files_match_true_for_identical_content() {
-        let dir = tempfile::tempdir().unwrap();
-        let a = dir.path().join("a");
-        let b = dir.path().join("b");
-        std::fs::write(&a, b"same").unwrap();
-        std::fs::write(&b, b"same").unwrap();
-        assert!(files_match(a.to_str().unwrap(), b.to_str().unwrap()).await);
-    }
-
-    #[tokio::test]
-    async fn files_match_false_for_different_content() {
-        let dir = tempfile::tempdir().unwrap();
-        let a = dir.path().join("a");
-        let b = dir.path().join("b");
-        std::fs::write(&a, b"one").unwrap();
-        std::fs::write(&b, b"two").unwrap();
-        assert!(!files_match(a.to_str().unwrap(), b.to_str().unwrap()).await);
-    }
-
-    #[tokio::test]
-    async fn files_match_false_when_one_is_missing() {
-        let dir = tempfile::tempdir().unwrap();
-        let a = dir.path().join("a");
-        std::fs::write(&a, b"one").unwrap();
-        let missing = dir.path().join("missing");
-        assert!(!files_match(a.to_str().unwrap(), missing.to_str().unwrap()).await);
-    }
-
-    #[tokio::test]
     async fn is_file_true_for_a_regular_file() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("f");
@@ -483,45 +408,6 @@ mod tests {
     #[tokio::test]
     async fn is_dir_false_when_missing() {
         assert!(!is_dir("/does/not/exist/mix-test").await);
-    }
-
-    #[tokio::test]
-    async fn create_dir_ignores_the_process_umask() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("sticky");
-
-        let previous = nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o077));
-        let result = create_dir(&target, 0o1777).await;
-        nix::sys::stat::umask(previous);
-
-        result.unwrap();
-        assert!(dir_has_mode(&target, 0o1777).await);
-    }
-
-    #[tokio::test]
-    async fn dir_has_mode_true_when_mode_matches() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(dir_has_mode(dir.path(), 0o755).await);
-    }
-
-    #[tokio::test]
-    async fn dir_has_mode_true_for_a_sticky_world_writable_directory() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o1777)).unwrap();
-        assert!(dir_has_mode(dir.path(), 0o1777).await);
-    }
-
-    #[tokio::test]
-    async fn dir_has_mode_false_on_drift() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        assert!(!dir_has_mode(dir.path(), 0o755).await);
-    }
-
-    #[tokio::test]
-    async fn dir_has_mode_false_when_missing() {
-        assert!(!dir_has_mode(Path::new("/does/not/exist/mix-test"), 0o755).await);
     }
 
     #[test]

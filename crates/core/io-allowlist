@@ -1,7 +1,0 @@
-async-trait
-libc
-mio
-mix-exec
-nix
-tokio
-tokio-util

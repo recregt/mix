@@ -7,12 +7,18 @@
 
 use std::path::Path;
 
+use mix_core::Result;
 use mix_core::identity;
 use mix_core::models::Target;
-use mix_core::{Result, Scope};
+use mix_exec::Scope;
 
+use mix_core::action::{Action, Fact, PathFacts, Query};
+
+use crate::drive::Performer;
 use crate::effect::exec::run;
+use crate::effect::files::{self, Files};
 use crate::effect::fs::{self, Owner};
+use crate::effect::home;
 use crate::effect::systemd;
 use crate::target::Finding;
 
@@ -20,7 +26,7 @@ pub async fn reconcile(target: &Target<'_>, finding: Finding, scope: &Scope) -> 
     match target {
         Target::Directory { path, mode, owner } => {
             tracing::debug!("reconciling directory: {}", path.display());
-            directory(path, *mode, *owner, finding).await
+            directory(path, *mode, *owner, finding, scope).await
         }
         Target::File {
             path,
@@ -61,20 +67,77 @@ pub async fn reconcile(target: &Target<'_>, finding: Finding, scope: &Scope) -> 
     }
 }
 
-async fn directory(path: &Path, mode: u32, owner: Owner, finding: Finding) -> Result<()> {
+async fn directory(
+    path: &Path,
+    mode: u32,
+    owner: Owner,
+    finding: Finding,
+    scope: &Scope,
+) -> Result<()> {
     match finding {
-        // The owner is what drifted, and the inspection measured it: set it and nothing else.
-        Finding::Owner { .. } => fs::set_owner(path, owner).await,
         // Nothing readable is there, so it and every directory it needs are created owned.
         Finding::Missing | Finding::Unreadable { .. } => {
             fs::create_dir_all_owned(path, mode, owner).await
         }
+        _ if taken_from_owner(path, owner, finding) => {
+            Box::pin(reclaim(path, mode, owner.expect("checked above"), scope)).await
+        }
+        // The owner is what drifted, and the inspection measured it: set it and nothing else.
+        Finding::Owner { .. } => fs::set_owner(path, owner).await,
         // The mode drifted; whether the owner did too was not measured, so it is checked.
         _ => {
             fs::set_mode(path, mode).await?;
             fs::set_owner_if_needed(path, owner).await.map(drop)
         }
     }
+}
+
+fn taken_from_owner(path: &Path, owner: Owner, finding: Finding) -> bool {
+    let Some((uid, _)) = owner else {
+        return false;
+    };
+    let known = match finding {
+        Finding::Owner { actual, .. } => Some(actual.0),
+        _ => None,
+    };
+    uid != 0
+        && known != Some(uid)
+        && files::tree_owner_of(path) == Some(uid)
+        && known
+            .or_else(|| files::owner_at(path))
+            .is_some_and(|own| own != uid)
+}
+
+async fn reclaim(path: &Path, mode: u32, owner: (u32, u32), scope: &Scope) -> Result<()> {
+    let request = format!("repair-{}", std::process::id());
+    let files = Files::open(Path::new("/"), &request).map_err(|source| mix_core::Error::Io {
+        path: "/".into(),
+        source,
+    })?;
+    let Some(Fact::Path(PathFacts {
+        id: Some(expect), ..
+    })) = files.observe(&Query::Path(path.to_path_buf()))
+    else {
+        return Ok(());
+    };
+    let mut performer = Performer::new(files);
+    let mut progress = |_| {};
+    let mut prepared = |_: &[Action]| Ok(());
+    for action in [
+        Action::ReclaimTree {
+            path: path.to_path_buf(),
+            expect,
+            owner,
+            mode,
+        },
+        Action::Commit,
+    ] {
+        performer
+            .perform(&action, scope, &mut progress, &mut prepared)
+            .await
+            .map_err(|failure| home::core_error(failure, path))?;
+    }
+    Ok(())
 }
 
 async fn file(path: &Path, expected: Option<&str>, owner: Owner, finding: Finding) -> Result<()> {
@@ -194,9 +257,15 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("sticky");
 
-        directory(&path, 0o1777, None, Finding::Missing)
-            .await
-            .unwrap();
+        directory(
+            &path,
+            0o1777,
+            None,
+            Finding::Missing,
+            &mix_exec::Scope::root(),
+        )
+        .await
+        .unwrap();
 
         let meta = tokio::fs::metadata(&path).await.unwrap();
         assert!(meta.is_dir());
@@ -209,9 +278,15 @@ mod tests {
         let path = root.path().join("a/b/c");
         let owner = (Uid::current().as_raw(), Gid::current().as_raw());
 
-        directory(&path, 0o700, Some(owner), Finding::Missing)
-            .await
-            .unwrap();
+        directory(
+            &path,
+            0o700,
+            Some(owner),
+            Finding::Missing,
+            &mix_exec::Scope::root(),
+        )
+        .await
+        .unwrap();
 
         for p in [root.path().join("a"), root.path().join("a/b"), path.clone()] {
             let meta = tokio::fs::metadata(&p).await.unwrap();
@@ -224,9 +299,15 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("a/b");
 
-        directory(&path, 0o700, None, Finding::Missing)
-            .await
-            .unwrap();
+        directory(
+            &path,
+            0o700,
+            None,
+            Finding::Missing,
+            &mix_exec::Scope::root(),
+        )
+        .await
+        .unwrap();
 
         let intermediate = tokio::fs::metadata(root.path().join("a")).await.unwrap();
         assert_eq!(intermediate.permissions().mode() & 0o7777, 0o755);
@@ -241,9 +322,15 @@ mod tests {
         std::fs::create_dir(&ancestor).unwrap();
         std::fs::set_permissions(&ancestor, std::fs::Permissions::from_mode(0o750)).unwrap();
 
-        directory(&ancestor.join("b"), 0o700, None, Finding::Missing)
-            .await
-            .unwrap();
+        directory(
+            &ancestor.join("b"),
+            0o700,
+            None,
+            Finding::Missing,
+            &mix_exec::Scope::root(),
+        )
+        .await
+        .unwrap();
 
         let meta = tokio::fs::metadata(&ancestor).await.unwrap();
         assert_eq!(meta.permissions().mode() & 0o7777, 0o750);
@@ -280,6 +367,7 @@ mod tests {
                 actual: (999_999, 999_999),
                 expected: owner,
             },
+            &mix_exec::Scope::root(),
         )
         .await
         .unwrap();

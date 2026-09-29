@@ -3,11 +3,7 @@ name: Security
 on:
   push:
     branches: [main]
-    paths: ["**/Cargo.toml", "**/Cargo.lock", "deny.toml", ".github/workflows/**"]
   pull_request:
-    paths: ["**/Cargo.toml", "**/Cargo.lock", "deny.toml", ".github/workflows/**"]
-  schedule:
-    - cron: "0 6 * * 1"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

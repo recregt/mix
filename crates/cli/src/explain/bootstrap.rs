@@ -42,6 +42,11 @@ pub(crate) fn describe(error: &Error, command: &str) -> Diagnostic {
             "If you use `--mirror`, check that it serves the right files",
         ),
 
+        Error::Conflict { subject, .. } => Diagnostic::hinting(
+            format!("{subject} changed while mix was working, so mix left it alone"),
+            format!("Run `{command}` again; it starts from what is there now"),
+        ),
+
         Error::InvalidMirror(reason) => Diagnostic::hinting(
             format!("the mirror settings aren't valid: {reason}"),
             "Pass `--mirror` as an http or https URL, and `--mirror-key` as a single <name>:<key> entry",
@@ -78,6 +83,32 @@ pub(crate) fn describe(error: &Error, command: &str) -> Diagnostic {
         Error::SystemdNotReady { host: Host::Native } => Diagnostic::hinting(
             "`mix` needs systemd, and it isn't running",
             format!("Make sure systemd is your init system, then run `{command}` again"),
+        ),
+
+        Error::SystemdUnreachable => Diagnostic::hinting(
+            "`mix` couldn't reach systemd",
+            format!(
+                "Check that the system bus is running with `systemctl status dbus`, then run \
+                 `{command}` again"
+            ),
+        ),
+
+        Error::Unit {
+            operation,
+            unit,
+            invocation,
+            ..
+        } => Diagnostic::hinting(
+            format!("systemd couldn't {operation} `{unit}`"),
+            match invocation {
+                Some(id) => format!(
+                    "See why with:\n\x20 journalctl _SYSTEMD_INVOCATION_ID={id}\nthen run \
+                     `{command}` again"
+                ),
+                None => {
+                    format!("See why with:\n\x20 journalctl -u {unit}\nthen run `{command}` again")
+                }
+            },
         ),
 
         Error::AlreadyManaged => Diagnostic::hinting(
@@ -143,6 +174,30 @@ mod tests {
     fn systemd_on_wsl_is_turned_on_differently_than_on_a_distro() {
         assert!(message(Error::SystemdNotReady { host: Host::Wsl }).contains("/etc/wsl.conf"));
         assert!(message(Error::SystemdNotReady { host: Host::Native }).contains("init system"));
+    }
+
+    #[test]
+    fn a_unit_failure_names_the_operation_and_the_run_to_read() {
+        let unit = |invocation: Option<&str>| {
+            message(Error::Unit {
+                operation: "start".into(),
+                unit: "nix-daemon.socket".into(),
+                detail: "job failed".into(),
+                invocation: invocation.map(str::to_string),
+            })
+        };
+
+        assert!(unit(None).starts_with("systemd couldn't start `nix-daemon.socket`"));
+        assert!(unit(None).contains("journalctl -u nix-daemon.socket"));
+        assert!(unit(Some("ab12")).contains("journalctl _SYSTEMD_INVOCATION_ID=ab12"));
+    }
+
+    #[test]
+    fn an_unreachable_systemd_is_not_mistaken_for_a_missing_one() {
+        let message = message(Error::SystemdUnreachable);
+
+        assert!(message.contains("systemctl status dbus"));
+        assert!(!message.contains("init system"));
     }
 
     #[test]

@@ -1,4 +1,5 @@
-use mix_core::{DownloadProgress, Error as CoreError, Scope};
+use mix_core::{DownloadProgress, Error as CoreError};
+use mix_exec::Scope;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::io::{Cursor, Read};
@@ -7,8 +8,6 @@ use std::path::Path;
 use crate::effect::mirror::{filter_mirror, mirror_url};
 use crate::ops::bootstrap::error::{Error, Result};
 use mix_pins::{TarballPin, pin_for};
-
-const MAX_DOWNLOAD_BYTES: usize = 1024 * 1024 * 1024;
 
 #[cfg(feature = "embed-tarball")]
 pub fn embedded() -> Option<&'static [u8]> {
@@ -54,7 +53,7 @@ pub async fn bytes(
         None => pin.url.to_string(),
     };
 
-    fetch_and_verify(&url, pin.sha256, progress, scope)
+    fetch_and_verify(&url, pin.sha256, pin.size, progress, scope)
         .await
         .map(Cow::Owned)
 }
@@ -63,9 +62,10 @@ fn network_error(e: reqwest::Error) -> Error {
     Error::Network(Box::new(e))
 }
 
-async fn fetch_and_verify(
+pub(crate) async fn fetch_and_verify(
     url: &str,
     expected_sha256: &str,
+    size: u64,
     progress: &dyn DownloadProgress,
     scope: &Scope,
 ) -> Result<Vec<u8>> {
@@ -74,12 +74,7 @@ async fn fetch_and_verify(
         mix_pins::NIX_VERSION
     );
     scope
-        .guard(fetch_and_verify_with_limits(
-            url,
-            expected_sha256,
-            MAX_DOWNLOAD_BYTES,
-            progress,
-        ))
+        .guard(download(url, expected_sha256, size, progress))
         .await
         .map_err(|_| Error::Interrupted)?
 }
@@ -90,10 +85,10 @@ async fn fetch_and_verify(
     skip_all,
     fields(name = "fetch the Nix runtime archive")
 )]
-async fn fetch_and_verify_with_limits(
+async fn download(
     url: &str,
     expected_sha256: &str,
-    max_bytes: usize,
+    size: u64,
     progress: &dyn DownloadProgress,
 ) -> Result<Vec<u8>> {
     let mut response = reqwest::get(url)
@@ -101,28 +96,31 @@ async fn fetch_and_verify_with_limits(
         .and_then(reqwest::Response::error_for_status)
         .map_err(network_error)?;
 
-    let content_length = response.content_length();
-    if let Some(len) = content_length {
-        progress.set_total(len);
-    }
-
-    let mut bytes = match content_length {
-        Some(len) => Vec::with_capacity(len.min(max_bytes as u64) as usize),
-        None => Vec::new(),
+    let size_mismatch = |found: String| Error::Integrity {
+        artifact: url.to_string(),
+        detail: format!("{found} bytes, expected exactly {size} (pin in crates/pins)"),
     };
+    if let Some(len) = response.content_length()
+        && len != size
+    {
+        return Err(size_mismatch(len.to_string()));
+    }
+    progress.set_total(size);
+
+    let mut bytes = Vec::with_capacity(usize::try_from(size).unwrap_or(0));
     let mut hasher = Sha256::new();
     while let Some(chunk) = response.chunk().await.map_err(network_error)? {
-        if bytes.len() + chunk.len() > max_bytes {
-            return Err(Error::Integrity {
-                artifact: url.to_string(),
-                detail: format!("download exceeded the {max_bytes}-byte limit"),
-            });
+        if (bytes.len() + chunk.len()) as u64 > size {
+            return Err(size_mismatch("more than that".to_string()));
         }
         hasher.update(&chunk);
         bytes.extend_from_slice(&chunk);
         progress.add(chunk.len() as u64);
     }
 
+    if bytes.len() as u64 != size {
+        return Err(size_mismatch(bytes.len().to_string()));
+    }
     let digest = hex(&hasher.finalize());
     if digest != expected_sha256 {
         return Err(Error::Integrity {
@@ -381,6 +379,7 @@ mod tests {
         let bytes = fetch_and_verify(
             &server.url(),
             &digest,
+            body.len() as u64,
             &mix_core::NoopProgress,
             &Scope::root(),
         )
@@ -402,6 +401,7 @@ mod tests {
         let err = fetch_and_verify(
             &server.url(),
             &"0".repeat(64),
+            9,
             &mix_core::NoopProgress,
             &Scope::root(),
         )
@@ -410,26 +410,81 @@ mod tests {
         assert!(matches!(err, Error::Integrity { .. }));
     }
 
-    #[tokio::test]
-    async fn fetch_and_verify_aborts_a_download_past_the_byte_limit() {
-        let mut server = Server::new_async().await;
-        let body = vec![0u8; 64];
-        let _mock = server
-            .mock("GET", "/")
-            .with_status(200)
-            .with_body(body.clone())
-            .create_async()
-            .await;
+    async fn serve(body: Vec<u8>, content_length: bool) -> std::net::SocketAddr {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            use std::io::{BufRead as _, Write as _};
+            if let Ok((mut conn, _)) = listener.accept() {
+                let mut request = std::io::BufReader::new(conn.try_clone().unwrap());
+                let mut line = String::new();
+                while request.read_line(&mut line).is_ok_and(|read| read > 2) {
+                    line.clear();
+                }
+                let head = if content_length {
+                    format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len())
+                } else {
+                    "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_string()
+                };
+                let _ = conn.write_all(head.as_bytes());
+                let _ = conn.write_all(&body);
+            }
+        });
+        addr
+    }
 
-        let err = fetch_and_verify_with_limits(
-            &server.url(),
+    #[tokio::test]
+    async fn a_download_announcing_another_size_than_its_pin_is_refused_at_once() {
+        let body = vec![0u8; 64];
+        let addr = serve(body.clone(), true).await;
+
+        let err = fetch_and_verify(
+            &format!("http://{addr}/"),
             &sha256_hex(&body),
             8,
             &mix_core::NoopProgress,
+            &Scope::root(),
         )
         .await
         .unwrap_err();
-        assert!(matches!(err, Error::Integrity { .. }));
+
+        assert!(matches!(err, Error::Integrity { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn a_download_longer_than_its_pin_is_cut_off() {
+        let body = vec![0u8; 64];
+        let addr = serve(body.clone(), false).await;
+
+        let err = fetch_and_verify(
+            &format!("http://{addr}/"),
+            &sha256_hex(&body),
+            8,
+            &mix_core::NoopProgress,
+            &Scope::root(),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, Error::Integrity { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn a_download_shorter_than_its_pin_is_refused() {
+        let body = vec![0u8; 8];
+        let addr = serve(body.clone(), false).await;
+
+        let err = fetch_and_verify(
+            &format!("http://{addr}/"),
+            &sha256_hex(&body),
+            64,
+            &mix_core::NoopProgress,
+            &Scope::root(),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, Error::Integrity { .. }), "{err:?}");
     }
 
     #[tokio::test]
@@ -445,6 +500,7 @@ mod tests {
         let err = fetch_and_verify(
             &server.url(),
             &"0".repeat(64),
+            16,
             &mix_core::NoopProgress,
             &Scope::root(),
         )
@@ -479,6 +535,7 @@ mod tests {
         let bytes = fetch_and_verify(
             &format!("http://{addr}/"),
             &expected,
+            15,
             &mix_core::NoopProgress,
             &Scope::root(),
         )
@@ -502,12 +559,13 @@ mod tests {
         let cancelling = scope.clone();
         tokio::task::spawn_blocking(move || {
             let _ = wait_for_accept.recv();
-            cancelling.cancel();
+            cancelling.cancel(mix_exec::Reason::Interrupted);
         });
 
         let err = fetch_and_verify(
             &format!("http://{addr}/"),
             &"0".repeat(64),
+            1,
             &mix_core::NoopProgress,
             &scope,
         )
@@ -525,6 +583,7 @@ mod tests {
         let err = fetch_and_verify(
             &format!("http://{addr}/"),
             &"0".repeat(64),
+            1,
             &mix_core::NoopProgress,
             &Scope::root(),
         )

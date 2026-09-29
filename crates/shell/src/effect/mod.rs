@@ -1,7 +1,15 @@
 pub mod accounts;
 pub(crate) mod exec;
+pub mod files;
 pub(crate) mod fs;
+pub mod generations;
 pub(crate) mod git;
+pub mod home;
+pub mod identity;
+pub mod journal;
 pub mod lock;
 pub(crate) mod mirror;
+pub mod runtime;
 pub(crate) mod systemd;
+pub mod tools;
+pub mod units;

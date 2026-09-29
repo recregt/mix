@@ -34,6 +34,13 @@ pub enum Error {
     #[error("{0}")]
     InvalidMirror(String),
 
+    #[error("{subject} changed while mix was working: expected {expected}, found {found}")]
+    Conflict {
+        subject: String,
+        expected: String,
+        found: String,
+    },
+
     #[error(transparent)]
     Target(#[from] crate::target::Error),
 
@@ -54,6 +61,17 @@ pub enum Error {
 
     #[error("systemd is not active: `/run/systemd/system` is missing or PID 1 is not systemd")]
     SystemdNotReady { host: Host },
+
+    #[error("systemd did not answer on the system bus")]
+    SystemdUnreachable,
+
+    #[error("systemd could not {operation} {unit}: {detail}")]
+    Unit {
+        operation: String,
+        unit: String,
+        detail: String,
+        invocation: Option<String>,
+    },
 
     #[error("an existing, unmanaged Nix installation was found on this system")]
     AlreadyManaged,

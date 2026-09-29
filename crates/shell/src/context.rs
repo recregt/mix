@@ -4,8 +4,9 @@ use std::sync::Arc;
 use mix_core::models::UserConfig;
 use mix_core::policy::{Mirror, Policy};
 use mix_core::{
-    ActivityReporter, DownloadProgress, NoopActivity, NoopProgress, NoopSteps, Scope, StepObserver,
+    ActivityReporter, DownloadProgress, NoopActivity, NoopProgress, NoopSteps, StepObserver,
 };
+use mix_exec::Scope;
 
 #[derive(Clone)]
 pub struct Reporters {

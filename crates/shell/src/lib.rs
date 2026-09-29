@@ -7,6 +7,9 @@
 
 mod context;
 
+pub mod bridge;
+pub mod drive;
+
 pub mod effect;
 pub mod ops;
 pub mod profile;

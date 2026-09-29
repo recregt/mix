@@ -1,7 +1,8 @@
-use std::collections::HashSet;
+use std::borrow::Cow;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+use rustc_hash::FxHashSet;
 
 use crate::outbox::Outbox;
 use crate::v1::{
@@ -12,34 +13,32 @@ use crate::v1::{
 
 pub type Stopped = Arc<dyn Fn() -> Option<Cancellation> + Send + Sync>;
 
-pub const ROOT: u64 = 1;
+pub type NodeId = u64;
 
-struct Shared {
-    outbox: Arc<Outbox>,
-    stopped: Stopped,
-    next: AtomicU64,
-}
+pub const ROOT: NodeId = 1;
 
-impl Shared {
-    fn allocate(&self) -> u64 {
-        self.next.fetch_add(1, Ordering::Relaxed)
-    }
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum Misuse {
+    #[error("node {0} is not running")]
+    NotOpen(NodeId),
 
-    fn emit(&self, event: Event) {
-        self.outbox.push(event);
-    }
+    #[error("node {id} cannot finish while its child {child} is running")]
+    ChildrenOpen { id: NodeId, child: NodeId },
+
+    #[error("node {parent} already has a child keyed {key}")]
+    DuplicateKey { parent: NodeId, key: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Start {
-    key: String,
+    key: Cow<'static, str>,
     kind: node_started::Kind,
-    planned: Vec<String>,
+    planned: Vec<Cow<'static, str>>,
     shielded: bool,
 }
 
 impl Start {
-    pub fn new(key: impl Into<String>, kind: node_started::Kind) -> Self {
+    pub fn new(key: impl Into<Cow<'static, str>>, kind: node_started::Kind) -> Self {
         Self {
             key: key.into(),
             kind,
@@ -48,11 +47,11 @@ impl Start {
         }
     }
 
-    pub fn command(key: impl Into<String>, command: Command) -> Self {
+    pub fn command(key: impl Into<Cow<'static, str>>, command: Command) -> Self {
         Self::new(key, node_started::Kind::Command(command))
     }
 
-    pub fn planned(mut self, keys: impl IntoIterator<Item = impl Into<String>>) -> Self {
+    pub fn planned(mut self, keys: impl IntoIterator<Item = impl Into<Cow<'static, str>>>) -> Self {
         self.planned = keys.into_iter().map(Into::into).collect();
         self
     }
@@ -125,15 +124,16 @@ pub fn output(bytes: &[u8], stream: Stream) -> Progress {
     })
 }
 
-#[derive(Default)]
-struct State {
-    planned: Vec<String>,
-    used: HashSet<String>,
+struct Open {
+    parent: NodeId,
+    planned: Vec<Cow<'static, str>>,
+    used: FxHashSet<Cow<'static, str>>,
+    children: usize,
     bytes: Option<Bytes>,
     builds: Option<Builds>,
 }
 
-impl State {
+impl Open {
     fn changed(&mut self, progress: &Progress) -> bool {
         match progress {
             Progress::Line(_) => true,
@@ -143,126 +143,276 @@ impl State {
     }
 }
 
-pub struct Node<'parent> {
-    shared: Arc<Shared>,
-    id: u64,
-    state: Mutex<State>,
-    finished: bool,
-    _parent: PhantomData<&'parent ()>,
+pub struct Tree {
+    outbox: Arc<Outbox>,
+    stopped: Stopped,
+    next: NodeId,
+    open: Vec<Option<Open>>,
 }
 
-impl Node<'static> {
-    pub fn root(outbox: Arc<Outbox>, stopped: Stopped, start: Start) -> Self {
+impl Tree {
+    pub fn new(outbox: Arc<Outbox>, stopped: Stopped, start: Start) -> Self {
         debug_assert!(matches!(start.kind, node_started::Kind::Command(_)));
-        let shared = Arc::new(Shared {
+        let mut tree = Self {
             outbox,
             stopped,
-            next: AtomicU64::new(ROOT),
-        });
-        Self::open(shared, 0, start)
-    }
-}
-
-impl<'parent> Node<'parent> {
-    fn open(shared: Arc<Shared>, parent: u64, start: Start) -> Self {
-        let id = shared.allocate();
-        shared.emit(Event::NodeStarted(NodeStarted {
-            id,
-            parent,
-            key: start.key,
-            planned: start.planned.clone(),
-            shielded: start.shielded,
-            kind: Some(start.kind),
-        }));
-        Node {
-            shared,
-            id,
-            state: Mutex::new(State {
-                planned: start.planned,
-                ..State::default()
-            }),
-            finished: false,
-            _parent: PhantomData,
-        }
-    }
-
-    pub fn id(&self) -> u64 {
-        self.id
-    }
-
-    pub fn start(&self, start: Start) -> Node<'_> {
-        self.claim(&start.key);
-        Node::open(self.shared.clone(), self.id, start)
-    }
-
-    pub fn child(&self, key: impl Into<String>, kind: node_started::Kind) -> Node<'_> {
-        self.start(Start::new(key, kind))
-    }
-
-    pub fn not_run(&self, key: impl Into<String>, reason: NotRunReason) {
-        let key = key.into();
-        self.claim(&key);
-        self.emit_not_run(key, reason);
-    }
-
-    pub fn progress(&self, progress: Progress) {
-        if !self.state().changed(&progress) {
-            return;
-        }
-        self.shared.emit(Event::NodeProgress(NodeProgress {
-            id: self.id,
-            progress: Some(progress),
-        }));
-    }
-
-    pub fn warn(&self, mut diagnostic: Diagnostic) {
-        diagnostic.node = self.id;
-        self.shared.emit(Event::Diagnostic(diagnostic));
-    }
-
-    pub fn finish(mut self, ending: Ending) {
-        self.close(ending);
-    }
-
-    fn state(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn claim(&self, key: &str) {
-        let fresh = self.state().used.insert(key.to_string());
-        debug_assert!(fresh, "node {} already has a child keyed {key}", self.id);
-    }
-
-    fn emit_not_run(&self, key: String, reason: NotRunReason) {
-        self.shared.emit(Event::NotRun(NotRun {
-            parent: self.id,
-            key,
-            reason: reason as i32,
-        }));
-    }
-
-    fn close(&mut self, ending: Ending) {
-        let unreached: Vec<String> = {
-            let state = self.state();
-            state
-                .planned
-                .iter()
-                .filter(|key| !state.used.contains(*key))
-                .cloned()
-                .collect()
+            next: ROOT,
+            open: Vec::new(),
         };
-        for key in unreached {
-            self.emit_not_run(key, NotRunReason::NotReached);
+        tree.open_node(0, start);
+        tree
+    }
+
+    pub fn is_open(&self, id: NodeId) -> bool {
+        self.get(id).is_some()
+    }
+
+    fn get(&self, id: NodeId) -> Option<&Open> {
+        self.open.get(usize::try_from(id).ok()?)?.as_ref()
+    }
+
+    fn get_mut(&mut self, id: NodeId) -> Option<&mut Open> {
+        self.open.get_mut(usize::try_from(id).ok()?)?.as_mut()
+    }
+
+    pub fn start(&mut self, parent: NodeId, mut start: Start) -> Result<NodeId, Misuse> {
+        start.key = self.claim(parent, start.key)?;
+        Ok(self.open_node(parent, start))
+    }
+
+    pub fn not_run(
+        &mut self,
+        parent: NodeId,
+        key: impl Into<Cow<'static, str>>,
+        reason: NotRunReason,
+    ) -> Result<(), Misuse> {
+        let key = self.claim(parent, key.into())?;
+        self.emit_not_run(parent, key.into_owned(), reason);
+        Ok(())
+    }
+
+    pub fn progress(&mut self, id: NodeId, progress: Progress) -> Result<(), Misuse> {
+        let open = self.get_mut(id).ok_or(Misuse::NotOpen(id))?;
+        if open.changed(&progress) {
+            self.outbox.push(Event::NodeProgress(NodeProgress {
+                id,
+                progress: Some(progress),
+            }));
         }
-        self.shared.emit(Event::NodeFinished(NodeFinished {
-            id: self.id,
+        Ok(())
+    }
+
+    pub fn warn(&mut self, id: NodeId, mut diagnostic: Diagnostic) -> Result<(), Misuse> {
+        if !self.is_open(id) {
+            return Err(Misuse::NotOpen(id));
+        }
+        diagnostic.node = id;
+        self.outbox.push(Event::Diagnostic(diagnostic));
+        Ok(())
+    }
+
+    pub fn finish(&mut self, id: NodeId, ending: Ending) -> Result<(), Misuse> {
+        let open = self.get(id).ok_or(Misuse::NotOpen(id))?;
+        if open.children > 0 {
+            let child = self
+                .open
+                .iter()
+                .zip(0..)
+                .find_map(|(open, child)| {
+                    open.as_ref()
+                        .filter(|open| open.parent == id)
+                        .map(|_| child)
+                })
+                .expect("a counted child is open");
+            return Err(Misuse::ChildrenOpen { id, child });
+        }
+        let open = self.open[usize::try_from(id).expect("an open id indexes the table")]
+            .take()
+            .expect("checked above");
+        if let Some(parent) = self.get_mut(open.parent) {
+            parent.children -= 1;
+        }
+        for key in open.planned.iter().filter(|key| !open.used.contains(*key)) {
+            self.emit_not_run(id, key.to_string(), NotRunReason::NotReached);
+        }
+        self.outbox.push(Event::NodeFinished(NodeFinished {
+            id,
             status: ending.status as i32,
             diagnostic: ending.diagnostic,
             exit_code: ending.exit_code,
             cancellation: ending.cancellation as i32,
             result: ending.result,
         }));
+        Ok(())
+    }
+
+    pub fn abandon(&mut self, id: NodeId) -> Result<(), Misuse> {
+        let ending = self.abandoned();
+        let mut open: Vec<NodeId> = self
+            .open
+            .iter()
+            .zip(0..)
+            .filter(|(open, node)| open.is_some() && self.descends_from(*node, id))
+            .map(|(_, node)| node)
+            .collect();
+        if open.is_empty() {
+            return Err(Misuse::NotOpen(id));
+        }
+        open.sort_unstable_by(|a, b| b.cmp(a));
+        for node in open {
+            self.finish(node, ending.clone())
+                .expect("a child always has a higher id than its parent");
+        }
+        Ok(())
+    }
+
+    fn abandoned(&self) -> Ending {
+        match (self.stopped)() {
+            Some(cause) => Ending::cancelled(cause),
+            None => Ending::new(Status::Failed),
+        }
+    }
+
+    fn descends_from(&self, mut node: NodeId, ancestor: NodeId) -> bool {
+        loop {
+            if node == ancestor {
+                return true;
+            }
+            match self.get(node) {
+                Some(open) => node = open.parent,
+                None => return false,
+            }
+        }
+    }
+
+    fn claim(
+        &mut self,
+        parent: NodeId,
+        key: Cow<'static, str>,
+    ) -> Result<Cow<'static, str>, Misuse> {
+        let open = self.get_mut(parent).ok_or(Misuse::NotOpen(parent))?;
+        if !open.used.insert(key.clone()) {
+            return Err(Misuse::DuplicateKey {
+                parent,
+                key: key.into_owned(),
+            });
+        }
+        Ok(key)
+    }
+
+    fn open_node(&mut self, parent: NodeId, start: Start) -> NodeId {
+        let id = self.next;
+        self.next += 1;
+        if let Some(parent) = self.get_mut(parent) {
+            parent.children += 1;
+        }
+        self.outbox.push(Event::NodeStarted(NodeStarted {
+            id,
+            parent,
+            key: start.key.into_owned(),
+            planned: start.planned.iter().map(ToString::to_string).collect(),
+            shielded: start.shielded,
+            kind: Some(start.kind),
+        }));
+        let index = usize::try_from(id).expect("node ids fit in memory");
+        if self.open.len() <= index {
+            self.open.resize_with(index + 1, || None);
+        }
+        self.open[index] = Some(Open {
+            parent,
+            planned: start.planned,
+            used: FxHashSet::default(),
+            children: 0,
+            bytes: None,
+            builds: None,
+        });
+        id
+    }
+
+    fn emit_not_run(&self, parent: NodeId, key: String, reason: NotRunReason) {
+        self.outbox.push(Event::NotRun(NotRun {
+            parent,
+            key,
+            reason: reason as i32,
+        }));
+    }
+}
+
+impl Drop for Tree {
+    fn drop(&mut self) {
+        if self.is_open(ROOT) {
+            let _ = self.abandon(ROOT);
+        }
+    }
+}
+
+pub struct Node<'parent> {
+    tree: Arc<Mutex<Tree>>,
+    id: NodeId,
+    finished: bool,
+    _parent: PhantomData<&'parent ()>,
+}
+
+impl Node<'static> {
+    pub fn root(outbox: Arc<Outbox>, stopped: Stopped, start: Start) -> Self {
+        Node {
+            tree: Arc::new(Mutex::new(Tree::new(outbox, stopped, start))),
+            id: ROOT,
+            finished: false,
+            _parent: PhantomData,
+        }
+    }
+}
+
+impl<'parent> Node<'parent> {
+    pub fn id(&self) -> NodeId {
+        self.id
+    }
+
+    pub fn start(&self, start: Start) -> Node<'_> {
+        let id = self
+            .tree()
+            .start(self.id, start)
+            .unwrap_or_else(|misuse| panic!("{misuse}"));
+        Node {
+            tree: Arc::clone(&self.tree),
+            id,
+            finished: false,
+            _parent: PhantomData,
+        }
+    }
+
+    pub fn child(&self, key: impl Into<Cow<'static, str>>, kind: node_started::Kind) -> Node<'_> {
+        self.start(Start::new(key, kind))
+    }
+
+    pub fn not_run(&self, key: impl Into<Cow<'static, str>>, reason: NotRunReason) {
+        self.tree()
+            .not_run(self.id, key, reason)
+            .unwrap_or_else(|misuse| panic!("{misuse}"));
+    }
+
+    pub fn progress(&self, progress: Progress) {
+        self.tree()
+            .progress(self.id, progress)
+            .expect("a borrowed node is running");
+    }
+
+    pub fn warn(&self, diagnostic: Diagnostic) {
+        self.tree()
+            .warn(self.id, diagnostic)
+            .expect("a borrowed node is running");
+    }
+
+    pub fn finish(mut self, ending: Ending) {
         self.finished = true;
+        self.tree()
+            .finish(self.id, ending)
+            .expect("a node's children finish before it can be moved");
+    }
+
+    fn tree(&self) -> MutexGuard<'_, Tree> {
+        self.tree.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -271,17 +421,16 @@ impl Drop for Node<'_> {
         if self.finished {
             return;
         }
-        let ending = match (self.shared.stopped)() {
-            Some(cause) => Ending::cancelled(cause),
-            None => Ending::new(Status::Failed),
-        };
-        self.close(ending);
+        let mut tree = self.tree();
+        if tree.is_open(self.id) {
+            let _ = tree.abandon(self.id);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     use super::*;
     use crate::v1::{Envelope, Plan, Step};
@@ -311,7 +460,7 @@ mod tests {
         Arc::new(|| None)
     }
 
-    fn root(sink: &Arc<Recorded>, stopped: Stopped, planned: &[&str]) -> Node<'static> {
+    fn root(sink: &Arc<Recorded>, stopped: Stopped, planned: &[&'static str]) -> Node<'static> {
         Node::root(
             sink.0.clone(),
             stopped,
@@ -715,5 +864,105 @@ mod tests {
                 ("bad \u{fffd} byte".to_string(), Stream::Stderr)
             ]
         );
+    }
+
+    fn tree(stopped: Stopped) -> (Arc<Outbox>, Tree) {
+        let outbox = Arc::new(Outbox::new("request", || {}));
+        let tree = Tree::new(
+            outbox.clone(),
+            stopped,
+            Start::command("bootstrap", Command::default()),
+        );
+        (outbox, tree)
+    }
+
+    #[test]
+    fn a_tree_refuses_misuse_and_emits_nothing_for_it() {
+        let (outbox, mut tree) = tree(never());
+        let first = tree.start(ROOT, Start::new("step", step())).unwrap();
+        outbox.drain();
+
+        assert_eq!(
+            tree.start(ROOT, Start::new("step", step())),
+            Err(Misuse::DuplicateKey {
+                parent: ROOT,
+                key: "step".to_string()
+            })
+        );
+        assert_eq!(
+            tree.finish(ROOT, Ending::succeeded()),
+            Err(Misuse::ChildrenOpen {
+                id: ROOT,
+                child: first
+            })
+        );
+        assert_eq!(
+            tree.progress(99, output(b"x", Stream::Stdout)),
+            Err(Misuse::NotOpen(99))
+        );
+        assert_eq!(
+            tree.not_run(99, "later", NotRunReason::Skipped),
+            Err(Misuse::NotOpen(99))
+        );
+        tree.finish(first, Ending::succeeded()).unwrap();
+        outbox.drain();
+        assert_eq!(
+            tree.finish(first, Ending::succeeded()),
+            Err(Misuse::NotOpen(first))
+        );
+        assert!(outbox.drain().is_empty());
+    }
+
+    #[test]
+    fn abandoning_a_node_closes_its_subtree_children_first_with_the_cause() {
+        let (outbox, mut tree) = tree(Arc::new(|| Some(Cancellation::Interrupted)));
+        let plan = tree
+            .start(
+                ROOT,
+                Start::new("plan", node_started::Kind::Plan(Plan::default())),
+            )
+            .unwrap();
+        let fetch = tree.start(plan, Start::new("fetch", step())).unwrap();
+        let download = tree.start(fetch, Start::new("download", step())).unwrap();
+
+        tree.abandon(plan).unwrap();
+
+        let closed: Vec<(u64, Status, Cancellation)> = outbox
+            .drain()
+            .into_iter()
+            .filter_map(|envelope| match envelope.event {
+                Some(Event::NodeFinished(node)) => {
+                    Some((node.id, node.status(), node.cancellation()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            closed,
+            [
+                (download, Status::Cancelled, Cancellation::Interrupted),
+                (fetch, Status::Cancelled, Cancellation::Interrupted),
+                (plan, Status::Cancelled, Cancellation::Interrupted)
+            ]
+        );
+        assert!(tree.is_open(ROOT));
+    }
+
+    #[test]
+    fn dropping_a_tree_closes_every_node_it_left_open() {
+        let (outbox, mut tree) = tree(never());
+        let first = tree.start(ROOT, Start::new("step", step())).unwrap();
+        tree.start(first, Start::new("inner", step())).unwrap();
+
+        drop(tree);
+
+        let failed = outbox
+            .drain()
+            .into_iter()
+            .filter(|envelope| {
+                matches!(&envelope.event, Some(Event::NodeFinished(node)) if node.status() == Status::Failed)
+            })
+            .count();
+        assert_eq!(failed, 3);
     }
 }

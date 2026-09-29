@@ -36,6 +36,7 @@ pub struct TarballPin {
     pub target: &'static str,
     pub url: &'static str,
     pub sha256: &'static str,
+    pub size: u64,
 }
 
 pub const NIX_TARBALLS: &[TarballPin] = &[
@@ -47,11 +48,13 @@ for target in "${targets[@]}"; do
     echo "fetching $url" >&2
     curl -fsSL -o "$file" "$url"
     hash="$(sha256sum "$file" | awk '{print $1}')"
+    size="$(stat -c %s "$file")"
     cat >> "$tmp_dir/pins.rs" <<EOF
     TarballPin {
         target: "$target",
         url: "$url",
         sha256: "$hash",
+        size: $size,
     },
 EOF
 done

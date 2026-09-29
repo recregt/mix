@@ -7,12 +7,13 @@
 
 use std::sync::{Arc, OnceLock};
 
-use mix_core::models::UserConfig;
 use mix_core::nix_plan::{self, Approved};
 use mix_core::paths::{
     DEFAULT_PROFILE_NIX, HOME_MANAGER_PROFILE_NAME, mix_state_dir, nix_profiles_dir,
 };
-use mix_core::{ActivityReporter, BuildProgress, Scope};
+use mix_core::privilege::InvokingUser;
+use mix_core::{ActivityReporter, BuildProgress};
+use mix_exec::Scope;
 use mix_nixgen::{AttrPath, FlakeRef, Installable};
 
 use crate::HostConfig;
@@ -97,13 +98,13 @@ fn as_refs(args: &[String]) -> Vec<&str> {
 }
 
 async fn refuse_source_builds(
-    cfg: &UserConfig,
+    user: &InvokingUser,
     installable: &str,
     options: &[String],
     scope: &Scope,
 ) -> Result<Approved> {
     let args = nix_dry_run_args(installable, options);
-    let dry_run = plan_as(&cfg.user, DEFAULT_PROFILE_NIX, &as_refs(&args), scope).await?;
+    let dry_run = plan_as(user, DEFAULT_PROFILE_NIX, &as_refs(&args), scope).await?;
 
     let spans = {
         let plan = match dry_run.plan() {
@@ -118,7 +119,7 @@ async fn refuse_source_builds(
         }
 
         let shown = run_as_with_input(
-            &cfg.user,
+            user,
             DEFAULT_PROFILE_NIX,
             &DERIVATION_SHOW_ARGS,
             plan.to_build().join("\n").into_bytes(),
@@ -173,46 +174,46 @@ impl ActivityReporter for SourceBuildGuard {
 
     fn build_started(&self, derivation: &str) {
         if !self.approved.contains(derivation) && self.refused.set(derivation.to_string()).is_ok() {
-            self.scope.cancel();
+            self.scope.cancel(mix_exec::Reason::Abandoned);
         }
         self.inner.build_started(derivation);
     }
 }
 
 pub async fn activate(
-    cfg: &UserConfig,
+    user: &InvokingUser,
     mirror: Option<&str>,
     activity: &Arc<dyn ActivityReporter>,
     host: &HostConfig,
     scope: &Scope,
     policy: BuildPolicy,
 ) -> Result<bool> {
-    let generation = switch(cfg, mirror, activity, scope, policy).await?;
-    finish(cfg, &generation, activity, host, scope).await
+    let generation = switch(user, mirror, activity, scope, policy).await?;
+    finish(user, &generation, activity, host, scope).await
 }
 
 pub async fn switch(
-    cfg: &UserConfig,
+    user: &InvokingUser,
     mirror: Option<&str>,
     activity: &Arc<dyn ActivityReporter>,
     scope: &Scope,
     policy: BuildPolicy,
 ) -> Result<String> {
     let flake_attr = Installable::new(
-        FlakeRef::path(mix_state_dir(&cfg.user.home))
+        FlakeRef::path(mix_state_dir(&user.home))
             .expect("an invoking user always has an absolute home"),
-        AttrPath::new(["homeConfigurations", &cfg.user.name, "activationPackage"])
+        AttrPath::new(["homeConfigurations", &user.name, "activationPackage"])
             .expect("an invoking user's name never holds a quote"),
     )
     .render();
-    let profile = nix_profiles_dir(&cfg.user.home).join(HOME_MANAGER_PROFILE_NAME);
+    let profile = nix_profiles_dir(&user.home).join(HOME_MANAGER_PROFILE_NAME);
     let profile_str = profile.to_string_lossy().into_owned();
     let options = nix_options(mirror);
 
     let guard = match policy {
         BuildPolicy::CacheOnly => Some(Arc::new(SourceBuildGuard {
             inner: Arc::clone(activity),
-            approved: refuse_source_builds(cfg, &flake_attr, &options, scope).await?,
+            approved: refuse_source_builds(user, &flake_attr, &options, scope).await?,
             refused: OnceLock::new(),
             scope: scope.child(),
         })),
@@ -223,7 +224,7 @@ pub async fn switch(
     let built = match &guard {
         Some(guard) => {
             run_as_reporting(
-                &cfg.user,
+                user,
                 DEFAULT_PROFILE_NIX,
                 &as_refs(&args),
                 &guard.scope,
@@ -233,7 +234,7 @@ pub async fn switch(
         }
         None => {
             run_as_reporting(
-                &cfg.user,
+                user,
                 DEFAULT_PROFILE_NIX,
                 &as_refs(&args),
                 scope,
@@ -250,26 +251,36 @@ pub async fn switch(
 }
 
 pub async fn finish(
-    cfg: &UserConfig,
+    user: &InvokingUser,
     generation: &str,
     activity: &Arc<dyn ActivityReporter>,
     host: &HostConfig,
     scope: &Scope,
 ) -> Result<bool> {
-    let activate = format!("{generation}/activate");
-    run_as_reporting(&cfg.user, &activate, &[], scope, Some(Arc::clone(activity))).await?;
-    Ok(record(cfg, host, scope).await)
+    activate_generation(user, generation, activity, scope).await?;
+    Ok(record(user, host, scope).await)
 }
 
-async fn record(cfg: &UserConfig, host: &HostConfig, scope: &Scope) -> bool {
-    let state_dir = mix_state_dir(&cfg.user.home);
-    let git = git::Git::resolve(&cfg.user, host.git_binary.as_deref()).await;
+pub async fn activate_generation(
+    user: &InvokingUser,
+    generation: &str,
+    activity: &Arc<dyn ActivityReporter>,
+    scope: &Scope,
+) -> Result<()> {
+    let activate = format!("{generation}/activate");
+    run_as_reporting(user, &activate, &[], scope, Some(Arc::clone(activity))).await?;
+    Ok(())
+}
+
+pub async fn record(user: &InvokingUser, host: &HostConfig, scope: &Scope) -> bool {
+    let state_dir = mix_state_dir(&user.home);
+    let git = git::Git::resolve(user, host.git_binary.as_deref()).await;
     let created_git_dir = !fs::exists(state_dir.join(".git")).await;
-    if created_git_dir && let Err(error) = git.init(&cfg.user, &state_dir, scope).await {
+    if created_git_dir && let Err(error) = git.init(user, &state_dir, scope).await {
         tracing::info!("could not record the change in git: {error}");
         return false;
     }
-    if let Err(error) = git.sync(&cfg.user, &state_dir, scope).await {
+    if let Err(error) = git.sync(user, &state_dir, scope).await {
         tracing::info!("could not record the change in git: {error}");
     }
     created_git_dir
