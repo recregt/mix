@@ -30,6 +30,7 @@ pub struct Files {
     request: String,
     pending: Vec<PathBuf>,
     next: u64,
+    seen: std::sync::Mutex<Option<(PathBuf, OwnedFd, OsString)>>,
 }
 
 struct Pinned {
@@ -122,6 +123,7 @@ impl Files {
             request: request.into(),
             pending: Vec::new(),
             next: 0,
+            seen: std::sync::Mutex::new(None),
         })
     }
 
@@ -145,6 +147,29 @@ impl Files {
         self.place_with(path, ResolveFlags::NO_SYMLINKS | ResolveFlags::BENEATH)
     }
 
+    fn forget(&self) {
+        if let Ok(mut seen) = self.seen.lock() {
+            *seen = None;
+        }
+    }
+
+    fn remember(&self, path: &Path, place: Place) {
+        if let Ok(mut seen) = self.seen.lock() {
+            *seen = Some((path.to_path_buf(), place.dir, place.name));
+        }
+    }
+
+    fn recall(&self, path: &Path) -> Option<(OwnedFd, OsString)> {
+        let mut seen = self.seen.lock().ok()?;
+        match seen.take() {
+            Some((at, dir, name)) if at == path => Some((dir, name)),
+            other => {
+                *seen = other;
+                None
+            }
+        }
+    }
+
     fn place_for_reading(&self, path: &Path) -> Result<Place, Failure> {
         let (dir, name) = self.resolve(path, false)?;
         Ok(Place {
@@ -155,6 +180,48 @@ impl Files {
     }
 
     fn resolve(&self, path: &Path, follow_last: bool) -> Result<(OwnedFd, OsString), Failure> {
+        let mut parts = path.components().peekable();
+        let mut dir = sys::openat(
+            &self.root,
+            ".",
+            OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|errno| io(path, errno))?;
+        while let Some(component) = parts.next() {
+            let name = match component {
+                Component::RootDir => continue,
+                Component::Normal(name) => name,
+                _ => return self.resolve_through_links(path, follow_last),
+            };
+            let last = parts.peek().is_none();
+            let stat = match sys::statx(&dir, name, AtFlags::SYMLINK_NOFOLLOW, WANTED) {
+                Ok(stat) => stat,
+                Err(Errno::NOENT) if last => return Ok((dir, name.to_os_string())),
+                Err(errno) => return Err(io(path, errno)),
+            };
+            if kind(&stat) == Kind::Symlink && (!last || follow_last) {
+                return self.resolve_through_links(path, follow_last);
+            }
+            if last {
+                return Ok((dir, name.to_os_string()));
+            }
+            dir = sys::openat(
+                &dir,
+                name,
+                OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|errno| io(path, errno))?;
+        }
+        Err(conflict(path, "a path below the root", "the root itself"))
+    }
+
+    fn resolve_through_links(
+        &self,
+        path: &Path,
+        follow_last: bool,
+    ) -> Result<(OwnedFd, OsString), Failure> {
         let open_dir = |parent: &OwnedFd, name: &OsStr| {
             sys::openat(
                 parent,
@@ -425,6 +492,7 @@ impl Files {
     }
 
     pub fn perform(&mut self, action: &Action, prepared: &mut Prepared<'_>) -> Option<Outcome> {
+        self.forget();
         Some(match action {
             Action::CreateDirs { path, mode, owner } => {
                 self.create_dirs(path, *mode, *owner, prepared)
@@ -1063,21 +1131,30 @@ impl Files {
             Err(failure) => return unreadable(failure),
         };
         match Self::stat(&place, &place.name) {
-            Ok(Some(stat)) => PathFacts {
-                kind: kind(&stat),
-                mode: mode(&stat),
-                owner: owner_of(&stat),
-                id: Some(id(&stat)),
-                digest: None,
-                changed: Some((stat.stx_mtime.tv_sec, stat.stx_mtime.tv_nsec)),
-            },
+            Ok(Some(stat)) => {
+                let facts = PathFacts {
+                    kind: kind(&stat),
+                    mode: mode(&stat),
+                    owner: owner_of(&stat),
+                    id: Some(id(&stat)),
+                    digest: None,
+                    changed: Some((stat.stx_mtime.tv_sec, stat.stx_mtime.tv_nsec)),
+                };
+                if facts.kind != Kind::Symlink {
+                    self.remember(path, place);
+                }
+                facts
+            }
             Ok(None) => missing,
             Err(failure) => unreadable(failure),
         }
     }
 
     fn contents(&self, path: &Path) -> Option<Vec<u8>> {
-        let (dir, name) = self.resolve(path, true).ok()?;
+        let (dir, name) = match self.recall(path) {
+            Some(resolved) => resolved,
+            None => self.resolve(path, true).ok()?,
+        };
         let node = sys::openat(
             &dir,
             &name,
