@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use mix_core::ActivityReporter;
 use mix_core::action::{Action, Failure, Outcome, Performed};
 use mix_core::paths::{DEFAULT_PROFILE_NIX_ENV, HOME_MANAGER_PROFILE_NAME, nix_profiles_dir};
 use mix_core::privilege::InvokingUser;
-use mix_core::{ActivityReporter, Scope};
+use mix_exec::Scope;
 
 use crate::HostConfig;
 use crate::effect::exec::{run_as, run_as_reporting};

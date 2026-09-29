@@ -1,7 +1,7 @@
-use mix_core::Scope;
 use mix_core::action::{
     Action, Fact, Failure, GroupFacts, Outcome, Owner, Performed, Query, UserFacts, UserSpec,
 };
+use mix_exec::Scope;
 
 use crate::effect::files::Prepared;
 use crate::effect::tools::root_command;

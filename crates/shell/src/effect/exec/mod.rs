@@ -11,7 +11,8 @@ use std::sync::Arc;
 use mix_core::nix_plan::DryRun;
 use mix_core::paths::{DEFAULT_PROFILE_BIN, HOME_MANAGER_PROFILE_NAME, nix_profiles_dir};
 use mix_core::privilege::InvokingUser;
-use mix_core::{ActivityReporter, Result, Scope};
+use mix_core::{ActivityReporter, Result};
+use mix_exec::Scope;
 use mix_exec::{Command, Drain};
 
 use crate::effect::exec::output::StreamDrain;
@@ -25,6 +26,14 @@ fn search_path(user: &InvokingUser) -> String {
         "{}/home-path/bin:{DEFAULT_PROFILE_BIN}:/usr/bin:/bin",
         generation.display()
     )
+}
+
+pub(crate) fn exec_error(error: mix_exec::Error) -> mix_core::Error {
+    match error {
+        mix_exec::Error::Spawn { command, source } => mix_core::Error::Exec { command, source },
+        mix_exec::Error::Cancelled { command } => mix_core::Error::Cancelled { command },
+        mix_exec::Error::Failed { command, detail } => mix_core::Error::Command { command, detail },
+    }
 }
 
 fn command_as(user: &InvokingUser, program: &str, args: &[&str]) -> Command {
@@ -66,7 +75,11 @@ fn stdout_of(output: &std::process::Output) -> String {
 }
 
 pub async fn run(program: &str, args: &[&str], scope: &Scope) -> Result<()> {
-    Command::new(program).args(args).run(scope).await?;
+    Command::new(program)
+        .args(args)
+        .run(scope)
+        .await
+        .map_err(exec_error)?;
     Ok(())
 }
 
@@ -91,7 +104,7 @@ pub async fn run_as_reporting(
     if let Some(activity) = activity {
         command = command.stderr(reported(activity));
     }
-    Ok(stdout_of(&command.run(scope).await?))
+    Ok(stdout_of(&command.run(scope).await.map_err(exec_error)?))
 }
 
 pub async fn run_as_with_input(
@@ -104,7 +117,8 @@ pub async fn run_as_with_input(
     let output = command_as(user, program, args)
         .input(input)
         .run(scope)
-        .await?;
+        .await
+        .map_err(exec_error)?;
     Ok(stdout_of(&output))
 }
 
@@ -119,7 +133,10 @@ pub async fn plan_as(
     args: &[&str],
     scope: &Scope,
 ) -> Result<DryRun> {
-    let output = command_as(user, program, args).run(scope).await?;
+    let output = command_as(user, program, args)
+        .run(scope)
+        .await
+        .map_err(exec_error)?;
     let stderr = String::from_utf8(output.stderr)
         .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned());
     Ok(DryRun::new(stderr))
@@ -131,7 +148,10 @@ pub async fn status_as(
     args: &[&str],
     scope: &Scope,
 ) -> Result<bool> {
-    let output = command_as(user, program, args).output(scope).await?;
+    let output = command_as(user, program, args)
+        .output(scope)
+        .await
+        .map_err(exec_error)?;
     Ok(output.status.success())
 }
 

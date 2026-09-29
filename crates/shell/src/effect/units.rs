@@ -1,8 +1,8 @@
 use futures_util::StreamExt;
-use mix_core::Scope;
 use mix_core::action::{
     Action, Failure, Outcome, Performed, UnitFacts, UnitFailure, UnitOperation,
 };
+use mix_exec::Scope;
 use zbus::zvariant::OwnedObjectPath;
 use zbus::{Connection, Proxy};
 

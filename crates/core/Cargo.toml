@@ -10,8 +10,6 @@ model = []
 
 [dependencies]
 mix-events = { path = "../events" }
-mix-exec = { path = "../exec" }
-async-trait = { workspace = true }
 memchr = { workspace = true }
 serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
@@ -21,7 +19,6 @@ tracing = { workspace = true }
 [dev-dependencies]
 proptest = { workspace = true }
 divan = { workspace = true }
-tokio = { workspace = true }
 
 [[bench]]
 name = "nix_log"
@@ -32,11 +29,7 @@ name = "nix_plan"
 harness = false
 
 [[bench]]
-name = "plan"
-harness = false
-
-[[bench]]
-name = "plan_observed"
+name = "runner"
 harness = false
 
 [[bench]]

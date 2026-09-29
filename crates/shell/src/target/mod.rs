@@ -20,8 +20,8 @@ pub use finding::{Finding, Unfixable};
 pub use inspect::inspect;
 pub use reconcile::reconcile;
 
-use mix_core::Scope;
 use mix_core::models::Target;
+use mix_exec::Scope;
 
 /// What reconciling a target could not do.
 ///

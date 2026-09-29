@@ -1,7 +1,7 @@
 use std::future::Future;
 
-use mix_core::Scope;
 use mix_exec::Reason;
+use mix_exec::Scope;
 use nix::sys::signal::Signal;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::task::JoinHandle;

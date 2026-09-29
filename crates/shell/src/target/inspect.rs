@@ -7,8 +7,9 @@
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 
+use mix_core::identity;
 use mix_core::models::Target;
-use mix_core::{Scope, identity};
+use mix_exec::Scope;
 
 use crate::effect::fs::{DIR_MODE_MASK, Owner, exists};
 use crate::effect::systemd::unit_is_active;

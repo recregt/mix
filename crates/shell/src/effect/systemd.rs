@@ -1,7 +1,8 @@
 //! Asking systemd about a unit, and asking it to start, restart or re-read one.
 
 use crate::effect::exec::run;
-use mix_core::{Result, Scope};
+use mix_core::Result;
+use mix_exec::Scope;
 
 /// Restarts a unit that is running, and says whether it had to be restarted.
 pub async fn restart_if_active(name: &str, scope: &Scope) -> Result<bool> {

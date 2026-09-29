@@ -2,7 +2,8 @@ use std::io::Write as _;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use mix_core::{Error as CoreError, Scope};
+use mix_core::Error as CoreError;
+use mix_exec::Scope;
 use nix::unistd::{Gid, Uid, User};
 
 use mix_core::identity::NIXBLD_GID;
@@ -434,7 +435,7 @@ fn load_db(nix_pkg: &Path, reginfo_path: &Path, scope: &Scope) -> Result<()> {
         .arg("--load-db")
         .input(reginfo)
         .run_blocking(scope)
-        .map_err(CoreError::from)?;
+        .map_err(crate::effect::exec::exec_error)?;
     Ok(())
 }
 
@@ -442,7 +443,7 @@ fn forget_vanished_paths(nix_pkg: &Path, scope: &Scope) -> Result<()> {
     nix_as_root(nix_pkg.join("bin/nix-store"))
         .arg("--verify")
         .run_blocking(scope)
-        .map_err(CoreError::from)?;
+        .map_err(crate::effect::exec::exec_error)?;
     Ok(())
 }
 
@@ -456,7 +457,7 @@ fn activate_default_profile(nix_pkg: &Path, nss_cacert_pkg: &Path, scope: &Scope
         .args(["--option", "substitute", "false"])
         .args(["--option", "post-build-hook", ""])
         .run_blocking(scope)
-        .map_err(CoreError::from)?;
+        .map_err(crate::effect::exec::exec_error)?;
     Ok(())
 }
 

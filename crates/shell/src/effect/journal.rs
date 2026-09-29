@@ -3,9 +3,9 @@ use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
-use mix_core::Scope;
 use mix_core::action::{Action, Failure};
 use mix_core::journal::{Record, Recovery, recover};
+use mix_exec::Scope;
 
 use crate::drive::{Journal, Performer};
 

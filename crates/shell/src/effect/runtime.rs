@@ -2,8 +2,9 @@ use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use mix_core::DownloadProgress;
 use mix_core::action::{Digest, Failure, Outcome, Performed};
-use mix_core::{DownloadProgress, Scope};
+use mix_exec::Scope;
 
 use crate::effect::files::Prepared;
 use crate::ops::bootstrap::Error;

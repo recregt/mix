@@ -41,16 +41,6 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-impl From<mix_exec::Error> for Error {
-    fn from(error: mix_exec::Error) -> Self {
-        match error {
-            mix_exec::Error::Spawn { command, source } => Self::Exec { command, source },
-            mix_exec::Error::Cancelled { command } => Self::Cancelled { command },
-            mix_exec::Error::Failed { command, detail } => Self::Command { command, detail },
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

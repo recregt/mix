@@ -7,9 +7,10 @@
 
 use std::path::Path;
 
+use mix_core::Result;
 use mix_core::identity;
 use mix_core::models::Target;
-use mix_core::{Result, Scope};
+use mix_exec::Scope;
 
 use mix_core::action::{Action, Fact, PathFacts, Query};
 

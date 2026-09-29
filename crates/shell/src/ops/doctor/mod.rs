@@ -70,7 +70,7 @@ mod tests {
 
     #[tokio::test]
     async fn audit_reports_one_entry_per_target() {
-        let reports = audit(&Context::new(mix_core::Scope::root())).await;
+        let reports = audit(&Context::new(mix_exec::Scope::root())).await;
         assert_eq!(
             reports.len(),
             mix_core::models::targets(None, &mix_core::policy::Policy::default()).len()
@@ -82,14 +82,14 @@ mod tests {
         let cfg = user_config();
 
         let reports =
-            audit(&Context::new(mix_core::Scope::root()).with_user(Some(cfg.clone()))).await;
+            audit(&Context::new(mix_exec::Scope::root()).with_user(Some(cfg.clone()))).await;
 
         assert_eq!(
             reports.len(),
             mix_core::models::targets(Some(&cfg), &mix_core::policy::Policy::default()).len(),
             "every target of the injected config must be reported"
         );
-        assert!(reports.len() > audit(&Context::new(mix_core::Scope::root())).await.len());
+        assert!(reports.len() > audit(&Context::new(mix_exec::Scope::root())).await.len());
         assert!(
             reports
                 .iter()
@@ -102,7 +102,7 @@ mod tests {
         let cfg = user_config();
 
         for report in
-            audit(&Context::new(mix_core::Scope::root()).with_user(Some(cfg.clone()))).await
+            audit(&Context::new(mix_exec::Scope::root()).with_user(Some(cfg.clone()))).await
         {
             assert_eq!(report.healthy(), report.finding.is_none());
         }

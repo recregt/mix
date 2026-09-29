@@ -5,9 +5,9 @@
 //! `mix repair` decides the order it walks the environment in, what a change means for the
 //! nix-daemon and for the git-tracked state, and what it hands the caller to print.
 
-use mix_core::Scope;
 use mix_core::models::{Target, UserConfig, targets};
 use mix_core::paths::{NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT, mix_state_dir};
+use mix_exec::Scope;
 
 use crate::effect::git;
 use crate::effect::systemd;

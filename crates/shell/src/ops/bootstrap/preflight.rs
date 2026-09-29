@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use mix_core::Scope;
 use mix_core::paths::NIX_OWNERSHIP_MARKER;
+use mix_exec::Scope;
 
 use crate::effect::fs::exists;
 use crate::effect::fs::{is_dir, is_file};

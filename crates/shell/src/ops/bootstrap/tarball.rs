@@ -1,4 +1,5 @@
-use mix_core::{DownloadProgress, Error as CoreError, Scope};
+use mix_core::{DownloadProgress, Error as CoreError};
+use mix_exec::Scope;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::io::{Cursor, Read};

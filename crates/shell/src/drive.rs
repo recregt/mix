@@ -6,16 +6,17 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::Instrument;
 
+use mix_core::DownloadProgress;
 use mix_core::action::{Action, Fact, Failure, Kind, Outcome, PathFacts, Performed, Query};
 use mix_core::journal::Record;
 use mix_core::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
 use mix_core::paths::mix_state_dir;
 use mix_core::plan::{Input, Next, Report, Runner};
 use mix_core::privilege::InvokingUser;
-use mix_core::{DownloadProgress, Scope};
 use mix_events::v1::Bytes;
 use mix_events::v1::node_progress::Progress;
 use mix_events::{Stopped, Tree};
+use mix_exec::Scope;
 
 use crate::effect::files::{Files, Prepared};
 use crate::effect::generations::{self, ProfileContext};

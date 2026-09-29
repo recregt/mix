@@ -12,7 +12,8 @@ use mix_core::paths::{
     DEFAULT_PROFILE_NIX, HOME_MANAGER_PROFILE_NAME, mix_state_dir, nix_profiles_dir,
 };
 use mix_core::privilege::InvokingUser;
-use mix_core::{ActivityReporter, BuildProgress, Scope};
+use mix_core::{ActivityReporter, BuildProgress};
+use mix_exec::Scope;
 use mix_nixgen::{AttrPath, FlakeRef, Installable};
 
 use crate::HostConfig;
