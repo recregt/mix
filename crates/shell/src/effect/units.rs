@@ -86,6 +86,14 @@ fn fdo_name(error: &zbus::fdo::Error) -> &'static str {
     }
 }
 
+pub fn since_epoch(microseconds: u64) -> Option<(i64, u32)> {
+    (microseconds > 0).then(|| {
+        let seconds = i64::try_from(microseconds / 1_000_000).unwrap_or(i64::MAX);
+        let nanos = u32::try_from(microseconds % 1_000_000).unwrap_or(0) * 1_000;
+        (seconds, nanos)
+    })
+}
+
 pub fn invocation(bytes: &[u8]) -> Option<String> {
     (!bytes.is_empty()).then(|| bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
@@ -129,11 +137,16 @@ impl Units {
             .get_property("NeedDaemonReload")
             .await
             .map_err(failed)?;
+        let entered: u64 = proxy
+            .get_property("ActiveEnterTimestamp")
+            .await
+            .map_err(failed)?;
         Ok(UnitFacts {
             load_state,
             active_state,
-            enabled: file_state == "enabled",
+            file_state,
             needs_reload,
+            active_since: since_epoch(entered),
         })
     }
 
@@ -248,7 +261,7 @@ impl Units {
 
     async fn enable(&self, unit: &str, prepared: &mut Prepared<'_>) -> Outcome {
         let facts = self.observe(unit).await?;
-        if facts.enabled {
+        if facts.enabled() {
             return done(Vec::new());
         }
         prepared(&[Action::DisableUnit {
@@ -267,7 +280,7 @@ impl Units {
 
     async fn disable(&self, unit: &str, prepared: &mut Prepared<'_>) -> Outcome {
         let facts = self.observe(unit).await?;
-        if !facts.enabled {
+        if !facts.enabled() {
             return done(Vec::new());
         }
         prepared(&[Action::EnableUnit {
@@ -378,6 +391,15 @@ mod tests {
                 status: None,
                 output_tail: "org.freedesktop.systemd1.JobTypeNotApplicable: no".into(),
             }
+        );
+    }
+
+    #[test]
+    fn systemd_timestamps_become_seconds_and_nanoseconds() {
+        assert_eq!(since_epoch(0), None);
+        assert_eq!(
+            since_epoch(1_790_000_000_123_456),
+            Some((1_790_000_000, 123_456_000))
         );
     }
 

@@ -246,6 +246,7 @@ pub struct PathFacts {
     pub owner: Owner,
     pub id: Option<FileId>,
     pub digest: Option<Digest>,
+    pub changed: Option<(i64, u32)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -266,8 +267,15 @@ pub struct UserFacts {
 pub struct UnitFacts {
     pub load_state: String,
     pub active_state: String,
-    pub enabled: bool,
+    pub file_state: String,
     pub needs_reload: bool,
+    pub active_since: Option<(i64, u32)>,
+}
+
+impl UnitFacts {
+    pub fn enabled(&self) -> bool {
+        self.file_state == "enabled"
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

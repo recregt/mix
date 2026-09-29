@@ -238,7 +238,7 @@ impl StepSpec for RemoveExistingInstallation {
                     unit: unit.to_string(),
                 });
             }
-            if state.enabled {
+            if state.enabled() {
                 actions.push(Action::DisableUnit {
                     unit: unit.to_string(),
                 });
@@ -476,38 +476,24 @@ impl StepSpec for ConfigureNixConf {
             queries.push(Query::Path(path.clone()));
             queries.push(Query::Contents(path));
         }
-        queries.push(Query::Unit(NIX_DAEMON_SERVICE_UNIT.to_string()));
         queries
     }
 
     fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
         let facts = Facts(facts);
         let mut actions = Vec::new();
-        let mut rewrote_nix_conf = false;
         for (index, (path, wanted)) in self.files().into_iter().enumerate() {
             let path = Path::new(path);
             let parent = path.parent().expect("an absolute file");
             actions.extend(ensure_exists(parent, facts.path(3 * index), None)?);
-            let writes = ensure_file(
+            actions.extend(ensure_file(
                 path,
                 facts.path(3 * index + 1),
                 facts.contents(3 * index + 2),
                 wanted,
                 FILE_MODE,
                 None,
-            )?;
-            if path == Path::new(NIX_CONF_DEST) {
-                rewrote_nix_conf = writes
-                    .iter()
-                    .any(|action| matches!(action, Action::PutFile { .. }));
-            }
-            actions.extend(writes);
-        }
-        let daemon = facts.unit(9);
-        if rewrote_nix_conf && daemon.load_state == "loaded" && daemon.active_state == "active" {
-            actions.push(Action::RestartUnit {
-                unit: NIX_DAEMON_SERVICE_UNIT.to_string(),
-            });
+            )?);
         }
         Ok(actions)
     }
@@ -545,6 +531,8 @@ impl StepSpec for ConfigureDaemon {
             queries.push(Query::Contents(destination.into()));
         }
         queries.push(Query::Unit(NIX_DAEMON_SOCKET_UNIT.to_string()));
+        queries.push(Query::Unit(NIX_DAEMON_SERVICE_UNIT.to_string()));
+        queries.push(Query::Path(NIX_CONF_DEST.into()));
         queries
     }
 
@@ -569,14 +557,32 @@ impl StepSpec for ConfigureDaemon {
         if !actions.is_empty() || socket.needs_reload {
             actions.push(Action::DaemonReload);
         }
-        if !socket.enabled {
-            actions.push(Action::EnableUnit {
+        match socket.file_state.as_str() {
+            "enabled" | "static" | "indirect" | "generated" | "alias" => {}
+            "masked" | "masked-runtime" => {
+                return Err(Failure::Conflict {
+                    subject: NIX_DAEMON_SOCKET_UNIT.to_string(),
+                    expected: "a unit mix may enable".to_string(),
+                    found: format!("a {} unit", socket.file_state),
+                });
+            }
+            _ => actions.push(Action::EnableUnit {
                 unit: NIX_DAEMON_SOCKET_UNIT.to_string(),
-            });
+            }),
         }
         if socket.active_state != "active" {
             actions.push(Action::StartUnit {
                 unit: NIX_DAEMON_SOCKET_UNIT.to_string(),
+            });
+        }
+        let service = facts.unit(7);
+        let configured = facts.path(8).changed;
+        if service.active_state == "active"
+            && let (Some(since), Some(configured)) = (service.active_since, configured)
+            && configured > since
+        {
+            actions.push(Action::RestartUnit {
+                unit: NIX_DAEMON_SERVICE_UNIT.to_string(),
             });
         }
         Ok(actions)

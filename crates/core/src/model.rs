@@ -34,14 +34,26 @@ pub struct Entry {
     pub mode: u32,
     pub owner: Owner,
     pub id: FileId,
+    pub changed: u64,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct Unit {
     pub loaded: Option<Arc<[u8]>>,
     pub enabled: bool,
     pub running: Option<Arc<[u8]>>,
+    pub since: Option<u64>,
 }
+
+impl PartialEq for Unit {
+    fn eq(&self, other: &Self) -> bool {
+        self.loaded == other.loaded
+            && self.enabled == other.enabled
+            && self.running == other.running
+    }
+}
+
+impl Eq for Unit {}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Profile {
@@ -159,6 +171,7 @@ impl World {
                 mode,
                 owner,
                 id,
+                changed: id.ino,
             },
         );
         self
@@ -179,6 +192,7 @@ impl World {
                 mode,
                 owner,
                 id,
+                changed: id.ino,
             },
         );
         self
@@ -189,6 +203,10 @@ impl World {
             Some(Content::File(contents)) => Some(contents),
             _ => None,
         }
+    }
+
+    pub fn now(&self) -> u64 {
+        self.next_ino
     }
 
     pub fn pending(&self) -> &[PathBuf] {
@@ -278,6 +296,7 @@ impl World {
             mode,
             owner,
             id,
+            changed: id.ino,
         };
         match expect {
             Expect::Absent => {
@@ -317,6 +336,7 @@ impl World {
                         mode: *mode,
                         owner: owner.unwrap_or(ROOT),
                         id,
+                        changed: id.ino,
                     },
                 );
                 done(vec![Action::RemoveCreated {
@@ -599,6 +619,8 @@ impl World {
                     return Err(account_conflict(unit, "inactive", "active"));
                 }
                 facts.running = facts.loaded.clone();
+                let since = self.fresh().ino;
+                self.units.get_mut(unit).expect("loaded above").since = Some(since);
                 done(vec![Action::StopUnit { unit: unit.clone() }])
             }
             Action::StopUnit { unit } => {
@@ -607,12 +629,15 @@ impl World {
                     return Err(account_conflict(unit, "active", "inactive"));
                 }
                 facts.running = None;
+                facts.since = None;
                 done(vec![Action::StartUnit { unit: unit.clone() }])
             }
             Action::RestartUnit { unit } => {
+                let since = self.fresh().ino;
                 let facts = self.units.entry(unit.clone()).or_default();
                 if facts.running.is_some() {
                     facts.running = facts.loaded.clone();
+                    facts.since = Some(since);
                 }
                 done(vec![Action::RestartUnit { unit: unit.clone() }])
             }
@@ -705,6 +730,7 @@ impl World {
                         mode: 0o755,
                         owner: (user.uid, user.gid),
                         id,
+                        changed: id.ino,
                     },
                 );
                 done(vec![Action::RemoveCreatedTree {
@@ -843,6 +869,7 @@ impl World {
                         mode: 0o755,
                         owner: ROOT,
                         id,
+                        changed: id.ino,
                     },
                 );
             }
@@ -863,6 +890,7 @@ impl World {
                     owner: ROOT,
                     id: None,
                     digest: None,
+                    changed: None,
                 },
                 Some(entry) => PathFacts {
                     kind: match entry.content {
@@ -873,6 +901,7 @@ impl World {
                     owner: entry.owner,
                     id: Some(entry.id),
                     digest: None,
+                    changed: Some((entry.changed as i64, 0)),
                 },
             }),
             Query::Contents(path) => Fact::Contents(self.contents(path).map(Arc::from)),
@@ -894,8 +923,9 @@ impl World {
                         "inactive"
                     }
                     .to_string(),
-                    enabled: facts.enabled,
+                    file_state: if facts.enabled { "enabled" } else { "disabled" }.to_string(),
                     needs_reload: facts.loaded != file,
+                    active_since: facts.since.map(|since| (since as i64, 0)),
                 })
             }
         }
@@ -1125,15 +1155,13 @@ mod tests {
                 },
             ],
         );
-        assert_eq!(
-            world.observe(&Query::Unit("nix-daemon.socket".into())),
-            Fact::Unit(UnitFacts {
-                load_state: "loaded".into(),
-                active_state: "active".into(),
-                enabled: true,
-                needs_reload: false,
-            })
-        );
+        let Fact::Unit(unit) = world.observe(&Query::Unit("nix-daemon.socket".into())) else {
+            panic!("a unit query is answered with unit facts");
+        };
+        assert_eq!(unit.load_state, "loaded");
+        assert_eq!(unit.active_state, "active");
+        assert!(unit.enabled());
+        assert!(!unit.needs_reload);
         roll_back(&mut world, &journal);
 
         let unloaded = |world: &World| {

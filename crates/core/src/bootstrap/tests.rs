@@ -195,15 +195,13 @@ fn a_fresh_bootstrap_builds_the_whole_machine() {
         contents(&world, POLICY_FILE),
         Some(settings.policy.render().to_string())
     );
-    assert_eq!(
-        world.observe(&Query::Unit(NIX_DAEMON_SOCKET_UNIT.into())),
-        Fact::Unit(UnitFacts {
-            load_state: "loaded".into(),
-            active_state: "active".into(),
-            enabled: true,
-            needs_reload: false,
-        })
-    );
+    let Fact::Unit(unit) = world.observe(&Query::Unit(NIX_DAEMON_SOCKET_UNIT.into())) else {
+        panic!("a unit query is answered with unit facts");
+    };
+    assert_eq!(unit.load_state, "loaded");
+    assert_eq!(unit.active_state, "active");
+    assert!(unit.enabled());
+    assert!(!unit.needs_reload);
     assert!(world.pending().is_empty());
 }
 
@@ -399,4 +397,85 @@ fn a_file_where_nix_belongs_is_refused_and_nothing_is_touched() {
             .outcome("bootstrap/plan/create-nix-tree"),
         Some(EventOutcome::NotRun(NotRunReason::NotReached))
     );
+}
+
+#[test]
+fn a_running_daemon_is_restarted_only_when_its_configuration_changed_after_it_started() {
+    let mut world = machine();
+    run(&mut world, &settings(None, false), Script::default());
+    let started = world.now();
+    let service = world
+        .units
+        .entry(NIX_DAEMON_SERVICE_UNIT.into())
+        .or_default();
+    service.loaded = service
+        .loaded
+        .clone()
+        .or(Some(Arc::from(&b"[Service]"[..])));
+    service.running = service.loaded.clone();
+    service.since = Some(started);
+
+    let unchanged = run(&mut world, &settings(None, false), Script::default());
+    assert_eq!(unchanged.changes, 0);
+    assert_eq!(world.units[NIX_DAEMON_SERVICE_UNIT].since, Some(started));
+
+    let mut other = settings(None, false);
+    other.policy = Policy::new(Some("https://elsewhere.internal"), None).unwrap();
+    let rewritten = run(&mut world, &other, Script::default());
+
+    assert_eq!(rewritten.report.verdict, Verdict::Succeeded);
+    assert!(world.units[NIX_DAEMON_SERVICE_UNIT].since > Some(started));
+}
+
+#[test]
+fn a_masked_socket_is_left_alone_and_reported() {
+    let facts = [
+        Fact::Contents(Some(Arc::from(&b"[Service]"[..]))),
+        Fact::Path(PathFacts {
+            kind: Kind::File,
+            mode: 0o644,
+            owner: (0, 0),
+            id: None,
+            digest: None,
+            changed: None,
+        }),
+        Fact::Contents(Some(Arc::from(&b"[Service]"[..]))),
+        Fact::Contents(Some(Arc::from(&b"[Socket]"[..]))),
+        Fact::Path(PathFacts {
+            kind: Kind::File,
+            mode: 0o644,
+            owner: (0, 0),
+            id: None,
+            digest: None,
+            changed: None,
+        }),
+        Fact::Contents(Some(Arc::from(&b"[Socket]"[..]))),
+        Fact::Unit(UnitFacts {
+            load_state: "masked".into(),
+            active_state: "inactive".into(),
+            file_state: "masked".into(),
+            needs_reload: false,
+            active_since: None,
+        }),
+        Fact::Unit(UnitFacts {
+            load_state: "loaded".into(),
+            active_state: "inactive".into(),
+            file_state: "static".into(),
+            needs_reload: false,
+            active_since: None,
+        }),
+        Fact::Path(PathFacts {
+            kind: Kind::File,
+            mode: 0o644,
+            owner: (0, 0),
+            id: None,
+            digest: None,
+            changed: Some((5, 0)),
+        }),
+    ];
+
+    assert!(matches!(
+        ConfigureDaemon.actions(&facts),
+        Err(Failure::Conflict { .. })
+    ));
 }

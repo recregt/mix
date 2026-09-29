@@ -734,6 +734,7 @@ impl Files {
             owner: (0, 0),
             id: None,
             digest: None,
+            changed: None,
         };
         let Ok(place) = self.place_for_reading(path) else {
             return missing;
@@ -745,6 +746,7 @@ impl Files {
                 owner: owner_of(&stat),
                 id: Some(id(&stat)),
                 digest: None,
+                changed: Some((stat.stx_mtime.tv_sec, stat.stx_mtime.tv_nsec)),
             },
             _ => missing,
         }
