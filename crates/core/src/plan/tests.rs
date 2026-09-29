@@ -654,3 +654,104 @@ fn every_undo_is_performed_shielded_and_no_forward_action_is() {
     );
     assert!(performed.len() > failed_at + 1);
 }
+
+fn crashing_run(
+    world: &mut World,
+    crash_at: usize,
+    after_change: bool,
+) -> Vec<crate::journal::Record> {
+    use crate::journal::Record;
+    let outbox = Arc::new(Outbox::new("request", || {}));
+    let mut tree = Tree::new(
+        outbox,
+        Arc::new(|| None),
+        Start::command("bootstrap", Command::default()),
+    );
+    let mut runner = Runner::new(ROOT, bootstrap_like());
+    let mut records = vec![Record::Began {
+        request: "r".into(),
+    }];
+    let mut input = None;
+    let mut seq = 0;
+    loop {
+        match runner.step(&mut tree, input.take()) {
+            Next::Observe(queries) => {
+                input = Some(Input::Facts(Ok(queries
+                    .iter()
+                    .map(|query| world.observe(query))
+                    .collect())));
+            }
+            Next::Perform(action) => {
+                if action == Action::Commit {
+                    records.push(Record::Committing);
+                }
+                let undo = world
+                    .clone()
+                    .apply(&action)
+                    .expect("the action applies")
+                    .undo;
+                records.push(Record::Prepared {
+                    seq,
+                    undo: undo.clone(),
+                });
+                if seq as usize == crash_at && !after_change {
+                    return records;
+                }
+                let outcome = world.apply(&action);
+                if seq as usize == crash_at && after_change {
+                    return records;
+                }
+                records.push(Record::Done { seq });
+                if action == Action::Commit {
+                    records.push(Record::Ended);
+                }
+                seq += 1;
+                input = Some(Input::Done(outcome));
+            }
+            Next::Finished(_) => return records,
+        }
+    }
+}
+
+fn recovered(world: &mut World, records: &[crate::journal::Record]) {
+    use crate::journal::{Recovery, recover};
+    match recover(records) {
+        Recovery::Nothing => {}
+        Recovery::RollBack { uncertain, certain } => {
+            for action in uncertain {
+                let _ = world.apply(&action);
+            }
+            for action in certain {
+                world.apply(&action).expect("a certain undo applies");
+            }
+        }
+        Recovery::FinishCommit { .. } => {
+            world.apply(&Action::Commit).expect("the commit finishes");
+        }
+    }
+}
+
+#[test]
+fn a_crash_before_or_after_any_change_is_recovered_to_the_start_or_the_finish() {
+    let mut base = World::default();
+    base.with_file("/etc/nix.conf", b"legacy", 0o644, (0, 0));
+    let mut finished = base.clone();
+    drive(&mut finished, bootstrap_like(), Script::default());
+    let changes = forward_actions(&base) + 1;
+
+    for crash_at in 0..changes {
+        for after_change in [false, true] {
+            let mut world = base.clone();
+            let records = crashing_run(&mut world, crash_at, after_change);
+
+            recovered(&mut world, &records);
+
+            let committing = records.contains(&crate::journal::Record::Committing);
+            let expected = if committing { &finished } else { &base };
+            assert_eq!(
+                &world, expected,
+                "crash at change {crash_at}, after the change: {after_change}"
+            );
+        }
+    }
+}

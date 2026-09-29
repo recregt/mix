@@ -13,7 +13,7 @@ mix-events = { path = "../events" }
 mix-exec = { path = "../exec" }
 async-trait = { workspace = true }
 memchr = { workspace = true }
-serde = { workspace = true }
+serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
