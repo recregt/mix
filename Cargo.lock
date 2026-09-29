@@ -1495,6 +1495,7 @@ dependencies = [
  "futures-util",
  "liblzma",
  "mix-core",
+ "mix-events",
  "mix-exec",
  "mix-nixgen",
  "mix-pins",

@@ -12,6 +12,7 @@ embed-tarball = []
 
 [dependencies]
 mix-core = { path = "../core" }
+mix-events = { path = "../events" }
 mix-exec = { path = "../exec" }
 mix-nixgen = { path = "../nixgen" }
 mix-pins = { path = "../pins" }

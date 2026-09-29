@@ -21,7 +21,7 @@ pub trait StepSpec {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Input {
-    Facts(Vec<Fact>),
+    Facts(Result<Vec<Fact>, Failure>),
     Done(Outcome),
 }
 
@@ -107,6 +107,14 @@ impl Runner {
         }
     }
 
+    pub fn shielded(&self) -> bool {
+        match &self.phase {
+            Phase::RollingBack { .. } | Phase::Committing { .. } => true,
+            Phase::Executing { step, .. } => self.steps[*step].shielded(),
+            _ => false,
+        }
+    }
+
     pub fn stop(&mut self, cause: Cancellation) {
         self.stop.get_or_insert(cause);
     }
@@ -149,7 +157,10 @@ impl Runner {
                         panic!("a query is answered with facts");
                     };
                     let spec = &self.steps[step];
-                    let actions = spec.actions(&facts);
+                    let (actions, unobservable) = match facts {
+                        Ok(facts) => (spec.actions(&facts), None),
+                        Err(failure) => (Vec::new(), Some(failure)),
+                    };
                     let mut start = Start::new(
                         spec.key(),
                         Kind::Step(Step {
@@ -163,7 +174,14 @@ impl Runner {
                         .start(self.plan, start)
                         .expect("each step key is started once");
                     self.nodes[step] = Some(node);
-                    if actions.is_empty() {
+                    if let Some(failure) = unobservable {
+                        finish(tree, node, Ending::failed(diagnostic(&failure)));
+                        self.verdict = Some(Verdict::Failed {
+                            step: self.steps[step].key(),
+                            failure,
+                        });
+                        self.roll_back();
+                    } else if actions.is_empty() {
                         finish(tree, node, Ending::already_satisfied());
                         self.phase = Phase::Checking {
                             step: step + 1,

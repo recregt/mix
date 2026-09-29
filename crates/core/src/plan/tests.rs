@@ -188,9 +188,10 @@ fn drive(world: &mut World, steps: Vec<Box<dyn StepSpec>>, script: Script) -> Ru
     let report = loop {
         match runner.step(&mut tree, input.take()) {
             Next::Observe(queries) => {
-                input = Some(Input::Facts(
-                    queries.iter().map(|query| world.observe(query)).collect(),
-                ));
+                input = Some(Input::Facts(Ok(queries
+                    .iter()
+                    .map(|query| world.observe(query))
+                    .collect())));
             }
             Next::Perform(action) => {
                 performed.push(action.clone());
@@ -418,9 +419,10 @@ fn a_commit_that_fails_still_succeeds_and_warns() {
     let report = loop {
         match runner.step(&mut tree, input.take()) {
             Next::Observe(queries) => {
-                input = Some(Input::Facts(
-                    queries.iter().map(|query| world.observe(query)).collect(),
-                ));
+                input = Some(Input::Facts(Ok(queries
+                    .iter()
+                    .map(|query| world.observe(query))
+                    .collect())));
             }
             Next::Perform(Action::Commit) => {
                 input = Some(Input::Done(Err(Failure::Io {
@@ -559,4 +561,96 @@ proptest! {
         }
         prop_assert!(run.report.rollback_failures.is_empty());
     }
+}
+
+fn answer(
+    runner: &mut Runner,
+    world: &mut World,
+    observe: impl Fn(&World, &[Query]) -> Result<Vec<Fact>, Failure>,
+    mut fail: impl FnMut(&Action) -> bool,
+) -> (Report, Vec<(Action, bool)>) {
+    let outbox = Arc::new(Outbox::new("request", || {}));
+    let mut tree = Tree::new(
+        outbox,
+        Arc::new(|| None),
+        Start::command("bootstrap", Command::default()),
+    );
+    let mut input = None;
+    let mut performed = Vec::new();
+    loop {
+        match runner.step(&mut tree, input.take()) {
+            Next::Observe(queries) => input = Some(Input::Facts(observe(world, &queries))),
+            Next::Perform(action) => {
+                performed.push((action.clone(), runner.shielded()));
+                let outcome = if fail(&action) {
+                    Err(Failure::Io {
+                        path: "/injected".into(),
+                        kind: std::io::ErrorKind::Other,
+                    })
+                } else {
+                    world.apply(&action)
+                };
+                input = Some(Input::Done(outcome));
+            }
+            Next::Finished(report) => return (report, performed),
+        }
+    }
+}
+
+#[test]
+fn a_step_that_cannot_be_observed_fails_and_rolls_back_what_came_before() {
+    let base = World::default();
+    let mut world = base.clone();
+    let mut runner = Runner::new(ROOT, bootstrap_like());
+
+    let (report, _) = answer(
+        &mut runner,
+        &mut world,
+        |world, queries| {
+            if matches!(queries.first(), Some(Query::Group(_))) {
+                Err(Failure::SystemdUnreachable)
+            } else {
+                Ok(queries.iter().map(|query| world.observe(query)).collect())
+            }
+        },
+        |_| false,
+    );
+
+    assert_eq!(
+        report.verdict,
+        Verdict::Failed {
+            step: "create-groups",
+            failure: Failure::SystemdUnreachable
+        }
+    );
+    assert_eq!(world, base);
+}
+
+#[test]
+fn every_undo_is_performed_shielded_and_no_forward_action_is() {
+    let mut world = World::default();
+    let mut runner = Runner::new(ROOT, bootstrap_like());
+
+    let (_, performed) = answer(
+        &mut runner,
+        &mut world,
+        |world, queries| Ok(queries.iter().map(|query| world.observe(query)).collect()),
+        |action| matches!(action, Action::PutFile { path, .. } if path.ends_with("nix.conf")),
+    );
+
+    let failed_at = performed
+        .iter()
+        .position(|(action, _)| matches!(action, Action::PutFile { path, .. } if path.ends_with("nix.conf")))
+        .unwrap();
+    assert!(
+        performed[..=failed_at]
+            .iter()
+            .all(|(_, shielded)| !shielded)
+    );
+    assert!(
+        performed[failed_at + 1..]
+            .iter()
+            .all(|(_, shielded)| *shielded)
+    );
+    assert!(performed.len() > failed_at + 1);
 }
