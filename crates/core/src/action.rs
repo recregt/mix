@@ -142,6 +142,12 @@ pub enum Action {
         owner: Owner,
         mode: u32,
     },
+    CopyTree {
+        from: PathBuf,
+        to: PathBuf,
+        owner: Owner,
+        mode: u32,
+    },
     AddGroup {
         name: String,
         gid: u32,

@@ -448,6 +448,53 @@ impl World {
                     },
                 ])
             }
+            Action::CopyTree {
+                from,
+                to,
+                owner,
+                mode,
+            } => {
+                if !self.files.contains_key(from) {
+                    return Err(not_found(from));
+                }
+                self.matches(to, Expect::Absent)?;
+                self.parent_is_dir(to)?;
+                let copy: Vec<(PathBuf, Entry)> = self
+                    .subtree(from)
+                    .into_iter()
+                    .map(|old| {
+                        let entry = self.files[&old].clone();
+                        let rest = old.strip_prefix(from).expect("inside the subtree");
+                        let new = if rest.as_os_str().is_empty() {
+                            to.clone()
+                        } else {
+                            to.join(rest)
+                        };
+                        let top = old == *from;
+                        (
+                            new,
+                            Entry {
+                                mode: if top { *mode } else { entry.mode & !0o6000 },
+                                owner: *owner,
+                                ..entry
+                            },
+                        )
+                    })
+                    .collect();
+                let mut top = None;
+                for (at, mut entry) in copy {
+                    entry.id = self.fresh();
+                    entry.changed = entry.id.ino;
+                    if at == *to {
+                        top = Some(entry.id);
+                    }
+                    self.files.insert(at, entry);
+                }
+                done(vec![Action::RemoveCreatedTree {
+                    path: to.clone(),
+                    expect: top.expect("the top was copied"),
+                }])
+            }
             Action::RemoveCreated { path, expect } => {
                 self.matches(path, Expect::Present(*expect))?;
                 if self.has_children(path) {

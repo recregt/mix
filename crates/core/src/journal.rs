@@ -35,7 +35,10 @@ fn confirmed(records: &[Record]) -> Vec<(u64, Vec<Action>)> {
     let mut confirmed = Vec::new();
     for record in records {
         match record {
-            Record::Prepared { seq, undo } => prepared.push((*seq, undo.clone())),
+            Record::Prepared { seq, undo } => {
+                prepared.retain(|(earlier, _)| earlier != seq);
+                prepared.push((*seq, undo.clone()));
+            }
             Record::Done { seq } => {
                 if let Some((_, undo)) = prepared.iter().find(|(prepared, _)| prepared == seq) {
                     confirmed.push((*seq, undo.clone()));
@@ -99,14 +102,21 @@ pub fn recover(records: &[Record]) -> Recovery {
             .collect()
     };
     let journal: Vec<Vec<Action>> = confirmed.iter().map(|(_, undo)| still(undo)).collect();
-    let mut uncertain = Vec::new();
+    let mut latest: Vec<(u64, &[Action])> = Vec::new();
     for record in records {
         if let Record::Prepared { seq, undo } = record
             && !settled.contains(seq)
             && !failed.contains(seq)
         {
-            uncertain.extend(rollback_order(&[still(undo)]));
+            match latest.iter_mut().find(|(earlier, _)| earlier == seq) {
+                Some(entry) => entry.1 = undo,
+                None => latest.push((*seq, undo)),
+            }
         }
+    }
+    let mut uncertain = Vec::new();
+    for (_, undo) in latest {
+        uncertain.extend(rollback_order(&[still(undo)]));
     }
     let certain = rollback_order(&journal);
     if uncertain.is_empty() && certain.is_empty() {
@@ -133,6 +143,44 @@ mod tests {
             path: path.into(),
             expect: id(ino),
         }
+    }
+
+    #[test]
+    fn a_later_announcement_for_the_same_action_replaces_the_earlier_one() {
+        let restore = Action::Restore {
+            path: "/home/alice/state".into(),
+            from: "/home/alice/.state.mix-reclaim-r".into(),
+            expect: Expect::Absent,
+        };
+        let records = [
+            Record::Began {
+                request: "r".into(),
+            },
+            Record::Prepared {
+                seq: 0,
+                undo: vec![removal("/home/alice/.state.mix-reclaim-r", 7)],
+            },
+            Record::Prepared {
+                seq: 0,
+                undo: vec![restore.clone()],
+            },
+        ];
+
+        assert_eq!(
+            recover(&records),
+            Recovery::RollBack {
+                uncertain: vec![restore.clone()],
+                certain: Vec::new(),
+            }
+        );
+        let done = [records.to_vec(), vec![Record::Done { seq: 0 }]].concat();
+        assert_eq!(
+            recover(&done),
+            Recovery::RollBack {
+                uncertain: Vec::new(),
+                certain: vec![restore],
+            }
+        );
     }
 
     #[test]
