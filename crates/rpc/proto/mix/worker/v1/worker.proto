@@ -135,7 +135,14 @@ message Failure {
     Rollback rollback = 15;
     Empty interrupted = 16;
     Detail invalid_mirror = 17;
+    Conflict conflict = 18;
   }
+}
+
+message Conflict {
+  string subject = 1;
+  string expected = 2;
+  string found = 3;
 }
 
 message Empty {}

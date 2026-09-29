@@ -93,6 +93,11 @@ pub enum Failure {
     },
     UnsupportedTarget(String),
     InvalidMirror(String),
+    Conflict {
+        subject: String,
+        expected: String,
+        found: String,
+    },
     Target(TargetFailure),
     Decompression(String),
     MalformedArchive(String),

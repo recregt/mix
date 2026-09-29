@@ -8,7 +8,7 @@ use mix_events::{Ending, NodeId, Start, Tree};
 
 use crate::action::{Action, Fact, Failure, Outcome, Query, rollback_order};
 
-pub trait StepSpec {
+pub trait StepSpec: Send + Sync {
     fn key(&self) -> &'static str;
     fn title(&self) -> &'static str;
     fn queries(&self) -> Vec<Query>;

@@ -42,6 +42,11 @@ pub(crate) fn describe(error: &Error, command: &str) -> Diagnostic {
             "If you use `--mirror`, check that it serves the right files",
         ),
 
+        Error::Conflict { subject, .. } => Diagnostic::hinting(
+            format!("{subject} changed while mix was working, so mix left it alone"),
+            format!("Run `{command}` again; it starts from what is there now"),
+        ),
+
         Error::InvalidMirror(reason) => Diagnostic::hinting(
             format!("the mirror settings aren't valid: {reason}"),
             "Pass `--mirror` as an http or https URL, and `--mirror-key` as a single <name>:<key> entry",

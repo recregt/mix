@@ -16,7 +16,6 @@ mix-events = { path = "../events" }
 mix-exec = { path = "../exec" }
 mix-nixgen = { path = "../nixgen" }
 mix-pins = { path = "../pins" }
-async-trait = { workspace = true }
 futures-util = { workspace = true }
 liblzma = { version = "0.4.8", default-features = false, features = ["static"] }
 nix = { workspace = true }

@@ -34,6 +34,13 @@ pub enum Error {
     #[error("{0}")]
     InvalidMirror(String),
 
+    #[error("{subject} changed while mix was working: expected {expected}, found {found}")]
+    Conflict {
+        subject: String,
+        expected: String,
+        found: String,
+    },
+
     #[error(transparent)]
     Target(#[from] crate::target::Error),
 

@@ -1,7 +1,9 @@
 use std::path::Path;
 
 use std::sync::Mutex;
+
 use std::sync::atomic::{AtomicU64, Ordering};
+use tracing::Instrument;
 
 use mix_core::action::{Action, Fact, Failure, Kind, Outcome, PathFacts, Performed, Query};
 use mix_core::journal::Record;
@@ -192,6 +194,19 @@ impl Performer {
     }
 }
 
+pub trait Observer: Send {
+    fn flush(&mut self);
+    fn span(&self, node: mix_events::NodeId) -> Option<tracing::Span>;
+}
+
+impl Observer for () {
+    fn flush(&mut self) {}
+
+    fn span(&self, _node: mix_events::NodeId) -> Option<tracing::Span> {
+        None
+    }
+}
+
 pub trait Journal: Send {
     fn append(&mut self, record: &Record) -> Result<(), Failure>;
 }
@@ -216,6 +231,7 @@ pub async fn drive(
     scope: &Scope,
     stopped: &Stopped,
     journal: &mut dyn Journal,
+    observer: &mut dyn Observer,
 ) -> Report {
     let mut input = None;
     let mut seq = 0;
@@ -224,7 +240,9 @@ pub async fn drive(
         if let Some(cause) = stopped() {
             runner.stop(cause);
         }
-        match runner.step(tree, input.take()) {
+        let next = runner.step(tree, input.take());
+        observer.flush();
+        match next {
             Next::Observe(queries) => {
                 input = Some(Input::Facts(performer.observe(&queries).await));
             }
@@ -259,10 +277,14 @@ pub async fn drive(
                             undo: undo.to_vec(),
                         })
                     };
-                    performer
-                        .perform(&action, &scope, &mut progress, &mut prepared)
-                        .await
+                    let performing =
+                        performer.perform(&action, &scope, &mut progress, &mut prepared);
+                    match node.and_then(|node| observer.span(node)) {
+                        Some(span) => performing.instrument(span).await,
+                        None => performing.await,
+                    }
                 };
+                observer.flush();
                 match (&outcome, reverting, committing) {
                     (Ok(_), true, _) => keep(journal, &Record::Reverted { action }),
                     (Ok(_), false, true) => {
@@ -420,6 +442,7 @@ mod tests {
             &Scope::root(),
             &stopped,
             &mut journal,
+            &mut (),
         )
         .await;
         assert_eq!(journal.last(), Some(&Record::Ended));
