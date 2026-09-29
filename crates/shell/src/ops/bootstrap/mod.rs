@@ -14,7 +14,9 @@ use std::sync::Arc;
 use mix_core::action::{Digest, Failure};
 use mix_core::bootstrap::{Runtime, Settings, steps};
 use mix_core::plan::{Report, Runner, Verdict, diagnostic};
-use mix_events::v1::{BootstrapRequest, Cancellation, Command, command};
+use mix_events::v1::{
+    BootstrapRequest, Cancellation, Command, Diagnostic, Severity, Step, command, node_started,
+};
 use mix_events::{Ending, Outbox, ROOT, Start, Stopped, Tree};
 use mix_exec::Reason;
 
@@ -23,7 +25,7 @@ use crate::bridge::Bridge;
 use crate::drive::{Observer, Performer, drive};
 use crate::effect::files::Files;
 use crate::effect::generations::ProfileContext;
-use crate::effect::journal::{FileJournal, JOURNAL_DIR, recover_all};
+use crate::effect::journal::{FileJournal, JOURNAL_DIR, recover_all, unfinished};
 use crate::effect::mirror::{filter_mirror, mirror_url};
 
 pub struct Environment(());
@@ -36,6 +38,13 @@ impl Environment {
 
 fn request_id() -> String {
     uuid::Uuid::now_v7().to_string()
+}
+
+fn warning(failure: &Failure) -> Diagnostic {
+    Diagnostic {
+        severity: Severity::Warning as i32,
+        ..diagnostic(failure)
+    }
 }
 
 fn digest(hex: &str) -> Result<Digest> {
@@ -167,14 +176,7 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
         activity: Arc::clone(&ctx.reporters.activity),
         host: ctx.host.clone(),
     });
-    let journals = Path::new(JOURNAL_DIR);
-    let recovered = recover_all(journals, &mut performer, &scope.shielded()).await;
-    for (action, failure) in &recovered.failures {
-        tracing::warn!("could not finish an interrupted request ({action:?}): {failure:?}");
-    }
-    let mut journal = FileJournal::create(journals, &request).map_err(error_from)?;
-
-    let outbox = Arc::new(Outbox::new(request, || {}));
+    let outbox = Arc::new(Outbox::new(request.clone(), || {}));
     let mut bridge = Bridge::new(Arc::clone(&outbox), ctx.reporters.clone());
     let watched = scope.clone();
     let stopped: Stopped = Arc::new(move || match watched.reason()? {
@@ -198,6 +200,28 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
             },
         ),
     );
+    let journals = Path::new(JOURNAL_DIR);
+    if !unfinished(journals).is_empty() {
+        let node = tree
+            .start(
+                ROOT,
+                Start::new(
+                    "recover",
+                    node_started::Kind::Step(Step {
+                        title: "finish an interrupted request".to_string(),
+                    }),
+                )
+                .shielded(),
+            )
+            .expect("the root is open");
+        let recovered = recover_all(journals, &mut performer, &scope.shielded()).await;
+        for (_, failure) in &recovered.failures {
+            let _ = tree.warn(node, warning(failure));
+        }
+        let _ = tree.finish(node, Ending::succeeded());
+        bridge.flush();
+    }
+    let mut journal = FileJournal::create(journals, &request).map_err(error_from)?;
     let mut runner = Runner::new(ROOT, steps(&settings));
     let report = drive(
         &mut runner,
@@ -214,11 +238,11 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
         Verdict::Failed { failure, .. } => Ending::failed(diagnostic(failure)),
         Verdict::Cancelled(cause) => Ending::cancelled(*cause),
     };
+    if let Err(failure) = journal.finish() {
+        let _ = tree.warn(ROOT, warning(&failure));
+    }
     let _ = tree.finish(ROOT, ending);
     drop(tree);
     bridge.flush();
-    if let Err(failure) = journal.finish() {
-        tracing::warn!("could not remove the finished journal: {failure:?}");
-    }
     outcome(report)
 }
