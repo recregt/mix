@@ -33,6 +33,7 @@ pub struct Command {
     args: Vec<OsString>,
     env: Vec<(OsString, OsString)>,
     env_remove: Vec<OsString>,
+    env_clear: bool,
     user: Option<(u32, u32)>,
     input: Option<Vec<u8>>,
     stderr: Option<Box<dyn Drain>>,
@@ -53,6 +54,7 @@ impl Command {
             args: Vec::new(),
             env: Vec::new(),
             env_remove: Vec::new(),
+            env_clear: false,
             user: None,
             input: None,
             stderr: None,
@@ -85,6 +87,11 @@ impl Command {
         self
     }
 
+    pub fn env_clear(mut self) -> Self {
+        self.env_clear = true;
+        self
+    }
+
     pub fn as_user(mut self, uid: u32, gid: u32) -> Self {
         self.user = Some((uid, gid));
         self
@@ -110,6 +117,9 @@ impl Command {
     pub(crate) fn process(&self) -> tokio::process::Command {
         let mut process = tokio::process::Command::new(&self.program);
         process.args(&self.args);
+        if self.env_clear {
+            process.env_clear();
+        }
         for key in &self.env_remove {
             process.env_remove(key);
         }

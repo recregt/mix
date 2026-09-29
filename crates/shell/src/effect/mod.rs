@@ -3,6 +3,8 @@ pub(crate) mod exec;
 pub mod files;
 pub(crate) mod fs;
 pub(crate) mod git;
+pub mod identity;
 pub mod lock;
 pub(crate) mod mirror;
 pub(crate) mod systemd;
+pub mod tools;
