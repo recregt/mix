@@ -26,7 +26,7 @@ impl HealthReport {
 
 pub async fn audit(ctx: &Context) -> Vec<HealthReport> {
     tracing::info!("auditing managed environment");
-    let items = mix_core::models::targets(ctx.user.as_ref(), &mix_core::policy::Policy::default());
+    let items = mix_core::models::targets(ctx.user.as_ref(), &ctx.policy);
     let findings = join_all(items.iter().map(|item| target::inspect(item, &ctx.scope))).await;
     items
         .iter()

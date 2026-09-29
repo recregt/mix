@@ -16,6 +16,7 @@ pub fn failure_from_bootstrap(error: BootstrapError) -> Failure {
         BootstrapError::Network(error) => Failure::Network(error.to_string()),
         BootstrapError::Integrity { artifact, detail } => Failure::Integrity { artifact, detail },
         BootstrapError::UnsupportedTarget(target) => Failure::UnsupportedTarget(target),
+        BootstrapError::InvalidMirror(reason) => Failure::InvalidMirror(reason),
         BootstrapError::Target(error) => Failure::Target(target_failure_from(error)),
         BootstrapError::Decompression(detail) => Failure::Decompression(detail),
         BootstrapError::MalformedArchive(detail) => Failure::MalformedArchive(detail),
@@ -47,6 +48,7 @@ pub fn bootstrap_error_from(failure: Failure) -> BootstrapError {
         Failure::Network(message) => BootstrapError::Network(message.into()),
         Failure::Integrity { artifact, detail } => BootstrapError::Integrity { artifact, detail },
         Failure::UnsupportedTarget(target) => BootstrapError::UnsupportedTarget(target),
+        Failure::InvalidMirror(reason) => BootstrapError::InvalidMirror(reason),
         Failure::Target(failure) => BootstrapError::Target(target_error_from(failure)),
         Failure::Decompression(detail) => BootstrapError::Decompression(detail),
         Failure::MalformedArchive(detail) => BootstrapError::MalformedArchive(detail),
@@ -130,6 +132,7 @@ mod tests {
                 detail: "sha256 mismatch".into(),
             },
             BootstrapError::UnsupportedTarget("armv7l-linux".into()),
+            BootstrapError::InvalidMirror("the mirror must be an http or https URL".into()),
             BootstrapError::Target(TargetError::Unrepairable {
                 artifact: "/nix".into(),
                 reason: AppUnfixable::NotADirectory,

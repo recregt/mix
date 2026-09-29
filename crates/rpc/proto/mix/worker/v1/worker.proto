@@ -134,6 +134,7 @@ message Failure {
     Path cross_device_store = 14;
     Rollback rollback = 15;
     Empty interrupted = 16;
+    Detail invalid_mirror = 17;
   }
 }
 

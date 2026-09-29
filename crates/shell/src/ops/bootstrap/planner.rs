@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use mix_core::models::UserConfig;
+use mix_core::policy::{Mirror, Policy};
 use mix_core::{ActivityReporter, DownloadProgress, Step};
 
 use crate::HostConfig;
@@ -12,34 +13,25 @@ use crate::ops::bootstrap::steps::{
 };
 
 pub fn bootstrap_steps(
-    mirror: Option<&str>,
-    mirror_key: Option<&str>,
+    policy: &Policy,
     force: bool,
     progress: Arc<dyn DownloadProgress>,
     activity: Arc<dyn ActivityReporter>,
     user_config: Option<UserConfig>,
     host: HostConfig,
 ) -> Vec<Box<dyn Step<Error = Error>>> {
-    steps_for(
-        mirror,
-        mirror_key,
-        force,
-        progress,
-        activity,
-        user_config,
-        host,
-    )
+    steps_for(policy, force, progress, activity, user_config, host)
 }
 
 fn steps_for(
-    mirror: Option<&str>,
-    mirror_key: Option<&str>,
+    policy: &Policy,
     force: bool,
     progress: Arc<dyn DownloadProgress>,
     activity: Arc<dyn ActivityReporter>,
     user_config: Option<UserConfig>,
     host: HostConfig,
 ) -> Vec<Box<dyn Step<Error = Error>>> {
+    let mirror = policy.mirror().map(Mirror::url);
     let mut steps: Vec<Box<dyn Step<Error = Error>>> = Vec::new();
     if force {
         steps.push(Box::new(RemoveExistingInstallation));
@@ -48,15 +40,12 @@ fn steps_for(
     steps.push(Box::new(CreateNixTree::default()));
     steps.push(Box::new(CreateUsersAndGroups::default()));
     steps.push(Box::new(FetchAndUnpack::new(mirror, progress)));
-    steps.push(Box::new(ConfigureNixConf::new(
-        mix_core::policy::Policy::default(),
-    )));
+    steps.push(Box::new(ConfigureNixConf::new(policy.clone())));
     steps.push(Box::new(ConfigureSystemdService::default()));
     steps.push(Box::new(WriteHomeManagerConfig::new(user_config.clone())));
     steps.push(Box::new(ActivateHomeManagerConfig::new(
         user_config,
         mirror,
-        mirror_key,
         activity,
         host,
     )));
@@ -98,8 +87,7 @@ mod tests {
     #[test]
     fn the_home_manager_steps_run_last_and_in_order() {
         let steps = steps_for(
-            None,
-            None,
+            &Policy::default(),
             false,
             Arc::new(NoopProgress),
             noop_activity(),
@@ -116,8 +104,7 @@ mod tests {
     #[test]
     fn forcing_prepends_the_removal_step() {
         let steps = steps_for(
-            None,
-            None,
+            &Policy::default(),
             true,
             Arc::new(NoopProgress),
             noop_activity(),
@@ -130,8 +117,7 @@ mod tests {
     #[test]
     fn the_same_step_list_is_planned_with_or_without_a_user() {
         let with_user = steps_for(
-            None,
-            None,
+            &Policy::default(),
             false,
             Arc::new(NoopProgress),
             noop_activity(),
@@ -139,8 +125,7 @@ mod tests {
             HostConfig::default(),
         );
         let without_user = steps_for(
-            None,
-            None,
+            &Policy::default(),
             false,
             Arc::new(NoopProgress),
             noop_activity(),

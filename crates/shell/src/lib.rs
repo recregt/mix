@@ -12,7 +12,7 @@ pub mod ops;
 pub mod profile;
 pub mod target;
 
-pub use context::{Context, HostConfig, Reporters, RequestEnv};
+pub use context::{Context, HostConfig, Reporters};
 
 #[doc(hidden)]
 pub use effect::exec::output;

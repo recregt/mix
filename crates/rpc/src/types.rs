@@ -92,6 +92,7 @@ pub enum Failure {
         detail: String,
     },
     UnsupportedTarget(String),
+    InvalidMirror(String),
     Target(TargetFailure),
     Decompression(String),
     MalformedArchive(String),

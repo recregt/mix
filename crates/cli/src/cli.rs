@@ -27,11 +27,11 @@ pub struct Cli {
 pub enum Command {
     /// Initialize runtime and system dependencies
     Bootstrap {
-        /// Alternate URL to fetch the pinned Nix archive from
+        /// Mirror for the Nix archive, flake inputs and binaries, used by every user
         #[arg(long, env = "MIX_NIX_MIRROR")]
         mirror: Option<String>,
 
-        /// Public key the mirror's binary cache is signed with
+        /// Public key the mirror's binary cache is signed with, trusted machine-wide
         #[arg(long, env = "MIX_NIX_MIRROR_KEY")]
         mirror_key: Option<String>,
 
@@ -45,14 +45,6 @@ pub enum Command {
         /// Packages to add
         #[arg(required = true)]
         packages: Vec<String>,
-
-        /// Alternate URL to fetch the pinned Nix archive from
-        #[arg(long, env = "MIX_NIX_MIRROR")]
-        mirror: Option<String>,
-
-        /// Public key the mirror's binary cache is signed with
-        #[arg(long, env = "MIX_NIX_MIRROR_KEY")]
-        mirror_key: Option<String>,
 
         /// Report the result as JSON on stdout, for scripts
         #[arg(long)]
@@ -68,14 +60,6 @@ pub enum Command {
         /// Packages to remove
         #[arg(required = true)]
         packages: Vec<String>,
-
-        /// Alternate URL to fetch the pinned Nix archive from
-        #[arg(long, env = "MIX_NIX_MIRROR")]
-        mirror: Option<String>,
-
-        /// Public key the mirror's binary cache is signed with
-        #[arg(long, env = "MIX_NIX_MIRROR_KEY")]
-        mirror_key: Option<String>,
 
         /// Report the result as JSON on stdout, for scripts
         #[arg(long)]

@@ -241,6 +241,16 @@ impl mix_rpc::Worker for CliWorker {
             Err(error) => Outcome::Failure(Failure::Core(error)),
             Ok(_lock) => {
                 let mirror = request.mirror.as_ref();
+                let policy = match crate::commands::requested_policy(
+                    mirror.map(|mirror| mirror.url.as_str()),
+                    mirror.and_then(|mirror| mirror.key.as_deref()),
+                ) {
+                    Ok(policy) => policy,
+                    Err(error) => {
+                        self.0.stop();
+                        return Outcome::Failure(failure_from_bootstrap(error));
+                    }
+                };
                 let ctx = mix_shell::Context::new(mix_exec::Scope::root())
                     .with_user(
                         mix_shell::effect::accounts::user_by_uid(caller.uid)
@@ -251,10 +261,7 @@ impl mix_rpc::Worker for CliWorker {
                         steps: Arc::new(Steps(self.0.clone())),
                         activity: Arc::new(Activity(events.clone())),
                     })
-                    .with_env(mix_shell::RequestEnv {
-                        mirror: mirror.map(|mirror| mirror.url.clone()),
-                        mirror_key: mirror.and_then(|mirror| mirror.key.clone()),
-                    })
+                    .with_policy(policy)
                     .with_host(crate::commands::host_config());
                 let _watch = controls::watch(
                     &ctx.scope,
@@ -283,6 +290,7 @@ impl mix_rpc::Worker for CliWorker {
                         mix_shell::effect::accounts::user_by_uid(caller.uid)
                             .and_then(mix_shell::profile::existing_user_config_for),
                     )
+                    .with_policy(crate::commands::policy())
                     .with_host(crate::commands::host_config());
                 let _watch = controls::watch(
                     &ctx.scope,
