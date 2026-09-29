@@ -47,3 +47,23 @@ async fn killing_one_request_leaves_another_running() {
     assert!(!running.is_finished());
     running.abort();
 }
+
+#[tokio::test]
+async fn a_session_talks_both_ways_and_reports_how_it_ended() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let request = mix_exec::Scope::root();
+    let (session, mut stdin, stdout) = mix_exec::Command::new("sh")
+        .args(["-c", "read line; echo \"got $line\"; echo done >&2; exit 3"])
+        .session(&request)
+        .unwrap();
+
+    stdin.write_all(b"hello\n").await.unwrap();
+    let reply = BufReader::new(stdout).lines().next_line().await.unwrap();
+    drop(stdin);
+    let output = session.finish().await.unwrap();
+
+    assert_eq!(reply.as_deref(), Some("got hello"));
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(output.stderr, b"done\n");
+}

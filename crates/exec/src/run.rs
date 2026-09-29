@@ -41,6 +41,29 @@ pub struct Command {
 
 pub struct Foreground(tokio::process::Child);
 
+pub struct Session {
+    child: tokio::process::Child,
+    _group: group::Group,
+    stderr: tokio::task::JoinHandle<Vec<u8>>,
+    line: String,
+}
+
+impl Session {
+    pub async fn finish(mut self) -> Result<Output, Error> {
+        let status = self
+            .child
+            .wait()
+            .await
+            .map_err(|source| Error::spawn(self.line.clone(), source))?;
+        let stderr = self.stderr.await.unwrap_or_default();
+        Ok(Output {
+            status,
+            stdout: Vec::new(),
+            stderr,
+        })
+    }
+}
+
 impl Foreground {
     pub async fn wait(&mut self) -> std::io::Result<ExitStatus> {
         self.0.wait().await
@@ -138,6 +161,42 @@ impl Command {
             .spawn()
             .map(Foreground)
             .map_err(|source| Error::spawn(line, source))
+    }
+
+    pub fn session(
+        self,
+        scope: &Scope,
+    ) -> Result<
+        (
+            Session,
+            tokio::process::ChildStdin,
+            tokio::process::ChildStdout,
+        ),
+        Error,
+    > {
+        let line = self.line();
+        tracing::debug!("starting a session: {line}");
+        let mut process = self.process();
+        process
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let (mut child, group) = group::spawn(&mut process, scope.processes())
+            .map_err(|source| Error::spawn(line.clone(), source))?;
+        let stdin = child.stdin.take().expect("stdin was piped");
+        let stdout = child.stdout.take().expect("stdout was piped");
+        let stderr = child.stderr.take().expect("stderr was piped");
+        let stderr = tokio::spawn(drain(stderr, Box::new(Vec::new())));
+        Ok((
+            Session {
+                child,
+                _group: group,
+                stderr,
+                line,
+            },
+            stdin,
+            stdout,
+        ))
     }
 
     pub async fn run(self, scope: &Scope) -> Result<Output, Error> {
