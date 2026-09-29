@@ -49,7 +49,7 @@ pub async fn repair(ctx: &Context) -> Repair {
     tracing::info!("repairing managed environment");
     let user_config = ctx.user.as_ref();
     let scope = &ctx.scope;
-    let items = targets(user_config);
+    let items = targets(user_config, &mix_core::policy::Policy::default());
     let (mut reports, interrupted) = put_back(&items, scope).await;
 
     let shielded = scope.shielded();
