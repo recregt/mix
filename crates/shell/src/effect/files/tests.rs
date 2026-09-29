@@ -11,12 +11,16 @@ struct Root {
     files: Files,
 }
 
+fn me() -> u32 {
+    nix::unistd::Uid::current().as_raw()
+}
+
 fn root() -> Root {
     let dir = tempfile::tempdir().unwrap();
     for sub in ["etc", "var"] {
         std::fs::create_dir(dir.path().join(sub)).unwrap();
     }
-    let files = Files::open(dir.path(), "r1").unwrap();
+    let files = Files::open_trusting(dir.path(), "r1", me()).unwrap();
     Root { dir, files }
 }
 
@@ -443,5 +447,39 @@ fn reading_follows_links_inside_the_root_but_writing_never_does() {
     assert!(
         matches!(refused, Err(Failure::Conflict { .. })),
         "{refused:?}"
+    );
+}
+
+#[test]
+fn a_link_nobody_trusted_owns_is_never_followed_when_reading() {
+    if me() == 0 {
+        return;
+    }
+    let root = root();
+    std::fs::create_dir_all(root.real("/secret")).unwrap();
+    std::fs::write(root.real("/secret/key"), "private").unwrap();
+    std::os::unix::fs::symlink("/secret", root.real("/var/planted")).unwrap();
+    let as_root = Files::open(root.dir.path(), "r2").unwrap();
+
+    assert_eq!(
+        as_root.observe(&Query::Contents("/var/planted/key".into())),
+        Some(Fact::Contents(None))
+    );
+    assert_eq!(
+        root.files
+            .observe(&Query::Contents("/var/planted/key".into())),
+        Some(Fact::Contents(Some(Arc::from(&b"private"[..]))))
+    );
+}
+
+#[test]
+fn a_link_loop_ends_as_the_kernel_would_end_it() {
+    let root = root();
+    std::os::unix::fs::symlink("/var/b", root.real("/var/a")).unwrap();
+    std::os::unix::fs::symlink("/var/a", root.real("/var/b")).unwrap();
+
+    assert_eq!(
+        root.files.observe(&Query::Contents("/var/a".into())),
+        Some(Fact::Contents(None))
     );
 }

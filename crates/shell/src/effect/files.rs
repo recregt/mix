@@ -22,8 +22,11 @@ use Unrenamed::{AlreadyGone, Other};
 
 pub type Prepared<'a> = dyn FnMut(&[Action]) -> Result<(), Failure> + Send + 'a;
 
+const MAXSYMLINKS: usize = 40;
+
 pub struct Files {
     root: OwnedFd,
+    trusted: u32,
     request: String,
     pending: Vec<PathBuf>,
     next: u64,
@@ -94,6 +97,14 @@ fn done(undo: Vec<Action>) -> Outcome {
 
 impl Files {
     pub fn open(root: &Path, request: impl Into<String>) -> std::io::Result<Self> {
+        Self::open_trusting(root, request, 0)
+    }
+
+    pub fn open_trusting(
+        root: &Path,
+        request: impl Into<String>,
+        trusted: u32,
+    ) -> std::io::Result<Self> {
         let root = sys::open(
             root,
             OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
@@ -101,6 +112,7 @@ impl Files {
         )?;
         Ok(Self {
             root,
+            trusted,
             request: request.into(),
             pending: Vec::new(),
             next: 0,
@@ -120,7 +132,102 @@ impl Files {
     }
 
     fn place_for_reading(&self, path: &Path) -> Result<Place, Failure> {
-        self.place_with(path, ResolveFlags::IN_ROOT)
+        let (dir, name) = self.resolve(path, false)?;
+        Ok(Place {
+            path: path.to_path_buf(),
+            dir,
+            name,
+        })
+    }
+
+    fn resolve(&self, path: &Path, follow_last: bool) -> Result<(OwnedFd, OsString), Failure> {
+        let open_dir = |parent: &OwnedFd, name: &OsStr| {
+            sys::openat(
+                parent,
+                name,
+                OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+        };
+        let reopen_root = || {
+            sys::openat(
+                &self.root,
+                ".",
+                OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+        };
+        let mut remaining: std::collections::VecDeque<OsString> = std::collections::VecDeque::new();
+        for component in path.components() {
+            match component {
+                Component::RootDir => {}
+                Component::Normal(part) => remaining.push_back(part.to_os_string()),
+                _ => {
+                    return Err(conflict(
+                        path,
+                        "an absolute, normalised path",
+                        "a relative one",
+                    ));
+                }
+            }
+        }
+        let mut stack = vec![reopen_root().map_err(|errno| io(path, errno))?];
+        let mut hops = 0;
+        while let Some(name) = remaining.pop_front() {
+            if name == ".." {
+                if stack.len() > 1 {
+                    stack.pop();
+                }
+                continue;
+            }
+            let last = remaining.is_empty();
+            let dir = stack.last().expect("the root stays on the stack");
+            let stat = match sys::statx(dir, &name, AtFlags::SYMLINK_NOFOLLOW, WANTED) {
+                Ok(stat) => stat,
+                Err(Errno::NOENT) if last => {
+                    let dir = stack.pop().expect("the root stays on the stack");
+                    return Ok((dir, name));
+                }
+                Err(errno) => return Err(io(path, errno)),
+            };
+            if kind(&stat) == Kind::Symlink && (!last || follow_last) {
+                if stat.stx_uid != self.trusted {
+                    return Err(conflict(
+                        path,
+                        format!("links owned by uid {}", self.trusted),
+                        format!("a link owned by uid {}", stat.stx_uid),
+                    ));
+                }
+                hops += 1;
+                if hops > MAXSYMLINKS {
+                    return Err(Failure::Io {
+                        path: path.to_path_buf(),
+                        kind: std::io::Error::from(Errno::LOOP).kind(),
+                    });
+                }
+                let target =
+                    sys::readlinkat(dir, &name, Vec::new()).map_err(|errno| io(path, errno))?;
+                let target = PathBuf::from(OsStr::from_bytes(target.as_bytes()));
+                if target.is_absolute() {
+                    stack.truncate(1);
+                }
+                for part in target.components().rev() {
+                    match part {
+                        Component::Normal(part) => remaining.push_front(part.to_os_string()),
+                        Component::ParentDir => remaining.push_front(OsString::from("..")),
+                        _ => {}
+                    }
+                }
+                continue;
+            }
+            if last {
+                let dir = stack.pop().expect("the root stays on the stack");
+                return Ok((dir, name));
+            }
+            let next = open_dir(dir, &name).map_err(|errno| io(path, errno))?;
+            stack.push(next);
+        }
+        Err(conflict(path, "a path below the root", "the root itself"))
     }
 
     fn place_with(&self, path: &Path, resolve: ResolveFlags) -> Result<Place, Failure> {
@@ -644,13 +751,12 @@ impl Files {
     }
 
     fn contents(&self, path: &Path) -> Option<Vec<u8>> {
-        let relative = path.strip_prefix("/").ok()?;
-        let node = sys::openat2(
-            &self.root,
-            relative,
-            OFlags::RDONLY | OFlags::CLOEXEC,
+        let (dir, name) = self.resolve(path, true).ok()?;
+        let node = sys::openat(
+            &dir,
+            &name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
             Mode::empty(),
-            ResolveFlags::IN_ROOT,
         )
         .ok()?;
         if kind(&statx_fd(&node).ok()?) != Kind::File {
