@@ -79,6 +79,7 @@ struct Undoing {
     failed: bool,
 }
 
+#[repr(u8)]
 enum Phase {
     Opening,
     Checking {
@@ -93,14 +94,14 @@ enum Phase {
     },
     RollingBack {
         remaining: Vec<usize>,
-        current: Option<Undoing>,
+        undoing: bool,
         awaiting: bool,
     },
     Committing {
         awaiting: bool,
     },
     Closing,
-    Closed(Report),
+    Closed,
 }
 
 pub struct Runner {
@@ -119,6 +120,7 @@ pub struct Runner {
     independent: bool,
     after: After,
     outcomes: Vec<(Cow<'static, str>, StepOutcome)>,
+    undoing: Option<Undoing>,
 }
 
 impl Runner {
@@ -140,20 +142,24 @@ impl Runner {
             independent: false,
             after: After::Close,
             outcomes: Vec::new(),
+            undoing: None,
         }
     }
 
     pub fn independent(mut self) -> Self {
         self.independent = true;
+        self.outcomes.reserve_exact(self.steps.len());
         self
     }
 
-    fn record(&mut self, step: usize, outcome: StepOutcome) {
-        self.outcomes.push((self.steps[step].key(), outcome));
+    fn record(&mut self, step: usize, outcome: impl FnOnce() -> StepOutcome) {
+        if self.independent {
+            self.outcomes.push((self.steps[step].key(), outcome()));
+        }
     }
 
     fn fail(&mut self, step: usize, failure: Failure) {
-        self.record(step, StepOutcome::Failed(failure.clone()));
+        self.record(step, || StepOutcome::Failed(failure.clone()));
         let failed = Verdict::Failed {
             step: self.steps[step].key(),
             failure,
@@ -206,10 +212,9 @@ impl Runner {
         }
         match &self.phase {
             Phase::Executing { node, .. } => Some(*node),
-            Phase::RollingBack {
-                current: Some(undoing),
-                ..
-            } => Some(undoing.node),
+            Phase::RollingBack { undoing: true, .. } => {
+                self.undoing.as_ref().map(|undoing| undoing.node)
+            }
             _ => None,
         }
     }
@@ -243,12 +248,11 @@ impl Runner {
         loop {
             match std::mem::replace(&mut self.phase, Phase::Closing) {
                 Phase::Opening => {
-                    let keys: Vec<Cow<'static, str>> =
-                        self.steps.iter().map(|step| step.key()).collect();
                     self.plan = tree
                         .start(
                             self.parent,
-                            Start::new("plan", Kind::Plan(Plan::default())).planned(keys),
+                            Start::new("plan", Kind::Plan(Plan::default()))
+                                .planned(self.steps.iter().map(|step| step.key())),
                         )
                         .expect("the plan starts under a running parent");
                     self.phase = Phase::Checking {
@@ -295,7 +299,7 @@ impl Runner {
                         self.fail(step, failure);
                     } else if actions.is_empty() {
                         finish(tree, node, Ending::already_satisfied());
-                        self.record(step, StepOutcome::Satisfied);
+                        self.record(step, || StepOutcome::Satisfied);
                         self.phase = Phase::Checking {
                             step: step + 1,
                             asked: false,
@@ -317,13 +321,13 @@ impl Runner {
                 } => match self.stop {
                     Some(cause) if !self.steps[step].shielded() => {
                         finish(tree, node, Ending::cancelled(cause));
-                        self.record(step, StepOutcome::Cancelled(cause));
+                        self.record(step, || StepOutcome::Cancelled(cause));
                         self.cancel(cause, Some(step));
                     }
                     _ => match queue.pop_front() {
                         None => {
                             finish(tree, node, Ending::succeeded());
-                            self.record(step, StepOutcome::Changed);
+                            self.record(step, || StepOutcome::Changed);
                             self.phase = Phase::Checking {
                                 step: step + 1,
                                 asked: false,
@@ -363,7 +367,7 @@ impl Runner {
                         Err(Failure::Cancelled) => {
                             let cause = *self.stop.get_or_insert(Cancellation::Interrupted);
                             finish(tree, node, Ending::cancelled(cause));
-                            self.record(step, StepOutcome::Cancelled(cause));
+                            self.record(step, || StepOutcome::Cancelled(cause));
                             self.cancel(cause, Some(step));
                         }
                         Err(failure) => {
@@ -374,7 +378,7 @@ impl Runner {
                 }
                 Phase::RollingBack {
                     mut remaining,
-                    current: None,
+                    undoing: false,
                     ..
                 } => match remaining.pop() {
                     None => match std::mem::replace(&mut self.after, After::Close) {
@@ -410,66 +414,72 @@ impl Runner {
                             .collect();
                         self.journal[step].clear();
                         self.doubts.retain(|doubt| doubt.step != step);
+                        self.undoing = Some(Undoing {
+                            step,
+                            node,
+                            queue,
+                            doubtful,
+                            doubting: false,
+                            failed: false,
+                        });
                         self.phase = Phase::RollingBack {
                             remaining,
-                            current: Some(Undoing {
-                                step,
-                                node,
-                                queue,
-                                doubtful,
-                                doubting: false,
-                                failed: false,
-                            }),
+                            undoing: true,
                             awaiting: false,
                         };
                     }
                 },
                 Phase::RollingBack {
                     remaining,
-                    current: Some(mut undoing),
+                    undoing: true,
                     awaiting: false,
-                } => match undoing
-                    .doubtful
-                    .pop_front()
-                    .map(|action| (action, true))
-                    .or_else(|| undoing.queue.pop_front().map(|action| (action, false)))
-                {
-                    None => {
-                        let ending = if undoing.failed {
-                            Ending::failed(rollback_diagnostic(
-                                &self.rollback_failures,
-                                &self.steps[undoing.step].key(),
-                            ))
-                        } else {
-                            Ending::succeeded()
-                        };
-                        finish(tree, undoing.node, ending);
-                        self.phase = Phase::RollingBack {
-                            remaining,
-                            current: None,
-                            awaiting: false,
-                        };
+                } => {
+                    let undoing = self.undoing.as_mut().expect("a step is being undone");
+                    match undoing
+                        .doubtful
+                        .pop_front()
+                        .map(|action| (action, true))
+                        .or_else(|| undoing.queue.pop_front().map(|action| (action, false)))
+                    {
+                        None => {
+                            let undoing = self.undoing.take().expect("a step is being undone");
+                            let ending = if undoing.failed {
+                                Ending::failed(rollback_diagnostic(
+                                    &self.rollback_failures,
+                                    &self.steps[undoing.step].key(),
+                                ))
+                            } else {
+                                Ending::succeeded()
+                            };
+                            finish(tree, undoing.node, ending);
+                            self.phase = Phase::RollingBack {
+                                remaining,
+                                undoing: false,
+                                awaiting: false,
+                            };
+                        }
+                        Some((action, doubting)) => {
+                            undoing.doubting = doubting;
+                            let node = undoing.node;
+                            self.phase = Phase::RollingBack {
+                                remaining,
+                                undoing: true,
+                                awaiting: true,
+                            };
+                            return self.act(tree, node, action);
+                        }
                     }
-                    Some((action, doubting)) => {
-                        undoing.doubting = doubting;
-                        let node = undoing.node;
-                        self.phase = Phase::RollingBack {
-                            remaining,
-                            current: Some(undoing),
-                            awaiting: true,
-                        };
-                        return self.act(tree, node, action);
-                    }
-                },
+                }
                 Phase::RollingBack {
                     remaining,
-                    current: Some(mut undoing),
+                    undoing: true,
                     awaiting: true,
                 } => {
                     let Some(Input::Done(outcome)) = input.take() else {
                         panic!("an undo is answered with its outcome");
                     };
                     self.acted(tree, &outcome, self.stop);
+                    let undoing = self.undoing.as_mut().expect("a step is being undone");
                     if let Err(failure) = outcome
                         && !undoing.doubting
                     {
@@ -479,7 +489,7 @@ impl Runner {
                     }
                     self.phase = Phase::RollingBack {
                         remaining,
-                        current: Some(undoing),
+                        undoing: true,
                         awaiting: false,
                     };
                 }
@@ -511,18 +521,14 @@ impl Runner {
                         ending = ending.with_diagnostic(incomplete);
                     }
                     finish(tree, self.plan, ending);
-                    let report = Report {
+                    self.phase = Phase::Closed;
+                    return Next::Finished(Report {
                         verdict,
-                        rollback_failures: self.rollback_failures.clone(),
-                        steps: self.outcomes.clone(),
-                    };
-                    self.phase = Phase::Closed(report.clone());
-                    return Next::Finished(report);
+                        rollback_failures: std::mem::take(&mut self.rollback_failures),
+                        steps: std::mem::take(&mut self.outcomes),
+                    });
                 }
-                Phase::Closed(report) => {
-                    self.phase = Phase::Closed(report.clone());
-                    return Next::Finished(report);
-                }
+                Phase::Closed => panic!("a finished plan is not stepped again"),
             }
         }
     }
@@ -558,7 +564,7 @@ impl Runner {
         self.after = after;
         self.phase = Phase::RollingBack {
             remaining: if owned { vec![step] } else { Vec::new() },
-            current: None,
+            undoing: false,
             awaiting: false,
         };
     }
@@ -572,7 +578,7 @@ impl Runner {
             .collect();
         self.phase = Phase::RollingBack {
             remaining,
-            current: None,
+            undoing: false,
             awaiting: false,
         };
     }
