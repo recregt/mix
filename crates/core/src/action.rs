@@ -129,6 +129,11 @@ pub enum Action {
         user: InvokingUser,
         allow_source_builds: bool,
     },
+    SwitchGeneration {
+        user: InvokingUser,
+        generation: Option<u64>,
+        expect: Option<u64>,
+    },
     RecordState {
         user: InvokingUser,
     },
@@ -166,14 +171,7 @@ pub enum Failure {
         program: String,
         kind: std::io::ErrorKind,
     },
-    Unit {
-        unit: String,
-        job_result: String,
-        active_state: String,
-        sub_state: String,
-        unit_result: String,
-        invocation: Option<String>,
-    },
+    Unit(Box<UnitFailure>),
     SystemdUnreachable,
     Network {
         url: String,
@@ -183,6 +181,16 @@ pub enum Failure {
         found: Digest,
     },
     Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnitFailure {
+    pub unit: String,
+    pub job_result: String,
+    pub active_state: String,
+    pub sub_state: String,
+    pub unit_result: String,
+    pub invocation: Option<String>,
 }
 
 pub type Outcome = Result<Performed, Failure>;

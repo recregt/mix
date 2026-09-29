@@ -2,6 +2,8 @@ pub mod action;
 pub mod build_graph;
 pub mod constants;
 pub mod error;
+#[cfg(any(test, feature = "model"))]
+pub mod model;
 pub mod models;
 pub mod nix_log;
 pub mod nix_plan;

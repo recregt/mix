@@ -5,6 +5,9 @@ edition = "2024"
 authors = ["Ömer Tekin"]
 license = "MPL-2.0"
 
+[features]
+model = []
+
 [dependencies]
 mix-exec = { path = "../exec" }
 async-trait = { workspace = true }
