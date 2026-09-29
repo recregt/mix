@@ -29,6 +29,7 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+uuid = { version = "1.26.1", features = ["v7"] }
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 
 [build-dependencies]

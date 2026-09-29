@@ -34,10 +34,7 @@ impl Environment {
 }
 
 fn request_id() -> String {
-    let since = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    format!("{}-{}", since.as_nanos(), std::process::id())
+    uuid::Uuid::now_v7().to_string()
 }
 
 fn digest(hex: &str) -> Result<Digest> {
