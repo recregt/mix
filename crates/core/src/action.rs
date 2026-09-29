@@ -330,6 +330,13 @@ pub enum Query {
     Group(String),
     User(String),
     Unit(String),
+    Profile(InvokingUser),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProfileFacts {
+    pub generations: Vec<u64>,
+    pub active: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -388,6 +395,7 @@ pub enum Fact {
     Group(Option<GroupFacts>),
     User(Option<UserFacts>),
     Unit(UnitFacts),
+    Profile(ProfileFacts),
 }
 
 pub fn rollback_order(journal: &[Vec<Action>]) -> Vec<Action> {

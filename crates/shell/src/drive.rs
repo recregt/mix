@@ -211,6 +211,7 @@ impl Performer {
                     .files
                     .observe(query)
                     .or_else(|| identity::observe(query))
+                    .or_else(|| generations::observe(query))
                     .expect("every query has an observer"),
             };
             facts.push(fact);

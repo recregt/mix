@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::action::{
     Action, Expect, Fact, Failure, FileId, GroupFacts, Kind, Outcome, Owner, PathFacts, Performed,
-    Query, UnitFacts, UnitFailure, UnitOperation, UserFacts, UserSpec,
+    ProfileFacts, Query, UnitFacts, UnitFailure, UnitOperation, UserFacts, UserSpec,
 };
 use crate::paths::{DEFAULT_PROFILE_NIX_ENV, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SOCKET_SRC};
 use crate::privilege::InvokingUser;
@@ -79,6 +79,7 @@ impl Eq for Unit {}
 pub struct Profile {
     pub generations: Vec<u64>,
     pub active: Option<u64>,
+    pub built: BTreeMap<u64, Vec<Option<Arc<[u8]>>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -782,10 +783,35 @@ impl World {
                         kind: std::io::ErrorKind::NotFound,
                     });
                 }
+                let state = crate::paths::mix_state_dir(&user.home);
+                let config: Vec<Option<Arc<[u8]>>> = [
+                    crate::paths::FLAKE_NIX,
+                    crate::paths::HOME_NIX,
+                    crate::paths::FLAKE_LOCK,
+                ]
+                .iter()
+                .map(|file| self.contents(state.join(file)).map(Arc::from))
+                .collect();
                 let profile = self.profiles.entry(user.uid).or_default();
                 let previous = profile.active;
-                let generation = profile.generations.iter().max().map_or(1, |last| last + 1);
+                let last = profile.generations.iter().max().copied();
+                if let Some(last) = last
+                    && profile.built.get(&last) == Some(&config)
+                {
+                    profile.active = Some(last);
+                    return done(if previous == Some(last) {
+                        Vec::new()
+                    } else {
+                        vec![Action::SwitchGeneration {
+                            user: user.clone(),
+                            generation: previous,
+                            expect: Some(last),
+                        }]
+                    });
+                }
+                let generation = last.map_or(1, |last| last + 1);
                 profile.generations.push(generation);
+                profile.built.insert(generation, config);
                 profile.active = Some(generation);
                 done(vec![
                     Action::SwitchGeneration {
@@ -816,6 +842,7 @@ impl World {
                     ));
                 }
                 profile.generations.retain(|kept| kept != generation);
+                profile.built.remove(generation);
                 if profile.generations.is_empty() && profile.active.is_none() {
                     self.profiles.remove(&user.uid);
                 }
@@ -1062,6 +1089,19 @@ impl World {
             Query::Contents(path) => Fact::Contents(self.contents(path).map(Arc::from)),
             Query::Group(name) => Fact::Group(self.groups.get(name).cloned()),
             Query::User(name) => Fact::User(self.users.get(name).cloned()),
+            Query::Profile(user) => Fact::Profile(
+                self.profiles
+                    .get(&user.uid)
+                    .map(|profile| {
+                        let mut generations = profile.generations.clone();
+                        generations.sort_unstable();
+                        ProfileFacts {
+                            generations,
+                            active: profile.active,
+                        }
+                    })
+                    .unwrap_or_default(),
+            ),
             Query::Unit(name) => {
                 let facts = self.units.get(name).cloned().unwrap_or_default();
                 let file = self.contents(unit_path(name)).map(Arc::from);
@@ -1458,6 +1498,61 @@ mod tests {
         }));
 
         assert!(matches!(refused, Err(Failure::Conflict { .. })));
+    }
+
+    #[test]
+    fn activating_an_unchanged_config_reuses_the_last_generation() {
+        let mut world = World::default();
+        world
+            .with_dir("/nix", 0o755, ROOT)
+            .with_dir("/nix/var", 0o755, ROOT)
+            .with_dir("/nix/var/nix", 0o755, ROOT)
+            .with_dir("/nix/var/nix/profiles", 0o755, ROOT);
+        let user = InvokingUser {
+            uid: 1000,
+            gid: 1000,
+            name: "alice".into(),
+            home: "/home/alice".into(),
+        };
+        let activate = Action::ActivateProfile {
+            user: user.clone(),
+            allow_source_builds: true,
+        };
+        run(
+            &mut world,
+            &[Action::InstallRuntime {
+                url: "https://example.invalid/nix.tar.xz".into(),
+                sha256: crate::action::Digest([0; 32]),
+                size: 1,
+            }],
+        );
+        world.apply(&activate).unwrap();
+        let once = world.clone();
+
+        let again = world.apply(&activate).unwrap();
+
+        assert!(again.undo.is_empty());
+        assert_eq!(world, once);
+        world
+            .apply(&Action::SwitchGeneration {
+                user: user.clone(),
+                generation: None,
+                expect: Some(1),
+            })
+            .unwrap();
+        let back = world.apply(&activate).unwrap();
+        assert_eq!(
+            back.undo,
+            [Action::SwitchGeneration {
+                user: user.clone(),
+                generation: None,
+                expect: Some(1),
+            }]
+        );
+        assert_eq!(
+            world.profile(&user).map(|p| p.generations.clone()),
+            Some(vec![1])
+        );
     }
 
     #[test]

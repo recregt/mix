@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use mix_core::ActivityReporter;
-use mix_core::action::{Action, Failure, Outcome, Performed};
+use mix_core::action::{Action, Fact, Failure, Outcome, Performed, ProfileFacts, Query};
 use mix_core::paths::{DEFAULT_PROFILE_NIX_ENV, HOME_MANAGER_PROFILE_NAME, nix_profiles_dir};
 use mix_core::privilege::InvokingUser;
 use mix_exec::Scope;
@@ -30,6 +30,18 @@ pub fn generation_of(link_name: &str) -> Option<u64> {
         .strip_suffix("-link")?
         .parse()
         .ok()
+}
+
+pub fn observe(query: &Query) -> Option<Fact> {
+    let Query::Profile(user) = query else {
+        return None;
+    };
+    let mut generations = existing(user);
+    generations.sort_unstable();
+    Some(Fact::Profile(ProfileFacts {
+        generations,
+        active: current(user),
+    }))
 }
 
 fn current(user: &InvokingUser) -> Option<u64> {
@@ -203,7 +215,8 @@ async fn activate(
     prepared: &mut Prepared<'_>,
 ) -> Outcome {
     let previous = current(user);
-    let predicted = existing(user).into_iter().max().map_or(1, |last| last + 1);
+    let before = existing(user);
+    let predicted = before.iter().max().map_or(1, |last| last + 1);
     prepared(&undo_activation(user, previous, predicted))?;
     let policy = if allow_source_builds {
         BuildPolicy::AllowSource
@@ -224,8 +237,10 @@ async fn activate(
         profile::activate_generation(user, &generation, &context.activity, scope).await
     {
         let shielded = scope.shielded();
-        if new != previous.unwrap_or(0) {
+        if previous != Some(new) {
             let _ = switch_to(user, previous, context, &shielded).await;
+        }
+        if !before.contains(&new) {
             let _ = run_as_reporting(
                 user,
                 DEFAULT_PROFILE_NIX_ENV,
@@ -243,7 +258,17 @@ async fn activate(
         return Err(profile_failure(error));
     }
     Ok(Performed {
-        undo: undo_activation(user, previous, new),
+        undo: if previous == Some(new) {
+            Vec::new()
+        } else if before.contains(&new) {
+            vec![Action::SwitchGeneration {
+                user: user.clone(),
+                generation: previous,
+                expect: Some(new),
+            }]
+        } else {
+            undo_activation(user, previous, new)
+        },
     })
 }
 
