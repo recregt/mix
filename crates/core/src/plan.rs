@@ -1,8 +1,9 @@
 use std::collections::VecDeque;
 
 use mix_events::v1::{
-    Cancellation, Code, CommandDetail, Diagnostic, IntegrityDetail, IoDetail, NetworkDetail, Plan,
-    Rollback, Severity, Step, StepsDetail, diagnostic::Detail, node_started::Kind,
+    Action as ActionNode, Cancellation, Code, CommandDetail, Diagnostic, IntegrityDetail, IoDetail,
+    NetworkDetail, Operation, Plan, Rollback, Severity, Step, StepsDetail, diagnostic::Detail,
+    node_started::Kind,
 };
 use mix_events::{Ending, NodeId, Start, Tree};
 
@@ -97,6 +98,8 @@ pub struct Runner {
     stop: Option<Cancellation>,
     verdict: Option<Verdict>,
     rollback_failures: Vec<(&'static str, Failure)>,
+    acting: Option<NodeId>,
+    performed: u64,
 }
 
 impl Runner {
@@ -113,10 +116,48 @@ impl Runner {
             stop: None,
             verdict: None,
             rollback_failures: Vec::new(),
+            acting: None,
+            performed: 0,
         }
     }
 
+    fn act(&mut self, tree: &mut Tree, parent: NodeId, action: Action) -> Next {
+        self.performed += 1;
+        let (operation, subject) = describe(&action);
+        self.acting = Some(
+            tree.start(
+                parent,
+                Start::new(
+                    format!("action-{}", self.performed),
+                    Kind::Action(ActionNode {
+                        operation: operation as i32,
+                        subject,
+                    }),
+                ),
+            )
+            .expect("an action starts under a running node"),
+        );
+        Next::Perform(action)
+    }
+
+    fn acted(&mut self, tree: &mut Tree, outcome: &Outcome, cause: Option<Cancellation>) {
+        let Some(node) = self.acting.take() else {
+            return;
+        };
+        let ending = match outcome {
+            Ok(_) => Ending::succeeded(),
+            Err(Failure::Cancelled) => {
+                Ending::cancelled(cause.unwrap_or(Cancellation::Interrupted))
+            }
+            Err(failure) => Ending::failed(diagnostic(failure)),
+        };
+        finish(tree, node, ending);
+    }
+
     pub fn current_node(&self) -> Option<NodeId> {
+        if self.acting.is_some() {
+            return self.acting;
+        }
         match &self.phase {
             Phase::Executing { node, .. } => Some(*node),
             Phase::RollingBack {
@@ -254,7 +295,7 @@ impl Runner {
                                 queue,
                                 awaiting: true,
                             };
-                            return Next::Perform(action);
+                            return self.act(tree, node, action);
                         }
                     },
                 },
@@ -267,6 +308,7 @@ impl Runner {
                     let Some(Input::Done(outcome)) = input.take() else {
                         panic!("an action is answered with its outcome");
                     };
+                    self.acted(tree, &outcome, self.stop);
                     match outcome {
                         Ok(performed) => {
                             self.journal[step].push(performed.undo);
@@ -361,12 +403,13 @@ impl Runner {
                     }
                     Some((action, doubting)) => {
                         undoing.doubting = doubting;
+                        let node = undoing.node;
                         self.phase = Phase::RollingBack {
                             remaining,
                             current: Some(undoing),
                             awaiting: true,
                         };
-                        return Next::Perform(action);
+                        return self.act(tree, node, action);
                     }
                 },
                 Phase::RollingBack {
@@ -377,6 +420,7 @@ impl Runner {
                     let Some(Input::Done(outcome)) = input.take() else {
                         panic!("an undo is answered with its outcome");
                     };
+                    self.acted(tree, &outcome, self.stop);
                     if let Err(failure) = outcome
                         && !undoing.doubting
                     {
@@ -392,12 +436,13 @@ impl Runner {
                 }
                 Phase::Committing { awaiting: false } => {
                     self.phase = Phase::Committing { awaiting: true };
-                    return Next::Perform(Action::Commit);
+                    return self.act(tree, self.plan, Action::Commit);
                 }
                 Phase::Committing { awaiting: true } => {
                     let Some(Input::Done(outcome)) = input.take() else {
                         panic!("the commit is answered with its outcome");
                     };
+                    self.acted(tree, &outcome, self.stop);
                     if let Err(failure) = outcome {
                         tree.warn(self.plan, diagnostic(&failure))
                             .expect("the plan is running");
@@ -449,6 +494,46 @@ impl Runner {
             current: None,
             awaiting: false,
         };
+    }
+}
+
+pub fn describe(action: &Action) -> (Operation, String) {
+    let path = |path: &std::path::Path| path.display().to_string();
+    match action {
+        Action::CreateDir { path: at, .. } => (Operation::CreateDir, path(at)),
+        Action::PutFile { path: at, .. } => (Operation::PutFile, path(at)),
+        Action::SetMode { path: at, .. } => (Operation::SetMode, path(at)),
+        Action::SetOwner { path: at, .. } => (Operation::SetOwner, path(at)),
+        Action::SetAside { path: at, .. } => (Operation::SetAside, path(at)),
+        Action::RemoveCreated { path: at, .. } => (Operation::RemoveCreated, path(at)),
+        Action::RemoveCreatedTree { path: at, .. } => (Operation::RemoveCreatedTree, path(at)),
+        Action::Restore { path: at, .. } => (Operation::Restore, path(at)),
+        Action::ReclaimTree { path: at, .. } => (Operation::ReclaimTree, path(at)),
+        Action::CopyTree { to, .. } => (Operation::CopyTree, path(to)),
+        Action::AddGroup { name, .. } => (Operation::AddGroup, name.clone()),
+        Action::SetGroupGid { name, .. } => (Operation::SetGroupGid, name.clone()),
+        Action::DeleteGroup { name, .. } => (Operation::DeleteGroup, name.clone()),
+        Action::AddUser(spec) => (Operation::AddUser, spec.name.clone()),
+        Action::SetUserIds { name, .. } => (Operation::SetUserIds, name.clone()),
+        Action::DeleteUser { name, .. } => (Operation::DeleteUser, name.clone()),
+        Action::AddMember { group, user } => (Operation::AddMember, format!("{user} in {group}")),
+        Action::RemoveMember { group, user } => {
+            (Operation::RemoveMember, format!("{user} in {group}"))
+        }
+        Action::InstallUnit { unit, .. } => (Operation::InstallUnit, unit.clone()),
+        Action::EnableUnit { unit } => (Operation::EnableUnit, unit.clone()),
+        Action::DisableUnit { unit } => (Operation::DisableUnit, unit.clone()),
+        Action::StartUnit { unit } => (Operation::StartUnit, unit.clone()),
+        Action::StopUnit { unit } => (Operation::StopUnit, unit.clone()),
+        Action::RestartUnit { unit } => (Operation::RestartUnit, unit.clone()),
+        Action::DaemonReload => (Operation::DaemonReload, String::new()),
+        Action::InstallRuntime { url, .. } => (Operation::InstallRuntime, url.clone()),
+        Action::RemoveRuntime { .. } => (Operation::RemoveRuntime, String::new()),
+        Action::ActivateProfile { user, .. } => (Operation::ActivateProfile, user.name.clone()),
+        Action::SwitchGeneration { user, .. } => (Operation::SwitchGeneration, user.name.clone()),
+        Action::DeleteGeneration { user, .. } => (Operation::DeleteGeneration, user.name.clone()),
+        Action::RecordState { user } => (Operation::RecordState, user.name.clone()),
+        Action::Commit => (Operation::Commit, String::new()),
     }
 }
 

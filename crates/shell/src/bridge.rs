@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use mix_events::v1::{
@@ -15,6 +15,7 @@ pub struct Bridge {
     spans: HashMap<NodeId, tracing::Span>,
     titles: HashMap<NodeId, String>,
     received: HashMap<NodeId, u64>,
+    actions: HashSet<NodeId>,
 }
 
 impl Bridge {
@@ -25,6 +26,7 @@ impl Bridge {
             spans: HashMap::new(),
             titles: HashMap::new(),
             received: HashMap::new(),
+            actions: HashSet::new(),
         }
     }
 
@@ -52,8 +54,18 @@ impl Bridge {
                     self.reporters.steps.on_step_span(&span);
                     self.spans.insert(node.id, span);
                 }
+                Some(node_started::Kind::Action(_)) => {
+                    if let Some(span) = self.spans.get(&node.parent).cloned() {
+                        self.actions.insert(node.id);
+                        self.spans.insert(node.id, span);
+                    }
+                }
                 _ => {}
             },
+            Event::NodeFinished(node) if self.actions.remove(&node.id) => {
+                self.spans.remove(&node.id);
+                self.received.remove(&node.id);
+            }
             Event::NodeFinished(node) => {
                 self.received.remove(&node.id);
                 let failed = node.status() == Status::Failed;
@@ -173,9 +185,21 @@ mod tests {
                 ),
             )
             .unwrap();
+        let action = tree
+            .start(
+                step,
+                Start::new(
+                    "action-1",
+                    node_started::Kind::Action(mix_events::v1::Action {
+                        operation: mix_events::v1::Operation::InstallRuntime as i32,
+                        subject: "https://mirror/nix.tar.xz".into(),
+                    }),
+                ),
+            )
+            .unwrap();
         for done in [4, 10] {
             tree.progress(
-                step,
+                action,
                 node_progress::Progress::Bytes(Bytes {
                     done,
                     total: Some(10),
@@ -184,6 +208,7 @@ mod tests {
             .unwrap();
             bridge.flush();
         }
+        tree.finish(action, Ending::succeeded()).unwrap();
         tree.finish(step, Ending::succeeded()).unwrap();
         bridge.flush();
 

@@ -278,6 +278,67 @@ fn a_fresh_run_does_every_step_and_commits() {
 }
 
 #[test]
+fn every_action_and_every_undo_is_a_node_under_what_ran_it() {
+    let mut world = World::default();
+
+    let run = drive(
+        &mut world,
+        bootstrap_like(),
+        Script {
+            fail_at: Some(1),
+            ..Script::default()
+        },
+    );
+
+    let started: Vec<(String, ActionNode)> = run
+        .stream
+        .iter()
+        .filter_map(|envelope| match &envelope.event {
+            Some(mix_events::v1::envelope::Event::NodeStarted(node)) => match &node.kind {
+                Some(Kind::Action(action)) => Some((node.key.clone(), action.clone())),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    let described = |operation: Operation, subject: &str| ActionNode {
+        operation: operation as i32,
+        subject: subject.to_string(),
+    };
+    assert_eq!(
+        started,
+        [
+            (
+                "action-1".to_string(),
+                described(Operation::CreateDir, "/nix")
+            ),
+            (
+                "action-2".to_string(),
+                described(Operation::CreateDir, "/nix/var")
+            ),
+            (
+                "action-3".to_string(),
+                described(Operation::RemoveCreated, "/nix")
+            ),
+        ]
+    );
+    for (path, status) in [
+        ("bootstrap/plan/create-nix-dir/action-1", Status::Succeeded),
+        ("bootstrap/plan/create-nix-var/action-2", Status::Failed),
+        (
+            "bootstrap/plan/rollback:create-nix-dir/action-3",
+            Status::Succeeded,
+        ),
+    ] {
+        assert_eq!(
+            outcome(&run, path),
+            Some(EventOutcome::Finished(status)),
+            "{path}"
+        );
+    }
+}
+
+#[test]
 fn a_second_run_finds_everything_satisfied_and_does_nothing() {
     let mut world = World::default();
     drive(&mut world, bootstrap_like(), Script::default());
