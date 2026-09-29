@@ -29,6 +29,7 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 
 [build-dependencies]
 mix-pins = { path = "../pins" }
