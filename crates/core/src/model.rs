@@ -6,7 +6,7 @@ use crate::action::{
     Action, Expect, Fact, Failure, FileId, GroupFacts, Kind, Outcome, Owner, PathFacts, Performed,
     Query, UnitFacts, UnitFailure, UserFacts, UserSpec,
 };
-use crate::paths::DEFAULT_PROFILE_NIX_ENV;
+use crate::paths::{DEFAULT_PROFILE_NIX_ENV, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SOCKET_SRC};
 use crate::privilege::InvokingUser;
 
 pub use crate::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
@@ -17,6 +17,15 @@ const ROOT: Owner = (0, 0);
 pub enum Content {
     Directory,
     File(Arc<[u8]>),
+}
+
+impl Entry {
+    pub fn content_kind(&self) -> &'static str {
+        match self.content {
+            Content::Directory => "directory",
+            Content::File(_) => "file",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,13 +65,21 @@ impl PartialEq for World {
         self.files == other.files
             && self.groups == other.groups
             && self.users == other.users
-            && self.units == other.units
+            && self.meaningful_units().eq(other.meaningful_units())
             && self.profiles == other.profiles
             && self.pending == other.pending
     }
 }
 
 impl Eq for World {}
+
+impl World {
+    fn meaningful_units(&self) -> impl Iterator<Item = (&String, &Unit)> {
+        self.units
+            .iter()
+            .filter(|(_, unit)| **unit != Unit::default())
+    }
+}
 
 impl Default for World {
     fn default() -> Self {
@@ -217,7 +234,12 @@ impl World {
         for old in self.subtree(from) {
             let entry = self.files.remove(&old).expect("listed above");
             let rest = old.strip_prefix(from).expect("inside the subtree");
-            self.files.insert(to.join(rest), entry);
+            let new = if rest.as_os_str().is_empty() {
+                to.to_path_buf()
+            } else {
+                to.join(rest)
+            };
+            self.files.insert(new, entry);
         }
     }
 
@@ -365,6 +387,13 @@ impl World {
                 self.files.remove(path);
                 done(Vec::new())
             }
+            Action::RemoveCreatedTree { path, expect } => {
+                self.matches(path, Expect::Present(*expect))?;
+                for entry in self.subtree(path) {
+                    self.files.remove(&entry);
+                }
+                done(Vec::new())
+            }
             Action::Restore { path, from, expect } => {
                 self.matches(path, *expect)?;
                 if !self.files.contains_key(from) {
@@ -447,6 +476,7 @@ impl World {
                 for group in &spec.groups {
                     if let Some(group) = self.groups.get_mut(group) {
                         group.members.push(spec.name.clone());
+                        group.members.sort();
                     }
                 }
                 done(vec![Action::DeleteUser {
@@ -498,6 +528,7 @@ impl World {
                     ));
                 }
                 facts.members.push(user.clone());
+                facts.members.sort();
                 done(vec![Action::RemoveMember {
                     group: group.clone(),
                     user: user.clone(),
@@ -603,11 +634,39 @@ impl World {
                 let generation = profile.generations.iter().max().map_or(1, |last| last + 1);
                 profile.generations.push(generation);
                 profile.active = Some(generation);
-                done(vec![Action::SwitchGeneration {
-                    user: user.clone(),
-                    generation: previous,
-                    expect: Some(generation),
-                }])
+                done(vec![
+                    Action::SwitchGeneration {
+                        user: user.clone(),
+                        generation: previous,
+                        expect: Some(generation),
+                    },
+                    Action::DeleteGeneration {
+                        user: user.clone(),
+                        generation,
+                    },
+                ])
+            }
+            Action::DeleteGeneration { user, generation } => {
+                let profile = self.profiles.entry(user.uid).or_default();
+                if profile.active == Some(*generation) {
+                    return Err(account_conflict(
+                        &user.name,
+                        format!("generation {generation} inactive"),
+                        "the active generation",
+                    ));
+                }
+                if !profile.generations.contains(generation) {
+                    return Err(account_conflict(
+                        &user.name,
+                        format!("generation {generation}"),
+                        "no such generation",
+                    ));
+                }
+                profile.generations.retain(|kept| kept != generation);
+                if profile.generations.is_empty() && profile.active.is_none() {
+                    self.profiles.remove(&user.uid);
+                }
+                done(Vec::new())
             }
             Action::SwitchGeneration {
                 user,
@@ -631,20 +690,24 @@ impl World {
             }
             Action::RecordState { user } => {
                 let git = crate::paths::mix_state_dir(&user.home).join(".git");
-                if !self.files.contains_key(&git) {
-                    self.parent_is_dir(&git)?;
-                    let id = self.fresh();
-                    self.files.insert(
-                        git,
-                        Entry {
-                            content: Content::Directory,
-                            mode: 0o755,
-                            owner: (user.uid, user.gid),
-                            id,
-                        },
-                    );
+                if self.files.contains_key(&git) {
+                    return done(Vec::new());
                 }
-                done(Vec::new())
+                self.parent_is_dir(&git)?;
+                let id = self.fresh();
+                self.files.insert(
+                    git.clone(),
+                    Entry {
+                        content: Content::Directory,
+                        mode: 0o755,
+                        owner: (user.uid, user.gid),
+                        id,
+                    },
+                );
+                done(vec![Action::RemoveCreatedTree {
+                    path: git,
+                    expect: id,
+                }])
             }
             Action::Commit => {
                 for pending in std::mem::take(&mut self.pending) {
@@ -707,40 +770,42 @@ impl World {
     }
 
     fn install_runtime(&mut self) -> Outcome {
-        let binary = Path::new(DEFAULT_PROFILE_NIX_ENV);
-        let mut missing: Vec<&Path> = binary
-            .ancestors()
-            .skip(1)
-            .take_while(|dir| !self.files.contains_key(*dir))
-            .collect();
-        missing.reverse();
-        let created = missing
-            .first()
-            .map(|top| top.to_path_buf())
-            .unwrap_or_else(|| binary.to_path_buf());
-        for dir in missing {
-            self.parent_is_dir(dir)?;
-            let id = self.fresh();
-            self.files.insert(
-                dir.to_path_buf(),
-                Entry {
-                    content: Content::Directory,
-                    mode: 0o755,
-                    owner: ROOT,
-                    id,
-                },
-            );
+        let files: [(&str, &[u8]); 3] = [
+            (DEFAULT_PROFILE_NIX_ENV, b"nix-env"),
+            (NIX_DAEMON_SERVICE_SRC, b"[Service]\nExecStart=nix-daemon\n"),
+            (
+                NIX_DAEMON_SOCKET_SRC,
+                b"[Socket]\nListenStream=/nix/var/nix/daemon-socket/socket\n",
+            ),
+        ];
+        let mut created = Vec::new();
+        for (file, contents) in files {
+            let file = Path::new(file);
+            let mut missing: Vec<&Path> = file
+                .ancestors()
+                .skip(1)
+                .take_while(|dir| !self.files.contains_key(*dir))
+                .collect();
+            missing.reverse();
+            if let Some(top) = missing.first() {
+                created.push(top.to_path_buf());
+            }
+            for dir in missing {
+                self.parent_is_dir(dir)?;
+                let id = self.fresh();
+                self.files.insert(
+                    dir.to_path_buf(),
+                    Entry {
+                        content: Content::Directory,
+                        mode: 0o755,
+                        owner: ROOT,
+                        id,
+                    },
+                );
+            }
+            self.put(file, &Arc::from(contents), 0o444, ROOT, Expect::Absent)?;
         }
-        self.put(
-            binary,
-            &Arc::from(&b"nix-env"[..]),
-            0o555,
-            ROOT,
-            Expect::Absent,
-        )?;
-        done(vec![Action::RemoveRuntime {
-            created: vec![created],
-        }])
+        done(vec![Action::RemoveRuntime { created }])
     }
 
     pub fn observe(&self, query: &Query) -> Fact {

@@ -266,27 +266,29 @@ mod tests {
             vec![Query::Path(self.path.clone())]
         }
 
-        fn actions(&self, facts: &[Fact]) -> Vec<Action> {
-            let Fact::Path(facts) = &facts[0] else {
-                unreachable!()
-            };
-            if facts.kind != Kind::Missing {
-                return Vec::new();
-            }
-            vec![match self.contents {
-                None => Action::CreateDir {
-                    path: self.path.clone(),
-                    mode: 0o755,
-                    owner: None,
-                },
-                Some(contents) => Action::PutFile {
-                    path: self.path.clone(),
-                    contents: Arc::from(contents.as_bytes()),
-                    mode: 0o644,
-                    owner: None,
-                    expect: Expect::Absent,
-                },
-            }]
+        fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
+            Ok((|| -> Vec<Action> {
+                let Fact::Path(facts) = &facts[0] else {
+                    unreachable!()
+                };
+                if facts.kind != Kind::Missing {
+                    return Vec::new();
+                }
+                vec![match self.contents {
+                    None => Action::CreateDir {
+                        path: self.path.clone(),
+                        mode: 0o755,
+                        owner: None,
+                    },
+                    Some(contents) => Action::PutFile {
+                        path: self.path.clone(),
+                        contents: Arc::from(contents.as_bytes()),
+                        mode: 0o644,
+                        owner: None,
+                        expect: Expect::Absent,
+                    },
+                }]
+            })())
         }
     }
 

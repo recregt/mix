@@ -28,23 +28,25 @@ impl StepSpec for EnsureDir {
         vec![Query::Path(self.path.clone())]
     }
 
-    fn actions(&self, facts: &[Fact]) -> Vec<Action> {
-        let Fact::Path(facts) = &facts[0] else {
-            unreachable!()
-        };
-        match facts.kind {
-            PathKind::Missing => vec![Action::CreateDir {
-                path: self.path.clone(),
-                mode: self.mode,
-                owner: None,
-            }],
-            _ if facts.mode != self.mode => vec![Action::SetMode {
-                path: self.path.clone(),
-                mode: self.mode,
-                expect: facts.mode,
-            }],
-            _ => Vec::new(),
-        }
+    fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
+        Ok({
+            let Fact::Path(facts) = &facts[0] else {
+                unreachable!()
+            };
+            match facts.kind {
+                PathKind::Missing => vec![Action::CreateDir {
+                    path: self.path.clone(),
+                    mode: self.mode,
+                    owner: None,
+                }],
+                _ if facts.mode != self.mode => vec![Action::SetMode {
+                    path: self.path.clone(),
+                    mode: self.mode,
+                    expect: facts.mode,
+                }],
+                _ => Vec::new(),
+            }
+        })
     }
 }
 
@@ -71,20 +73,22 @@ impl StepSpec for EnsureFile {
         ]
     }
 
-    fn actions(&self, facts: &[Fact]) -> Vec<Action> {
-        let (Fact::Path(path), Fact::Contents(contents)) = (&facts[0], &facts[1]) else {
-            unreachable!()
-        };
-        if contents.as_deref() == Some(self.contents.as_bytes()) {
-            return Vec::new();
-        }
-        vec![Action::PutFile {
-            path: self.path.clone(),
-            contents: Arc::from(self.contents.as_bytes()),
-            mode: 0o644,
-            owner: None,
-            expect: path.id.map_or(Expect::Absent, Expect::Present),
-        }]
+    fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
+        Ok((|| -> Vec<Action> {
+            let (Fact::Path(path), Fact::Contents(contents)) = (&facts[0], &facts[1]) else {
+                unreachable!()
+            };
+            if contents.as_deref() == Some(self.contents.as_bytes()) {
+                return Vec::new();
+            }
+            vec![Action::PutFile {
+                path: self.path.clone(),
+                contents: Arc::from(self.contents.as_bytes()),
+                mode: 0o644,
+                owner: None,
+                expect: path.id.map_or(Expect::Absent, Expect::Present),
+            }]
+        })())
     }
 
     fn shielded(&self) -> bool {
@@ -111,19 +115,21 @@ impl StepSpec for EnsureGroup {
         vec![Query::Group(self.name.to_string())]
     }
 
-    fn actions(&self, facts: &[Fact]) -> Vec<Action> {
-        match &facts[0] {
-            Fact::Group(None) => vec![Action::AddGroup {
-                name: self.name.to_string(),
-                gid: self.gid,
-            }],
-            Fact::Group(Some(group)) if group.gid != self.gid => vec![Action::SetGroupGid {
-                name: self.name.to_string(),
-                gid: self.gid,
-                expect: group.gid,
-            }],
-            _ => Vec::new(),
-        }
+    fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
+        Ok({
+            match &facts[0] {
+                Fact::Group(None) => vec![Action::AddGroup {
+                    name: self.name.to_string(),
+                    gid: self.gid,
+                }],
+                Fact::Group(Some(group)) if group.gid != self.gid => vec![Action::SetGroupGid {
+                    name: self.name.to_string(),
+                    gid: self.gid,
+                    expect: group.gid,
+                }],
+                _ => Vec::new(),
+            }
+        })
     }
 }
 

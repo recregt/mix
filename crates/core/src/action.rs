@@ -66,6 +66,10 @@ pub enum Action {
         path: PathBuf,
         expect: FileId,
     },
+    RemoveCreatedTree {
+        path: PathBuf,
+        expect: FileId,
+    },
     Restore {
         path: PathBuf,
         from: PathBuf,
@@ -140,6 +144,10 @@ pub enum Action {
         generation: Option<u64>,
         expect: Option<u64>,
     },
+    DeleteGeneration {
+        user: InvokingUser,
+        generation: u64,
+    },
     RecordState {
         user: InvokingUser,
     },
@@ -149,6 +157,16 @@ pub enum Action {
 impl Action {
     pub fn is_sync(&self) -> bool {
         matches!(self, Action::DaemonReload | Action::RestartUnit { .. })
+    }
+
+    pub fn needs_loaded_units(&self) -> bool {
+        matches!(
+            self,
+            Action::EnableUnit { .. }
+                | Action::DisableUnit { .. }
+                | Action::StartUnit { .. }
+                | Action::StopUnit { .. }
+        )
     }
 }
 
@@ -262,20 +280,27 @@ pub enum Fact {
 
 pub fn rollback_order(journal: &[Vec<Action>]) -> Vec<Action> {
     let mut ordered = Vec::new();
-    let mut syncs: Vec<Action> = Vec::new();
+    let mut pending: Vec<Action> = Vec::new();
     for undo in journal.iter().rev() {
         for action in undo {
             if action.is_sync() {
-                if !syncs.contains(action) {
-                    syncs.push(action.clone());
+                if !pending.contains(action) {
+                    pending.push(action.clone());
                 }
-            } else {
-                ordered.push(action.clone());
+                continue;
             }
+            if action.needs_loaded_units()
+                && let Some(index) = pending
+                    .iter()
+                    .position(|sync| *sync == Action::DaemonReload)
+            {
+                ordered.push(pending.remove(index));
+            }
+            ordered.push(action.clone());
         }
     }
-    syncs.reverse();
-    ordered.extend(syncs);
+    pending.reverse();
+    ordered.extend(pending);
     ordered
 }
 
@@ -363,6 +388,29 @@ mod tests {
         let order = rollback_order(&journal);
 
         assert_eq!(&order[order.len() - 2..], [restart, Action::DaemonReload]);
+    }
+
+    #[test]
+    fn a_pending_reload_runs_before_a_unit_is_touched_again() {
+        let socket = || unit("nix-daemon.socket");
+        let journal = vec![
+            vec![Action::StartUnit { unit: socket() }],
+            vec![Action::EnableUnit { unit: socket() }],
+            vec![restore("/etc/systemd/system/nix-daemon.socket")],
+            vec![Action::DaemonReload],
+            vec![restore("/nix")],
+        ];
+
+        assert_eq!(
+            rollback_order(&journal),
+            [
+                restore("/nix"),
+                restore("/etc/systemd/system/nix-daemon.socket"),
+                Action::DaemonReload,
+                Action::EnableUnit { unit: socket() },
+                Action::StartUnit { unit: socket() },
+            ]
+        );
     }
 
     #[test]

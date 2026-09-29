@@ -12,7 +12,7 @@ pub trait StepSpec {
     fn key(&self) -> &'static str;
     fn title(&self) -> &'static str;
     fn queries(&self) -> Vec<Query>;
-    fn actions(&self, facts: &[Fact]) -> Vec<Action>;
+    fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure>;
 
     fn shielded(&self) -> bool {
         false
@@ -172,8 +172,9 @@ impl Runner {
                         panic!("a query is answered with facts");
                     };
                     let spec = &self.steps[step];
-                    let (actions, unobservable) = match facts {
-                        Ok(facts) => (spec.actions(&facts), None),
+                    let (actions, unobservable) = match facts.and_then(|facts| spec.actions(&facts))
+                    {
+                        Ok(actions) => (actions, None),
                         Err(failure) => (Vec::new(), Some(failure)),
                     };
                     let mut start = Start::new(
