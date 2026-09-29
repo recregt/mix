@@ -337,6 +337,7 @@ pub enum Query {
     User(String),
     Unit(String),
     Profile(InvokingUser),
+    TreeOwner(PathBuf),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -348,6 +349,7 @@ pub struct ProfileFacts {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Missing,
+    Unreadable(std::io::ErrorKind),
     Directory,
     File,
     Symlink,
@@ -402,6 +404,7 @@ pub enum Fact {
     User(Option<UserFacts>),
     Unit(UnitFacts),
     Profile(ProfileFacts),
+    TreeOwner(Option<u32>),
 }
 
 pub fn rollback_order(journal: &[Vec<Action>]) -> Vec<Action> {

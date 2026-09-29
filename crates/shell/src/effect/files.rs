@@ -968,6 +968,7 @@ impl Files {
         Some(match query {
             Query::Path(path) => Fact::Path(self.path_facts(path)),
             Query::Contents(path) => Fact::Contents(self.contents(path).map(Into::into)),
+            Query::TreeOwner(path) => Fact::TreeOwner(self.tree_owner(path)),
             _ => return None,
         })
     }
@@ -981,8 +982,23 @@ impl Files {
             digest: None,
             changed: None,
         };
-        let Ok(place) = self.place_for_reading(path) else {
-            return missing;
+        let unreadable = |failure: Failure| match failure {
+            Failure::Io {
+                kind: std::io::ErrorKind::NotFound,
+                ..
+            } => missing.clone(),
+            Failure::Io { kind, .. } => PathFacts {
+                kind: Kind::Unreadable(kind),
+                ..missing.clone()
+            },
+            _ => PathFacts {
+                kind: Kind::Unreadable(std::io::ErrorKind::PermissionDenied),
+                ..missing.clone()
+            },
+        };
+        let place = match self.place_for_reading(path) {
+            Ok(place) => place,
+            Err(failure) => return unreadable(failure),
         };
         match Self::stat(&place, &place.name) {
             Ok(Some(stat)) => PathFacts {
@@ -993,7 +1009,8 @@ impl Files {
                 digest: None,
                 changed: Some((stat.stx_mtime.tv_sec, stat.stx_mtime.tv_nsec)),
             },
-            _ => missing,
+            Ok(None) => missing,
+            Err(failure) => unreadable(failure),
         }
     }
 

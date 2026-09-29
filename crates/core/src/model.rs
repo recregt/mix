@@ -1096,6 +1096,16 @@ impl World {
             Query::Contents(path) => Fact::Contents(self.contents(path).map(Arc::from)),
             Query::Group(name) => Fact::Group(self.groups.get(name).cloned()),
             Query::User(name) => Fact::User(self.users.get(name).cloned()),
+            Query::TreeOwner(path) => Fact::TreeOwner(
+                path.ancestors()
+                    .skip(1)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .filter_map(|ancestor| self.files.get(ancestor))
+                    .map(|entry| entry.owner.0)
+                    .find(|uid| *uid != 0),
+            ),
             Query::Profile(user) => Fact::Profile(
                 self.profiles
                     .get(&user.uid)

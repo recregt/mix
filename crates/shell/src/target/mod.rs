@@ -12,12 +12,11 @@
 //! it, so the two commands cannot disagree, and repair pays for one lookup per target instead of
 //! one per question it asks about it.
 
-mod finding;
 mod inspect;
 mod reconcile;
 
-pub use finding::{Finding, Unfixable};
 pub use inspect::inspect;
+pub use mix_core::health::{Finding, Unfixable};
 pub use reconcile::reconcile;
 
 use mix_core::models::Target;
