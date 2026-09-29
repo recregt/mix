@@ -1,5 +1,6 @@
 pub mod accounts;
 pub(crate) mod exec;
+pub mod files;
 pub(crate) mod fs;
 pub(crate) mod git;
 pub mod lock;

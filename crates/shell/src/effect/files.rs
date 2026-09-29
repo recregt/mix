@@ -1,0 +1,565 @@
+use std::ffi::{OsStr, OsString};
+use std::io::{Read, Write};
+use std::os::fd::OwnedFd;
+use std::os::unix::ffi::OsStrExt;
+use std::path::{Component, Path, PathBuf};
+
+use mix_core::action::{
+    Action, Expect, Fact, Failure, FileId, Kind, Outcome, Owner, PathFacts, Performed, Query,
+};
+use rustix::fs::{
+    self as sys, AtFlags, FileType, Gid, Mode, OFlags, RenameFlags, ResolveFlags, Stat, Uid,
+};
+use rustix::io::Errno;
+
+pub struct Files {
+    root: OwnedFd,
+    request: String,
+    pending: Vec<PathBuf>,
+    next: u64,
+}
+
+struct Place {
+    path: PathBuf,
+    dir: OwnedFd,
+    name: OsString,
+}
+
+fn io(path: &Path, errno: Errno) -> Failure {
+    Failure::Io {
+        path: path.to_path_buf(),
+        kind: std::io::Error::from(errno).kind(),
+    }
+}
+
+fn conflict(path: &Path, expected: impl Into<String>, found: impl Into<String>) -> Failure {
+    Failure::Conflict {
+        subject: path.display().to_string(),
+        expected: expected.into(),
+        found: found.into(),
+    }
+}
+
+fn id(stat: &Stat) -> FileId {
+    FileId {
+        dev: stat.st_dev,
+        ino: stat.st_ino,
+    }
+}
+
+fn kind(stat: &Stat) -> Kind {
+    match FileType::from_raw_mode(stat.st_mode) {
+        FileType::Directory => Kind::Directory,
+        FileType::RegularFile => Kind::File,
+        FileType::Symlink => Kind::Symlink,
+        _ => Kind::Other,
+    }
+}
+
+fn mode(stat: &Stat) -> u32 {
+    stat.st_mode & 0o7777
+}
+
+fn owner_of(stat: &Stat) -> Owner {
+    (stat.st_uid, stat.st_gid)
+}
+
+fn ids(owner: Owner) -> (Option<Uid>, Option<Gid>) {
+    (Some(Uid::from_raw(owner.0)), Some(Gid::from_raw(owner.1)))
+}
+
+fn done(undo: Vec<Action>) -> Outcome {
+    Ok(Performed { undo })
+}
+
+impl Files {
+    pub fn open(root: &Path, request: impl Into<String>) -> std::io::Result<Self> {
+        let root = sys::open(
+            root,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+        Ok(Self {
+            root,
+            request: request.into(),
+            pending: Vec::new(),
+            next: 0,
+        })
+    }
+
+    pub fn pending(&self) -> &[PathBuf] {
+        &self.pending
+    }
+
+    fn place(&self, path: &Path) -> Result<Place, Failure> {
+        let mut parts = Vec::new();
+        for component in path.components() {
+            match component {
+                Component::RootDir => {}
+                Component::Normal(part) => parts.push(part),
+                _ => {
+                    return Err(conflict(
+                        path,
+                        "an absolute, normalised path",
+                        "a relative one",
+                    ));
+                }
+            }
+        }
+        let name = parts
+            .pop()
+            .ok_or_else(|| conflict(path, "a path below the root", "the root itself"))?;
+        let parent: PathBuf = parts.iter().collect();
+        let parent = if parent.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            parent
+        };
+        let dir = sys::openat2(
+            &self.root,
+            &parent,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::NO_SYMLINKS | ResolveFlags::BENEATH,
+        )
+        .map_err(|errno| match errno {
+            Errno::LOOP => conflict(path, "no symbolic link on the way", "a symbolic link"),
+            errno => io(path, errno),
+        })?;
+        Ok(Place {
+            path: path.to_path_buf(),
+            dir,
+            name: name.to_os_string(),
+        })
+    }
+
+    fn sibling(&mut self, place: &Place, purpose: &str) -> OsString {
+        self.next += 1;
+        let mut name = OsString::from(".");
+        name.push(&place.name);
+        name.push(format!(".mix-{purpose}-{}-{}", self.request, self.next));
+        name
+    }
+
+    fn stat(place: &Place, name: &OsStr) -> Result<Option<Stat>, Failure> {
+        match sys::statat(&place.dir, name, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(stat) => Ok(Some(stat)),
+            Err(Errno::NOENT) => Ok(None),
+            Err(errno) => Err(io(&place.path, errno)),
+        }
+    }
+
+    fn rename(place: &Place, from: &OsStr, to: &OsStr, flags: RenameFlags) -> Result<(), Errno> {
+        sys::renameat_with(&place.dir, from, &place.dir, to, flags)
+    }
+
+    fn sync(place: &Place) -> Result<(), Failure> {
+        sys::fsync(&place.dir).map_err(|errno| io(&place.path, errno))
+    }
+
+    fn open_node(place: &Place, name: &OsStr) -> Result<OwnedFd, Failure> {
+        sys::openat(
+            &place.dir,
+            name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|errno| match errno {
+            Errno::LOOP => conflict(&place.path, "no symbolic link", "a symbolic link"),
+            errno => io(&place.path, errno),
+        })
+    }
+
+    fn finish_node(
+        place: &Place,
+        node: &OwnedFd,
+        mode: u32,
+        owner: Option<Owner>,
+    ) -> Result<FileId, Failure> {
+        let failed = |errno| io(&place.path, errno);
+        sys::fchmod(node, Mode::from_raw_mode(mode)).map_err(failed)?;
+        if let Some(owner) = owner {
+            let (uid, gid) = ids(owner);
+            sys::fchown(node, uid, gid).map_err(failed)?;
+        }
+        Ok(id(&sys::fstat(node).map_err(failed)?))
+    }
+
+    fn write_new(
+        &mut self,
+        place: &Place,
+        purpose: &str,
+        contents: &[u8],
+        mode: u32,
+        owner: Option<Owner>,
+    ) -> Result<(OsString, FileId), Failure> {
+        let name = self.sibling(place, purpose);
+        let file = sys::openat(
+            &place.dir,
+            &name,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::from_raw_mode(0o600),
+        )
+        .map_err(|errno| io(&place.path, errno))?;
+        let written = (|| {
+            let mut writer = std::fs::File::from(file.try_clone()?);
+            writer.write_all(contents)?;
+            writer.sync_all()
+        })();
+        let finished = written
+            .map_err(|error| Failure::Io {
+                path: place.path.clone(),
+                kind: error.kind(),
+            })
+            .and_then(|()| Self::finish_node(place, &file, mode, owner));
+        match finished {
+            Ok(id) => Ok((name, id)),
+            Err(failure) => {
+                let _ = sys::unlinkat(&place.dir, &name, AtFlags::empty());
+                Err(failure)
+            }
+        }
+    }
+
+    fn expect_id(place: &Place, name: &OsStr, expect: FileId) -> Result<Stat, Failure> {
+        match Self::stat(place, name)? {
+            Some(stat) if id(&stat) == expect => Ok(stat),
+            Some(stat) => Err(conflict(
+                &place.path,
+                format!("{expect:?}"),
+                format!("{:?}", id(&stat)),
+            )),
+            None => Err(conflict(&place.path, format!("{expect:?}"), "nothing")),
+        }
+    }
+
+    pub fn perform(&mut self, action: &Action) -> Option<Outcome> {
+        Some(match action {
+            Action::CreateDir { path, mode, owner } => self.create_dir(path, *mode, *owner),
+            Action::PutFile {
+                path,
+                contents,
+                mode,
+                owner,
+                expect,
+            } => self.put_file(path, contents, *mode, *owner, *expect),
+            Action::SetMode { path, mode, expect } => self.set_mode(path, *mode, *expect),
+            Action::SetOwner {
+                path,
+                owner,
+                expect,
+            } => self.set_owner(path, *owner, *expect),
+            Action::SetAside { path, expect } => self.set_aside(path, *expect),
+            Action::RemoveCreated { path, expect } => self.remove_created(path, *expect),
+            Action::Restore { path, from, expect } => self.restore(path, from, *expect),
+            Action::Commit => self.commit(),
+            _ => return None,
+        })
+    }
+
+    fn create_dir(&mut self, path: &Path, mode: u32, owner: Option<Owner>) -> Outcome {
+        let place = self.place(path)?;
+        sys::mkdirat(&place.dir, &place.name, Mode::from_raw_mode(0o700)).map_err(|errno| {
+            match errno {
+                Errno::EXIST => conflict(path, "nothing", "something already there"),
+                errno => io(path, errno),
+            }
+        })?;
+        let node = Self::open_node(&place, &place.name)?;
+        let id = Self::finish_node(&place, &node, mode, owner)?;
+        Self::sync(&place)?;
+        done(vec![Action::RemoveCreated {
+            path: path.to_path_buf(),
+            expect: id,
+        }])
+    }
+
+    fn put_file(
+        &mut self,
+        path: &Path,
+        contents: &[u8],
+        mode: u32,
+        owner: Option<Owner>,
+        expect: Expect,
+    ) -> Outcome {
+        let place = self.place(path)?;
+        match expect {
+            Expect::Absent => {
+                let (new, id) = self.write_new(&place, "new", contents, mode, owner)?;
+                if let Err(errno) = Self::rename(&place, &new, &place.name, RenameFlags::NOREPLACE)
+                {
+                    let _ = sys::unlinkat(&place.dir, &new, AtFlags::empty());
+                    return Err(match errno {
+                        Errno::EXIST => conflict(path, "nothing", "something already there"),
+                        errno => io(path, errno),
+                    });
+                }
+                Self::sync(&place)?;
+                done(vec![Action::RemoveCreated {
+                    path: path.to_path_buf(),
+                    expect: id,
+                }])
+            }
+            Expect::Present(old) => {
+                let (backup, id) = self.write_new(&place, "backup", contents, mode, owner)?;
+                if let Err(errno) =
+                    Self::rename(&place, &backup, &place.name, RenameFlags::EXCHANGE)
+                {
+                    let _ = sys::unlinkat(&place.dir, &backup, AtFlags::empty());
+                    return Err(match errno {
+                        Errno::NOENT => conflict(path, format!("{old:?}"), "nothing"),
+                        errno => io(path, errno),
+                    });
+                }
+                if let Err(failure) = Self::expect_id(&place, &backup, old) {
+                    let _ = Self::rename(&place, &backup, &place.name, RenameFlags::EXCHANGE);
+                    let _ = sys::unlinkat(&place.dir, &backup, AtFlags::empty());
+                    return Err(failure);
+                }
+                Self::sync(&place)?;
+                let backup = path.with_file_name(&backup);
+                self.pending.push(backup.clone());
+                done(vec![Action::Restore {
+                    path: path.to_path_buf(),
+                    from: backup,
+                    expect: Expect::Present(id),
+                }])
+            }
+        }
+    }
+
+    fn set_mode(&mut self, path: &Path, mode: u32, expect: u32) -> Outcome {
+        let place = self.place(path)?;
+        let node = Self::open_node(&place, &place.name)?;
+        let stat = sys::fstat(&node).map_err(|errno| io(path, errno))?;
+        if self::mode(&stat) != expect {
+            return Err(conflict(
+                path,
+                format!("mode {expect:o}"),
+                format!("mode {:o}", self::mode(&stat)),
+            ));
+        }
+        sys::fchmod(&node, Mode::from_raw_mode(mode)).map_err(|errno| io(path, errno))?;
+        done(vec![Action::SetMode {
+            path: path.to_path_buf(),
+            mode: expect,
+            expect: mode,
+        }])
+    }
+
+    fn set_owner(&mut self, path: &Path, owner: Owner, expect: Owner) -> Outcome {
+        let place = self.place(path)?;
+        let node = Self::open_node(&place, &place.name)?;
+        let stat = sys::fstat(&node).map_err(|errno| io(path, errno))?;
+        if owner_of(&stat) != expect {
+            return Err(conflict(
+                path,
+                format!("owner {expect:?}"),
+                format!("owner {:?}", owner_of(&stat)),
+            ));
+        }
+        let (uid, gid) = ids(owner);
+        sys::fchown(&node, uid, gid).map_err(|errno| io(path, errno))?;
+        done(vec![Action::SetOwner {
+            path: path.to_path_buf(),
+            owner: expect,
+            expect: owner,
+        }])
+    }
+
+    fn set_aside(&mut self, path: &Path, expect: FileId) -> Outcome {
+        let place = self.place(path)?;
+        let aside = self.sibling(&place, "aside");
+        Self::rename(&place, &place.name, &aside, RenameFlags::NOREPLACE).map_err(|errno| {
+            match errno {
+                Errno::NOENT => conflict(path, format!("{expect:?}"), "nothing"),
+                errno => io(path, errno),
+            }
+        })?;
+        if let Err(failure) = Self::expect_id(&place, &aside, expect) {
+            let _ = Self::rename(&place, &aside, &place.name, RenameFlags::NOREPLACE);
+            return Err(failure);
+        }
+        Self::sync(&place)?;
+        let aside = path.with_file_name(&aside);
+        self.pending.push(aside.clone());
+        done(vec![Action::Restore {
+            path: path.to_path_buf(),
+            from: aside,
+            expect: Expect::Absent,
+        }])
+    }
+
+    fn remove_created(&mut self, path: &Path, expect: FileId) -> Outcome {
+        let place = self.place(path)?;
+        let doomed = self.sibling(&place, "remove");
+        Self::rename(&place, &place.name, &doomed, RenameFlags::NOREPLACE).map_err(|errno| {
+            match errno {
+                Errno::NOENT => conflict(path, format!("{expect:?}"), "nothing"),
+                errno => io(path, errno),
+            }
+        })?;
+        let put_back = || {
+            let _ = Self::rename(&place, &doomed, &place.name, RenameFlags::NOREPLACE);
+        };
+        let stat = match Self::expect_id(&place, &doomed, expect) {
+            Ok(stat) => stat,
+            Err(failure) => {
+                put_back();
+                return Err(failure);
+            }
+        };
+        let flags = if kind(&stat) == Kind::Directory {
+            AtFlags::REMOVEDIR
+        } else {
+            AtFlags::empty()
+        };
+        if let Err(errno) = sys::unlinkat(&place.dir, &doomed, flags) {
+            put_back();
+            return Err(match errno {
+                Errno::NOTEMPTY | Errno::EXIST => {
+                    conflict(path, "an empty directory", "a directory with contents")
+                }
+                errno => io(path, errno),
+            });
+        }
+        Self::sync(&place)?;
+        done(Vec::new())
+    }
+
+    fn restore(&mut self, path: &Path, from: &Path, expect: Expect) -> Outcome {
+        let place = self.place(path)?;
+        if from.parent() != path.parent() {
+            return Err(conflict(
+                from,
+                "a sibling of the restored path",
+                "another directory",
+            ));
+        }
+        let from_name = from
+            .file_name()
+            .ok_or_else(|| conflict(from, "a file name", "none"))?
+            .to_os_string();
+        match expect {
+            Expect::Absent => {
+                Self::rename(&place, &from_name, &place.name, RenameFlags::NOREPLACE).map_err(
+                    |errno| match errno {
+                        Errno::EXIST => conflict(path, "nothing", "something already there"),
+                        errno => io(path, errno),
+                    },
+                )?;
+            }
+            Expect::Present(current) => {
+                Self::rename(&place, &from_name, &place.name, RenameFlags::EXCHANGE).map_err(
+                    |errno| match errno {
+                        Errno::NOENT => conflict(path, format!("{current:?}"), "nothing"),
+                        errno => io(path, errno),
+                    },
+                )?;
+                if let Err(failure) = Self::expect_id(&place, &from_name, current) {
+                    let _ = Self::rename(&place, &from_name, &place.name, RenameFlags::EXCHANGE);
+                    return Err(failure);
+                }
+                self.remove_tree(&place, &from_name)?;
+            }
+        }
+        Self::sync(&place)?;
+        self.pending.retain(|pending| pending != from);
+        done(Vec::new())
+    }
+
+    fn commit(&mut self) -> Outcome {
+        let mut first = None;
+        let mut kept = Vec::new();
+        for pending in std::mem::take(&mut self.pending) {
+            let removed = self.place(&pending).and_then(|place| {
+                self.remove_tree(&place, &place.name)?;
+                Self::sync(&place)
+            });
+            if let Err(failure) = removed {
+                first.get_or_insert(failure);
+                kept.push(pending);
+            }
+        }
+        self.pending = kept;
+        match first {
+            None => done(Vec::new()),
+            Some(failure) => Err(failure),
+        }
+    }
+
+    fn remove_tree(&self, place: &Place, name: &OsStr) -> Result<(), Failure> {
+        remove_tree_at(&place.dir, name).map_err(|errno| io(&place.path, errno))
+    }
+
+    pub fn observe(&self, query: &Query) -> Option<Fact> {
+        Some(match query {
+            Query::Path(path) => Fact::Path(self.path_facts(path)),
+            Query::Contents(path) => Fact::Contents(self.contents(path).map(Into::into)),
+            _ => return None,
+        })
+    }
+
+    fn path_facts(&self, path: &Path) -> PathFacts {
+        let missing = PathFacts {
+            kind: Kind::Missing,
+            mode: 0,
+            owner: (0, 0),
+            id: None,
+            digest: None,
+        };
+        let Ok(place) = self.place(path) else {
+            return missing;
+        };
+        match Self::stat(&place, &place.name) {
+            Ok(Some(stat)) => PathFacts {
+                kind: kind(&stat),
+                mode: mode(&stat),
+                owner: owner_of(&stat),
+                id: Some(id(&stat)),
+                digest: None,
+            },
+            _ => missing,
+        }
+    }
+
+    fn contents(&self, path: &Path) -> Option<Vec<u8>> {
+        let place = self.place(path).ok()?;
+        let node = Self::open_node(&place, &place.name).ok()?;
+        if kind(&sys::fstat(&node).ok()?) != Kind::File {
+            return None;
+        }
+        let mut contents = Vec::new();
+        std::fs::File::from(node).read_to_end(&mut contents).ok()?;
+        Some(contents)
+    }
+}
+
+fn remove_tree_at(dir: &OwnedFd, name: &OsStr) -> Result<(), Errno> {
+    let stat = match sys::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(stat) => stat,
+        Err(Errno::NOENT) => return Ok(()),
+        Err(errno) => return Err(errno),
+    };
+    if kind(&stat) != Kind::Directory {
+        return sys::unlinkat(dir, name, AtFlags::empty());
+    }
+    let child = sys::openat(
+        dir,
+        name,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    let names: Vec<OsString> = sys::Dir::read_from(&child)?
+        .filter_map(Result::ok)
+        .map(|entry| OsStr::from_bytes(entry.file_name().to_bytes()).to_os_string())
+        .filter(|entry| entry != "." && entry != "..")
+        .collect();
+    for entry in names {
+        remove_tree_at(&child, &entry)?;
+    }
+    sys::unlinkat(dir, name, AtFlags::REMOVEDIR)
+}
+
+#[cfg(test)]
+mod tests;
