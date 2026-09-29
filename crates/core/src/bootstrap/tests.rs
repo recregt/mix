@@ -48,12 +48,14 @@ fn machine() -> World {
 struct Script {
     fail_at: Option<usize>,
     stop_after: Option<usize>,
+    fail_undo_at: Option<usize>,
 }
 
 struct Run {
     report: Report,
     stream: Vec<mix_events::v1::Envelope>,
     changes: usize,
+    undos: usize,
 }
 
 fn run(world: &mut World, settings: &Settings, script: Script) -> Run {
@@ -66,6 +68,7 @@ fn run(world: &mut World, settings: &Settings, script: Script) -> Run {
     let mut runner = Runner::new(ROOT, steps(settings));
     let mut input = None;
     let mut changes = 0;
+    let mut undos = 0;
     let report = loop {
         match runner.step(&mut tree, input.take()) {
             Next::Observe(queries) => {
@@ -76,7 +79,10 @@ fn run(world: &mut World, settings: &Settings, script: Script) -> Run {
             }
             Next::Perform(action) => {
                 let forward = !runner.rolling_back() && action != Action::Commit;
-                let outcome = if forward && script.fail_at == Some(changes) {
+                let undoing = runner.rolling_back();
+                let outcome = if (forward && script.fail_at == Some(changes))
+                    || (undoing && script.fail_undo_at == Some(undos))
+                {
                     Err(Failure::Io {
                         path: "/injected".into(),
                         kind: std::io::ErrorKind::Other,
@@ -84,6 +90,9 @@ fn run(world: &mut World, settings: &Settings, script: Script) -> Run {
                 } else {
                     world.apply(&action)
                 };
+                if undoing {
+                    undos += 1;
+                }
                 if forward {
                     if script.stop_after == Some(changes) {
                         runner.stop(Cancellation::Interrupted);
@@ -106,6 +115,7 @@ fn run(world: &mut World, settings: &Settings, script: Script) -> Run {
         report,
         stream: outbox.drain(),
         changes,
+        undos,
     }
 }
 
@@ -292,6 +302,51 @@ fn a_failure_at_any_change_leaves_the_machine_as_it_was() {
             difference(&world, &base)
         );
         assert!(validate(&run.stream).is_ok());
+    }
+}
+
+#[test]
+fn an_undo_that_fails_is_reported_and_every_other_undo_still_runs() {
+    let base = machine();
+    let settings = settings(Some(alice()), false);
+    let last = run(&mut base.clone(), &settings, Script::default()).changes - 1;
+    let failing_last = Script {
+        fail_at: Some(last),
+        ..Script::default()
+    };
+    let undos = run(&mut base.clone(), &settings, failing_last).undos;
+
+    for fail_undo_at in 0..undos {
+        let run = run(
+            &mut base.clone(),
+            &settings,
+            Script {
+                fail_undo_at: Some(fail_undo_at),
+                ..failing_last
+            },
+        );
+
+        assert!(
+            matches!(run.report.verdict, Verdict::Failed { .. }),
+            "{fail_undo_at}"
+        );
+        assert!(!run.report.rollback_failures.is_empty(), "{fail_undo_at}");
+        assert!(
+            run.undos >= undos,
+            "{fail_undo_at}: {} of {undos}",
+            run.undos
+        );
+        assert!(validate(&run.stream).is_ok(), "{fail_undo_at}");
+        assert!(
+            run.stream.iter().any(|envelope| matches!(
+                &envelope.event,
+                Some(mix_events::v1::envelope::Event::NodeFinished(finished))
+                    if finished.diagnostic.as_ref().is_some_and(|diagnostic| {
+                        diagnostic.code == mix_events::v1::Code::RollbackIncomplete as i32
+                    })
+            )),
+            "{fail_undo_at}"
+        );
     }
 }
 
