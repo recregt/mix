@@ -486,7 +486,7 @@ struct RestartIfStale;
 
 impl StepSpec for RestartIfStale {
     fn key(&self) -> Cow<'static, str> {
-        NIX_DAEMON_SERVICE_UNIT.into()
+        "restart-nix-daemon".into()
     }
 
     fn title(&self) -> Cow<'static, str> {
@@ -531,58 +531,4 @@ pub fn target_steps(targets: Vec<Target<'_>>, request: &str) -> Vec<Box<dyn Step
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The binding between what an inspection found and what repair can do about it.
-    #[test]
-    fn a_finding_says_whether_repair_can_reconcile_it() {
-        assert_eq!(
-            Finding::NotADirectory.unfixable(),
-            Some(Unfixable::NotADirectory)
-        );
-        assert_eq!(
-            Finding::NoSuchUser.unfixable(),
-            Some(Unfixable::MissingUser)
-        );
-        assert_eq!(
-            Finding::RuntimeMissing.unfixable(),
-            Some(Unfixable::MissingRuntime)
-        );
-    }
-
-    #[test]
-    fn everything_repair_reconciles_is_bound_to_no_reason() {
-        for finding in [
-            Finding::Missing,
-            Finding::Unreadable {
-                kind: std::io::ErrorKind::PermissionDenied,
-            },
-            Finding::Mode {
-                actual: 0o700,
-                expected: 0o755,
-            },
-            Finding::Owner {
-                actual: (0, 0),
-                expected: (1000, 1000),
-            },
-            Finding::ContentDrift,
-            Finding::GroupMissing,
-            Finding::GroupGid {
-                actual: 1,
-                expected: 30_000,
-            },
-            Finding::NotAMember { group: "mix-users" },
-            Finding::UserMissing,
-            Finding::UserIds {
-                actual: (1, 1),
-                expected: (30_000, 30_000),
-            },
-            Finding::UnitMissing,
-            Finding::UnitDrift,
-            Finding::UnitInactive,
-        ] {
-            assert_eq!(finding.unfixable(), None, "{finding:?}");
-        }
-    }
-}
+mod tests;
