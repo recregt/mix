@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mix_events::v1::{Command, Envelope, NotRunReason, Status};
@@ -180,13 +180,16 @@ struct Run {
 }
 
 fn drive(world: &mut World, steps: Vec<Box<dyn StepSpec>>, script: Script) -> Run {
+    drive_runner(world, Runner::new(ROOT, steps), script)
+}
+
+fn drive_runner(world: &mut World, mut runner: Runner, script: Script) -> Run {
     let outbox = Arc::new(Outbox::new("request", || {}));
     let mut tree = Tree::new(
         outbox.clone(),
         Arc::new(|| None),
         Start::command("bootstrap", Command::default()),
     );
-    let mut runner = Runner::new(ROOT, steps);
     let mut input = None;
     let mut performed = Vec::new();
     let mut forward = 0;
@@ -337,6 +340,71 @@ fn every_action_and_every_undo_is_a_node_under_what_ran_it() {
             "{path}"
         );
     }
+}
+
+#[test]
+fn an_independent_step_that_fails_is_undone_alone_and_the_others_still_run() {
+    let mut world = World::default();
+
+    let run = drive_runner(
+        &mut world,
+        Runner::new(ROOT, bootstrap_like()).independent(),
+        Script {
+            fail_at: Some(1),
+            ..Script::default()
+        },
+    );
+
+    assert!(
+        matches!(&run.report.verdict, Verdict::Failed { step, .. } if step == "create-nix-var"),
+        "{:?}",
+        run.report.verdict
+    );
+    let outcomes: Vec<(&str, bool)> = run
+        .report
+        .steps
+        .iter()
+        .map(|(step, outcome)| (step.as_ref(), matches!(outcome, StepOutcome::Changed)))
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            ("create-nix-dir", true),
+            ("create-nix-var", false),
+            ("create-groups", true),
+            ("write-marker", true),
+            ("write-nix-conf", true),
+        ]
+    );
+    assert!(world.files.contains_key(Path::new("/nix")));
+    assert!(!world.files.contains_key(Path::new("/nix/var")));
+    assert!(world.pending().is_empty());
+    assert!(validate(&run.stream).is_ok());
+}
+
+#[test]
+fn an_independent_run_that_is_stopped_undoes_the_step_in_progress_and_keeps_the_rest() {
+    let mut world = World::default();
+
+    let run = drive_runner(
+        &mut world,
+        Runner::new(ROOT, bootstrap_like()).independent(),
+        Script {
+            stop_after: Some(1),
+            ..Script::default()
+        },
+    );
+
+    assert!(matches!(run.report.verdict, Verdict::Cancelled(_)));
+    assert!(world.files.contains_key(Path::new("/nix")));
+    assert!(!world.files.contains_key(Path::new("/nix/var")));
+    assert!(!world.groups.contains_key("nixbld"));
+    assert!(world.pending().is_empty());
+    assert_eq!(
+        outcome(&run, "bootstrap/plan/create-groups"),
+        Some(EventOutcome::NotRun(NotRunReason::NotReached))
+    );
+    assert!(validate(&run.stream).is_ok());
 }
 
 #[test]

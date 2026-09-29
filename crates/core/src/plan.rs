@@ -45,9 +45,24 @@ pub enum Verdict {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StepOutcome {
+    Satisfied,
+    Changed,
+    Failed(Failure),
+    Cancelled(Cancellation),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Report {
     pub verdict: Verdict,
     pub rollback_failures: Vec<(Cow<'static, str>, Failure)>,
+    pub steps: Vec<(Cow<'static, str>, StepOutcome)>,
+}
+
+enum After {
+    Close,
+    Continue(usize),
+    Commit,
 }
 
 struct Doubt {
@@ -101,6 +116,9 @@ pub struct Runner {
     rollback_failures: Vec<(Cow<'static, str>, Failure)>,
     acting: Option<NodeId>,
     performed: u64,
+    independent: bool,
+    after: After,
+    outcomes: Vec<(Cow<'static, str>, StepOutcome)>,
 }
 
 impl Runner {
@@ -119,6 +137,33 @@ impl Runner {
             rollback_failures: Vec::new(),
             acting: None,
             performed: 0,
+            independent: false,
+            after: After::Close,
+            outcomes: Vec::new(),
+        }
+    }
+
+    pub fn independent(mut self) -> Self {
+        self.independent = true;
+        self
+    }
+
+    fn record(&mut self, step: usize, outcome: StepOutcome) {
+        self.outcomes.push((self.steps[step].key(), outcome));
+    }
+
+    fn fail(&mut self, step: usize, failure: Failure) {
+        self.record(step, StepOutcome::Failed(failure.clone()));
+        let failed = Verdict::Failed {
+            step: self.steps[step].key(),
+            failure,
+        };
+        if self.independent {
+            self.verdict.get_or_insert(failed);
+            self.roll_back_only(step, After::Continue(step + 1));
+        } else {
+            self.verdict = Some(failed);
+            self.roll_back();
         }
     }
 
@@ -213,14 +258,10 @@ impl Runner {
                 }
                 Phase::Checking { step, asked: false } => {
                     if step == self.steps.len() {
-                        if self.journal.iter().all(Vec::is_empty) {
-                            self.verdict = Some(Verdict::Succeeded);
-                            self.phase = Phase::Closing;
-                        } else {
-                            self.phase = Phase::Committing { awaiting: false };
-                        }
+                        self.verdict.get_or_insert(Verdict::Succeeded);
+                        self.finish_or_commit();
                     } else if let Some(cause) = self.stop {
-                        self.cancel(cause);
+                        self.cancel(cause, None);
                     } else {
                         self.phase = Phase::Checking { step, asked: true };
                         return Next::Observe(self.steps[step].queries());
@@ -251,13 +292,10 @@ impl Runner {
                     self.nodes[step] = Some(node);
                     if let Some(failure) = unobservable {
                         finish(tree, node, Ending::failed(diagnostic(&failure)));
-                        self.verdict = Some(Verdict::Failed {
-                            step: self.steps[step].key(),
-                            failure,
-                        });
-                        self.roll_back();
+                        self.fail(step, failure);
                     } else if actions.is_empty() {
                         finish(tree, node, Ending::already_satisfied());
+                        self.record(step, StepOutcome::Satisfied);
                         self.phase = Phase::Checking {
                             step: step + 1,
                             asked: false,
@@ -279,11 +317,13 @@ impl Runner {
                 } => match self.stop {
                     Some(cause) if !self.steps[step].shielded() => {
                         finish(tree, node, Ending::cancelled(cause));
-                        self.cancel(cause);
+                        self.record(step, StepOutcome::Cancelled(cause));
+                        self.cancel(cause, Some(step));
                     }
                     _ => match queue.pop_front() {
                         None => {
                             finish(tree, node, Ending::succeeded());
+                            self.record(step, StepOutcome::Changed);
                             self.phase = Phase::Checking {
                                 step: step + 1,
                                 asked: false,
@@ -323,15 +363,12 @@ impl Runner {
                         Err(Failure::Cancelled) => {
                             let cause = *self.stop.get_or_insert(Cancellation::Interrupted);
                             finish(tree, node, Ending::cancelled(cause));
-                            self.cancel(cause);
+                            self.record(step, StepOutcome::Cancelled(cause));
+                            self.cancel(cause, Some(step));
                         }
                         Err(failure) => {
                             finish(tree, node, Ending::failed(diagnostic(&failure)));
-                            self.verdict = Some(Verdict::Failed {
-                                step: self.steps[step].key(),
-                                failure,
-                            });
-                            self.roll_back();
+                            self.fail(step, failure);
                         }
                     }
                 }
@@ -340,7 +377,16 @@ impl Runner {
                     current: None,
                     ..
                 } => match remaining.pop() {
-                    None => self.phase = Phase::Closing,
+                    None => match std::mem::replace(&mut self.after, After::Close) {
+                        After::Close => self.phase = Phase::Closing,
+                        After::Continue(next) => {
+                            self.phase = Phase::Checking {
+                                step: next,
+                                asked: false,
+                            };
+                        }
+                        After::Commit => self.finish_or_commit(),
+                    },
                     Some(step) => {
                         let key = self.steps[step].key();
                         let node = tree
@@ -355,20 +401,22 @@ impl Runner {
                                 .shielded(),
                             )
                             .expect("each step is rolled back once");
+                        let queue = rollback_order(&self.journal[step]).into();
+                        let doubtful = self
+                            .doubts
+                            .iter()
+                            .filter(|doubt| doubt.step == step)
+                            .flat_map(|doubt| rollback_order(std::slice::from_ref(&doubt.undo)))
+                            .collect();
+                        self.journal[step].clear();
+                        self.doubts.retain(|doubt| doubt.step != step);
                         self.phase = Phase::RollingBack {
                             remaining,
                             current: Some(Undoing {
                                 step,
                                 node,
-                                queue: rollback_order(&self.journal[step]).into(),
-                                doubtful: self
-                                    .doubts
-                                    .iter()
-                                    .filter(|doubt| doubt.step == step)
-                                    .flat_map(|doubt| {
-                                        rollback_order(std::slice::from_ref(&doubt.undo))
-                                    })
-                                    .collect(),
+                                queue,
+                                doubtful,
                                 doubting: false,
                                 failed: false,
                             }),
@@ -448,7 +496,7 @@ impl Runner {
                         tree.warn(self.plan, diagnostic(&failure))
                             .expect("the plan is running");
                     }
-                    self.verdict = Some(Verdict::Succeeded);
+                    self.verdict.get_or_insert(Verdict::Succeeded);
                     self.phase = Phase::Closing;
                 }
                 Phase::Closing => {
@@ -466,6 +514,7 @@ impl Runner {
                     let report = Report {
                         verdict,
                         rollback_failures: self.rollback_failures.clone(),
+                        steps: self.outcomes.clone(),
                     };
                     self.phase = Phase::Closed(report.clone());
                     return Next::Finished(report);
@@ -478,9 +527,40 @@ impl Runner {
         }
     }
 
-    fn cancel(&mut self, cause: Cancellation) {
+    fn cancel(&mut self, cause: Cancellation, current: Option<usize>) {
         self.verdict = Some(Verdict::Cancelled(cause));
-        self.roll_back();
+        if !self.independent {
+            self.roll_back();
+            return;
+        }
+        match current {
+            Some(step)
+                if !self.journal[step].is_empty()
+                    || self.doubts.iter().any(|doubt| doubt.step == step) =>
+            {
+                self.roll_back_only(step, After::Commit);
+            }
+            _ => self.finish_or_commit(),
+        }
+    }
+
+    fn finish_or_commit(&mut self) {
+        self.phase = if self.journal.iter().all(Vec::is_empty) {
+            Phase::Closing
+        } else {
+            Phase::Committing { awaiting: false }
+        };
+    }
+
+    fn roll_back_only(&mut self, step: usize, after: After) {
+        let owned =
+            !self.journal[step].is_empty() || self.doubts.iter().any(|doubt| doubt.step == step);
+        self.after = after;
+        self.phase = Phase::RollingBack {
+            remaining: if owned { vec![step] } else { Vec::new() },
+            current: None,
+            awaiting: false,
+        };
     }
 
     fn roll_back(&mut self) {
