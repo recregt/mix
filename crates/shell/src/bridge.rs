@@ -56,6 +56,18 @@ impl Bridge {
             },
             Event::NodeFinished(node) => {
                 self.received.remove(&node.id);
+                let failed = node.status() == Status::Failed;
+                if failed && let Some(span) = self.spans.get(&node.id) {
+                    let message = node
+                        .diagnostic
+                        .as_ref()
+                        .map(|diagnostic| diagnostic.message.clone())
+                        .unwrap_or_default();
+                    span.in_scope(|| match self.titles.get(&node.id) {
+                        Some(title) => tracing::debug!("step failed: {title} ({message})"),
+                        None => tracing::error!("rollback failed: {message}"),
+                    });
+                }
                 if let Some(span) = self.spans.remove(&node.id) {
                     self.reporters
                         .steps

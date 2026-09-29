@@ -18,8 +18,8 @@ pub fn trusted_in(name: &str, dirs: &[&Path], owner: u32) -> Result<PathBuf, Fai
         let Ok(resolved) = std::fs::canonicalize(&candidate) else {
             continue;
         };
-        match vetted(&resolved, owner) {
-            Ok(()) => return Ok(resolved),
+        match vetted(&resolved, owner).and_then(|()| vetted_dirs(dir, owner)) {
+            Ok(()) => return Ok(candidate),
             Err(failure) => {
                 refused.get_or_insert(failure);
             }
@@ -52,6 +52,30 @@ fn vetted(binary: &Path, owner: u32) -> Result<(), Failure> {
             ));
         }
         if meta.mode() & WRITABLE_BY_OTHERS != 0 {
+            return Err(untrusted(
+                path,
+                "writable by its owner alone",
+                format!("mode {:o}", meta.mode() & 0o7777),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn vetted_dirs(dir: &Path, owner: u32) -> Result<(), Failure> {
+    for path in dir.ancestors() {
+        let meta = std::fs::symlink_metadata(path).map_err(|error| Failure::Io {
+            path: path.to_path_buf(),
+            kind: error.kind(),
+        })?;
+        if meta.uid() != owner && meta.uid() != 0 {
+            return Err(untrusted(
+                path,
+                format!("owned by root or uid {owner}"),
+                format!("owned by uid {}", meta.uid()),
+            ));
+        }
+        if !meta.file_type().is_symlink() && meta.mode() & WRITABLE_BY_OTHERS != 0 {
             return Err(untrusted(
                 path,
                 "writable by its owner alone",
@@ -159,10 +183,18 @@ mod tests {
 
         let accepted = trusted_in("useradd", &[dir.path()], me());
 
-        assert_eq!(
-            accepted.unwrap(),
-            dir.path().canonicalize().unwrap().join("useradd")
-        );
+        assert_eq!(accepted.unwrap(), dir.path().join("useradd"));
+    }
+
+    #[test]
+    fn a_tool_reached_through_a_link_runs_under_the_name_it_was_found_by() {
+        let dir = scratch();
+        tool(dir.path(), "pgrep", 0o755);
+        std::os::unix::fs::symlink("pgrep", dir.path().join("pkill")).unwrap();
+
+        let found = trusted_in("pkill", &[dir.path()], me()).unwrap();
+
+        assert_eq!(found.file_name().unwrap(), "pkill");
     }
 
     #[test]

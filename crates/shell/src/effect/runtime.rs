@@ -1,5 +1,6 @@
 use std::borrow::Cow;
-use std::path::PathBuf;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 use mix_core::action::{Digest, Failure, Outcome, Performed};
 use mix_core::{DownloadProgress, Scope};
@@ -8,6 +9,39 @@ use crate::effect::files::Prepared;
 use crate::ops::bootstrap::Error;
 use crate::ops::bootstrap::steps::fetch_and_unpack::{provision_runtime, remove_runtime};
 use crate::ops::bootstrap::tarball;
+
+pub fn listing(root: &Path, skip: &Path) -> BTreeSet<PathBuf> {
+    let mut found = BTreeSet::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path == skip {
+                continue;
+            }
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                pending.push(path.clone());
+            }
+            found.insert(path);
+        }
+    }
+    found
+}
+
+pub fn added(before: &BTreeSet<PathBuf>, after: &BTreeSet<PathBuf>) -> Vec<PathBuf> {
+    after
+        .iter()
+        .filter(|path| !before.contains(*path))
+        .filter(|path| {
+            path.parent()
+                .is_none_or(|parent| !after.contains(parent) || before.contains(parent))
+        })
+        .cloned()
+        .collect()
+}
 
 pub fn hex(digest: &Digest) -> String {
     digest.0.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -78,8 +112,16 @@ pub async fn install(
         .map(std::path::Path::to_path_buf)
         .collect();
     prepared(&[mix_core::action::Action::RemoveRuntime { created: predicted }])?;
+    let nix = Path::new("/nix");
+    let store = Path::new(mix_core::paths::NIX_STORE);
+    let before = listing(nix, store);
     let working = scope.clone();
-    let (created, provisioned) = blocking(move || provision_runtime(&bytes, &working)).await?;
+    let (mut created, provisioned) = blocking(move || provision_runtime(&bytes, &working)).await?;
+    for path in added(&before, &listing(nix, store)) {
+        if !created.iter().any(|known| path.starts_with(known)) {
+            created.push(path);
+        }
+    }
     let failed = match provisioned {
         Ok(()) if !scope.is_stopped() => {
             return Ok(Performed {
@@ -119,6 +161,47 @@ mod tests {
         assert_eq!(written.len(), 64);
         assert!(written.starts_with("0c00"));
         assert!(written.ends_with("0058"));
+    }
+
+    #[test]
+    fn only_the_topmost_new_paths_are_recorded() {
+        let before: BTreeSet<PathBuf> = ["/nix/var", "/nix/var/nix", "/nix/var/nix/db"]
+            .map(PathBuf::from)
+            .into();
+        let after: BTreeSet<PathBuf> = [
+            "/nix/var",
+            "/nix/var/nix",
+            "/nix/var/nix/db",
+            "/nix/var/nix/db/db.sqlite",
+            "/nix/var/nix/profiles",
+            "/nix/var/nix/profiles/default",
+            "/nix/var/nix/profiles/default-1-link",
+        ]
+        .map(PathBuf::from)
+        .into();
+
+        assert_eq!(
+            added(&before, &after),
+            ["/nix/var/nix/db/db.sqlite", "/nix/var/nix/profiles"].map(PathBuf::from)
+        );
+    }
+
+    #[test]
+    fn a_listing_skips_the_store_and_does_not_follow_links() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("store/big")).unwrap();
+        std::fs::create_dir_all(root.path().join("var/nix")).unwrap();
+        std::os::unix::fs::symlink(root.path().join("store"), root.path().join("var/link"))
+            .unwrap();
+
+        let found = listing(root.path(), &root.path().join("store"));
+
+        assert_eq!(
+            found,
+            ["var", "var/link", "var/nix"]
+                .map(|path| root.path().join(path))
+                .into()
+        );
     }
 
     #[test]

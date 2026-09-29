@@ -109,6 +109,14 @@ impl Files {
     }
 
     fn place(&self, path: &Path) -> Result<Place, Failure> {
+        self.place_with(path, ResolveFlags::NO_SYMLINKS | ResolveFlags::BENEATH)
+    }
+
+    fn place_for_reading(&self, path: &Path) -> Result<Place, Failure> {
+        self.place_with(path, ResolveFlags::IN_ROOT)
+    }
+
+    fn place_with(&self, path: &Path, resolve: ResolveFlags) -> Result<Place, Failure> {
         let mut parts = Vec::new();
         for component in path.components() {
             match component {
@@ -137,7 +145,7 @@ impl Files {
             &parent,
             OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
             Mode::empty(),
-            ResolveFlags::NO_SYMLINKS | ResolveFlags::BENEATH,
+            resolve,
         )
         .map_err(|errno| match errno {
             Errno::LOOP => conflict(path, "no symbolic link on the way", "a symbolic link"),
@@ -601,7 +609,7 @@ impl Files {
             id: None,
             digest: None,
         };
-        let Ok(place) = self.place(path) else {
+        let Ok(place) = self.place_for_reading(path) else {
             return missing;
         };
         match Self::stat(&place, &place.name) {
@@ -617,8 +625,15 @@ impl Files {
     }
 
     fn contents(&self, path: &Path) -> Option<Vec<u8>> {
-        let place = self.place(path).ok()?;
-        let node = Self::open_node(&place, &place.name).ok()?;
+        let relative = path.strip_prefix("/").ok()?;
+        let node = sys::openat2(
+            &self.root,
+            relative,
+            OFlags::RDONLY | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::IN_ROOT,
+        )
+        .ok()?;
         if kind(&statx_fd(&node).ok()?) != Kind::File {
             return None;
         }

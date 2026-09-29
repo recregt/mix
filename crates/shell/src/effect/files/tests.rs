@@ -413,3 +413,35 @@ fn a_created_tree_is_removed_whole_but_only_if_it_is_still_the_one_made() {
             .all(|(path, ..)| !path.to_string_lossy().contains("mix-remove"))
     );
 }
+
+#[test]
+fn reading_follows_links_inside_the_root_but_writing_never_does() {
+    let mut root = root();
+    std::fs::create_dir_all(root.real("/nix/store/abc-nix/bin")).unwrap();
+    std::fs::write(root.real("/nix/store/abc-nix/bin/nix-env"), "binary").unwrap();
+    std::os::unix::fs::symlink("/nix/store/abc-nix", root.real("/nix/profile")).unwrap();
+
+    assert_eq!(
+        root.files
+            .observe(&Query::Contents("/nix/profile/bin/nix-env".into())),
+        Some(Fact::Contents(Some(Arc::from(&b"binary"[..]))))
+    );
+    assert!(matches!(
+        root.files.observe(&Query::Path("/nix/profile".into())),
+        Some(Fact::Path(PathFacts {
+            kind: Kind::Symlink,
+            ..
+        }))
+    ));
+    let refused = root.apply(Action::PutFile {
+        path: "/nix/profile/bin/other".into(),
+        contents: bytes("x"),
+        mode: 0o644,
+        owner: None,
+        expect: Expect::Absent,
+    });
+    assert!(
+        matches!(refused, Err(Failure::Conflict { .. })),
+        "{refused:?}"
+    );
+}

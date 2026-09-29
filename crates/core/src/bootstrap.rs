@@ -437,12 +437,12 @@ impl StepSpec for FetchRuntime {
 
     fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
         match Facts(facts).path(0).kind {
-            Kind::File => Ok(Vec::new()),
-            _ => Ok(vec![Action::InstallRuntime {
+            Kind::Missing => Ok(vec![Action::InstallRuntime {
                 url: self.0.url.clone(),
                 sha256: self.0.sha256,
                 size: self.0.size,
             }]),
+            _ => Ok(Vec::new()),
         }
     }
 }
