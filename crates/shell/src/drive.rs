@@ -3,19 +3,23 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use mix_core::action::{Action, Fact, Failure, Outcome, Query};
+use mix_core::action::{Action, Fact, Failure, Kind, Outcome, PathFacts, Performed, Query};
 use mix_core::journal::Record;
 use mix_core::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
+use mix_core::paths::mix_state_dir;
 use mix_core::plan::{Input, Next, Report, Runner};
+use mix_core::privilege::InvokingUser;
 use mix_core::{DownloadProgress, Scope};
 use mix_events::v1::Bytes;
 use mix_events::v1::node_progress::Progress;
 use mix_events::{Stopped, Tree};
 
 use crate::effect::files::{Files, Prepared};
+use crate::effect::generations::{self, ProfileContext};
 use crate::effect::identity;
 use crate::effect::runtime;
 use crate::effect::units::Units;
+use crate::profile;
 
 struct Relay<'a> {
     report: Mutex<&'a mut (dyn FnMut(Progress) + Send)>,
@@ -43,11 +47,54 @@ impl DownloadProgress for Relay<'_> {
 pub struct Performer {
     files: Files,
     units: Option<Units>,
+    profile: Option<ProfileContext>,
 }
 
 impl Performer {
     pub fn new(files: Files) -> Self {
-        Self { files, units: None }
+        Self {
+            files,
+            units: None,
+            profile: None,
+        }
+    }
+
+    pub fn with_profile(mut self, profile: ProfileContext) -> Self {
+        self.profile = Some(profile);
+        self
+    }
+
+    async fn record(
+        &mut self,
+        user: &InvokingUser,
+        prepared: &mut Prepared<'_>,
+        scope: &Scope,
+    ) -> Outcome {
+        let git = mix_state_dir(&user.home).join(".git");
+        let existed = !matches!(
+            self.files.observe(&Query::Path(git.clone())),
+            Some(Fact::Path(PathFacts {
+                kind: Kind::Missing,
+                ..
+            }))
+        );
+        prepared(&[])?;
+        let host = self
+            .profile
+            .as_ref()
+            .map(|profile| profile.host.clone())
+            .unwrap_or_default();
+        profile::record(user, &host, scope).await;
+        let undo = match self.files.observe(&Query::Path(git.clone())) {
+            Some(Fact::Path(PathFacts { id: Some(id), .. })) if !existed => {
+                vec![Action::RemoveCreatedTree {
+                    path: git,
+                    expect: id,
+                }]
+            }
+            _ => Vec::new(),
+        };
+        Ok(Performed { undo })
     }
 
     async fn units(&mut self) -> Result<&Units, Failure> {
@@ -90,6 +137,7 @@ impl Performer {
                 return runtime::install(url, sha256, *size, &relay, scope, prepared).await;
             }
             Action::RemoveRuntime { created } => return runtime::remove(created).await,
+            Action::RecordState { user } => return self.record(user, prepared, scope).await,
             Action::InstallUnit {
                 unit,
                 contents,
@@ -122,6 +170,11 @@ impl Performer {
             return outcome;
         }
         if let Some(outcome) = identity::perform(action, scope, prepared).await {
+            return outcome;
+        }
+        if let Some(profile) = &self.profile
+            && let Some(outcome) = generations::perform(action, profile, scope, prepared).await
+        {
             return outcome;
         }
         if let Some(outcome) = self.units().await?.perform(action, scope, prepared).await {
@@ -189,31 +242,43 @@ pub async fn drive(
                     continue;
                 }
                 let this = seq;
-                let mut progress = |progress: Progress| {
-                    if let Some(node) = node {
-                        let _ = tree.progress(node, progress);
-                    }
+                let mut announced: Option<Vec<Action>> = None;
+                let outcome = {
+                    let mut progress = |progress: Progress| {
+                        if let Some(node) = node {
+                            let _ = tree.progress(node, progress);
+                        }
+                    };
+                    let mut prepared = |undo: &[Action]| {
+                        if reverting || committing {
+                            return Ok(());
+                        }
+                        announced = Some(undo.to_vec());
+                        journal.append(&Record::Prepared {
+                            seq: this,
+                            undo: undo.to_vec(),
+                        })
+                    };
+                    performer
+                        .perform(&action, &scope, &mut progress, &mut prepared)
+                        .await
                 };
-                let mut prepared = |undo: &[Action]| {
-                    if reverting || committing {
-                        return Ok(());
-                    }
-                    journal.append(&Record::Prepared {
-                        seq: this,
-                        undo: undo.to_vec(),
-                    })
-                };
-                let outcome = performer
-                    .perform(&action, &scope, &mut progress, &mut prepared)
-                    .await;
                 match (&outcome, reverting, committing) {
                     (Ok(_), true, _) => keep(journal, &Record::Reverted { action }),
                     (Ok(_), false, true) => {
                         keep(journal, &Record::Ended);
                         ended = true;
                     }
-                    (Ok(_), false, false) => {
-                        keep(journal, &Record::Done { seq: this });
+                    (Ok(performed), false, false) => {
+                        let record = if announced.as_deref() == Some(&performed.undo[..]) {
+                            Record::Done { seq: this }
+                        } else {
+                            Record::Settled {
+                                seq: this,
+                                undo: performed.undo.clone(),
+                            }
+                        };
+                        keep(journal, &record);
                         seq += 1;
                     }
                     (Err(_), false, false) => {

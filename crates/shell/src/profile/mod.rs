@@ -9,7 +9,7 @@ pub mod change;
 pub mod config;
 pub mod state;
 
-pub use activation::{BuildPolicy, activate, finish, switch};
+pub use activation::{BuildPolicy, activate, activate_generation, finish, record, switch};
 pub use config::{existing_user_config_for, user_config_for};
 
 /// What an activation could not do.

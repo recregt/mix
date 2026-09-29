@@ -57,7 +57,7 @@ impl Step for ActivateHomeManagerConfig {
         // Bootstrapping has to build home-manager's generation from whatever the cache offers,
         // so it is not the place to refuse a build.
         self.created_git_dir = profile::activate(
-            cfg,
+            &cfg.user,
             self.mirror.as_deref(),
             &self.activity,
             &self.host,

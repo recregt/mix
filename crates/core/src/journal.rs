@@ -11,6 +11,7 @@ pub enum Record {
     Began { request: String },
     Prepared { seq: u64, undo: Vec<Action> },
     Done { seq: u64 },
+    Settled { seq: u64, undo: Vec<Action> },
     Failed { seq: u64 },
     Reverted { action: Action },
     Committing,
@@ -29,27 +30,30 @@ pub enum Recovery {
     },
 }
 
-pub fn pending(records: &[Record]) -> Vec<PathBuf> {
-    let finished = finished(records);
-    records
-        .iter()
-        .filter_map(|record| match record {
-            Record::Prepared { seq, undo } if finished.contains(seq) => Some(undo),
-            _ => None,
-        })
-        .flatten()
-        .filter_map(|action| match action {
-            Action::Restore { from, .. } => Some(from.clone()),
-            _ => None,
-        })
-        .collect()
+fn confirmed(records: &[Record]) -> Vec<(u64, Vec<Action>)> {
+    let mut prepared: Vec<(u64, Vec<Action>)> = Vec::new();
+    let mut confirmed = Vec::new();
+    for record in records {
+        match record {
+            Record::Prepared { seq, undo } => prepared.push((*seq, undo.clone())),
+            Record::Done { seq } => {
+                if let Some((_, undo)) = prepared.iter().find(|(prepared, _)| prepared == seq) {
+                    confirmed.push((*seq, undo.clone()));
+                }
+            }
+            Record::Settled { seq, undo } => confirmed.push((*seq, undo.clone())),
+            _ => {}
+        }
+    }
+    confirmed
 }
 
-fn finished(records: &[Record]) -> HashSet<u64> {
-    records
-        .iter()
-        .filter_map(|record| match record {
-            Record::Done { seq } => Some(*seq),
+pub fn pending(records: &[Record]) -> Vec<PathBuf> {
+    confirmed(records)
+        .into_iter()
+        .flat_map(|(_, undo)| undo)
+        .filter_map(|action| match action {
+            Action::Restore { from, .. } => Some(from),
             _ => None,
         })
         .collect()
@@ -64,7 +68,8 @@ pub fn recover(records: &[Record]) -> Recovery {
             pending: pending(records),
         };
     }
-    let done = finished(records);
+    let confirmed = confirmed(records);
+    let settled: HashSet<u64> = confirmed.iter().map(|(seq, _)| *seq).collect();
     let failed: HashSet<u64> = records
         .iter()
         .filter_map(|record| match record {
@@ -93,15 +98,13 @@ pub fn recover(records: &[Record]) -> Recovery {
             .cloned()
             .collect()
     };
-    let mut journal = Vec::new();
+    let journal: Vec<Vec<Action>> = confirmed.iter().map(|(_, undo)| still(undo)).collect();
     let mut uncertain = Vec::new();
     for record in records {
-        let Record::Prepared { seq, undo } = record else {
-            continue;
-        };
-        if done.contains(seq) {
-            journal.push(still(undo));
-        } else if !failed.contains(seq) {
+        if let Record::Prepared { seq, undo } = record
+            && !settled.contains(seq)
+            && !failed.contains(seq)
+        {
             uncertain.extend(rollback_order(&[still(undo)]));
         }
     }
@@ -238,6 +241,30 @@ mod tests {
             Recovery::RollBack {
                 uncertain: vec![],
                 certain: vec![removal("/nix", 1)],
+            }
+        );
+    }
+
+    #[test]
+    fn a_settled_change_is_undone_with_the_undo_it_settled_on() {
+        let predicted = removal("/home/alice/.local/state/mix/.git", 0);
+        let actual = removal("/home/alice/.local/state/mix/.git", 9);
+        let records = [
+            Record::Prepared {
+                seq: 0,
+                undo: vec![predicted],
+            },
+            Record::Settled {
+                seq: 0,
+                undo: vec![actual.clone()],
+            },
+        ];
+
+        assert_eq!(
+            recover(&records),
+            Recovery::RollBack {
+                uncertain: vec![],
+                certain: vec![actual],
             }
         );
     }

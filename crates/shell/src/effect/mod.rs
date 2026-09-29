@@ -2,6 +2,7 @@ pub mod accounts;
 pub(crate) mod exec;
 pub mod files;
 pub(crate) mod fs;
+pub mod generations;
 pub(crate) mod git;
 pub mod identity;
 pub mod journal;
