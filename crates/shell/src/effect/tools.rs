@@ -107,12 +107,20 @@ mod tests {
 
     use super::*;
 
+    fn target() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target")
+    }
+
     fn me() -> u32 {
         nix::unistd::Uid::current().as_raw()
     }
 
+    fn checkout() -> u32 {
+        std::fs::metadata(env!("CARGO_MANIFEST_DIR")).unwrap().uid()
+    }
+
     fn scratch() -> tempfile::TempDir {
-        let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
+        let target = target();
         std::fs::create_dir_all(&target).unwrap();
         let dir = tempfile::tempdir_in(target).unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -154,7 +162,7 @@ mod tests {
         let dir = scratch();
         tool(dir.path(), "useradd", 0o777);
 
-        let refused = trusted_in("useradd", &[dir.path()], me());
+        let refused = trusted_in("useradd", &[dir.path()], checkout());
 
         assert!(
             matches!(refused, Err(Failure::Conflict { .. })),
@@ -168,7 +176,7 @@ mod tests {
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
         tool(dir.path(), "useradd", 0o755);
 
-        let refused = trusted_in("useradd", &[dir.path()], me());
+        let refused = trusted_in("useradd", &[dir.path()], checkout());
 
         assert!(
             matches!(refused, Err(Failure::Conflict { .. })),
@@ -181,7 +189,7 @@ mod tests {
         let dir = scratch();
         tool(dir.path(), "useradd", 0o755);
 
-        let accepted = trusted_in("useradd", &[dir.path()], me());
+        let accepted = trusted_in("useradd", &[dir.path()], checkout());
 
         assert_eq!(accepted.unwrap(), dir.path().join("useradd"));
     }
@@ -192,7 +200,7 @@ mod tests {
         tool(dir.path(), "pgrep", 0o755);
         std::os::unix::fs::symlink("pgrep", dir.path().join("pkill")).unwrap();
 
-        let found = trusted_in("pkill", &[dir.path()], me()).unwrap();
+        let found = trusted_in("pkill", &[dir.path()], checkout()).unwrap();
 
         assert_eq!(found.file_name().unwrap(), "pkill");
     }
