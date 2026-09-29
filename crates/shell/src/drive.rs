@@ -489,6 +489,8 @@ pub async fn drive(
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -507,12 +509,12 @@ mod tests {
     }
 
     impl StepSpec for Ensure {
-        fn key(&self) -> &'static str {
-            self.key
+        fn key(&self) -> Cow<'static, str> {
+            self.key.into()
         }
 
-        fn title(&self) -> &'static str {
-            "ensure"
+        fn title(&self) -> Cow<'static, str> {
+            "ensure".into()
         }
 
         fn queries(&self) -> Vec<Query> {
@@ -636,8 +638,8 @@ mod tests {
         let (report, stream) = run(root.path(), "/missing/parent/file", Arc::new(|| None)).await;
 
         assert!(matches!(
-            report.verdict,
-            Verdict::Failed { step: "marker", .. }
+            &report.verdict,
+            Verdict::Failed { step, .. } if step == "marker"
         ));
         assert_eq!(listing(root.path()), before);
         assert!(validate(&stream).is_ok());

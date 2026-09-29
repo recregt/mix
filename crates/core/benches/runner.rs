@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::{Arc, LazyLock};
 
 use mix_core::action::{Action, Fact, Failure, Performed, Query};
@@ -21,12 +22,12 @@ struct Noop {
 }
 
 impl StepSpec for Noop {
-    fn key(&self) -> &'static str {
-        self.key
+    fn key(&self) -> Cow<'static, str> {
+        self.key.into()
     }
 
-    fn title(&self) -> &'static str {
-        "do nothing"
+    fn title(&self) -> Cow<'static, str> {
+        "do nothing".into()
     }
 
     fn queries(&self) -> Vec<Query> {

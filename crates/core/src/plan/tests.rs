@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -16,12 +17,12 @@ struct EnsureDir {
 }
 
 impl StepSpec for EnsureDir {
-    fn key(&self) -> &'static str {
-        self.key
+    fn key(&self) -> Cow<'static, str> {
+        self.key.into()
     }
 
-    fn title(&self) -> &'static str {
-        "ensure a directory"
+    fn title(&self) -> Cow<'static, str> {
+        "ensure a directory".into()
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -58,12 +59,12 @@ struct EnsureFile {
 }
 
 impl StepSpec for EnsureFile {
-    fn key(&self) -> &'static str {
-        self.key
+    fn key(&self) -> Cow<'static, str> {
+        self.key.into()
     }
 
-    fn title(&self) -> &'static str {
-        "ensure a file"
+    fn title(&self) -> Cow<'static, str> {
+        "ensure a file".into()
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -103,12 +104,12 @@ struct EnsureGroup {
 }
 
 impl StepSpec for EnsureGroup {
-    fn key(&self) -> &'static str {
-        self.key
+    fn key(&self) -> Cow<'static, str> {
+        self.key.into()
     }
 
-    fn title(&self) -> &'static str {
-        "ensure a group"
+    fn title(&self) -> Cow<'static, str> {
+        "ensure a group".into()
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -443,7 +444,7 @@ fn a_failed_undo_is_reported_the_others_still_run_and_nothing_foreign_is_removed
         .report
         .rollback_failures
         .iter()
-        .map(|(step, _)| *step)
+        .map(|(step, _)| step.as_ref())
         .collect();
     assert_eq!(failed, ["write-marker", "create-nix-dir"]);
     assert!(matches!(
@@ -686,7 +687,7 @@ fn a_step_that_cannot_be_observed_fails_and_rolls_back_what_came_before() {
     assert_eq!(
         report.verdict,
         Verdict::Failed {
-            step: "create-groups",
+            step: "create-groups".into(),
             failure: Failure::SystemdUnreachable
         }
     );

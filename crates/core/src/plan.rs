@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::VecDeque;
 
 use mix_events::v1::{
@@ -10,8 +11,8 @@ use mix_events::{Ending, NodeId, Start, Tree};
 use crate::action::{Action, Fact, Failure, Outcome, Query, rollback_order};
 
 pub trait StepSpec: Send + Sync {
-    fn key(&self) -> &'static str;
-    fn title(&self) -> &'static str;
+    fn key(&self) -> Cow<'static, str>;
+    fn title(&self) -> Cow<'static, str>;
     fn queries(&self) -> Vec<Query>;
     fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure>;
 
@@ -37,7 +38,7 @@ pub enum Next {
 pub enum Verdict {
     Succeeded,
     Failed {
-        step: &'static str,
+        step: Cow<'static, str>,
         failure: Failure,
     },
     Cancelled(Cancellation),
@@ -46,7 +47,7 @@ pub enum Verdict {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Report {
     pub verdict: Verdict,
-    pub rollback_failures: Vec<(&'static str, Failure)>,
+    pub rollback_failures: Vec<(Cow<'static, str>, Failure)>,
 }
 
 struct Doubt {
@@ -97,7 +98,7 @@ pub struct Runner {
     phase: Phase,
     stop: Option<Cancellation>,
     verdict: Option<Verdict>,
-    rollback_failures: Vec<(&'static str, Failure)>,
+    rollback_failures: Vec<(Cow<'static, str>, Failure)>,
     acting: Option<NodeId>,
     performed: u64,
 }
@@ -197,7 +198,7 @@ impl Runner {
         loop {
             match std::mem::replace(&mut self.phase, Phase::Closing) {
                 Phase::Opening => {
-                    let keys: Vec<&'static str> =
+                    let keys: Vec<Cow<'static, str>> =
                         self.steps.iter().map(|step| step.key()).collect();
                     self.plan = tree
                         .start(
@@ -389,7 +390,7 @@ impl Runner {
                         let ending = if undoing.failed {
                             Ending::failed(rollback_diagnostic(
                                 &self.rollback_failures,
-                                self.steps[undoing.step].key(),
+                                &self.steps[undoing.step].key(),
                             ))
                         } else {
                             Ending::succeeded()
@@ -543,7 +544,7 @@ fn finish(tree: &mut Tree, node: NodeId, ending: Ending) {
         .expect("the runner finishes its nodes children first");
 }
 
-fn incomplete(failures: &[(&'static str, Failure)]) -> Diagnostic {
+fn incomplete(failures: &[(Cow<'static, str>, Failure)]) -> Diagnostic {
     let mut steps: Vec<String> = failures.iter().map(|(step, _)| step.to_string()).collect();
     steps.dedup();
     Diagnostic {
@@ -559,8 +560,8 @@ fn incomplete(failures: &[(&'static str, Failure)]) -> Diagnostic {
     }
 }
 
-fn rollback_diagnostic(failures: &[(&'static str, Failure)], step: &'static str) -> Diagnostic {
-    let own: Vec<(&'static str, Failure)> = failures
+fn rollback_diagnostic(failures: &[(Cow<'static, str>, Failure)], step: &str) -> Diagnostic {
+    let own: Vec<(Cow<'static, str>, Failure)> = failures
         .iter()
         .filter(|(failed, _)| *failed == step)
         .cloned()
