@@ -107,6 +107,17 @@ impl Runner {
         }
     }
 
+    pub fn current_node(&self) -> Option<NodeId> {
+        match &self.phase {
+            Phase::Executing { node, .. } => Some(*node),
+            Phase::RollingBack {
+                current: Some(undoing),
+                ..
+            } => Some(undoing.node),
+            _ => None,
+        }
+    }
+
     pub fn shielded(&self) -> bool {
         match &self.phase {
             Phase::RollingBack { .. } | Phase::Committing { .. } => true,
@@ -486,13 +497,17 @@ pub fn diagnostic(failure: &Failure) -> Diagnostic {
             url.clone(),
             Some(Detail::Network(NetworkDetail { url: url.clone() })),
         ),
-        Failure::Integrity { expected, found } => (
+        Failure::Integrity {
+            artifact,
+            expected,
+            found,
+        } => (
             Code::Integrity,
-            "the download does not match its pin".to_string(),
+            format!("{artifact}: expected {expected}, found {found}"),
             Some(Detail::Integrity(IntegrityDetail {
-                artifact: String::new(),
-                expected: hex(&expected.0),
-                actual: hex(&found.0),
+                artifact: artifact.clone(),
+                expected: expected.clone(),
+                actual: found.clone(),
             })),
         ),
         Failure::Cancelled => (Code::Internal, "cancelled".to_string(), None),
@@ -505,10 +520,6 @@ pub fn diagnostic(failure: &Failure) -> Diagnostic {
         causes: Vec::new(),
         detail,
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(test)]

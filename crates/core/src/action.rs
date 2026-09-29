@@ -126,6 +126,9 @@ pub enum Action {
         sha256: Digest,
         size: u64,
     },
+    RemoveRuntime {
+        created: Vec<PathBuf>,
+    },
     ActivateProfile {
         user: InvokingUser,
         allow_source_builds: bool,
@@ -178,8 +181,9 @@ pub enum Failure {
         url: String,
     },
     Integrity {
-        expected: Digest,
-        found: Digest,
+        artifact: String,
+        expected: String,
+        found: String,
     },
     Cancelled,
 }

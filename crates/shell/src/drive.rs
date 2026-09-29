@@ -1,14 +1,43 @@
 use std::path::Path;
 
-use mix_core::Scope;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use mix_core::action::{Action, Fact, Failure, Outcome, Query};
 use mix_core::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
 use mix_core::plan::{Input, Next, Report, Runner};
+use mix_core::{DownloadProgress, Scope};
+use mix_events::v1::Bytes;
+use mix_events::v1::node_progress::Progress;
 use mix_events::{Stopped, Tree};
 
 use crate::effect::files::Files;
 use crate::effect::identity;
+use crate::effect::runtime;
 use crate::effect::units::Units;
+
+struct Relay<'a> {
+    report: Mutex<&'a mut (dyn FnMut(Progress) + Send)>,
+    total: AtomicU64,
+    done: AtomicU64,
+}
+
+impl DownloadProgress for Relay<'_> {
+    fn set_total(&self, total: u64) {
+        self.total.store(total, Ordering::Relaxed);
+    }
+
+    fn add(&self, delta: u64) {
+        let done = self.done.fetch_add(delta, Ordering::Relaxed) + delta;
+        let total = self.total.load(Ordering::Relaxed);
+        if let Ok(mut report) = self.report.lock() {
+            report(Progress::Bytes(Bytes {
+                done,
+                total: (total > 0).then_some(total),
+            }));
+        }
+    }
+}
 
 pub struct Performer {
     files: Files,
@@ -43,7 +72,24 @@ impl Performer {
         Ok(facts)
     }
 
-    pub async fn perform(&mut self, action: &Action, scope: &Scope) -> Outcome {
+    pub async fn perform(
+        &mut self,
+        action: &Action,
+        scope: &Scope,
+        progress: &mut (dyn FnMut(Progress) + Send),
+    ) -> Outcome {
+        match action {
+            Action::InstallRuntime { url, sha256, size } => {
+                let relay = Relay {
+                    report: Mutex::new(progress),
+                    total: AtomicU64::new(0),
+                    done: AtomicU64::new(0),
+                };
+                return runtime::install(url, sha256, *size, &relay, scope).await;
+            }
+            Action::RemoveRuntime { created } => return runtime::remove(created).await,
+            _ => {}
+        }
         if let Action::InstallUnit {
             unit,
             contents,
@@ -102,7 +148,15 @@ pub async fn drive(
                 } else {
                     scope.clone()
                 };
-                input = Some(Input::Done(performer.perform(&action, &scope).await));
+                let node = runner.current_node();
+                let mut progress = |progress: Progress| {
+                    if let Some(node) = node {
+                        let _ = tree.progress(node, progress);
+                    }
+                };
+                input = Some(Input::Done(
+                    performer.perform(&action, &scope, &mut progress).await,
+                ));
             }
             Next::Finished(report) => return report,
         }
@@ -284,5 +338,35 @@ mod tests {
         assert!(created.load(Ordering::Relaxed));
         assert_eq!(listing(root.path()), before);
         assert!(validate(&stream).is_ok());
+    }
+
+    #[test]
+    fn download_progress_becomes_byte_snapshots_against_the_total() {
+        let mut seen = Vec::new();
+        {
+            let mut report = |progress: Progress| seen.push(progress);
+            let relay = Relay {
+                report: Mutex::new(&mut report),
+                total: AtomicU64::new(0),
+                done: AtomicU64::new(0),
+            };
+            relay.set_total(10);
+            relay.add(4);
+            relay.add(6);
+        }
+
+        assert_eq!(
+            seen,
+            [
+                Progress::Bytes(Bytes {
+                    done: 4,
+                    total: Some(10)
+                }),
+                Progress::Bytes(Bytes {
+                    done: 10,
+                    total: Some(10)
+                })
+            ]
+        );
     }
 }

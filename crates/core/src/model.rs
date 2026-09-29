@@ -583,6 +583,14 @@ impl World {
                 done(vec![Action::RestartUnit { unit: unit.clone() }])
             }
             Action::InstallRuntime { .. } => self.install_runtime(),
+            Action::RemoveRuntime { created } => {
+                for path in created {
+                    for entry in self.subtree(path) {
+                        self.files.remove(&entry);
+                    }
+                }
+                done(Vec::new())
+            }
             Action::ActivateProfile { user, .. } => {
                 if self.contents(DEFAULT_PROFILE_NIX_ENV).is_none() {
                     return Err(Failure::SpawnFailed {
@@ -706,7 +714,10 @@ impl World {
             .take_while(|dir| !self.files.contains_key(*dir))
             .collect();
         missing.reverse();
-        let mut undo = Vec::new();
+        let created = missing
+            .first()
+            .map(|top| top.to_path_buf())
+            .unwrap_or_else(|| binary.to_path_buf());
         for dir in missing {
             self.parent_is_dir(dir)?;
             let id = self.fresh();
@@ -719,20 +730,17 @@ impl World {
                     id,
                 },
             );
-            undo.push(Action::RemoveCreated {
-                path: dir.to_path_buf(),
-                expect: id,
-            });
         }
-        undo.extend(self.put(
+        self.put(
             binary,
             &Arc::from(&b"nix-env"[..]),
             0o555,
             ROOT,
             Expect::Absent,
-        )?);
-        undo.reverse();
-        done(undo)
+        )?;
+        done(vec![Action::RemoveRuntime {
+            created: vec![created],
+        }])
     }
 
     pub fn observe(&self, query: &Query) -> Fact {

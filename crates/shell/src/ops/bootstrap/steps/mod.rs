@@ -2,7 +2,7 @@ mod activate_home_manager;
 mod configure_nix_conf;
 mod configure_systemd_service;
 mod create_nix_dir;
-mod fetch_and_unpack;
+pub(crate) mod fetch_and_unpack;
 mod remove_existing_installation;
 mod write_home_manager_config;
 

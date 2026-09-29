@@ -81,6 +81,42 @@ impl Step for FetchAndUnpack {
     }
 }
 
+impl Installed {
+    fn created(&self) -> Vec<PathBuf> {
+        let mut created = Vec::new();
+        if self.profile_created {
+            created.push(PathBuf::from(DEFAULT_PROFILE));
+        }
+        if self.store_dir_created {
+            created.push(PathBuf::from(NIX_STORE));
+        } else {
+            created.extend(self.store_paths.iter().rev().cloned());
+        }
+        created
+    }
+}
+
+pub(crate) fn provision_runtime(tarball_bytes: &[u8], scope: &Scope) -> (Vec<PathBuf>, Result<()>) {
+    let mut installed = Installed::default();
+    let result = provision(tarball_bytes, &mut installed, scope);
+    (installed.created(), result)
+}
+
+pub(crate) fn remove_runtime(created: &[PathBuf]) -> Result<()> {
+    for path in created {
+        if path == Path::new(DEFAULT_PROFILE) {
+            remove_profile_default()?;
+        } else {
+            remove_path(path)?;
+        }
+    }
+    if let Some(scratch_root) = read_manifest() {
+        remove_path(&scratch_root)?;
+    }
+    remove_manifest();
+    Ok(())
+}
+
 fn provision(tarball_bytes: &[u8], installed: &mut Installed, scope: &Scope) -> Result<()> {
     let scratch_root = match recover_scratch() {
         Some(path) => path,

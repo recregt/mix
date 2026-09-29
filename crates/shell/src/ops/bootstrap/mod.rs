@@ -1,7 +1,7 @@
 mod cleanup;
 mod error;
 mod planner;
-mod steps;
+pub(crate) mod steps;
 
 pub mod detect;
 pub mod preflight;

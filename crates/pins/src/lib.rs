@@ -11,6 +11,7 @@ pub struct TarballPin {
     pub target: &'static str,
     pub url: &'static str,
     pub sha256: &'static str,
+    pub size: u64,
 }
 
 pub const NIX_TARBALLS: &[TarballPin] = &[
@@ -18,11 +19,13 @@ pub const NIX_TARBALLS: &[TarballPin] = &[
         target: "x86_64-linux",
         url: "https://releases.nixos.org/nix/nix-2.35.2/nix-2.35.2-x86_64-linux.tar.xz",
         sha256: "0c3960a9792331a22081c3c7a5d8465db9b17c50b3acdf18587fa4c6f2cb1158",
+        size: 27_131_728,
     },
     TarballPin {
         target: "aarch64-linux",
         url: "https://releases.nixos.org/nix/nix-2.35.2/nix-2.35.2-aarch64-linux.tar.xz",
         sha256: "4d0302a2910f5eec1c33b8deef634f04899a75737e7001ec49908d003ae5efda",
+        size: 25_288_932,
     },
 ];
 
