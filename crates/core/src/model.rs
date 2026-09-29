@@ -302,6 +302,9 @@ impl World {
     }
 
     pub fn apply(&mut self, action: &Action) -> Outcome {
+        if self.already(action) {
+            return done(Vec::new());
+        }
         match action {
             Action::CreateDir { path, mode, owner } => {
                 self.parent_is_dir(path)?;
@@ -614,7 +617,7 @@ impl World {
                 done(vec![Action::RestartUnit { unit: unit.clone() }])
             }
             Action::InstallRuntime { .. } => self.install_runtime(),
-            Action::RemoveRuntime { created } => {
+            Action::RemoveRuntime { created, .. } => {
                 for path in created {
                     for entry in self.subtree(path) {
                         self.files.remove(&entry);
@@ -720,6 +723,46 @@ impl World {
         }
     }
 
+    fn already(&self, action: &Action) -> bool {
+        let members = |name: &str| {
+            self.groups
+                .get(name)
+                .map(|group| group.members.clone())
+                .unwrap_or_default()
+        };
+        match action {
+            Action::RemoveCreated { path, .. } | Action::RemoveCreatedTree { path, .. } => {
+                !self.files.contains_key(path)
+            }
+            Action::AddGroup { name, gid } | Action::SetGroupGid { name, gid, .. } => {
+                self.groups.get(name).is_some_and(|group| group.gid == *gid)
+            }
+            Action::DeleteGroup { name, .. } => !self.groups.contains_key(name),
+            Action::AddUser(spec) => self
+                .users
+                .get(&spec.name)
+                .is_some_and(|user| (user.uid, user.gid) == (spec.uid, spec.gid)),
+            Action::SetUserIds { name, ids, .. } => self
+                .users
+                .get(name)
+                .is_some_and(|user| (user.uid, user.gid) == *ids),
+            Action::DeleteUser { name, .. } => !self.users.contains_key(name),
+            Action::AddMember { group, user } => members(group).contains(user),
+            Action::RemoveMember { group, user } => !members(group).contains(user),
+            Action::EnableUnit { unit } => self.units.get(unit).is_some_and(|unit| unit.enabled),
+            Action::DisableUnit { unit } => !self.units.get(unit).is_some_and(|unit| unit.enabled),
+            Action::StartUnit { unit } => self
+                .units
+                .get(unit)
+                .is_some_and(|unit| unit.running.is_some()),
+            Action::StopUnit { unit } => !self
+                .units
+                .get(unit)
+                .is_some_and(|unit| unit.running.is_some()),
+            _ => false,
+        }
+    }
+
     fn group(&mut self, name: &str, expect: u32) -> Result<&mut GroupFacts, Failure> {
         match self.groups.get_mut(name) {
             Some(group) if group.gid == expect => Ok(group),
@@ -805,7 +848,10 @@ impl World {
             }
             self.put(file, &Arc::from(contents), 0o444, ROOT, Expect::Absent)?;
         }
-        done(vec![Action::RemoveRuntime { created }])
+        done(vec![Action::RemoveRuntime {
+            created,
+            kept: Vec::new(),
+        }])
     }
 
     pub fn observe(&self, query: &Query) -> Fact {
@@ -1200,5 +1246,54 @@ mod tests {
 
         assert_eq!(world.files, before.files);
         assert_eq!(world.profile(&user).and_then(|p| p.active), None);
+    }
+
+    #[test]
+    fn an_action_whose_result_already_holds_changes_nothing_and_needs_no_undo() {
+        let mut world = World::default();
+        world.groups.insert(
+            "nixbld".into(),
+            GroupFacts {
+                gid: 30_000,
+                members: vec![],
+            },
+        );
+        let before = world.clone();
+
+        for action in [
+            Action::AddGroup {
+                name: "nixbld".into(),
+                gid: 30_000,
+            },
+            Action::DeleteUser {
+                name: "nixbld1".into(),
+                expect: (30_001, 30_000),
+            },
+            Action::RemoveCreated {
+                path: "/nix".into(),
+                expect: FileId {
+                    dev: 1,
+                    ino: 99,
+                    born: None,
+                },
+            },
+            Action::StopUnit {
+                unit: "nix-daemon.socket".into(),
+            },
+        ] {
+            assert_eq!(
+                world.apply(&action),
+                Ok(Performed { undo: vec![] }),
+                "{action:?}"
+            );
+        }
+        assert_eq!(world, before);
+        assert!(matches!(
+            world.apply(&Action::AddGroup {
+                name: "nixbld".into(),
+                gid: 1,
+            }),
+            Err(Failure::Conflict { .. })
+        ));
     }
 }

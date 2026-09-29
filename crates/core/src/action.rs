@@ -134,6 +134,7 @@ pub enum Action {
     },
     RemoveRuntime {
         created: Vec<PathBuf>,
+        kept: Vec<PathBuf>,
     },
     ActivateProfile {
         user: InvokingUser,

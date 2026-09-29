@@ -138,7 +138,9 @@ impl Performer {
                 };
                 return runtime::install(url, sha256, *size, &relay, scope, prepared).await;
             }
-            Action::RemoveRuntime { created } => return runtime::remove(created).await,
+            Action::RemoveRuntime { created, kept } => {
+                return runtime::remove(created, kept).await;
+            }
             Action::RecordState { user } => return self.record(user, prepared, scope).await,
             Action::InstallUnit {
                 unit,
@@ -304,7 +306,9 @@ pub async fn drive(
                         seq += 1;
                     }
                     (Err(_), false, false) => {
-                        keep(journal, &Record::Failed { seq: this });
+                        if let Some(undo) = announced.take() {
+                            runner.in_doubt(undo);
+                        }
                         seq += 1;
                     }
                     (Err(_), _, _) => {}

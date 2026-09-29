@@ -761,3 +761,52 @@ fn a_crash_before_or_after_any_change_is_recovered_to_the_start_or_the_finish() 
         }
     }
 }
+
+#[test]
+fn an_action_that_failed_after_taking_effect_is_undone_as_one_in_doubt() {
+    let base = World::default();
+    for failing in 0..forward_actions(&base) {
+        let mut world = base.clone();
+        let outbox = Arc::new(Outbox::new("request", || {}));
+        let mut tree = Tree::new(
+            outbox,
+            Arc::new(|| None),
+            Start::command("bootstrap", Command::default()),
+        );
+        let mut runner = Runner::new(ROOT, bootstrap_like());
+        let mut input = None;
+        let mut forward = 0;
+        let report = loop {
+            match runner.step(&mut tree, input.take()) {
+                Next::Observe(queries) => {
+                    input = Some(Input::Facts(Ok(queries
+                        .iter()
+                        .map(|query| world.observe(query))
+                        .collect())));
+                }
+                Next::Perform(action) => {
+                    let outcome = world.apply(&action);
+                    let counts = !runner.rolling_back() && action != Action::Commit;
+                    input = Some(Input::Done(if counts && forward == failing {
+                        runner.in_doubt(outcome.expect("the action applies").undo);
+                        Err(Failure::Cancelled)
+                    } else {
+                        outcome
+                    }));
+                    if counts {
+                        forward += 1;
+                    }
+                }
+                Next::Finished(report) => break report,
+            }
+        };
+
+        assert!(matches!(report.verdict, Verdict::Cancelled(_)), "{failing}");
+        assert!(
+            report.rollback_failures.is_empty(),
+            "{failing}: {:?}",
+            report.rollback_failures
+        );
+        assert_eq!(world, base, "failing at {failing}");
+    }
+}

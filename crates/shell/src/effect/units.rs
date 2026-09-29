@@ -90,14 +90,6 @@ pub fn invocation(bytes: &[u8]) -> Option<String> {
     (!bytes.is_empty()).then(|| bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
-fn conflict(unit: &str, expected: &str, found: &str) -> Failure {
-    Failure::Conflict {
-        subject: unit.to_string(),
-        expected: expected.to_string(),
-        found: found.to_string(),
-    }
-}
-
 fn done(undo: Vec<Action>) -> Outcome {
     Ok(Performed { undo })
 }
@@ -257,7 +249,7 @@ impl Units {
     async fn enable(&self, unit: &str, prepared: &mut Prepared<'_>) -> Outcome {
         let facts = self.observe(unit).await?;
         if facts.enabled {
-            return Err(conflict(unit, "disabled", "enabled"));
+            return done(Vec::new());
         }
         prepared(&[Action::DisableUnit {
             unit: unit.to_string(),
@@ -276,7 +268,7 @@ impl Units {
     async fn disable(&self, unit: &str, prepared: &mut Prepared<'_>) -> Outcome {
         let facts = self.observe(unit).await?;
         if !facts.enabled {
-            return Err(conflict(unit, "enabled", "disabled"));
+            return done(Vec::new());
         }
         prepared(&[Action::EnableUnit {
             unit: unit.to_string(),
@@ -295,7 +287,7 @@ impl Units {
     async fn start(&self, unit: &str, scope: &Scope, prepared: &mut Prepared<'_>) -> Outcome {
         let facts = self.observe(unit).await?;
         if facts.active_state == "active" {
-            return Err(conflict(unit, "inactive", "active"));
+            return done(Vec::new());
         }
         prepared(&[Action::StopUnit {
             unit: unit.to_string(),
@@ -308,13 +300,28 @@ impl Units {
 
     async fn stop(&self, unit: &str, scope: &Scope, prepared: &mut Prepared<'_>) -> Outcome {
         let facts = self.observe(unit).await?;
-        if facts.active_state != "active" {
-            return Err(conflict(unit, "active", &facts.active_state));
+        if facts.active_state != "active" && facts.active_state != "activating" {
+            return done(Vec::new());
         }
         prepared(&[Action::StartUnit {
             unit: unit.to_string(),
         }])?;
+        let triggered: Vec<String> = self
+            .unit_proxy(unit, UNIT)
+            .await?
+            .get_property("Triggers")
+            .await
+            .unwrap_or_default();
         self.job("StopUnit", unit, scope).await?;
+        for dependent in triggered {
+            if self
+                .observe(&dependent)
+                .await
+                .is_ok_and(|facts| facts.active_state == "active")
+            {
+                self.job("StopUnit", &dependent, scope).await?;
+            }
+        }
         done(vec![Action::StartUnit {
             unit: unit.to_string(),
         }])

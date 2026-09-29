@@ -48,10 +48,17 @@ pub struct Report {
     pub rollback_failures: Vec<(&'static str, Failure)>,
 }
 
+struct Doubt {
+    step: usize,
+    undo: Vec<Action>,
+}
+
 struct Undoing {
     step: usize,
     node: NodeId,
+    doubtful: VecDeque<Action>,
     queue: VecDeque<Action>,
+    doubting: bool,
     failed: bool,
 }
 
@@ -84,6 +91,7 @@ pub struct Runner {
     parent: NodeId,
     plan: NodeId,
     journal: Vec<Vec<Vec<Action>>>,
+    doubts: Vec<Doubt>,
     nodes: Vec<Option<NodeId>>,
     phase: Phase,
     stop: Option<Cancellation>,
@@ -99,6 +107,7 @@ impl Runner {
             parent,
             plan: 0,
             journal: vec![Vec::new(); count],
+            doubts: Vec::new(),
             nodes: vec![None; count],
             phase: Phase::Opening,
             stop: None,
@@ -127,6 +136,14 @@ impl Runner {
             Phase::RollingBack { .. } | Phase::Committing { .. } => true,
             Phase::Executing { step, .. } => self.steps[*step].shielded(),
             _ => false,
+        }
+    }
+
+    pub fn in_doubt(&mut self, undo: Vec<Action>) {
+        if let Phase::Executing { step, .. } = self.phase
+            && !undo.is_empty()
+        {
+            self.doubts.push(Doubt { step, undo });
         }
     }
 
@@ -301,6 +318,15 @@ impl Runner {
                                 step,
                                 node,
                                 queue: rollback_order(&self.journal[step]).into(),
+                                doubtful: self
+                                    .doubts
+                                    .iter()
+                                    .filter(|doubt| doubt.step == step)
+                                    .flat_map(|doubt| {
+                                        rollback_order(std::slice::from_ref(&doubt.undo))
+                                    })
+                                    .collect(),
+                                doubting: false,
                                 failed: false,
                             }),
                             awaiting: false,
@@ -311,7 +337,12 @@ impl Runner {
                     remaining,
                     current: Some(mut undoing),
                     awaiting: false,
-                } => match undoing.queue.pop_front() {
+                } => match undoing
+                    .doubtful
+                    .pop_front()
+                    .map(|action| (action, true))
+                    .or_else(|| undoing.queue.pop_front().map(|action| (action, false)))
+                {
                     None => {
                         let ending = if undoing.failed {
                             Ending::failed(rollback_diagnostic(
@@ -328,7 +359,8 @@ impl Runner {
                             awaiting: false,
                         };
                     }
-                    Some(action) => {
+                    Some((action, doubting)) => {
+                        undoing.doubting = doubting;
                         self.phase = Phase::RollingBack {
                             remaining,
                             current: Some(undoing),
@@ -345,7 +377,9 @@ impl Runner {
                     let Some(Input::Done(outcome)) = input.take() else {
                         panic!("an undo is answered with its outcome");
                     };
-                    if let Err(failure) = outcome {
+                    if let Err(failure) = outcome
+                        && !undoing.doubting
+                    {
                         undoing.failed = true;
                         self.rollback_failures
                             .push((self.steps[undoing.step].key(), failure));
@@ -405,7 +439,10 @@ impl Runner {
 
     fn roll_back(&mut self) {
         let remaining = (0..self.steps.len())
-            .filter(|step| !self.journal[*step].is_empty())
+            .filter(|step| {
+                !self.journal[*step].is_empty()
+                    || self.doubts.iter().any(|doubt| doubt.step == *step)
+            })
             .collect();
         self.phase = Phase::RollingBack {
             remaining,

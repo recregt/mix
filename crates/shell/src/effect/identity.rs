@@ -142,6 +142,26 @@ fn subject(action: &Action) -> String {
     }
 }
 
+pub fn already(action: &Action) -> bool {
+    let members = |name: &str| group(name).map(|group| group.members).unwrap_or_default();
+    match action {
+        Action::AddGroup { name, gid } | Action::SetGroupGid { name, gid, .. } => {
+            group(name).is_some_and(|found| found.gid == *gid)
+        }
+        Action::DeleteGroup { name, .. } => group(name).is_none(),
+        Action::AddUser(spec) => {
+            user(&spec.name).is_some_and(|found| (found.uid, found.gid) == (spec.uid, spec.gid))
+        }
+        Action::SetUserIds { name, ids, .. } => {
+            user(name).is_some_and(|found| (found.uid, found.gid) == *ids)
+        }
+        Action::DeleteUser { name, .. } => user(name).is_none(),
+        Action::AddMember { group: name, user } => members(name).contains(user),
+        Action::RemoveMember { group: name, user } => !members(name).contains(user),
+        _ => false,
+    }
+}
+
 fn precondition(action: &Action) -> Result<Vec<Action>, Failure> {
     let expect_group = |name: &str, gid: u32| match group(name) {
         Some(found) if found.gid == gid => Ok(found),
@@ -309,6 +329,9 @@ pub async fn perform(
     let (tool, args) = command(action)?;
     Some(
         async {
+            if already(action) {
+                return Ok(Performed { undo: Vec::new() });
+            }
             let undo = precondition(action)?;
             prepared(&undo)?;
             if let Action::DeleteUser { name, .. } = action {

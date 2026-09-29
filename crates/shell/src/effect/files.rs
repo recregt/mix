@@ -13,6 +13,13 @@ use rustix::fs::{
 };
 use rustix::io::Errno;
 
+enum Unrenamed {
+    AlreadyGone,
+    Other(Failure),
+}
+
+use Unrenamed::{AlreadyGone, Other};
+
 pub type Prepared<'a> = dyn FnMut(&[Action]) -> Result<(), Failure> + Send + 'a;
 
 pub struct Files {
@@ -476,12 +483,18 @@ impl Files {
     fn remove_created(&mut self, path: &Path, expect: FileId) -> Outcome {
         let place = self.place(path)?;
         let doomed = self.sibling(&place, "remove");
-        Self::rename(&place, &place.name, &doomed, RenameFlags::NOREPLACE).map_err(|errno| {
-            match errno {
-                Errno::NOENT => conflict(path, format!("{expect:?}"), "nothing"),
-                errno => io(path, errno),
-            }
-        })?;
+        let renamed =
+            Self::rename(&place, &place.name, &doomed, RenameFlags::NOREPLACE).map_err(|errno| {
+                match errno {
+                    Errno::NOENT => AlreadyGone,
+                    errno => Other(io(path, errno)),
+                }
+            });
+        match renamed {
+            Err(AlreadyGone) => return done(Vec::new()),
+            Err(Other(failure)) => return Err(failure),
+            Ok(()) => {}
+        }
         let put_back = || {
             let _ = Self::rename(&place, &doomed, &place.name, RenameFlags::NOREPLACE);
         };
@@ -513,12 +526,18 @@ impl Files {
     fn remove_created_tree(&mut self, path: &Path, expect: FileId) -> Outcome {
         let place = self.place(path)?;
         let doomed = self.sibling(&place, "remove");
-        Self::rename(&place, &place.name, &doomed, RenameFlags::NOREPLACE).map_err(|errno| {
-            match errno {
-                Errno::NOENT => conflict(path, format!("{expect:?}"), "nothing"),
-                errno => io(path, errno),
-            }
-        })?;
+        let renamed =
+            Self::rename(&place, &place.name, &doomed, RenameFlags::NOREPLACE).map_err(|errno| {
+                match errno {
+                    Errno::NOENT => AlreadyGone,
+                    errno => Other(io(path, errno)),
+                }
+            });
+        match renamed {
+            Err(AlreadyGone) => return done(Vec::new()),
+            Err(Other(failure)) => return Err(failure),
+            Ok(()) => {}
+        }
         if let Err(failure) = Self::expect_id(&place, &doomed, expect) {
             let _ = Self::rename(&place, &doomed, &place.name, RenameFlags::NOREPLACE);
             return Err(failure);

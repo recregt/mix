@@ -503,7 +503,8 @@ impl StepSpec for ConfigureNixConf {
             }
             actions.extend(writes);
         }
-        if rewrote_nix_conf && facts.unit(9).active_state == "active" {
+        let daemon = facts.unit(9);
+        if rewrote_nix_conf && daemon.load_state == "loaded" && daemon.active_state == "active" {
             actions.push(Action::RestartUnit {
                 unit: NIX_DAEMON_SERVICE_UNIT.to_string(),
             });

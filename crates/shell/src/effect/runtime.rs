@@ -111,10 +111,14 @@ pub async fn install(
         .filter(|path| !path.exists())
         .map(std::path::Path::to_path_buf)
         .collect();
-    prepared(&[mix_core::action::Action::RemoveRuntime { created: predicted }])?;
     let nix = Path::new("/nix");
     let store = Path::new(mix_core::paths::NIX_STORE);
     let before = listing(nix, store);
+    let kept: Vec<PathBuf> = before.iter().cloned().collect();
+    prepared(&[mix_core::action::Action::RemoveRuntime {
+        created: predicted,
+        kept: kept.clone(),
+    }])?;
     let working = scope.clone();
     let (mut created, provisioned) = blocking(move || provision_runtime(&bytes, &working)).await?;
     for path in added(&before, &listing(nix, store)) {
@@ -125,7 +129,7 @@ pub async fn install(
     let failed = match provisioned {
         Ok(()) if !scope.is_stopped() => {
             return Ok(Performed {
-                undo: vec![mix_core::action::Action::RemoveRuntime { created }],
+                undo: vec![mix_core::action::Action::RemoveRuntime { created, kept }],
             });
         }
         Ok(()) => Failure::Cancelled,
@@ -138,8 +142,17 @@ pub async fn install(
     Err(failed)
 }
 
-pub async fn remove(created: &[PathBuf]) -> Outcome {
-    let created = created.to_vec();
+pub async fn remove(created: &[PathBuf], kept: &[PathBuf]) -> Outcome {
+    let mut created = created.to_vec();
+    if !kept.is_empty() {
+        let kept: BTreeSet<PathBuf> = kept.iter().cloned().collect();
+        let now = listing(Path::new("/nix"), Path::new(mix_core::paths::NIX_STORE));
+        for path in added(&kept, &now) {
+            if !created.iter().any(|known| path.starts_with(known)) {
+                created.push(path);
+            }
+        }
+    }
     blocking(move || remove_runtime(&created))
         .await?
         .map_err(|error| failure("", error))?;
