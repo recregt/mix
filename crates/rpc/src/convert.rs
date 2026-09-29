@@ -286,6 +286,18 @@ fn failure_to_wire(failure: Failure) -> proto::Failure {
             }
             .into(),
         }),
+        Failure::SystemdUnreachable => Kind::SystemdUnreachable(proto::Empty {}),
+        Failure::Unit {
+            operation,
+            unit,
+            detail,
+            invocation,
+        } => Kind::Unit(proto::Unit {
+            operation,
+            unit,
+            detail,
+            invocation,
+        }),
         Failure::AlreadyManaged => Kind::AlreadyManaged(proto::Empty {}),
         Failure::CrossDeviceStore { path } => Kind::CrossDeviceStore(proto::Path {
             path: path.to_string_lossy().into_owned(),
@@ -334,6 +346,13 @@ fn failure_from_wire(failure: proto::Failure) -> Result<Failure, Malformed> {
                         return Err(Malformed(format!("host {}", not_ready.host)));
                     }
                 },
+            },
+            Kind::SystemdUnreachable(_) => Failure::SystemdUnreachable,
+            Kind::Unit(unit) => Failure::Unit {
+                operation: unit.operation,
+                unit: unit.unit,
+                detail: unit.detail,
+                invocation: unit.invocation,
             },
             Kind::AlreadyManaged(_) => Failure::AlreadyManaged,
             Kind::CrossDeviceStore(path) => Failure::CrossDeviceStore {
@@ -642,6 +661,19 @@ mod tests {
             Failure::UnsupportedKernel,
             Failure::SystemdNotReady { host: Host::Native },
             Failure::SystemdNotReady { host: Host::Wsl },
+            Failure::SystemdUnreachable,
+            Failure::Unit {
+                operation: "start".into(),
+                unit: "nix-daemon.socket".into(),
+                detail: "job failed, failed (failed), result exit-code".into(),
+                invocation: Some("0123456789abcdef0123456789abcdef".into()),
+            },
+            Failure::Unit {
+                operation: "enable".into(),
+                unit: "nix-daemon.socket".into(),
+                detail: "masked".into(),
+                invocation: None,
+            },
             Failure::AlreadyManaged,
             Failure::CrossDeviceStore {
                 path: "/nix/store/pkg-a".into(),

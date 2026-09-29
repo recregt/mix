@@ -136,7 +136,16 @@ message Failure {
     Empty interrupted = 16;
     Detail invalid_mirror = 17;
     Conflict conflict = 18;
+    Empty systemd_unreachable = 19;
+    Unit unit = 20;
   }
+}
+
+message Unit {
+  string operation = 1;
+  string unit = 2;
+  string detail = 3;
+  optional string invocation = 4;
 }
 
 message Conflict {

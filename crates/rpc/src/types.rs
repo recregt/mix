@@ -107,6 +107,13 @@ pub enum Failure {
     SystemdNotReady {
         host: Host,
     },
+    SystemdUnreachable,
+    Unit {
+        operation: String,
+        unit: String,
+        detail: String,
+        invocation: Option<String>,
+    },
     AlreadyManaged,
     CrossDeviceStore {
         path: PathBuf,

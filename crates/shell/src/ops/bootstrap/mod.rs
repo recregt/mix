@@ -89,14 +89,16 @@ pub fn error_from(failure: Failure) -> Error {
             command: program,
             source: std::io::Error::from(kind),
         }),
-        Failure::Unit(unit) => Error::Core(mix_core::Error::Command {
-            command: format!("start {}", unit.unit),
+        Failure::Unit(unit) => Error::Unit {
+            operation: unit.operation.verb().to_string(),
             detail: format!(
                 "job {}, {} ({}), result {}",
                 unit.job_result, unit.active_state, unit.sub_state, unit.unit_result
             ),
-        }),
-        Failure::SystemdUnreachable => Error::SystemdNotReady { host: Host::Native },
+            unit: unit.unit,
+            invocation: unit.invocation,
+        },
+        Failure::SystemdUnreachable => Error::SystemdUnreachable,
         Failure::Network { url } => Error::Network(Box::new(std::io::Error::other(url))),
         Failure::Integrity {
             artifact,

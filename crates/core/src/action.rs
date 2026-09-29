@@ -210,8 +210,34 @@ pub enum Failure {
     Cancelled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitOperation {
+    Inspect,
+    Reload,
+    Enable,
+    Disable,
+    Start,
+    Stop,
+    Restart,
+}
+
+impl UnitOperation {
+    pub fn verb(self) -> &'static str {
+        match self {
+            Self::Inspect => "inspect",
+            Self::Reload => "reload",
+            Self::Enable => "enable",
+            Self::Disable => "disable",
+            Self::Start => "start",
+            Self::Stop => "stop",
+            Self::Restart => "restart",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnitFailure {
+    pub operation: UnitOperation,
     pub unit: String,
     pub job_result: String,
     pub active_state: String,

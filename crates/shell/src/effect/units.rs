@@ -1,6 +1,8 @@
 use futures_util::StreamExt;
 use mix_core::Scope;
-use mix_core::action::{Action, Failure, Outcome, Performed, UnitFacts, UnitFailure};
+use mix_core::action::{
+    Action, Failure, Outcome, Performed, UnitFacts, UnitFailure, UnitOperation,
+};
 use zbus::zvariant::OwnedObjectPath;
 use zbus::{Connection, Proxy};
 
@@ -10,6 +12,13 @@ const DESTINATION: &str = "org.freedesktop.systemd1";
 const MANAGER_PATH: &str = "/org/freedesktop/systemd1";
 const MANAGER: &str = "org.freedesktop.systemd1.Manager";
 const UNIT: &str = "org.freedesktop.systemd1.Unit";
+
+#[derive(Clone, Copy)]
+enum Job {
+    Start,
+    Stop,
+    Restart,
+}
 
 pub struct Units {
     bus: Connection,
@@ -27,10 +36,11 @@ pub fn interface_of(unit: &str) -> Option<&'static str> {
     })
 }
 
-pub fn method_failure(unit: &str, name: &str, message: &str) -> Failure {
+pub fn method_failure(operation: UnitOperation, unit: &str, name: &str, message: &str) -> Failure {
     match name {
         "org.freedesktop.systemd1.NoSuchUnit" | "org.freedesktop.systemd1.LoadFailed" => {
             Failure::Unit(Box::new(UnitFailure {
+                operation,
                 unit: unit.to_string(),
                 job_result: "failed".to_string(),
                 active_state: "inactive".to_string(),
@@ -55,14 +65,17 @@ pub fn method_failure(unit: &str, name: &str, message: &str) -> Failure {
     }
 }
 
-fn bus_failure(unit: &str, error: zbus::Error) -> Failure {
+fn bus_failure(operation: UnitOperation, unit: &str, error: zbus::Error) -> Failure {
     match error {
-        zbus::Error::MethodError(name, message, _) => {
-            method_failure(unit, name.as_str(), message.as_deref().unwrap_or(""))
-        }
+        zbus::Error::MethodError(name, message, _) => method_failure(
+            operation,
+            unit,
+            name.as_str(),
+            message.as_deref().unwrap_or(""),
+        ),
         zbus::Error::FDO(error) => {
             let name = format!("org.freedesktop.DBus.Error.{}", fdo_name(&error));
-            method_failure(unit, &name, &error.to_string())
+            method_failure(operation, unit, &name, &error.to_string())
         }
         zbus::Error::InputOutput(_) | zbus::Error::Handshake(_) | zbus::Error::Address(_) => {
             Failure::SystemdUnreachable
@@ -110,26 +123,30 @@ impl Units {
             .map_err(|_| Failure::SystemdUnreachable)
     }
 
-    async fn manager(&self) -> Result<Proxy<'_>, Failure> {
+    async fn manager(&self, operation: UnitOperation) -> Result<Proxy<'_>, Failure> {
         Proxy::new(&self.bus, DESTINATION, MANAGER_PATH, MANAGER)
             .await
-            .map_err(|error| bus_failure("systemd", error))
+            .map_err(|error| bus_failure(operation, "systemd", error))
     }
 
-    async fn unit_proxy(&self, unit: &str, interface: &'static str) -> Result<Proxy<'_>, Failure> {
-        let manager = self.manager().await?;
-        let path: OwnedObjectPath = manager
-            .call("LoadUnit", &(unit,))
-            .await
-            .map_err(|error| bus_failure(unit, error))?;
+    async fn unit_proxy(
+        &self,
+        operation: UnitOperation,
+        unit: &str,
+        interface: &'static str,
+    ) -> Result<Proxy<'_>, Failure> {
+        let failed = |error| bus_failure(operation, unit, error);
+        let manager = self.manager(operation).await?;
+        let path: OwnedObjectPath = manager.call("LoadUnit", &(unit,)).await.map_err(failed)?;
         Proxy::new(&self.bus, DESTINATION, path, interface)
             .await
-            .map_err(|error| bus_failure(unit, error))
+            .map_err(failed)
     }
 
     pub async fn observe(&self, unit: &str) -> Result<UnitFacts, Failure> {
-        let proxy = self.unit_proxy(unit, UNIT).await?;
-        let failed = |error| bus_failure(unit, error);
+        let operation = UnitOperation::Inspect;
+        let proxy = self.unit_proxy(operation, unit, UNIT).await?;
+        let failed = |error| bus_failure(operation, unit, error);
         let load_state: String = proxy.get_property("LoadState").await.map_err(failed)?;
         let active_state: String = proxy.get_property("ActiveState").await.map_err(failed)?;
         let file_state: String = proxy.get_property("UnitFileState").await.map_err(failed)?;
@@ -150,27 +167,28 @@ impl Units {
         })
     }
 
-    async fn failure(&self, unit: &str, job_result: &str) -> Failure {
-        let (active_state, sub_state, invocation) = match self.unit_proxy(unit, UNIT).await {
-            Ok(proxy) => (
-                proxy
-                    .get_property::<String>("ActiveState")
-                    .await
-                    .unwrap_or_default(),
-                proxy
-                    .get_property::<String>("SubState")
-                    .await
-                    .unwrap_or_default(),
-                proxy
-                    .get_property::<Vec<u8>>("InvocationID")
-                    .await
-                    .ok()
-                    .and_then(|bytes| invocation(&bytes)),
-            ),
-            Err(_) => Default::default(),
-        };
+    async fn failure(&self, operation: UnitOperation, unit: &str, job_result: &str) -> Failure {
+        let (active_state, sub_state, invocation) =
+            match self.unit_proxy(operation, unit, UNIT).await {
+                Ok(proxy) => (
+                    proxy
+                        .get_property::<String>("ActiveState")
+                        .await
+                        .unwrap_or_default(),
+                    proxy
+                        .get_property::<String>("SubState")
+                        .await
+                        .unwrap_or_default(),
+                    proxy
+                        .get_property::<Vec<u8>>("InvocationID")
+                        .await
+                        .ok()
+                        .and_then(|bytes| invocation(&bytes)),
+                ),
+                Err(_) => Default::default(),
+            };
         let unit_result = match interface_of(unit) {
-            Some(interface) => match self.unit_proxy(unit, interface).await {
+            Some(interface) => match self.unit_proxy(operation, unit, interface).await {
                 Ok(proxy) => proxy
                     .get_property::<String>("Result")
                     .await
@@ -180,6 +198,7 @@ impl Units {
             None => String::new(),
         };
         Failure::Unit(Box::new(UnitFailure {
+            operation,
             unit: unit.to_string(),
             job_result: job_result.to_string(),
             active_state,
@@ -189,9 +208,14 @@ impl Units {
         }))
     }
 
-    async fn job(&self, method: &str, unit: &str, scope: &Scope) -> Result<(), Failure> {
-        let manager = self.manager().await?;
-        let failed = |error| bus_failure(unit, error);
+    async fn job(&self, job: Job, unit: &str, scope: &Scope) -> Result<(), Failure> {
+        let (method, operation) = match job {
+            Job::Start => ("StartUnit", UnitOperation::Start),
+            Job::Stop => ("StopUnit", UnitOperation::Stop),
+            Job::Restart => ("TryRestartUnit", UnitOperation::Restart),
+        };
+        let manager = self.manager(operation).await?;
+        let failed = |error| bus_failure(operation, unit, error);
         let _ = manager.call::<_, _, ()>("Subscribe", &()).await;
         let mut removed = manager.receive_signal("JobRemoved").await.map_err(failed)?;
         let job: OwnedObjectPath = manager
@@ -218,7 +242,7 @@ impl Units {
             .map_err(|_| Failure::Cancelled)?;
         match result.as_deref() {
             Some("done") => Ok(()),
-            Some(result) => Err(self.failure(unit, result).await),
+            Some(result) => Err(self.failure(operation, unit, result).await),
             None => Err(Failure::SystemdUnreachable),
         }
     }
@@ -240,7 +264,7 @@ impl Units {
                 match prepared(&undo) {
                     Err(failure) => Err(failure),
                     Ok(()) => self
-                        .job("TryRestartUnit", unit, scope)
+                        .job(Job::Restart, unit, scope)
                         .await
                         .and_then(|()| done(undo)),
                 }
@@ -251,11 +275,12 @@ impl Units {
 
     async fn reload(&self, prepared: &mut Prepared<'_>) -> Outcome {
         prepared(&[Action::DaemonReload])?;
-        self.manager()
+        let operation = UnitOperation::Reload;
+        self.manager(operation)
             .await?
             .call::<_, _, ()>("Reload", &())
             .await
-            .map_err(|error| bus_failure("systemd", error))?;
+            .map_err(|error| bus_failure(operation, "systemd", error))?;
         done(vec![Action::DaemonReload])
     }
 
@@ -267,12 +292,13 @@ impl Units {
         prepared(&[Action::DisableUnit {
             unit: unit.to_string(),
         }])?;
+        let operation = UnitOperation::Enable;
         let _: (bool, Vec<(String, String, String)>) = self
-            .manager()
+            .manager(operation)
             .await?
             .call("EnableUnitFiles", &(vec![unit], false, false))
             .await
-            .map_err(|error| bus_failure(unit, error))?;
+            .map_err(|error| bus_failure(operation, unit, error))?;
         done(vec![Action::DisableUnit {
             unit: unit.to_string(),
         }])
@@ -286,12 +312,13 @@ impl Units {
         prepared(&[Action::EnableUnit {
             unit: unit.to_string(),
         }])?;
+        let operation = UnitOperation::Disable;
         let _: Vec<(String, String, String)> = self
-            .manager()
+            .manager(operation)
             .await?
             .call("DisableUnitFiles", &(vec![unit], false))
             .await
-            .map_err(|error| bus_failure(unit, error))?;
+            .map_err(|error| bus_failure(operation, unit, error))?;
         done(vec![Action::EnableUnit {
             unit: unit.to_string(),
         }])
@@ -305,7 +332,7 @@ impl Units {
         prepared(&[Action::StopUnit {
             unit: unit.to_string(),
         }])?;
-        self.job("StartUnit", unit, scope).await?;
+        self.job(Job::Start, unit, scope).await?;
         done(vec![Action::StopUnit {
             unit: unit.to_string(),
         }])
@@ -320,19 +347,19 @@ impl Units {
             unit: unit.to_string(),
         }])?;
         let triggered: Vec<String> = self
-            .unit_proxy(unit, UNIT)
+            .unit_proxy(UnitOperation::Stop, unit, UNIT)
             .await?
             .get_property("Triggers")
             .await
             .unwrap_or_default();
-        self.job("StopUnit", unit, scope).await?;
+        self.job(Job::Stop, unit, scope).await?;
         for dependent in triggered {
             if self
                 .observe(&dependent)
                 .await
                 .is_ok_and(|facts| facts.active_state == "active")
             {
-                self.job("StopUnit", &dependent, scope).await?;
+                self.job(Job::Stop, &dependent, scope).await?;
             }
         }
         done(vec![Action::StartUnit {
@@ -362,11 +389,12 @@ mod tests {
     #[test]
     fn a_missing_unit_is_a_unit_failure_and_a_refusal_is_permission_denied() {
         assert!(matches!(
-            method_failure("nix-daemon.socket", "org.freedesktop.systemd1.NoSuchUnit", ""),
+            method_failure(UnitOperation::Start, "nix-daemon.socket", "org.freedesktop.systemd1.NoSuchUnit", ""),
             Failure::Unit(unit) if unit.unit_result == "not-found"
         ));
         assert!(matches!(
             method_failure(
+                UnitOperation::Start,
                 "nix-daemon.socket",
                 "org.freedesktop.DBus.Error.AccessDenied",
                 ""
@@ -377,7 +405,12 @@ mod tests {
             }
         ));
         assert_eq!(
-            method_failure("x", "org.freedesktop.DBus.Error.ServiceUnknown", ""),
+            method_failure(
+                UnitOperation::Start,
+                "x",
+                "org.freedesktop.DBus.Error.ServiceUnknown",
+                ""
+            ),
             Failure::SystemdUnreachable
         );
     }
@@ -385,7 +418,12 @@ mod tests {
     #[test]
     fn an_unknown_error_keeps_its_name_and_message() {
         assert_eq!(
-            method_failure("x", "org.freedesktop.systemd1.JobTypeNotApplicable", "no"),
+            method_failure(
+                UnitOperation::Start,
+                "x",
+                "org.freedesktop.systemd1.JobTypeNotApplicable",
+                "no"
+            ),
             Failure::CommandFailed {
                 program: "systemd".into(),
                 status: None,

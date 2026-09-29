@@ -38,6 +38,18 @@ pub fn failure_from_bootstrap(error: BootstrapError) -> Failure {
                 AppHost::Wsl => Host::Wsl,
             },
         },
+        BootstrapError::SystemdUnreachable => Failure::SystemdUnreachable,
+        BootstrapError::Unit {
+            operation,
+            unit,
+            detail,
+            invocation,
+        } => Failure::Unit {
+            operation,
+            unit,
+            detail,
+            invocation,
+        },
         BootstrapError::AlreadyManaged => Failure::AlreadyManaged,
         BootstrapError::CrossDeviceStore { path } => Failure::CrossDeviceStore { path },
         BootstrapError::Rollback { cause, summary } => Failure::Rollback {
@@ -78,6 +90,18 @@ pub fn bootstrap_error_from(failure: Failure) -> BootstrapError {
                 Host::Native => AppHost::Native,
                 Host::Wsl => AppHost::Wsl,
             },
+        },
+        Failure::SystemdUnreachable => BootstrapError::SystemdUnreachable,
+        Failure::Unit {
+            operation,
+            unit,
+            detail,
+            invocation,
+        } => BootstrapError::Unit {
+            operation,
+            unit,
+            detail,
+            invocation,
         },
         Failure::AlreadyManaged => BootstrapError::AlreadyManaged,
         Failure::CrossDeviceStore { path } => BootstrapError::CrossDeviceStore { path },
@@ -169,6 +193,13 @@ mod tests {
                 host: AppHost::Native,
             },
             BootstrapError::SystemdNotReady { host: AppHost::Wsl },
+            BootstrapError::SystemdUnreachable,
+            BootstrapError::Unit {
+                operation: "start".into(),
+                unit: "nix-daemon.socket".into(),
+                detail: "job failed".into(),
+                invocation: None,
+            },
             BootstrapError::AlreadyManaged,
             BootstrapError::CrossDeviceStore {
                 path: "/nix/store/pkg-a".into(),

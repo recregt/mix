@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::action::{
     Action, Expect, Fact, Failure, FileId, GroupFacts, Kind, Outcome, Owner, PathFacts, Performed,
-    Query, UnitFacts, UnitFailure, UserFacts, UserSpec,
+    Query, UnitFacts, UnitFailure, UnitOperation, UserFacts, UserSpec,
 };
 use crate::paths::{DEFAULT_PROFILE_NIX_ENV, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SOCKET_SRC};
 use crate::privilege::InvokingUser;
@@ -611,7 +611,7 @@ impl World {
                 done(vec![Action::DaemonReload])
             }
             Action::EnableUnit { unit } => {
-                let facts = self.loaded_unit(unit)?;
+                let facts = self.loaded_unit(unit, UnitOperation::Enable)?;
                 if facts.enabled {
                     return Err(account_conflict(unit, "disabled", "enabled"));
                 }
@@ -627,7 +627,7 @@ impl World {
                 done(vec![Action::EnableUnit { unit: unit.clone() }])
             }
             Action::StartUnit { unit } => {
-                let facts = self.loaded_unit(unit)?;
+                let facts = self.loaded_unit(unit, UnitOperation::Start)?;
                 if facts.running.is_some() {
                     return Err(account_conflict(unit, "inactive", "active"));
                 }
@@ -826,10 +826,11 @@ impl World {
         }
     }
 
-    fn loaded_unit(&mut self, unit: &str) -> Result<&mut Unit, Failure> {
+    fn loaded_unit(&mut self, unit: &str, operation: UnitOperation) -> Result<&mut Unit, Failure> {
         let facts = self.units.entry(unit.to_string()).or_default();
         if facts.loaded.is_none() {
             return Err(Failure::Unit(Box::new(UnitFailure {
+                operation,
                 unit: unit.to_string(),
                 job_result: "failed".to_string(),
                 active_state: "inactive".to_string(),
