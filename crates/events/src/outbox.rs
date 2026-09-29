@@ -1,5 +1,7 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::{Mutex, PoisonError};
+
+use rustc_hash::FxHashMap;
 
 use crate::v1::{Envelope, NodeProgress, envelope::Event, node_progress::Progress};
 
@@ -30,7 +32,7 @@ struct Queue {
     head: u64,
     seq: u64,
     items: VecDeque<Option<Event>>,
-    pending: HashMap<Slot, u64>,
+    pending: FxHashMap<Slot, u64>,
 }
 
 pub struct Outbox {
@@ -65,6 +67,19 @@ impl Outbox {
 
     pub fn pop(&self) -> Option<Envelope> {
         let mut queue = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
+        self.next(&mut queue)
+    }
+
+    pub fn drain(&self) -> Vec<Envelope> {
+        let mut queue = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut drained = Vec::with_capacity(queue.items.len());
+        while let Some(envelope) = self.next(&mut queue) {
+            drained.push(envelope);
+        }
+        drained
+    }
+
+    fn next(&self, queue: &mut Queue) -> Option<Envelope> {
         loop {
             let item = queue.items.pop_front()?;
             let position = queue.head;
@@ -82,9 +97,5 @@ impl Outbox {
                 event: Some(event),
             });
         }
-    }
-
-    pub fn drain(&self) -> Vec<Envelope> {
-        std::iter::from_fn(|| self.pop()).collect()
     }
 }

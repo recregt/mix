@@ -1,6 +1,8 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::borrow::Cow;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+use rustc_hash::FxHashSet;
 
 use crate::outbox::Outbox;
 use crate::v1::{
@@ -29,14 +31,14 @@ pub enum Misuse {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Start {
-    key: String,
+    key: Cow<'static, str>,
     kind: node_started::Kind,
-    planned: Vec<String>,
+    planned: Vec<Cow<'static, str>>,
     shielded: bool,
 }
 
 impl Start {
-    pub fn new(key: impl Into<String>, kind: node_started::Kind) -> Self {
+    pub fn new(key: impl Into<Cow<'static, str>>, kind: node_started::Kind) -> Self {
         Self {
             key: key.into(),
             kind,
@@ -45,11 +47,11 @@ impl Start {
         }
     }
 
-    pub fn command(key: impl Into<String>, command: Command) -> Self {
+    pub fn command(key: impl Into<Cow<'static, str>>, command: Command) -> Self {
         Self::new(key, node_started::Kind::Command(command))
     }
 
-    pub fn planned(mut self, keys: impl IntoIterator<Item = impl Into<String>>) -> Self {
+    pub fn planned(mut self, keys: impl IntoIterator<Item = impl Into<Cow<'static, str>>>) -> Self {
         self.planned = keys.into_iter().map(Into::into).collect();
         self
     }
@@ -124,9 +126,9 @@ pub fn output(bytes: &[u8], stream: Stream) -> Progress {
 
 struct Open {
     parent: NodeId,
-    planned: Vec<String>,
-    used: HashSet<String>,
-    children: BTreeSet<NodeId>,
+    planned: Vec<Cow<'static, str>>,
+    used: FxHashSet<Cow<'static, str>>,
+    children: usize,
     bytes: Option<Bytes>,
     builds: Option<Builds>,
 }
@@ -145,7 +147,7 @@ pub struct Tree {
     outbox: Arc<Outbox>,
     stopped: Stopped,
     next: NodeId,
-    open: HashMap<NodeId, Open>,
+    open: Vec<Option<Open>>,
 }
 
 impl Tree {
@@ -155,35 +157,42 @@ impl Tree {
             outbox,
             stopped,
             next: ROOT,
-            open: HashMap::new(),
+            open: Vec::new(),
         };
         tree.open_node(0, start);
         tree
     }
 
     pub fn is_open(&self, id: NodeId) -> bool {
-        self.open.contains_key(&id)
+        self.get(id).is_some()
     }
 
-    pub fn start(&mut self, parent: NodeId, start: Start) -> Result<NodeId, Misuse> {
-        self.claim(parent, &start.key)?;
+    fn get(&self, id: NodeId) -> Option<&Open> {
+        self.open.get(usize::try_from(id).ok()?)?.as_ref()
+    }
+
+    fn get_mut(&mut self, id: NodeId) -> Option<&mut Open> {
+        self.open.get_mut(usize::try_from(id).ok()?)?.as_mut()
+    }
+
+    pub fn start(&mut self, parent: NodeId, mut start: Start) -> Result<NodeId, Misuse> {
+        start.key = self.claim(parent, start.key)?;
         Ok(self.open_node(parent, start))
     }
 
     pub fn not_run(
         &mut self,
         parent: NodeId,
-        key: impl Into<String>,
+        key: impl Into<Cow<'static, str>>,
         reason: NotRunReason,
     ) -> Result<(), Misuse> {
-        let key = key.into();
-        self.claim(parent, &key)?;
-        self.emit_not_run(parent, key, reason);
+        let key = self.claim(parent, key.into())?;
+        self.emit_not_run(parent, key.into_owned(), reason);
         Ok(())
     }
 
     pub fn progress(&mut self, id: NodeId, progress: Progress) -> Result<(), Misuse> {
-        let open = self.open.get_mut(&id).ok_or(Misuse::NotOpen(id))?;
+        let open = self.get_mut(id).ok_or(Misuse::NotOpen(id))?;
         if open.changed(&progress) {
             self.outbox.push(Event::NodeProgress(NodeProgress {
                 id,
@@ -203,16 +212,28 @@ impl Tree {
     }
 
     pub fn finish(&mut self, id: NodeId, ending: Ending) -> Result<(), Misuse> {
-        let open = self.open.get(&id).ok_or(Misuse::NotOpen(id))?;
-        if let Some(child) = open.children.first() {
-            return Err(Misuse::ChildrenOpen { id, child: *child });
+        let open = self.get(id).ok_or(Misuse::NotOpen(id))?;
+        if open.children > 0 {
+            let child = self
+                .open
+                .iter()
+                .zip(0..)
+                .find_map(|(open, child)| {
+                    open.as_ref()
+                        .filter(|open| open.parent == id)
+                        .map(|_| child)
+                })
+                .expect("a counted child is open");
+            return Err(Misuse::ChildrenOpen { id, child });
         }
-        let open = self.open.remove(&id).expect("checked above");
-        if let Some(parent) = self.open.get_mut(&open.parent) {
-            parent.children.remove(&id);
+        let open = self.open[usize::try_from(id).expect("an open id indexes the table")]
+            .take()
+            .expect("checked above");
+        if let Some(parent) = self.get_mut(open.parent) {
+            parent.children -= 1;
         }
         for key in open.planned.iter().filter(|key| !open.used.contains(*key)) {
-            self.emit_not_run(id, key.clone(), NotRunReason::NotReached);
+            self.emit_not_run(id, key.to_string(), NotRunReason::NotReached);
         }
         self.outbox.push(Event::NodeFinished(NodeFinished {
             id,
@@ -229,9 +250,10 @@ impl Tree {
         let ending = self.abandoned();
         let mut open: Vec<NodeId> = self
             .open
-            .keys()
-            .copied()
-            .filter(|node| self.descends_from(*node, id))
+            .iter()
+            .zip(0..)
+            .filter(|(open, node)| open.is_some() && self.descends_from(*node, id))
+            .map(|(_, node)| node)
             .collect();
         if open.is_empty() {
             return Err(Misuse::NotOpen(id));
@@ -256,49 +278,54 @@ impl Tree {
             if node == ancestor {
                 return true;
             }
-            match self.open.get(&node) {
+            match self.get(node) {
                 Some(open) => node = open.parent,
                 None => return false,
             }
         }
     }
 
-    fn claim(&mut self, parent: NodeId, key: &str) -> Result<(), Misuse> {
-        let open = self.open.get_mut(&parent).ok_or(Misuse::NotOpen(parent))?;
-        if !open.used.insert(key.to_string()) {
+    fn claim(
+        &mut self,
+        parent: NodeId,
+        key: Cow<'static, str>,
+    ) -> Result<Cow<'static, str>, Misuse> {
+        let open = self.get_mut(parent).ok_or(Misuse::NotOpen(parent))?;
+        if !open.used.insert(key.clone()) {
             return Err(Misuse::DuplicateKey {
                 parent,
-                key: key.to_string(),
+                key: key.into_owned(),
             });
         }
-        Ok(())
+        Ok(key)
     }
 
     fn open_node(&mut self, parent: NodeId, start: Start) -> NodeId {
         let id = self.next;
         self.next += 1;
-        if let Some(parent) = self.open.get_mut(&parent) {
-            parent.children.insert(id);
+        if let Some(parent) = self.get_mut(parent) {
+            parent.children += 1;
         }
         self.outbox.push(Event::NodeStarted(NodeStarted {
             id,
             parent,
-            key: start.key,
-            planned: start.planned.clone(),
+            key: start.key.into_owned(),
+            planned: start.planned.iter().map(ToString::to_string).collect(),
             shielded: start.shielded,
             kind: Some(start.kind),
         }));
-        self.open.insert(
-            id,
-            Open {
-                parent,
-                planned: start.planned,
-                used: HashSet::new(),
-                children: BTreeSet::new(),
-                bytes: None,
-                builds: None,
-            },
-        );
+        let index = usize::try_from(id).expect("node ids fit in memory");
+        if self.open.len() <= index {
+            self.open.resize_with(index + 1, || None);
+        }
+        self.open[index] = Some(Open {
+            parent,
+            planned: start.planned,
+            used: FxHashSet::default(),
+            children: 0,
+            bytes: None,
+            builds: None,
+        });
         id
     }
 
@@ -355,11 +382,11 @@ impl<'parent> Node<'parent> {
         }
     }
 
-    pub fn child(&self, key: impl Into<String>, kind: node_started::Kind) -> Node<'_> {
+    pub fn child(&self, key: impl Into<Cow<'static, str>>, kind: node_started::Kind) -> Node<'_> {
         self.start(Start::new(key, kind))
     }
 
-    pub fn not_run(&self, key: impl Into<String>, reason: NotRunReason) {
+    pub fn not_run(&self, key: impl Into<Cow<'static, str>>, reason: NotRunReason) {
         self.tree()
             .not_run(self.id, key, reason)
             .unwrap_or_else(|misuse| panic!("{misuse}"));
@@ -433,7 +460,7 @@ mod tests {
         Arc::new(|| None)
     }
 
-    fn root(sink: &Arc<Recorded>, stopped: Stopped, planned: &[&str]) -> Node<'static> {
+    fn root(sink: &Arc<Recorded>, stopped: Stopped, planned: &[&'static str]) -> Node<'static> {
         Node::root(
             sink.0.clone(),
             stopped,

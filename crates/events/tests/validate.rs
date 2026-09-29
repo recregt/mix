@@ -47,7 +47,7 @@ fn recorded_with_latest(run: impl FnOnce(&Consumer)) -> (Vec<Envelope>, HashMap<
     )
 }
 
-fn root(consumer: &Consumer, planned: &[&str]) -> Node<'static> {
+fn root(consumer: &Consumer, planned: &[&'static str]) -> Node<'static> {
     Node::root(
         consumer.outbox.clone(),
         Arc::new(|| None),
