@@ -29,6 +29,7 @@ fn user(name: &str) -> Option<UserFacts> {
         gid: user.gid.as_raw(),
         home: user.dir,
         shell: user.shell,
+        comment: user.gecos.to_string_lossy().into_owned(),
     })
 }
 
@@ -223,6 +224,7 @@ fn precondition(action: &Action) -> Result<Vec<Action>, Failure> {
             vec![Action::DeleteUser {
                 name: spec.name.clone(),
                 expect: (spec.uid, spec.gid),
+                comment: spec.comment.clone(),
             }]
         }
         Action::SetUserIds { name, ids, expect } => {
@@ -233,13 +235,19 @@ fn precondition(action: &Action) -> Result<Vec<Action>, Failure> {
                 expect: *ids,
             }]
         }
-        Action::DeleteUser { name, expect } => {
+        Action::DeleteUser {
+            name,
+            expect,
+            comment,
+        } => {
             let found = expect_user(name, *expect)?;
-            let comment = nix::unistd::User::from_name(name)
-                .ok()
-                .flatten()
-                .map(|user| user.gecos.to_string_lossy().into_owned())
-                .unwrap_or_default();
+            if found.comment != *comment {
+                return Err(conflict(
+                    name,
+                    format!("comment {comment:?}"),
+                    format!("comment {:?}", found.comment),
+                ));
+            }
             let groups = supplementary_groups(name);
             vec![Action::AddUser(UserSpec {
                 name: name.clone(),
@@ -247,7 +255,7 @@ fn precondition(action: &Action) -> Result<Vec<Action>, Failure> {
                 gid: found.gid,
                 home: found.home,
                 shell: found.shell,
-                comment,
+                comment: found.comment,
                 groups,
             })]
         }

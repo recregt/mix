@@ -494,6 +494,7 @@ impl World {
                         gid: spec.gid,
                         home: spec.home.clone(),
                         shell: spec.shell.clone(),
+                        comment: spec.comment.clone(),
                     },
                 );
                 for group in &spec.groups {
@@ -505,6 +506,7 @@ impl World {
                 done(vec![Action::DeleteUser {
                     name: spec.name.clone(),
                     expect: (spec.uid, spec.gid),
+                    comment: spec.comment.clone(),
                 }])
             }
             Action::SetUserIds { name, ids, expect } => {
@@ -516,8 +518,19 @@ impl World {
                     expect: *ids,
                 }])
             }
-            Action::DeleteUser { name, expect } => {
+            Action::DeleteUser {
+                name,
+                expect,
+                comment,
+            } => {
                 let user = self.user(name, *expect)?.clone();
+                if user.comment != *comment {
+                    return Err(account_conflict(
+                        name,
+                        format!("comment {comment:?}"),
+                        format!("comment {:?}", user.comment),
+                    ));
+                }
                 self.users.remove(name);
                 let groups: Vec<String> = self
                     .groups
@@ -534,7 +547,7 @@ impl World {
                     gid: user.gid,
                     home: user.home,
                     shell: user.shell,
-                    comment: String::new(),
+                    comment: user.comment,
                     groups,
                 })])
             }
@@ -1191,6 +1204,7 @@ mod tests {
                 gid: 30_000,
                 home: "/var/empty".into(),
                 shell: "/usr/sbin/nologin".into(),
+                comment: "mix build user 1".into(),
             },
         );
         let before = world.clone();
@@ -1201,6 +1215,7 @@ mod tests {
                 Action::DeleteUser {
                     name: "nixbld1".into(),
                     expect: (30_001, 30_000),
+                    comment: "mix build user 1".into(),
                 },
                 Action::DeleteGroup {
                     name: "nixbld".into(),
@@ -1214,6 +1229,33 @@ mod tests {
     }
 
     #[test]
+    fn an_undo_leaves_a_same_named_account_someone_else_made() {
+        let mut world = World::default();
+        let spec = UserSpec {
+            name: "nixbld1".into(),
+            uid: 30_001,
+            gid: 30_000,
+            home: "/var/empty".into(),
+            shell: "/usr/sbin/nologin".into(),
+            comment: "mix build user 1 for request a".into(),
+            groups: vec![],
+        };
+        let undo = world.apply(&Action::AddUser(spec.clone())).unwrap().undo;
+        world.apply(&undo[0].clone()).unwrap();
+        world
+            .apply(&Action::AddUser(UserSpec {
+                comment: "Nix build user 1".into(),
+                ..spec
+            }))
+            .unwrap();
+
+        let refused = world.apply(&undo[0]);
+
+        assert!(matches!(refused, Err(Failure::Conflict { .. })));
+        assert!(world.users.contains_key("nixbld1"));
+    }
+
+    #[test]
     fn a_taken_uid_is_a_conflict() {
         let mut world = World::default();
         world.users.insert(
@@ -1223,6 +1265,7 @@ mod tests {
                 gid: 100,
                 home: "/home/someone".into(),
                 shell: "/bin/sh".into(),
+                comment: String::new(),
             },
         );
 
@@ -1296,6 +1339,7 @@ mod tests {
             Action::DeleteUser {
                 name: "nixbld1".into(),
                 expect: (30_001, 30_000),
+                comment: String::new(),
             },
             Action::RemoveCreated {
                 path: "/nix".into(),

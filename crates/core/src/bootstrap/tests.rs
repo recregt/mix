@@ -19,6 +19,7 @@ fn settings(user: Option<UserConfig>, force: bool) -> Settings {
             sha256: Digest([7; 32]),
             size: 27_131_728,
         },
+        request: "request-1".into(),
     }
 }
 

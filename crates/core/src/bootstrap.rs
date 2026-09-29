@@ -38,6 +38,7 @@ pub struct Settings {
     pub user: Option<UserConfig>,
     pub force: bool,
     pub runtime: Runtime,
+    pub request: String,
 }
 
 struct Facts<'a>(&'a [Fact]);
@@ -260,6 +261,7 @@ impl StepSpec for RemoveExistingInstallation {
                 actions.push(Action::DeleteUser {
                     name: user_name(n).into_owned(),
                     expect: (user.uid, user.gid),
+                    comment: user.comment.clone(),
                 });
             }
         }
@@ -347,7 +349,9 @@ impl StepSpec for CreateNixTree {
     }
 }
 
-struct CreateUsersAndGroups;
+struct CreateUsersAndGroups {
+    request: String,
+}
 
 impl StepSpec for CreateUsersAndGroups {
     fn key(&self) -> &'static str {
@@ -403,7 +407,7 @@ impl StepSpec for CreateUsersAndGroups {
                     gid: NIXBLD_GID,
                     home: NIXBLD_HOME.into(),
                     shell: NIXBLD_SHELL.into(),
-                    comment: format!("mix build user {n}"),
+                    comment: format!("mix build user {n} for request {}", self.request),
                     groups: vec![NIXBLD_GROUP.to_string()],
                 })),
                 Some(user) if (user.uid, user.gid) != (uid, NIXBLD_GID) => {
@@ -741,7 +745,9 @@ pub fn steps(settings: &Settings) -> Vec<Box<dyn StepSpec>> {
     }
     steps.push(Box::new(CreateNixDir));
     steps.push(Box::new(CreateNixTree));
-    steps.push(Box::new(CreateUsersAndGroups));
+    steps.push(Box::new(CreateUsersAndGroups {
+        request: settings.request.clone(),
+    }));
     steps.push(Box::new(FetchRuntime(settings.runtime.clone())));
     steps.push(Box::new(ConfigureNixConf(settings.policy.clone())));
     steps.push(Box::new(ConfigureDaemon));

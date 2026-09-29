@@ -97,6 +97,7 @@ pub enum Action {
     DeleteUser {
         name: String,
         expect: Owner,
+        comment: String,
     },
     AddMember {
         group: String,
@@ -261,6 +262,7 @@ pub struct UserFacts {
     pub gid: u32,
     pub home: PathBuf,
     pub shell: PathBuf,
+    pub comment: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

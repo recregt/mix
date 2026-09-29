@@ -150,13 +150,14 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
         preflight::check_nix_not_installed(scope).await?;
     }
 
+    let request = request_id();
     let settings = Settings {
         policy: ctx.policy.clone(),
         user: ctx.user.clone(),
         force,
         runtime: runtime(ctx.mirror())?,
+        request: request.clone(),
     };
-    let request = request_id();
     let files = Files::open(Path::new("/"), &request).map_err(|source| mix_core::Error::Io {
         path: "/".into(),
         source,
