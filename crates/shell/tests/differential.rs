@@ -3,7 +3,9 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use mix_core::action::{Action, Expect, Fact, FileId, Owner, PathFacts, Query, rollback_order};
+use mix_core::action::{
+    Action, Expect, Fact, FileId, Owner, PathFacts, Query, UserSpec, rollback_order,
+};
 use mix_core::model::{Content, World};
 use mix_exec::Scope;
 use mix_shell::drive::Performer;
@@ -318,4 +320,263 @@ fn a_commit_leaves_what_the_model_predicts() {
         "{:?}",
         model.entries()
     );
+}
+
+type Step<'a> = &'a dyn Fn(&mut Machine, bool) -> Action;
+
+struct Machine {
+    world: World,
+    performer: Performer,
+    runtime: tokio::runtime::Runtime,
+}
+
+impl Machine {
+    fn new(world: World) -> Self {
+        Self {
+            world,
+            performer: Performer::new(Files::open(Path::new("/"), "differential").unwrap()),
+            runtime: tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap(),
+        }
+    }
+
+    fn real(&mut self, query: &Query) -> Fact {
+        self.runtime
+            .block_on(self.performer.observe(std::slice::from_ref(query)))
+            .unwrap()
+            .remove(0)
+    }
+
+    fn both(&mut self, query: &Query) -> (Fact, Fact) {
+        (self.world.observe(query), self.real(query))
+    }
+
+    fn perform(&mut self, model: &Action, real: &Action) -> (Vec<Action>, Vec<Action>) {
+        let predicted = self
+            .world
+            .apply(model)
+            .unwrap_or_else(|failure| panic!("model: {model:?}: {failure:?}"));
+        let scope = Scope::root();
+        let mut progress = |_| {};
+        let mut prepared = |_: &[Action]| Ok(());
+        let performed = self
+            .runtime
+            .block_on(
+                self.performer
+                    .perform(real, &scope, &mut progress, &mut prepared),
+            )
+            .unwrap_or_else(|failure| panic!("real: {real:?}: {failure:?}"));
+        (predicted.undo, performed.undo)
+    }
+
+    fn same(&mut self, queries: &[Query], after: &str) {
+        for query in queries {
+            let (model, real) = self.both(query);
+            assert_eq!(
+                comparable(model),
+                comparable(real),
+                "{query:?} after {after}"
+            );
+        }
+    }
+
+    fn run(&mut self, steps: &[Step<'_>], queries: &[Query]) {
+        let baseline: Vec<Fact> = queries
+            .iter()
+            .map(|query| comparable(self.real(query)))
+            .collect();
+        let mut undos = (Vec::new(), Vec::new());
+        for step in steps {
+            let (model, real) = (step(self, true), step(self, false));
+            let (on_model, on_real) = self.perform(&model, &real);
+            undos.0.push(on_model);
+            undos.1.push(on_real);
+            self.same(queries, &format!("{real:?}"));
+        }
+        for (model, real) in rollback_order(&undos.0)
+            .into_iter()
+            .zip(rollback_order(&undos.1))
+        {
+            self.perform(&model, &real);
+            self.same(queries, &format!("undoing with {real:?}"));
+        }
+        let after: Vec<Fact> = queries
+            .iter()
+            .map(|query| comparable(self.real(query)))
+            .collect();
+        assert_eq!(after, baseline, "the machine is back where it started");
+    }
+}
+
+fn comparable(fact: Fact) -> Fact {
+    match fact {
+        Fact::Group(Some(mut group)) => {
+            group.members.sort();
+            Fact::Group(Some(group))
+        }
+        Fact::Unit(mut unit) => {
+            unit.active_since = None;
+            Fact::Unit(unit)
+        }
+        Fact::Path(facts) => Fact::Path(PathFacts {
+            id: None,
+            changed: None,
+            digest: None,
+            ..facts
+        }),
+        other => other,
+    }
+}
+
+fn observed<T>(machine: &mut Machine, model: bool, query: Query, pick: fn(Fact) -> T) -> T {
+    pick(if model {
+        machine.world.observe(&query)
+    } else {
+        machine.real(&query)
+    })
+}
+
+fn group_gid(fact: Fact) -> u32 {
+    match fact {
+        Fact::Group(Some(group)) => group.gid,
+        other => panic!("{other:?}"),
+    }
+}
+
+fn user_ids(fact: Fact) -> Owner {
+    match fact {
+        Fact::User(Some(user)) => (user.uid, user.gid),
+        other => panic!("{other:?}"),
+    }
+}
+
+fn user_comment(fact: Fact) -> String {
+    match fact {
+        Fact::User(Some(user)) => user.comment,
+        other => panic!("{other:?}"),
+    }
+}
+
+fn path_facts(fact: Fact) -> PathFacts {
+    match fact {
+        Fact::Path(facts) => facts,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "needs root; e2e/test_differential.py runs it in a container"]
+fn every_account_action_and_its_undo_match_the_model() {
+    let mut machine = Machine::new(World::default());
+    let group = || Query::Group("mixdiff".into());
+    let extra = || Query::Group("mixdiff-extra".into());
+    let user = || Query::User("mixdiff1".into());
+
+    machine.run(
+        &[
+            &|_, _| Action::AddGroup {
+                name: "mixdiff".into(),
+                gid: 39_000,
+            },
+            &|_, _| Action::AddGroup {
+                name: "mixdiff-extra".into(),
+                gid: 39_002,
+            },
+            &|_, _| {
+                Action::AddUser(UserSpec {
+                    name: "mixdiff1".into(),
+                    uid: 39_001,
+                    gid: 39_000,
+                    home: "/var/empty".into(),
+                    shell: "/usr/sbin/nologin".into(),
+                    comment: "mix differential".into(),
+                    groups: vec!["mixdiff".into()],
+                })
+            },
+            &|_, _| Action::AddMember {
+                group: "mixdiff-extra".into(),
+                user: "mixdiff1".into(),
+            },
+            &|machine, model| Action::SetUserIds {
+                name: "mixdiff1".into(),
+                ids: (39_011, 39_000),
+                expect: observed(machine, model, user(), user_ids),
+            },
+            &|machine, model| Action::SetGroupGid {
+                name: "mixdiff-extra".into(),
+                gid: 39_012,
+                expect: observed(machine, model, extra(), group_gid),
+            },
+            &|_, _| Action::RemoveMember {
+                group: "mixdiff-extra".into(),
+                user: "mixdiff1".into(),
+            },
+            &|machine, model| Action::DeleteUser {
+                name: "mixdiff1".into(),
+                expect: observed(machine, model, user(), user_ids),
+                comment: observed(machine, model, user(), user_comment),
+            },
+        ],
+        &[group(), extra(), user()],
+    );
+}
+
+#[test]
+#[ignore = "needs root and systemd; e2e/test_differential.py runs it in a container"]
+fn every_unit_action_and_its_undo_match_the_model() {
+    let mut machine = Machine::new(World::default());
+    let unit = "mix-differential.service";
+    let contents: Arc<[u8]> = Arc::from(
+        &b"[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n"[..],
+    );
+    let install = {
+        let contents = contents.clone();
+        move |_: &mut Machine, _: bool| Action::InstallUnit {
+            unit: unit.into(),
+            contents: contents.clone(),
+            expect: Expect::Absent,
+        }
+    };
+
+    machine.run(
+        &[
+            &install,
+            &|_, _| Action::DaemonReload,
+            &|_, _| Action::EnableUnit { unit: unit.into() },
+            &|_, _| Action::StartUnit { unit: unit.into() },
+            &|_, _| Action::RestartUnit { unit: unit.into() },
+            &|_, _| Action::StopUnit { unit: unit.into() },
+            &|_, _| Action::DisableUnit { unit: unit.into() },
+        ],
+        &[Query::Unit(unit.into())],
+    );
+}
+
+#[test]
+#[ignore = "needs root; e2e/test_differential.py runs it in a container"]
+fn changing_an_owner_to_another_user_matches_the_model() {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let path = dir.path().join("owned");
+    let mut world = World::default();
+    world.with_dir("/tmp", 0o1777, ROOT_OWNER);
+    world.with_dir(dir.path(), 0o700, ROOT_OWNER);
+    let mut machine = Machine::new(world);
+    let at = path.clone();
+    let put = move |_: &mut Machine, _: bool| Action::PutFile {
+        path: at.clone(),
+        contents: Arc::from(&b"x"[..]),
+        mode: 0o640,
+        owner: None,
+        expect: Expect::Absent,
+    };
+    let at = path.clone();
+    let chown = move |machine: &mut Machine, model: bool| Action::SetOwner {
+        path: at.clone(),
+        owner: (4_242, 4_243),
+        expect: observed(machine, model, Query::Path(at.clone()), path_facts).owner,
+    };
+
+    machine.run(&[&put, &chown], &[Query::Path(path.clone())]);
 }
