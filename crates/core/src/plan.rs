@@ -524,8 +524,13 @@ pub fn diagnostic(failure: &Failure) -> Diagnostic {
         Failure::Unit(unit) => (
             Code::UnitFailed,
             format!(
-                "{}: job {}, {} ({}), result {}",
-                unit.unit, unit.job_result, unit.active_state, unit.sub_state, unit.unit_result
+                "could not {} {}: job {}, {} ({}), result {}",
+                unit.operation.verb(),
+                unit.unit,
+                unit.job_result,
+                unit.active_state,
+                unit.sub_state,
+                unit.unit_result
             ),
             None,
         ),
