@@ -45,6 +45,26 @@ pub struct Unit {
     pub since: Option<u64>,
 }
 
+impl Unit {
+    fn held(&self) -> bool {
+        self.running.is_some() || self.enabled
+    }
+
+    fn forget_unless_held(&mut self) {
+        if !self.held() {
+            self.loaded = None;
+        }
+    }
+
+    fn seen(&self, file: Option<Arc<[u8]>>) -> Option<Arc<[u8]>> {
+        if self.held() {
+            self.loaded.clone()
+        } else {
+            file
+        }
+    }
+}
+
 impl PartialEq for Unit {
     fn eq(&self, other: &Self) -> bool {
         self.loaded == other.loaded
@@ -695,16 +715,7 @@ impl World {
                 done(undo)
             }
             Action::DaemonReload => {
-                let names: Vec<String> = self
-                    .units
-                    .keys()
-                    .cloned()
-                    .chain(self.unit_files())
-                    .collect();
-                for name in names {
-                    let loaded = self.contents(unit_path(&name)).map(Arc::from);
-                    self.units.entry(name).or_default().loaded = loaded;
-                }
+                self.reload();
                 done(vec![Action::DaemonReload])
             }
             Action::EnableUnit { unit } => {
@@ -713,6 +724,7 @@ impl World {
                     return Err(account_conflict(unit, "disabled", "enabled"));
                 }
                 facts.enabled = true;
+                self.reload();
                 done(vec![Action::DisableUnit { unit: unit.clone() }])
             }
             Action::DisableUnit { unit } => {
@@ -721,6 +733,8 @@ impl World {
                     return Err(account_conflict(unit, "enabled", "disabled"));
                 }
                 facts.enabled = false;
+                facts.forget_unless_held();
+                self.reload();
                 done(vec![Action::EnableUnit { unit: unit.clone() }])
             }
             Action::StartUnit { unit } => {
@@ -740,6 +754,7 @@ impl World {
                 }
                 facts.running = None;
                 facts.since = None;
+                facts.forget_unless_held();
                 done(vec![Action::StartUnit { unit: unit.clone() }])
             }
             Action::RestartUnit { unit } => {
@@ -932,8 +947,28 @@ impl World {
         }
     }
 
+    fn reload(&mut self) {
+        let names: Vec<String> = self
+            .units
+            .keys()
+            .cloned()
+            .chain(self.unit_files())
+            .collect();
+        for name in names {
+            let loaded = self.contents(unit_path(&name)).map(Arc::from);
+            let facts = self.units.entry(name).or_default();
+            if facts.held() {
+                facts.loaded = loaded;
+            }
+        }
+    }
+
     fn loaded_unit(&mut self, unit: &str, operation: UnitOperation) -> Result<&mut Unit, Failure> {
+        let file = self.contents(unit_path(unit)).map(Arc::from);
         let facts = self.units.entry(unit.to_string()).or_default();
+        if !facts.held() {
+            facts.loaded = file;
+        }
         if facts.loaded.is_none() {
             return Err(Failure::Unit(Box::new(UnitFailure {
                 operation,
@@ -1030,8 +1065,9 @@ impl World {
             Query::Unit(name) => {
                 let facts = self.units.get(name).cloned().unwrap_or_default();
                 let file = self.contents(unit_path(name)).map(Arc::from);
+                let loaded = facts.seen(file.clone());
                 Fact::Unit(UnitFacts {
-                    load_state: if facts.loaded.is_some() {
+                    load_state: if loaded.is_some() {
                         "loaded"
                     } else {
                         "not-found"
@@ -1043,8 +1079,13 @@ impl World {
                         "inactive"
                     }
                     .to_string(),
-                    file_state: if facts.enabled { "enabled" } else { "disabled" }.to_string(),
-                    needs_reload: facts.loaded != file,
+                    file_state: match (facts.enabled, &file) {
+                        (true, _) => "enabled",
+                        (false, Some(_)) => "disabled",
+                        (false, None) => "",
+                    }
+                    .to_string(),
+                    needs_reload: loaded != file,
                     active_since: facts.since.map(|since| (since as i64, 0)),
                 })
             }
