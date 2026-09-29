@@ -13,6 +13,8 @@ use rustix::fs::{
 };
 use rustix::io::Errno;
 
+pub type Prepared<'a> = dyn FnMut(&[Action]) -> Result<(), Failure> + Send + 'a;
+
 pub struct Files {
     root: OwnedFd,
     request: String,
@@ -100,6 +102,10 @@ impl Files {
 
     pub fn pending(&self) -> &[PathBuf] {
         &self.pending
+    }
+
+    pub fn adopt(&mut self, pending: impl IntoIterator<Item = PathBuf>) {
+        self.pending.extend(pending);
     }
 
     fn place(&self, path: &Path) -> Result<Place, Failure> {
@@ -244,23 +250,25 @@ impl Files {
         }
     }
 
-    pub fn perform(&mut self, action: &Action) -> Option<Outcome> {
+    pub fn perform(&mut self, action: &Action, prepared: &mut Prepared<'_>) -> Option<Outcome> {
         Some(match action {
-            Action::CreateDir { path, mode, owner } => self.create_dir(path, *mode, *owner),
+            Action::CreateDir { path, mode, owner } => {
+                self.create_dir(path, *mode, *owner, prepared)
+            }
             Action::PutFile {
                 path,
                 contents,
                 mode,
                 owner,
                 expect,
-            } => self.put_file(path, contents, *mode, *owner, *expect),
-            Action::SetMode { path, mode, expect } => self.set_mode(path, *mode, *expect),
+            } => self.put_file(path, contents, *mode, *owner, *expect, prepared),
+            Action::SetMode { path, mode, expect } => self.set_mode(path, *mode, *expect, prepared),
             Action::SetOwner {
                 path,
                 owner,
                 expect,
-            } => self.set_owner(path, *owner, *expect),
-            Action::SetAside { path, expect } => self.set_aside(path, *expect),
+            } => self.set_owner(path, *owner, *expect, prepared),
+            Action::SetAside { path, expect } => self.set_aside(path, *expect, prepared),
             Action::RemoveCreated { path, expect } => self.remove_created(path, *expect),
             Action::Restore { path, from, expect } => self.restore(path, from, *expect),
             Action::Commit => self.commit(),
@@ -268,21 +276,49 @@ impl Files {
         })
     }
 
-    fn create_dir(&mut self, path: &Path, mode: u32, owner: Option<Owner>) -> Outcome {
+    fn create_dir(
+        &mut self,
+        path: &Path,
+        mode: u32,
+        owner: Option<Owner>,
+        prepared: &mut Prepared<'_>,
+    ) -> Outcome {
         let place = self.place(path)?;
-        sys::mkdirat(&place.dir, &place.name, Mode::from_raw_mode(0o700)).map_err(|errno| {
-            match errno {
-                Errno::EXIST => conflict(path, "nothing", "something already there"),
-                errno => io(path, errno),
+        if Self::stat(&place, &place.name)?.is_some() {
+            return Err(conflict(path, "nothing", "something already there"));
+        }
+        let staged = self.sibling(&place, "new");
+        sys::mkdirat(&place.dir, &staged, Mode::from_raw_mode(0o700))
+            .map_err(|errno| io(path, errno))?;
+        let discard = || {
+            let _ = sys::unlinkat(&place.dir, &staged, AtFlags::REMOVEDIR);
+        };
+        let finished = Self::open_node(&place, &staged)
+            .and_then(|node| Self::finish_node(&place, &node, mode, owner));
+        let id = match finished {
+            Ok(id) => id,
+            Err(failure) => {
+                discard();
+                return Err(failure);
             }
-        })?;
-        let node = Self::open_node(&place, &place.name)?;
-        let id = Self::finish_node(&place, &node, mode, owner)?;
-        Self::sync(&place)?;
-        done(vec![Action::RemoveCreated {
+        };
+        let undo = vec![Action::RemoveCreated {
             path: path.to_path_buf(),
             expect: id,
-        }])
+        }];
+        if let Err(failure) = prepared(&undo) {
+            discard();
+            return Err(failure);
+        }
+        if let Err(errno) = Self::rename(&place, &staged, &place.name, RenameFlags::NOREPLACE) {
+            discard();
+            return Err(match errno {
+                Errno::EXIST => conflict(path, "nothing", "something already there"),
+                errno => io(path, errno),
+            });
+        }
+        Self::sync(&place)?;
+        done(undo)
     }
 
     fn put_file(
@@ -292,11 +328,20 @@ impl Files {
         mode: u32,
         owner: Option<Owner>,
         expect: Expect,
+        prepared: &mut Prepared<'_>,
     ) -> Outcome {
         let place = self.place(path)?;
         match expect {
             Expect::Absent => {
                 let (new, id) = self.write_new(&place, "new", contents, mode, owner)?;
+                let undo = vec![Action::RemoveCreated {
+                    path: path.to_path_buf(),
+                    expect: id,
+                }];
+                if let Err(failure) = prepared(&undo) {
+                    let _ = sys::unlinkat(&place.dir, &new, AtFlags::empty());
+                    return Err(failure);
+                }
                 if let Err(errno) = Self::rename(&place, &new, &place.name, RenameFlags::NOREPLACE)
                 {
                     let _ = sys::unlinkat(&place.dir, &new, AtFlags::empty());
@@ -306,13 +351,19 @@ impl Files {
                     });
                 }
                 Self::sync(&place)?;
-                done(vec![Action::RemoveCreated {
-                    path: path.to_path_buf(),
-                    expect: id,
-                }])
+                done(undo)
             }
             Expect::Present(old) => {
                 let (backup, id) = self.write_new(&place, "backup", contents, mode, owner)?;
+                let undo = vec![Action::Restore {
+                    path: path.to_path_buf(),
+                    from: path.with_file_name(&backup),
+                    expect: Expect::Present(id),
+                }];
+                if let Err(failure) = prepared(&undo) {
+                    let _ = sys::unlinkat(&place.dir, &backup, AtFlags::empty());
+                    return Err(failure);
+                }
                 if let Err(errno) =
                     Self::rename(&place, &backup, &place.name, RenameFlags::EXCHANGE)
                 {
@@ -328,18 +379,19 @@ impl Files {
                     return Err(failure);
                 }
                 Self::sync(&place)?;
-                let backup = path.with_file_name(&backup);
-                self.pending.push(backup.clone());
-                done(vec![Action::Restore {
-                    path: path.to_path_buf(),
-                    from: backup,
-                    expect: Expect::Present(id),
-                }])
+                self.pending.push(path.with_file_name(&backup));
+                done(undo)
             }
         }
     }
 
-    fn set_mode(&mut self, path: &Path, mode: u32, expect: u32) -> Outcome {
+    fn set_mode(
+        &mut self,
+        path: &Path,
+        mode: u32,
+        expect: u32,
+        prepared: &mut Prepared<'_>,
+    ) -> Outcome {
         let place = self.place(path)?;
         let node = Self::open_node(&place, &place.name)?;
         let stat = statx_fd(&node).map_err(|errno| io(path, errno))?;
@@ -350,15 +402,23 @@ impl Files {
                 format!("mode {:o}", self::mode(&stat)),
             ));
         }
-        sys::fchmod(&node, Mode::from_raw_mode(mode)).map_err(|errno| io(path, errno))?;
-        done(vec![Action::SetMode {
+        let undo = vec![Action::SetMode {
             path: path.to_path_buf(),
             mode: expect,
             expect: mode,
-        }])
+        }];
+        prepared(&undo)?;
+        sys::fchmod(&node, Mode::from_raw_mode(mode)).map_err(|errno| io(path, errno))?;
+        done(undo)
     }
 
-    fn set_owner(&mut self, path: &Path, owner: Owner, expect: Owner) -> Outcome {
+    fn set_owner(
+        &mut self,
+        path: &Path,
+        owner: Owner,
+        expect: Owner,
+        prepared: &mut Prepared<'_>,
+    ) -> Outcome {
         let place = self.place(path)?;
         let node = Self::open_node(&place, &place.name)?;
         let stat = statx_fd(&node).map_err(|errno| io(path, errno))?;
@@ -369,18 +429,26 @@ impl Files {
                 format!("owner {:?}", owner_of(&stat)),
             ));
         }
-        let (uid, gid) = ids(owner);
-        sys::fchown(&node, uid, gid).map_err(|errno| io(path, errno))?;
-        done(vec![Action::SetOwner {
+        let undo = vec![Action::SetOwner {
             path: path.to_path_buf(),
             owner: expect,
             expect: owner,
-        }])
+        }];
+        prepared(&undo)?;
+        let (uid, gid) = ids(owner);
+        sys::fchown(&node, uid, gid).map_err(|errno| io(path, errno))?;
+        done(undo)
     }
 
-    fn set_aside(&mut self, path: &Path, expect: FileId) -> Outcome {
+    fn set_aside(&mut self, path: &Path, expect: FileId, prepared: &mut Prepared<'_>) -> Outcome {
         let place = self.place(path)?;
         let aside = self.sibling(&place, "aside");
+        let undo = vec![Action::Restore {
+            path: path.to_path_buf(),
+            from: path.with_file_name(&aside),
+            expect: Expect::Absent,
+        }];
+        prepared(&undo)?;
         Self::rename(&place, &place.name, &aside, RenameFlags::NOREPLACE).map_err(|errno| {
             match errno {
                 Errno::NOENT => conflict(path, format!("{expect:?}"), "nothing"),
@@ -392,13 +460,8 @@ impl Files {
             return Err(failure);
         }
         Self::sync(&place)?;
-        let aside = path.with_file_name(&aside);
-        self.pending.push(aside.clone());
-        done(vec![Action::Restore {
-            path: path.to_path_buf(),
-            from: aside,
-            expect: Expect::Absent,
-        }])
+        self.pending.push(path.with_file_name(&aside));
+        done(undo)
     }
 
     fn remove_created(&mut self, path: &Path, expect: FileId) -> Outcome {

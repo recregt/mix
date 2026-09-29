@@ -33,7 +33,9 @@ impl Root {
     }
 
     fn apply(&mut self, action: Action) -> Outcome {
-        self.files.perform(&action).expect("a file action")
+        self.files
+            .perform(&action, &mut |_: &[Action]| Ok(()))
+            .expect("a file action")
     }
 
     fn tree(&self) -> Vec<(PathBuf, bool, u32, Option<Vec<u8>>)> {
@@ -353,7 +355,10 @@ fn the_file_system_shows_what_the_model_predicts() {
     let mut journal = Vec::new();
     for action in &actions {
         let predicted = world.apply(action);
-        let real = root.files.perform(action).unwrap();
+        let real = root
+            .files
+            .perform(action, &mut |_: &[Action]| Ok(()))
+            .unwrap();
         assert_eq!(predicted.is_ok(), real.is_ok(), "{action:?}");
         journal.push(real.unwrap().undo);
     }

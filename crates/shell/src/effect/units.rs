@@ -4,6 +4,8 @@ use mix_core::action::{Action, Failure, Outcome, Performed, UnitFacts, UnitFailu
 use zbus::zvariant::OwnedObjectPath;
 use zbus::{Connection, Proxy};
 
+use crate::effect::files::Prepared;
+
 const DESTINATION: &str = "org.freedesktop.systemd1";
 const MANAGER_PATH: &str = "/org/freedesktop/systemd1";
 const MANAGER: &str = "org.freedesktop.systemd1.Manager";
@@ -216,22 +218,34 @@ impl Units {
         }
     }
 
-    pub async fn perform(&self, action: &Action, scope: &Scope) -> Option<Outcome> {
+    pub async fn perform(
+        &self,
+        action: &Action,
+        scope: &Scope,
+        prepared: &mut Prepared<'_>,
+    ) -> Option<Outcome> {
         Some(match action {
-            Action::DaemonReload => self.reload().await,
-            Action::EnableUnit { unit } => self.enable(unit).await,
-            Action::DisableUnit { unit } => self.disable(unit).await,
-            Action::StartUnit { unit } => self.start(unit, scope).await,
-            Action::StopUnit { unit } => self.stop(unit, scope).await,
-            Action::RestartUnit { unit } => self
-                .job("TryRestartUnit", unit, scope)
-                .await
-                .and_then(|()| done(vec![Action::RestartUnit { unit: unit.clone() }])),
+            Action::DaemonReload => self.reload(prepared).await,
+            Action::EnableUnit { unit } => self.enable(unit, prepared).await,
+            Action::DisableUnit { unit } => self.disable(unit, prepared).await,
+            Action::StartUnit { unit } => self.start(unit, scope, prepared).await,
+            Action::StopUnit { unit } => self.stop(unit, scope, prepared).await,
+            Action::RestartUnit { unit } => {
+                let undo = vec![Action::RestartUnit { unit: unit.clone() }];
+                match prepared(&undo) {
+                    Err(failure) => Err(failure),
+                    Ok(()) => self
+                        .job("TryRestartUnit", unit, scope)
+                        .await
+                        .and_then(|()| done(undo)),
+                }
+            }
             _ => return None,
         })
     }
 
-    async fn reload(&self) -> Outcome {
+    async fn reload(&self, prepared: &mut Prepared<'_>) -> Outcome {
+        prepared(&[Action::DaemonReload])?;
         self.manager()
             .await?
             .call::<_, _, ()>("Reload", &())
@@ -240,11 +254,14 @@ impl Units {
         done(vec![Action::DaemonReload])
     }
 
-    async fn enable(&self, unit: &str) -> Outcome {
+    async fn enable(&self, unit: &str, prepared: &mut Prepared<'_>) -> Outcome {
         let facts = self.observe(unit).await?;
         if facts.enabled {
             return Err(conflict(unit, "disabled", "enabled"));
         }
+        prepared(&[Action::DisableUnit {
+            unit: unit.to_string(),
+        }])?;
         let _: (bool, Vec<(String, String, String)>) = self
             .manager()
             .await?
@@ -256,11 +273,14 @@ impl Units {
         }])
     }
 
-    async fn disable(&self, unit: &str) -> Outcome {
+    async fn disable(&self, unit: &str, prepared: &mut Prepared<'_>) -> Outcome {
         let facts = self.observe(unit).await?;
         if !facts.enabled {
             return Err(conflict(unit, "enabled", "disabled"));
         }
+        prepared(&[Action::EnableUnit {
+            unit: unit.to_string(),
+        }])?;
         let _: Vec<(String, String, String)> = self
             .manager()
             .await?
@@ -272,22 +292,28 @@ impl Units {
         }])
     }
 
-    async fn start(&self, unit: &str, scope: &Scope) -> Outcome {
+    async fn start(&self, unit: &str, scope: &Scope, prepared: &mut Prepared<'_>) -> Outcome {
         let facts = self.observe(unit).await?;
         if facts.active_state == "active" {
             return Err(conflict(unit, "inactive", "active"));
         }
+        prepared(&[Action::StopUnit {
+            unit: unit.to_string(),
+        }])?;
         self.job("StartUnit", unit, scope).await?;
         done(vec![Action::StopUnit {
             unit: unit.to_string(),
         }])
     }
 
-    async fn stop(&self, unit: &str, scope: &Scope) -> Outcome {
+    async fn stop(&self, unit: &str, scope: &Scope, prepared: &mut Prepared<'_>) -> Outcome {
         let facts = self.observe(unit).await?;
         if facts.active_state != "active" {
             return Err(conflict(unit, "active", &facts.active_state));
         }
+        prepared(&[Action::StartUnit {
+            unit: unit.to_string(),
+        }])?;
         self.job("StopUnit", unit, scope).await?;
         done(vec![Action::StartUnit {
             unit: unit.to_string(),

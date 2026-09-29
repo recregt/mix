@@ -118,6 +118,10 @@ impl Runner {
         }
     }
 
+    pub fn rolling_back(&self) -> bool {
+        matches!(self.phase, Phase::RollingBack { .. })
+    }
+
     pub fn shielded(&self) -> bool {
         match &self.phase {
             Phase::RollingBack { .. } | Phase::Committing { .. } => true,

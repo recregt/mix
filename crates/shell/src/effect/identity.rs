@@ -3,6 +3,7 @@ use mix_core::action::{
     Action, Fact, Failure, GroupFacts, Outcome, Owner, Performed, Query, UserFacts, UserSpec,
 };
 
+use crate::effect::files::Prepared;
 use crate::effect::tools::root_command;
 
 pub fn observe(query: &Query) -> Option<Fact> {
@@ -278,11 +279,16 @@ fn supplementary_groups(user: &str) -> Vec<String> {
         .collect()
 }
 
-pub async fn perform(action: &Action, scope: &Scope) -> Option<Outcome> {
+pub async fn perform(
+    action: &Action,
+    scope: &Scope,
+    prepared: &mut Prepared<'_>,
+) -> Option<Outcome> {
     let (tool, args) = command(action)?;
     Some(
         async {
             let undo = precondition(action)?;
+            prepared(&undo)?;
             let output = root_command(tool)?
                 .args(&args)
                 .output(scope)

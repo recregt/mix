@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use mix_core::action::{Action, Fact, Failure, Outcome, Query};
+use mix_core::journal::Record;
 use mix_core::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
 use mix_core::plan::{Input, Next, Report, Runner};
 use mix_core::{DownloadProgress, Scope};
@@ -11,7 +12,7 @@ use mix_events::v1::Bytes;
 use mix_events::v1::node_progress::Progress;
 use mix_events::{Stopped, Tree};
 
-use crate::effect::files::Files;
+use crate::effect::files::{Files, Prepared};
 use crate::effect::identity;
 use crate::effect::runtime;
 use crate::effect::units::Units;
@@ -77,6 +78,7 @@ impl Performer {
         action: &Action,
         scope: &Scope,
         progress: &mut (dyn FnMut(Progress) + Send),
+        prepared: &mut Prepared<'_>,
     ) -> Outcome {
         match action {
             Action::InstallRuntime { url, sha256, size } => {
@@ -85,37 +87,44 @@ impl Performer {
                     total: AtomicU64::new(0),
                     done: AtomicU64::new(0),
                 };
-                return runtime::install(url, sha256, *size, &relay, scope).await;
+                return runtime::install(url, sha256, *size, &relay, scope, prepared).await;
             }
             Action::RemoveRuntime { created } => return runtime::remove(created).await,
+            Action::InstallUnit {
+                unit,
+                contents,
+                expect,
+            } => {
+                let mut with_reload = |undo: &[Action]| {
+                    let mut undo = undo.to_vec();
+                    undo.push(Action::DaemonReload);
+                    prepared(&undo)
+                };
+                let mut performed = self
+                    .files
+                    .perform(
+                        &Action::PutFile {
+                            path: Path::new(UNIT_DIR).join(unit),
+                            contents: contents.clone(),
+                            mode: 0o644,
+                            owner: None,
+                            expect: *expect,
+                        },
+                        &mut with_reload,
+                    )
+                    .expect("a file write")?;
+                performed.undo.push(Action::DaemonReload);
+                return Ok(performed);
+            }
             _ => {}
         }
-        if let Action::InstallUnit {
-            unit,
-            contents,
-            expect,
-        } = action
-        {
-            let mut performed = self
-                .files
-                .perform(&Action::PutFile {
-                    path: Path::new(UNIT_DIR).join(unit),
-                    contents: contents.clone(),
-                    mode: 0o644,
-                    owner: None,
-                    expect: *expect,
-                })
-                .expect("a file write")?;
-            performed.undo.push(Action::DaemonReload);
-            return Ok(performed);
-        }
-        if let Some(outcome) = self.files.perform(action) {
+        if let Some(outcome) = self.files.perform(action, prepared) {
             return outcome;
         }
-        if let Some(outcome) = identity::perform(action, scope).await {
+        if let Some(outcome) = identity::perform(action, scope, prepared).await {
             return outcome;
         }
-        if let Some(outcome) = self.units().await?.perform(action, scope).await {
+        if let Some(outcome) = self.units().await?.perform(action, scope, prepared).await {
             return outcome;
         }
         Err(Failure::CommandFailed {
@@ -123,6 +132,27 @@ impl Performer {
             status: None,
             output_tail: format!("no performer for {action:?}"),
         })
+    }
+
+    pub fn adopt(&mut self, pending: Vec<std::path::PathBuf>) {
+        self.files.adopt(pending);
+    }
+}
+
+pub trait Journal: Send {
+    fn append(&mut self, record: &Record) -> Result<(), Failure>;
+}
+
+impl Journal for Vec<Record> {
+    fn append(&mut self, record: &Record) -> Result<(), Failure> {
+        self.push(record.clone());
+        Ok(())
+    }
+}
+
+fn keep(journal: &mut dyn Journal, record: &Record) {
+    if let Err(failure) = journal.append(record) {
+        tracing::warn!("could not record {record:?} in the journal: {failure:?}");
     }
 }
 
@@ -132,8 +162,11 @@ pub async fn drive(
     performer: &mut Performer,
     scope: &Scope,
     stopped: &Stopped,
+    journal: &mut dyn Journal,
 ) -> Report {
     let mut input = None;
+    let mut seq = 0;
+    let mut ended = false;
     loop {
         if let Some(cause) = stopped() {
             runner.stop(cause);
@@ -149,16 +182,54 @@ pub async fn drive(
                     scope.clone()
                 };
                 let node = runner.current_node();
+                let reverting = runner.rolling_back();
+                let committing = action == Action::Commit;
+                if committing && let Err(failure) = journal.append(&Record::Committing) {
+                    input = Some(Input::Done(Err(failure)));
+                    continue;
+                }
+                let this = seq;
                 let mut progress = |progress: Progress| {
                     if let Some(node) = node {
                         let _ = tree.progress(node, progress);
                     }
                 };
-                input = Some(Input::Done(
-                    performer.perform(&action, &scope, &mut progress).await,
-                ));
+                let mut prepared = |undo: &[Action]| {
+                    if reverting || committing {
+                        return Ok(());
+                    }
+                    journal.append(&Record::Prepared {
+                        seq: this,
+                        undo: undo.to_vec(),
+                    })
+                };
+                let outcome = performer
+                    .perform(&action, &scope, &mut progress, &mut prepared)
+                    .await;
+                match (&outcome, reverting, committing) {
+                    (Ok(_), true, _) => keep(journal, &Record::Reverted { action }),
+                    (Ok(_), false, true) => {
+                        keep(journal, &Record::Ended);
+                        ended = true;
+                    }
+                    (Ok(_), false, false) => {
+                        keep(journal, &Record::Done { seq: this });
+                        seq += 1;
+                    }
+                    (Err(_), false, false) => {
+                        keep(journal, &Record::Failed { seq: this });
+                        seq += 1;
+                    }
+                    (Err(_), _, _) => {}
+                }
+                input = Some(Input::Done(outcome));
             }
-            Next::Finished(report) => return report,
+            Next::Finished(report) => {
+                if !ended {
+                    keep(journal, &Record::Ended);
+                }
+                return report;
+            }
         }
     }
 }
@@ -274,14 +345,17 @@ mod tests {
         let mut runner = Runner::new(ROOT, steps(last));
         let mut performer = Performer::new(Files::open(root, "r1").unwrap());
 
+        let mut journal = Vec::new();
         let report = drive(
             &mut runner,
             &mut tree,
             &mut performer,
             &Scope::root(),
             &stopped,
+            &mut journal,
         )
         .await;
+        assert_eq!(journal.last(), Some(&Record::Ended));
         drop(tree);
         (report, outbox.drain())
     }

@@ -4,6 +4,7 @@ pub mod files;
 pub(crate) mod fs;
 pub(crate) mod git;
 pub mod identity;
+pub mod journal;
 pub mod lock;
 pub(crate) mod mirror;
 pub mod runtime;

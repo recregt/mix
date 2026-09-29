@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use mix_core::action::{Digest, Failure, Outcome, Performed};
 use mix_core::{DownloadProgress, Scope};
 
+use crate::effect::files::Prepared;
 use crate::ops::bootstrap::Error;
 use crate::ops::bootstrap::steps::fetch_and_unpack::{provision_runtime, remove_runtime};
 use crate::ops::bootstrap::tarball;
@@ -58,6 +59,7 @@ pub async fn install(
     size: u64,
     progress: &dyn DownloadProgress,
     scope: &Scope,
+    prepared: &mut Prepared<'_>,
 ) -> Outcome {
     let bytes: Cow<'static, [u8]> = match tarball::embedded() {
         Some(bytes) => Cow::Borrowed(bytes),
@@ -67,6 +69,15 @@ pub async fn install(
                 .map_err(|error| failure(url, error))?,
         ),
     };
+    let profile = std::path::Path::new(mix_core::paths::DEFAULT_PROFILE_BIN)
+        .parent()
+        .expect("the profile's bin has a parent");
+    let predicted: Vec<PathBuf> = [profile, std::path::Path::new(mix_core::paths::NIX_STORE)]
+        .into_iter()
+        .filter(|path| !path.exists())
+        .map(std::path::Path::to_path_buf)
+        .collect();
+    prepared(&[mix_core::action::Action::RemoveRuntime { created: predicted }])?;
     let working = scope.clone();
     let (created, provisioned) = blocking(move || provision_runtime(&bytes, &working)).await?;
     let failed = match provisioned {
