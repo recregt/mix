@@ -111,11 +111,12 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub fn spawn(user: &InvokingUser, request: &str, scope: &Scope) -> Result<Self, Failure> {
-        let program = std::env::current_exe().map_err(|error| Failure::SpawnFailed {
-            program: PROGRAM.to_string(),
-            kind: error.kind(),
-        })?;
+    pub fn spawn(
+        program: &Path,
+        user: &InvokingUser,
+        request: &str,
+        scope: &Scope,
+    ) -> Result<Self, Failure> {
         let (session, stdin, stdout) = mix_exec::Command::new(program)
             .args([COMMAND, request])
             .env_clear()
@@ -224,6 +225,13 @@ pub fn core_error(failure: Failure, path: &Path) -> mix_core::Error {
     }
 }
 
+pub fn myself() -> Result<PathBuf, Failure> {
+    std::env::current_exe().map_err(|error| Failure::SpawnFailed {
+        program: PROGRAM.to_string(),
+        kind: error.kind(),
+    })
+}
+
 pub fn owner(files: &Files, path: &Path) -> Option<u32> {
     files
         .tree_owner(path)
@@ -272,7 +280,7 @@ pub async fn write_file(
     let mut prepared = |_: &[Action]| Ok(());
     match owner(&files, path) {
         Some(uid) => {
-            let mut agent = Agent::spawn(&account(uid, path)?, &request, scope)?;
+            let mut agent = Agent::spawn(&myself()?, &account(uid, path)?, &request, scope)?;
             agent.perform(&put, &mut prepared).await?;
             agent.perform(&Action::Commit, &mut prepared).await?;
             agent.close().await

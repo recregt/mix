@@ -54,6 +54,7 @@ pub struct Performer {
     agents: BTreeMap<u32, Agent>,
     units: Option<Units>,
     profile: Option<ProfileContext>,
+    agent_program: Option<PathBuf>,
 }
 
 impl Performer {
@@ -63,12 +64,27 @@ impl Performer {
             agents: BTreeMap::new(),
             units: None,
             profile: None,
+            agent_program: None,
         }
+    }
+
+    pub fn with_agent_program(mut self, program: PathBuf) -> Self {
+        self.agent_program = Some(program);
+        self
     }
 
     fn agent(&mut self, uid: u32, path: &Path, scope: &Scope) -> Result<&mut Agent, Failure> {
         if !self.agents.contains_key(&uid) {
-            let agent = Agent::spawn(&home::account(uid, path)?, self.files.request(), scope)?;
+            let program = match &self.agent_program {
+                Some(program) => program.clone(),
+                None => home::myself()?,
+            };
+            let agent = Agent::spawn(
+                &program,
+                &home::account(uid, path)?,
+                self.files.request(),
+                scope,
+            )?;
             self.agents.insert(uid, agent);
         }
         Ok(self.agents.get_mut(&uid).expect("inserted above"))

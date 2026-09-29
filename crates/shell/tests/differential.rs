@@ -3,13 +3,21 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use mix_core::NoopActivity;
 use mix_core::action::{
-    Action, Expect, Fact, FileId, Owner, PathFacts, Query, UserSpec, rollback_order,
+    Action, Expect, Fact, FileId, Owner, PathFacts, ProfileFacts, Query, UserSpec, rollback_order,
 };
-use mix_core::model::{Content, World};
+use mix_core::model::{Content, Profile, World};
+use mix_core::paths::{
+    DEFAULT_PROFILE_NIX_ENV, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, POLICY_FILE, mix_state_dir,
+};
+use mix_core::policy::Policy;
+use mix_core::privilege::InvokingUser;
 use mix_exec::Scope;
+use mix_shell::HostConfig;
 use mix_shell::drive::Performer;
 use mix_shell::effect::files::Files;
+use mix_shell::effect::generations::ProfileContext;
 
 const ROOT_OWNER: Owner = (0, 0);
 
@@ -332,9 +340,16 @@ struct Machine {
 
 impl Machine {
     fn new(world: World) -> Self {
+        Self::with(
+            world,
+            Performer::new(Files::open(Path::new("/"), "differential").unwrap()),
+        )
+    }
+
+    fn with(world: World, performer: Performer) -> Self {
         Self {
             world,
-            performer: Performer::new(Files::open(Path::new("/"), "differential").unwrap()),
+            performer,
             runtime: tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -579,4 +594,132 @@ fn changing_an_owner_to_another_user_matches_the_model() {
     };
 
     machine.run(&[&put, &chown], &[Query::Path(path.clone())]);
+}
+
+fn enrolled() -> InvokingUser {
+    let name = std::env::var("MIX_DIFFERENTIAL_USER").expect("the enrolled user's name");
+    let user = nix::unistd::User::from_name(&name).unwrap().unwrap();
+    InvokingUser {
+        uid: user.uid.as_raw(),
+        gid: user.gid.as_raw(),
+        name,
+        home: user.dir,
+    }
+}
+
+fn profile_of(fact: Fact) -> ProfileFacts {
+    match fact {
+        Fact::Profile(profile) => profile,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "needs a bootstrapped machine and its mirror; e2e/test_differential.py runs it"]
+fn every_profile_action_and_its_undo_match_the_model() {
+    let user = enrolled();
+    let owner = (user.uid, user.gid);
+    let state = mix_state_dir(&user.home);
+    let config: Vec<Option<Arc<[u8]>>> = [FLAKE_NIX, HOME_NIX, FLAKE_LOCK]
+        .iter()
+        .map(|file| std::fs::read(state.join(file)).ok().map(Arc::from))
+        .collect();
+    let performer = Performer::new(Files::open(Path::new("/"), "differential").unwrap())
+        .with_profile(ProfileContext {
+            mirror: Policy::load(std::fs::read_to_string(POLICY_FILE).ok().as_deref())
+                .mirror()
+                .map(|mirror| mirror.url().to_string()),
+            activity: Arc::new(NoopActivity),
+            host: HostConfig::default(),
+        })
+        .with_agent_program("/usr/local/bin/mix".into());
+    let mut machine = Machine::with(World::default(), performer);
+    let real = profile_of(machine.real(&Query::Profile(user.clone())));
+    let world = &mut machine.world;
+    world
+        .with_file(DEFAULT_PROFILE_NIX_ENV, b"nix-env", 0o555, ROOT_OWNER)
+        .with_dir(&user.home, 0o700, owner)
+        .with_dir(user.home.join(".local"), 0o755, owner)
+        .with_dir(user.home.join(".local/state"), 0o755, owner)
+        .with_dir(&state, 0o700, owner)
+        .with_dir(state.join(".git"), 0o755, owner);
+    for (file, contents) in [FLAKE_NIX, HOME_NIX, FLAKE_LOCK].iter().zip(&config) {
+        world.with_file(
+            state.join(file),
+            contents.as_deref().unwrap_or_default(),
+            0o644,
+            owner,
+        );
+    }
+    let last = *real
+        .generations
+        .iter()
+        .max()
+        .expect("bootstrap built a generation");
+    world.profiles.insert(
+        user.uid,
+        Profile {
+            generations: real.generations.clone(),
+            active: real.active,
+            built: BTreeMap::from([(last, config.clone())]),
+        },
+    );
+    let home_nix = state.join(HOME_NIX);
+    let changed: Arc<[u8]> = {
+        let text = String::from_utf8(config[1].as_deref().unwrap().to_vec()).unwrap();
+        let end = text.rfind('}').unwrap();
+        Arc::from(
+            format!(
+                "{}  manual.manpages.enable = false;\n{}",
+                &text[..end],
+                &text[end..]
+            )
+            .as_bytes(),
+        )
+    };
+    let activate = {
+        let user = user.clone();
+        move |_: &mut Machine, _: bool| Action::ActivateProfile {
+            user: user.clone(),
+            allow_source_builds: true,
+        }
+    };
+    let change = {
+        let home_nix = home_nix.clone();
+        move |machine: &mut Machine, model: bool| Action::PutFile {
+            path: home_nix.clone(),
+            contents: changed.clone(),
+            mode: 0o644,
+            owner: None,
+            expect: Expect::Present(
+                observed(machine, model, Query::Path(home_nix.clone()), path_facts)
+                    .id
+                    .unwrap(),
+            ),
+        }
+    };
+    let back = {
+        let user = user.clone();
+        move |machine: &mut Machine, model: bool| {
+            let now = observed(machine, model, Query::Profile(user.clone()), profile_of);
+            Action::SwitchGeneration {
+                user: user.clone(),
+                generation: Some(last),
+                expect: now.active,
+            }
+        }
+    };
+    let record = {
+        let user = user.clone();
+        move |_: &mut Machine, _: bool| Action::RecordState { user: user.clone() }
+    };
+
+    machine.run(
+        &[&activate, &change, &activate, &back, &activate, &record],
+        &[
+            Query::Profile(user.clone()),
+            Query::Contents(home_nix.clone()),
+            Query::Path(state.join(".git")),
+        ],
+    );
 }
