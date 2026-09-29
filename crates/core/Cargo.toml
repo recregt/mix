@@ -9,6 +9,7 @@ license = "MPL-2.0"
 model = []
 
 [dependencies]
+mix-events = { path = "../events" }
 mix-exec = { path = "../exec" }
 async-trait = { workspace = true }
 memchr = { workspace = true }
@@ -18,6 +19,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+proptest = { workspace = true }
 divan = { workspace = true }
 tokio = { workspace = true }
 
