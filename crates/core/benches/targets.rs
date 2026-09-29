@@ -25,13 +25,15 @@ fn user_config() -> UserConfig {
 
 #[divan::bench]
 fn build_the_system_target_list(bencher: divan::Bencher) {
-    bencher.bench(|| targets(None, &Policy::default()));
+    let policy = Policy::default();
+    bencher.bench(|| targets(None, divan::black_box(&policy)));
 }
 
 #[divan::bench]
 fn build_the_target_list_with_a_user(bencher: divan::Bencher) {
     let cfg = user_config();
-    bencher.bench(|| targets(Some(divan::black_box(&cfg)), &Policy::default()));
+    let policy = Policy::default();
+    bencher.bench(|| targets(Some(divan::black_box(&cfg)), divan::black_box(&policy)));
 }
 
 #[divan::bench]
@@ -43,7 +45,8 @@ fn build_the_per_user_target_list(bencher: divan::Bencher) {
 #[divan::bench]
 fn label_and_categorize_every_target(bencher: divan::Bencher) {
     let cfg = user_config();
-    let items = targets(Some(&cfg), &Policy::default());
+    let policy = Policy::default();
+    let items = targets(Some(&cfg), &policy);
     bencher.bench(|| {
         divan::black_box(&items)
             .iter()

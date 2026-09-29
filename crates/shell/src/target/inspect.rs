@@ -14,7 +14,7 @@ use crate::effect::fs::{DIR_MODE_MASK, Owner, exists};
 use crate::effect::systemd::unit_is_active;
 use crate::target::Finding;
 
-pub async fn inspect(target: &Target, scope: &Scope) -> Option<Finding> {
+pub async fn inspect(target: &Target<'_>, scope: &Scope) -> Option<Finding> {
     match target {
         Target::Directory { path, mode, owner } => {
             tracing::debug!("checking directory: {}", path.display());

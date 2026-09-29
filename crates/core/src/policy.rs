@@ -63,9 +63,17 @@ impl Mirror {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Policy {
     mirror: Option<Mirror>,
+    rendered: String,
+    nix_conf: String,
+}
+
+impl Default for Policy {
+    fn default() -> Self {
+        Self::with(None)
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -85,9 +93,7 @@ impl Policy {
         let url = url.map(str::trim).filter(|url| !url.is_empty());
         let key = key.map(str::trim).filter(|key| !key.is_empty());
         match (url, key) {
-            (Some(url), key) => Ok(Self {
-                mirror: Some(Mirror::new(url, key)?),
-            }),
+            (Some(url), key) => Ok(Self::with(Some(Mirror::new(url, key)?))),
             (None, Some(_)) => Err(Invalid::KeyWithoutMirror),
             (None, None) => Ok(Self::default()),
         }
@@ -115,34 +121,49 @@ impl Policy {
             .unwrap_or_default()
     }
 
-    pub fn render(&self) -> String {
-        let stored = Stored {
-            format: FORMAT,
-            mirror: self.mirror.as_ref().map(|mirror| StoredMirror {
-                url: mirror.url.clone(),
-                key: mirror.key.clone(),
-            }),
-        };
-        let mut rendered =
-            serde_json::to_string_pretty(&stored).expect("a policy always serialises");
-        rendered.push('\n');
-        rendered
+    pub fn render(&self) -> &str {
+        &self.rendered
     }
 
-    pub fn nix_conf(&self) -> String {
-        let mut conf = String::from(
-            "build-users-group = nixbld\nexperimental-features = nix-command flakes\ntrusted-users = root\n",
-        );
-        if let Some(mirror) = &self.mirror {
-            conf.push_str(&format!("substituters = {}\n", mirror.cache()));
-            if let Some(key) = &mirror.key {
-                conf.push_str(&format!(
-                    "trusted-public-keys = {CACHE_NIXOS_ORG_KEY} {key}\n"
-                ));
-            }
-        }
-        conf
+    pub fn nix_conf(&self) -> &str {
+        &self.nix_conf
     }
+
+    fn with(mirror: Option<Mirror>) -> Self {
+        Self {
+            rendered: render(mirror.as_ref()),
+            nix_conf: nix_conf(mirror.as_ref()),
+            mirror,
+        }
+    }
+}
+
+fn render(mirror: Option<&Mirror>) -> String {
+    let stored = Stored {
+        format: FORMAT,
+        mirror: mirror.map(|mirror| StoredMirror {
+            url: mirror.url.clone(),
+            key: mirror.key.clone(),
+        }),
+    };
+    let mut rendered = serde_json::to_string_pretty(&stored).expect("a policy always serialises");
+    rendered.push('\n');
+    rendered
+}
+
+fn nix_conf(mirror: Option<&Mirror>) -> String {
+    let mut conf = String::from(
+        "build-users-group = nixbld\nexperimental-features = nix-command flakes\ntrusted-users = root\n",
+    );
+    if let Some(mirror) = mirror {
+        conf.push_str(&format!("substituters = {}\n", mirror.cache()));
+        if let Some(key) = &mirror.key {
+            conf.push_str(&format!(
+                "trusted-public-keys = {CACHE_NIXOS_ORG_KEY} {key}\n"
+            ));
+        }
+    }
+    conf
 }
 
 fn is_mirror_url(url: &str) -> bool {
@@ -196,9 +217,8 @@ mod tests {
 
     #[test]
     fn a_mirror_without_a_key_adds_no_key() {
-        let conf = Policy::new(Some("http://mirror.internal"), None)
-            .unwrap()
-            .nix_conf();
+        let policy = Policy::new(Some("http://mirror.internal"), None).unwrap();
+        let conf = policy.nix_conf();
 
         assert!(conf.contains("substituters = http://mirror.internal/cache\n"));
         assert!(!conf.contains("trusted-public-keys"));
@@ -252,7 +272,7 @@ mod tests {
             Policy::new(Some("https://mirror.internal"), None).unwrap(),
             Policy::new(Some("https://mirror.internal"), Some(KEY)).unwrap(),
         ] {
-            assert_eq!(Policy::parse(&policy.render()), Ok(policy));
+            assert_eq!(Policy::parse(policy.render()), Ok(policy));
         }
     }
 

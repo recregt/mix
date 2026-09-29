@@ -25,11 +25,11 @@ impl ConfigureNixConf {
         }
     }
 
-    fn files(&self) -> [(&'static str, String); 3] {
+    fn files(&self) -> [(&'static str, &str); 3] {
         [
             (POLICY_FILE, self.policy.render()),
             (NIX_CONF_DEST, self.policy.nix_conf()),
-            (PROFILE_SNIPPET_DEST, PROFILE_SNIPPET.to_string()),
+            (PROFILE_SNIPPET_DEST, PROFILE_SNIPPET),
         ]
     }
 }
@@ -50,7 +50,7 @@ impl Step for ConfigureNixConf {
 
     async fn check(&self, _scope: &Scope) -> Result<bool> {
         for (path, expected) in self.files() {
-            if !matches_expected(path, &expected).await {
+            if !matches_expected(path, expected).await {
                 return Ok(false);
             }
         }
@@ -59,12 +59,13 @@ impl Step for ConfigureNixConf {
 
     async fn execute(&mut self, scope: &Scope) -> Result<()> {
         let mut restart_daemon = false;
-        for (path, contents) in self.files() {
+        for index in 0..self.files().len() {
+            let (path, contents) = self.files()[index];
             let previous = previous_contents(path).await;
             if path == NIX_CONF_DEST {
-                restart_daemon = daemon_needs_the_new_config(previous.as_deref(), &contents);
+                restart_daemon = daemon_needs_the_new_config(previous.as_deref(), contents);
             }
-            let created_dir = write(path, &contents).await?;
+            let created_dir = write(path, contents).await?;
             self.written.push(WrittenFile {
                 path,
                 previous,
@@ -151,7 +152,7 @@ mod tests {
     use super::*;
 
     fn nix_conf() -> String {
-        Policy::default().nix_conf()
+        Policy::default().nix_conf().to_string()
     }
 
     #[test]
