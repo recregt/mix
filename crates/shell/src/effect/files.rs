@@ -439,6 +439,12 @@ impl Files {
                 owner,
                 mode,
             } => self.reclaim(path, *expect, *owner, *mode, prepared),
+            Action::CopyTree {
+                from,
+                to,
+                owner,
+                mode,
+            } => self.copy(from, to, *owner, *mode, prepared),
             Action::Commit => self.commit(),
             _ => return None,
         })
@@ -678,16 +684,10 @@ impl Files {
     fn remove_created_tree(&mut self, path: &Path, expect: FileId) -> Outcome {
         let place = self.place(path)?;
         let doomed = self.sibling(&place, "remove");
-        let renamed =
-            Self::rename(&place, &place.name, &doomed, RenameFlags::NOREPLACE).map_err(|errno| {
-                match errno {
-                    Errno::NOENT => AlreadyGone,
-                    errno => Other(io(path, errno)),
-                }
-            });
-        match renamed {
-            Err(AlreadyGone) => return done(Vec::new()),
-            Err(Other(failure)) => return Err(failure),
+        match Self::rename(&place, &place.name, &doomed, RenameFlags::NOREPLACE) {
+            Err(Errno::NOENT) => return done(Vec::new()),
+            Err(Errno::XDEV) => return Self::remove_in_place(&place, expect),
+            Err(errno) => return Err(io(path, errno)),
             Ok(()) => {}
         }
         if let Err(failure) = Self::expect_id(&place, &doomed, expect) {
@@ -697,6 +697,94 @@ impl Files {
         self.remove_tree(&place, &doomed)?;
         Self::sync(&place)?;
         done(Vec::new())
+    }
+
+    fn remove_in_place(place: &Place, expect: FileId) -> Outcome {
+        let top = sys::openat(
+            &place.dir,
+            &place.name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|errno| io(&place.path, errno))?;
+        let found = id(&statx_fd(&top).map_err(|errno| io(&place.path, errno))?);
+        if found != expect {
+            return Err(conflict(
+                &place.path,
+                format!("{expect:?}"),
+                format!("{found:?}"),
+            ));
+        }
+        let names: Vec<OsString> = sys::Dir::read_from(&top)
+            .map_err(|errno| io(&place.path, errno))?
+            .filter_map(Result::ok)
+            .map(|entry| OsStr::from_bytes(entry.file_name().to_bytes()).to_os_string())
+            .filter(|entry| entry != "." && entry != "..")
+            .collect();
+        for name in names {
+            remove_tree_at(&top, &name).map_err(|errno| io(&place.path, errno))?;
+        }
+        sys::unlinkat(&place.dir, &place.name, AtFlags::REMOVEDIR)
+            .map_err(|errno| io(&place.path, errno))?;
+        Self::sync(place)?;
+        done(Vec::new())
+    }
+
+    fn copy(
+        &mut self,
+        from: &Path,
+        to: &Path,
+        owner: Owner,
+        mode: u32,
+        prepared: &mut Prepared<'_>,
+    ) -> Outcome {
+        let running = (
+            nix::unistd::geteuid().as_raw(),
+            nix::unistd::getegid().as_raw(),
+        );
+        if running != owner {
+            return Err(conflict(
+                to,
+                format!("a copy made as {owner:?}"),
+                format!("a process running as {running:?}"),
+            ));
+        }
+        let source = self.place(from)?;
+        let place = self.place(to)?;
+        if Self::stat(&place, &place.name)?.is_some() {
+            return Err(conflict(to, "nothing", "something already there"));
+        }
+        let staged = self.sibling(&place, "new");
+        let discard = |files: &Self| {
+            let _ = files.remove_tree(&place, &staged);
+        };
+        if let Err(errno) = copy_tree_at(&source.dir, &source.name, &place.dir, &staged, Some(mode))
+        {
+            discard(self);
+            return Err(io(from, errno));
+        }
+        let copied = match Self::stat(&place, &staged) {
+            Ok(Some(stat)) => id(&stat),
+            Ok(None) => return Err(conflict(to, "the copy", "nothing")),
+            Err(failure) => {
+                discard(self);
+                return Err(failure);
+            }
+        };
+        let undo = vec![Action::RemoveCreatedTree {
+            path: to.to_path_buf(),
+            expect: copied,
+        }];
+        if let Err(failure) = prepared(&undo) {
+            discard(self);
+            return Err(failure);
+        }
+        if let Err(errno) = Self::rename(&place, &staged, &place.name, RenameFlags::NOREPLACE) {
+            discard(self);
+            return Err(io(to, errno));
+        }
+        Self::sync(&place)?;
+        done(undo)
     }
 
     fn restore(&mut self, path: &Path, from: &Path, expect: Expect) -> Outcome {

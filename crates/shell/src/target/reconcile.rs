@@ -74,15 +74,15 @@ async fn directory(
     scope: &Scope,
 ) -> Result<()> {
     match finding {
-        Finding::Owner { .. } if in_own_tree(path, owner) => {
-            reclaim(path, mode, owner.expect("checked above"), scope).await
-        }
-        // The owner is what drifted, and the inspection measured it: set it and nothing else.
-        Finding::Owner { .. } => fs::set_owner(path, owner).await,
         // Nothing readable is there, so it and every directory it needs are created owned.
         Finding::Missing | Finding::Unreadable { .. } => {
             fs::create_dir_all_owned(path, mode, owner).await
         }
+        _ if taken_from_owner(path, owner) => {
+            reclaim(path, mode, owner.expect("checked above"), scope).await
+        }
+        // The owner is what drifted, and the inspection measured it: set it and nothing else.
+        Finding::Owner { .. } => fs::set_owner(path, owner).await,
         // The mode drifted; whether the owner did too was not measured, so it is checked.
         _ => {
             fs::set_mode(path, mode).await?;
@@ -91,13 +91,15 @@ async fn directory(
     }
 }
 
-fn in_own_tree(path: &Path, owner: Owner) -> bool {
+fn taken_from_owner(path: &Path, owner: Owner) -> bool {
     let Some((uid, _)) = owner else {
         return false;
     };
     uid != 0
-        && Files::open(Path::new("/"), "inspect")
-            .is_ok_and(|files| files.tree_owner(path) == Some(uid))
+        && Files::open(Path::new("/"), "inspect").is_ok_and(|files| {
+            files.tree_owner(path) == Some(uid)
+                && files.owner_of(path).is_some_and(|found| found != uid)
+        })
 }
 
 async fn reclaim(path: &Path, mode: u32, owner: (u32, u32), scope: &Scope) -> Result<()> {

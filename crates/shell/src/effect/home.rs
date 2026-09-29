@@ -38,7 +38,8 @@ pub fn path_of(action: &Action) -> Option<&Path> {
         | Action::RemoveCreated { path, .. }
         | Action::RemoveCreatedTree { path, .. }
         | Action::Restore { path, .. }
-        | Action::ReclaimTree { path, .. } => Some(path),
+        | Action::ReclaimTree { path, .. }
+        | Action::CopyTree { to: path, .. } => Some(path),
         _ => None,
     }
 }

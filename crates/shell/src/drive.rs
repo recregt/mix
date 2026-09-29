@@ -73,6 +73,72 @@ impl Performer {
         Ok(self.agents.get_mut(&uid).expect("inserted above"))
     }
 
+    async fn perform_file(
+        &mut self,
+        action: &Action,
+        path: &Path,
+        scope: &Scope,
+        prepared: &mut Prepared<'_>,
+    ) -> Outcome {
+        let removed = match action {
+            Action::RemoveCreated { .. } | Action::RemoveCreatedTree { .. } => {
+                self.files.owner_of(path)
+            }
+            _ => None,
+        };
+        let running = nix::unistd::geteuid().as_raw();
+        match removed
+            .or_else(|| self.files.tree_owner(path))
+            .filter(|uid| *uid != running)
+        {
+            Some(uid) => {
+                self.agent(uid, path, scope)?
+                    .perform(action, prepared)
+                    .await
+            }
+            None => self.files.perform(action, prepared).expect("a file action"),
+        }
+    }
+
+    async fn reclaim_by_copy(
+        &mut self,
+        path: &Path,
+        expect: mix_core::action::FileId,
+        owner: mix_core::action::Owner,
+        mode: u32,
+        scope: &Scope,
+        prepared: &mut Prepared<'_>,
+    ) -> Outcome {
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let staging = path.with_file_name(format!(".{name}.mix-reclaim-{}", self.files.request()));
+        let copy = Action::CopyTree {
+            from: path.to_path_buf(),
+            to: staging.clone(),
+            owner,
+            mode,
+        };
+        self.perform_file(&copy, &staging, scope, prepared).await?;
+        let restore = Action::Restore {
+            path: path.to_path_buf(),
+            from: staging,
+            expect: mix_core::action::Expect::Absent,
+        };
+        prepared(std::slice::from_ref(&restore))?;
+        let mut announced = |_: &[Action]| Ok(());
+        let removal = Action::RemoveCreatedTree {
+            path: path.to_path_buf(),
+            expect,
+        };
+        self.perform_file(&removal, path, scope, &mut announced)
+            .await?;
+        self.perform_file(&restore, path, scope, &mut announced)
+            .await?;
+        Ok(Performed { undo: Vec::new() })
+    }
+
     async fn commit(&mut self, prepared: &mut Prepared<'_>) -> Outcome {
         let mut first = None;
         for agent in self.agents.values_mut() {
@@ -201,26 +267,37 @@ impl Performer {
             _ => {}
         }
         if let Some(path) = home::path_of(action) {
-            let outcome = match home::owner(&self.files, path) {
-                Some(uid) => {
-                    self.agent(uid, path, scope)?
-                        .perform(action, prepared)
+            let outcome = self.perform_file(action, path, scope, prepared).await;
+            return match (action, outcome) {
+                (
+                    Action::ReclaimTree {
+                        path,
+                        expect,
+                        owner,
+                        mode,
+                    },
+                    Err(Failure::Io {
+                        kind: std::io::ErrorKind::CrossesDevices,
+                        ..
+                    }),
+                ) => {
+                    self.reclaim_by_copy(path, *expect, *owner, *mode, scope, prepared)
                         .await
                 }
-                None => self.files.perform(action, prepared).expect("a file action"),
+                (Action::ReclaimTree { .. }, Ok(performed)) => {
+                    let asides = performed
+                        .undo
+                        .iter()
+                        .filter_map(|undo| match undo {
+                            Action::Restore { from, .. } => Some(from.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                    self.adopt(asides, scope).await?;
+                    Ok(performed)
+                }
+                (_, outcome) => outcome,
             };
-            if let (Action::ReclaimTree { .. }, Ok(performed)) = (action, &outcome) {
-                let asides = performed
-                    .undo
-                    .iter()
-                    .filter_map(|undo| match undo {
-                        Action::Restore { from, .. } => Some(from.clone()),
-                        _ => None,
-                    })
-                    .collect();
-                self.adopt(asides, scope).await?;
-            }
-            return outcome;
         }
         if let Some(outcome) = identity::perform(action, scope, prepared).await {
             return outcome;
