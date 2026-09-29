@@ -32,6 +32,12 @@ pub struct Files {
     next: u64,
 }
 
+struct Pinned {
+    _node: OwnedFd,
+    dev: u64,
+    ino: u64,
+}
+
 struct Place {
     path: PathBuf,
     dir: OwnedFd,
@@ -399,15 +405,53 @@ impl Files {
         }
     }
 
-    fn expect_id(place: &Place, name: &OsStr, expect: FileId) -> Result<Statx, Failure> {
-        match Self::stat(place, name)? {
-            Some(stat) if id(&stat) == expect => Ok(stat),
-            Some(stat) => Err(conflict(
+    fn pin(place: &Place, name: &OsStr, expect: FileId) -> Result<Option<Pinned>, Failure> {
+        let node = match sys::openat(
+            &place.dir,
+            name,
+            OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(node) => node,
+            Err(Errno::NOENT) => return Ok(None),
+            Err(errno) => return Err(io(&place.path, errno)),
+        };
+        let stat = statx_fd(&node).map_err(|errno| io(&place.path, errno))?;
+        if id(&stat) != expect {
+            return Err(conflict(
                 &place.path,
                 format!("{expect:?}"),
                 format!("{:?}", id(&stat)),
+            ));
+        }
+        Ok(Some(Pinned {
+            _node: node,
+            dev: id(&stat).dev,
+            ino: stat.stx_ino,
+        }))
+    }
+
+    fn pinned(place: &Place, name: &OsStr, expect: FileId) -> Result<Pinned, Failure> {
+        Self::pin(place, name, expect)?
+            .ok_or_else(|| conflict(&place.path, format!("{expect:?}"), "nothing"))
+    }
+
+    fn holds(place: &Place, name: &OsStr, pinned: &Pinned) -> Result<Statx, Failure> {
+        match Self::stat(place, name)? {
+            Some(stat) if (id(&stat).dev, stat.stx_ino) == (pinned.dev, pinned.ino) => Ok(stat),
+            Some(stat) => Err(conflict(
+                &place.path,
+                format!(
+                    "the object checked before the rename (inode {})",
+                    pinned.ino
+                ),
+                format!("inode {}", stat.stx_ino),
             )),
-            None => Err(conflict(&place.path, format!("{expect:?}"), "nothing")),
+            None => Err(conflict(
+                &place.path,
+                "the object checked before",
+                "nothing",
+            )),
         }
     }
 
@@ -528,6 +572,7 @@ impl Files {
                 done(undo)
             }
             Expect::Present(old) => {
+                let pinned = Self::pinned(&place, &place.name, old)?;
                 let (backup, id) = self.write_new(&place, "backup", contents, mode, owner)?;
                 let undo = vec![Action::Restore {
                     path: path.to_path_buf(),
@@ -547,7 +592,7 @@ impl Files {
                         errno => io(path, errno),
                     });
                 }
-                if let Err(failure) = Self::expect_id(&place, &backup, old) {
+                if let Err(failure) = Self::holds(&place, &backup, &pinned) {
                     let _ = Self::rename(&place, &backup, &place.name, RenameFlags::EXCHANGE);
                     let _ = sys::unlinkat(&place.dir, &backup, AtFlags::empty());
                     return Err(failure);
@@ -616,6 +661,7 @@ impl Files {
 
     fn set_aside(&mut self, path: &Path, expect: FileId, prepared: &mut Prepared<'_>) -> Outcome {
         let place = self.place(path)?;
+        let pinned = Self::pinned(&place, &place.name, expect)?;
         let aside = self.sibling(&place, "aside");
         let undo = vec![Action::Restore {
             path: path.to_path_buf(),
@@ -629,7 +675,7 @@ impl Files {
                 errno => io(path, errno),
             }
         })?;
-        if let Err(failure) = Self::expect_id(&place, &aside, expect) {
+        if let Err(failure) = Self::holds(&place, &aside, &pinned) {
             let _ = Self::rename(&place, &aside, &place.name, RenameFlags::NOREPLACE);
             return Err(failure);
         }
@@ -640,6 +686,9 @@ impl Files {
 
     fn remove_created(&mut self, path: &Path, expect: FileId) -> Outcome {
         let place = self.place(path)?;
+        let Some(pinned) = Self::pin(&place, &place.name, expect)? else {
+            return done(Vec::new());
+        };
         let doomed = self.sibling(&place, "remove");
         let renamed =
             Self::rename(&place, &place.name, &doomed, RenameFlags::NOREPLACE).map_err(|errno| {
@@ -656,7 +705,7 @@ impl Files {
         let put_back = || {
             let _ = Self::rename(&place, &doomed, &place.name, RenameFlags::NOREPLACE);
         };
-        let stat = match Self::expect_id(&place, &doomed, expect) {
+        let stat = match Self::holds(&place, &doomed, &pinned) {
             Ok(stat) => stat,
             Err(failure) => {
                 put_back();
@@ -683,6 +732,9 @@ impl Files {
 
     fn remove_created_tree(&mut self, path: &Path, expect: FileId) -> Outcome {
         let place = self.place(path)?;
+        let Some(pinned) = Self::pin(&place, &place.name, expect)? else {
+            return done(Vec::new());
+        };
         let doomed = self.sibling(&place, "remove");
         match Self::rename(&place, &place.name, &doomed, RenameFlags::NOREPLACE) {
             Err(Errno::NOENT) => return done(Vec::new()),
@@ -690,7 +742,7 @@ impl Files {
             Err(errno) => return Err(io(path, errno)),
             Ok(()) => {}
         }
-        if let Err(failure) = Self::expect_id(&place, &doomed, expect) {
+        if let Err(failure) = Self::holds(&place, &doomed, &pinned) {
             let _ = Self::rename(&place, &doomed, &place.name, RenameFlags::NOREPLACE);
             return Err(failure);
         }
@@ -810,13 +862,14 @@ impl Files {
                 )?;
             }
             Expect::Present(current) => {
+                let pinned = Self::pinned(&place, &place.name, current)?;
                 Self::rename(&place, &from_name, &place.name, RenameFlags::EXCHANGE).map_err(
                     |errno| match errno {
                         Errno::NOENT => conflict(path, format!("{current:?}"), "nothing"),
                         errno => io(path, errno),
                     },
                 )?;
-                if let Err(failure) = Self::expect_id(&place, &from_name, current) {
+                if let Err(failure) = Self::holds(&place, &from_name, &pinned) {
                     let _ = Self::rename(&place, &from_name, &place.name, RenameFlags::EXCHANGE);
                     return Err(failure);
                 }
@@ -848,7 +901,7 @@ impl Files {
             ));
         }
         let place = self.place(path)?;
-        Self::expect_id(&place, &place.name, expect)?;
+        let pinned = Self::pinned(&place, &place.name, expect)?;
         let staged = self.sibling(&place, "reclaim");
         let discard = |files: &Self| {
             let _ = files.remove_tree(&place, &staged);
@@ -885,7 +938,7 @@ impl Files {
             discard(self);
             return Err(io(path, errno));
         }
-        if let Err(failure) = Self::expect_id(&place, &aside, expect) {
+        if let Err(failure) = Self::holds(&place, &aside, &pinned) {
             let _ = Self::rename(&place, &aside, &place.name, RenameFlags::NOREPLACE);
             discard(self);
             return Err(failure);
