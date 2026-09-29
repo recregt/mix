@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use std::sync::Mutex;
 
@@ -18,6 +19,7 @@ use mix_events::{Stopped, Tree};
 
 use crate::effect::files::{Files, Prepared};
 use crate::effect::generations::{self, ProfileContext};
+use crate::effect::home::{self, Agent};
 use crate::effect::identity;
 use crate::effect::runtime;
 use crate::effect::units::Units;
@@ -48,6 +50,7 @@ impl DownloadProgress for Relay<'_> {
 
 pub struct Performer {
     files: Files,
+    agents: BTreeMap<u32, Agent>,
     units: Option<Units>,
     profile: Option<ProfileContext>,
 }
@@ -56,8 +59,34 @@ impl Performer {
     pub fn new(files: Files) -> Self {
         Self {
             files,
+            agents: BTreeMap::new(),
             units: None,
             profile: None,
+        }
+    }
+
+    fn agent(&mut self, uid: u32, path: &Path, scope: &Scope) -> Result<&mut Agent, Failure> {
+        if !self.agents.contains_key(&uid) {
+            let agent = Agent::spawn(&home::account(uid, path)?, self.files.request(), scope)?;
+            self.agents.insert(uid, agent);
+        }
+        Ok(self.agents.get_mut(&uid).expect("inserted above"))
+    }
+
+    async fn commit(&mut self, prepared: &mut Prepared<'_>) -> Outcome {
+        let mut first = None;
+        for agent in self.agents.values_mut() {
+            if let Err(failure) = agent.perform(&Action::Commit, prepared).await {
+                first.get_or_insert(failure);
+            }
+        }
+        let root = self
+            .files
+            .perform(&Action::Commit, prepared)
+            .expect("a file action");
+        match first {
+            Some(failure) => Err(failure),
+            None => root,
         }
     }
 
@@ -168,7 +197,16 @@ impl Performer {
                 performed.undo.push(Action::DaemonReload);
                 return Ok(performed);
             }
+            Action::Commit => return self.commit(prepared).await,
             _ => {}
+        }
+        if let Some(path) = home::path_of(action)
+            && let Some(uid) = home::owner(&self.files, path)
+        {
+            return self
+                .agent(uid, path, scope)?
+                .perform(action, prepared)
+                .await;
         }
         if let Some(outcome) = self.files.perform(action, prepared) {
             return outcome;
@@ -191,8 +229,21 @@ impl Performer {
         })
     }
 
-    pub fn adopt(&mut self, pending: Vec<std::path::PathBuf>) {
-        self.files.adopt(pending);
+    pub async fn adopt(&mut self, pending: Vec<PathBuf>, scope: &Scope) -> Result<(), Failure> {
+        let mut theirs: BTreeMap<u32, Vec<PathBuf>> = BTreeMap::new();
+        let mut ours = Vec::new();
+        for path in pending {
+            match home::owner(&self.files, &path) {
+                Some(uid) => theirs.entry(uid).or_default().push(path),
+                None => ours.push(path),
+            }
+        }
+        self.files.adopt(ours);
+        for (uid, paths) in theirs {
+            let first = paths[0].clone();
+            self.agent(uid, &first, scope)?.adopt(paths).await?;
+        }
+        Ok(())
     }
 }
 

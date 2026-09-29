@@ -123,6 +123,45 @@ impl Files {
         &self.pending
     }
 
+    pub fn request(&self) -> &str {
+        &self.request
+    }
+
+    pub fn tree_owner(&self, path: &Path) -> Option<u32> {
+        let parts: Vec<&OsStr> = path
+            .components()
+            .filter_map(|component| match component {
+                Component::Normal(part) => Some(part),
+                _ => None,
+            })
+            .collect();
+        let (_, ancestors) = parts.split_last()?;
+        let mut dir = sys::openat(
+            &self.root,
+            ".",
+            OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .ok()?;
+        for name in ancestors {
+            let stat = sys::statx(&dir, *name, AtFlags::SYMLINK_NOFOLLOW, WANTED).ok()?;
+            if kind(&stat) != Kind::Directory {
+                return None;
+            }
+            if stat.stx_uid != 0 {
+                return Some(stat.stx_uid);
+            }
+            dir = sys::openat(
+                &dir,
+                *name,
+                OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .ok()?;
+        }
+        None
+    }
+
     pub fn adopt(&mut self, pending: impl IntoIterator<Item = PathBuf>) {
         self.pending.extend(pending);
     }

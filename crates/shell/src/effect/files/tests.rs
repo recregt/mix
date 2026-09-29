@@ -483,3 +483,19 @@ fn a_link_loop_ends_as_the_kernel_would_end_it() {
         Some(Fact::Contents(None))
     );
 }
+
+#[test]
+fn a_tree_belongs_to_the_first_directory_root_does_not_own() {
+    let root = root();
+    std::fs::create_dir_all(root.real("/home/alice/.local")).unwrap();
+    std::os::unix::fs::symlink(root.real("/home"), root.real("/linked")).unwrap();
+    let files = &root.files;
+
+    assert_eq!(
+        files.tree_owner(Path::new("/home/alice/.local/x")),
+        (me() != 0).then_some(me())
+    );
+    assert_eq!(files.tree_owner(Path::new("/missing/deeper/x")), None);
+    assert_eq!(files.tree_owner(Path::new("/linked/alice/x")), None);
+    assert_eq!(files.tree_owner(Path::new("/x")), None);
+}

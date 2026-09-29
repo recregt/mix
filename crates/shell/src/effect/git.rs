@@ -6,12 +6,14 @@
 
 use std::path::{Path, PathBuf};
 
+use mix_core::action::Failure;
 use mix_core::paths::{FLAKE_LOCK, FLAKE_NIX, HOME_NIX, STATE_FILE};
 use mix_core::privilege::InvokingUser;
 use mix_core::{Error, Result, Scope};
 
-use crate::effect::exec::{run, run_as, status_as};
+use crate::effect::exec::{run_as, status_as};
 use crate::effect::fs::exists;
+use crate::effect::home;
 
 const AUTHOR_NAME: &str = "mix";
 const AUTHOR_EMAIL: &str = "mix@localhost";
@@ -43,7 +45,7 @@ impl Git {
         let state_dir_str = state_dir.to_string_lossy().into_owned();
         self.run_as(user, &["-C", &state_dir_str, "init", "-q"], scope)
             .await?;
-        write_gitignore(user, state_dir).await
+        write_gitignore(state_dir, scope).await
     }
 
     pub async fn sync(&self, user: &InvokingUser, state_dir: &Path, scope: &Scope) -> Result<bool> {
@@ -51,16 +53,6 @@ impl Git {
         if !exists(&git_dir).await {
             return Ok(false);
         }
-        run(
-            "chown",
-            &[
-                "-R",
-                &format!("{}:{}", user.uid, user.gid),
-                &git_dir.to_string_lossy(),
-            ],
-            scope,
-        )
-        .await?;
 
         let state_dir_str = state_dir.to_string_lossy().into_owned();
         let staged = self.stage(user, &state_dir_str, state_dir, scope).await?;
@@ -155,23 +147,27 @@ fn profile_git(user: &InvokingUser) -> PathBuf {
     user.home.join(PROFILE_GIT)
 }
 
-async fn write_gitignore(user: &InvokingUser, state_dir: &Path) -> Result<()> {
+async fn write_gitignore(state_dir: &Path, scope: &Scope) -> Result<()> {
     let path = state_dir.join(GITIGNORE);
-    tokio::fs::write(&path, GITIGNORE_CONTENTS)
+    home::write_file(&path, GITIGNORE_CONTENTS.as_bytes(), 0o644, scope)
         .await
-        .map_err(|e| Error::Io {
-            path: path.clone(),
-            source: e,
-        })?;
-    nix::unistd::chown(
-        &path,
-        Some(nix::unistd::Uid::from_raw(user.uid)),
-        Some(nix::unistd::Gid::from_raw(user.gid)),
-    )
-    .map_err(|e| Error::Io {
-        path,
-        source: std::io::Error::from(e),
-    })
+        .map_err(|failure| match failure {
+            Failure::Io { path, kind } => Error::Io {
+                path,
+                source: kind.into(),
+            },
+            Failure::SpawnFailed { program, kind } => Error::Exec {
+                command: program,
+                source: kind.into(),
+            },
+            Failure::Cancelled => Error::Cancelled {
+                command: format!("write {}", path.display()),
+            },
+            other => Error::Command {
+                command: format!("write {}", path.display()),
+                detail: format!("{other:?}"),
+            },
+        })
 }
 
 #[cfg(test)]

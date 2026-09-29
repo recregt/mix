@@ -121,11 +121,15 @@ pub async fn recover_all(dir: &Path, performer: &mut Performer, scope: &Scope) -
                 }
             }
             Recovery::FinishCommit { pending } => {
-                performer.adopt(pending);
-                if let Err(failure) = performer
-                    .perform(&Action::Commit, scope, &mut quiet, &mut ignore)
-                    .await
-                {
+                let committed = match performer.adopt(pending, scope).await {
+                    Ok(()) => {
+                        performer
+                            .perform(&Action::Commit, scope, &mut quiet, &mut ignore)
+                            .await
+                    }
+                    Err(failure) => Err(failure),
+                };
+                if let Err(failure) = committed {
                     recovered.failures.push((Action::Commit, failure));
                 }
             }

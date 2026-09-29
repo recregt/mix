@@ -4,6 +4,7 @@ mod controls;
 pub mod explain;
 mod remote;
 
+use std::io::Write as _;
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -15,6 +16,9 @@ pub async fn run() -> ExitCode {
     let cli = Cli::parse();
     if matches!(cli.command, Command::Worker) {
         return remote::worker::run().await;
+    }
+    if let Command::HomeFiles { request } = &cli.command {
+        return home_files(request);
     }
 
     mix_ui::init_tracing(cli.verbose, cli.draws_progress());
@@ -55,7 +59,9 @@ pub async fn run() -> ExitCode {
             Box::new(|error| explain::remove::explain(error, packages))
         }
         Command::Doctor => Box::new(explain::doctor::explain),
-        Command::Repair | Command::Worker => Box::new(explain::repair::explain),
+        Command::Repair | Command::Worker | Command::HomeFiles { .. } => {
+            Box::new(explain::repair::explain)
+        }
     };
 
     let result = match &cli.command {
@@ -79,7 +85,9 @@ pub async fn run() -> ExitCode {
         } => commands::install::run(packages, *json, *build).await,
         Command::Remove { packages, json } => commands::remove::run(packages, *json).await,
         Command::Doctor => commands::doctor::run(cli.verbose).await,
-        Command::Repair | Command::Worker => commands::repair::run(cli.verbose).await,
+        Command::Repair | Command::Worker | Command::HomeFiles { .. } => {
+            commands::repair::run(cli.verbose).await
+        }
     };
 
     match result {
@@ -91,6 +99,18 @@ pub async fn run() -> ExitCode {
             } else {
                 mix_ui::fail(message);
             }
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn home_files(request: &str) -> ExitCode {
+    let input = std::io::BufReader::new(std::io::stdin());
+    let output = std::io::BufWriter::new(std::io::stdout());
+    match mix_shell::effect::home::serve(request, input, output) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(failure) => {
+            let _ = writeln!(std::io::stderr(), "{failure:?}");
             ExitCode::FAILURE
         }
     }
