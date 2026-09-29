@@ -292,7 +292,7 @@ mod tests {
     #[tokio::test]
     async fn run_kills_and_reaps_the_child_when_cancelled() {
         let scope = mix_exec::Scope::root();
-        scope.cancel();
+        scope.cancel(mix_exec::Reason::Interrupted);
 
         match run("sleep", &["5"], &scope).await {
             Err(Error::Cancelled { command }) => {

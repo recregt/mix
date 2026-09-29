@@ -16,6 +16,7 @@ use mix_core::bootstrap::{Runtime, Settings, steps};
 use mix_core::plan::{Report, Runner, Verdict, diagnostic};
 use mix_events::v1::{BootstrapRequest, Cancellation, Command, command};
 use mix_events::{Ending, Outbox, ROOT, Start, Stopped, Tree};
+use mix_exec::Reason;
 
 use crate::Context;
 use crate::bridge::Bridge;
@@ -176,8 +177,12 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
     let outbox = Arc::new(Outbox::new(request, || {}));
     let mut bridge = Bridge::new(Arc::clone(&outbox), ctx.reporters.clone());
     let watched = scope.clone();
-    let stopped: Stopped =
-        Arc::new(move || watched.is_stopped().then_some(Cancellation::Interrupted));
+    let stopped: Stopped = Arc::new(move || match watched.reason()? {
+        Reason::Interrupted => Some(Cancellation::Interrupted),
+        Reason::Terminated => Some(Cancellation::Terminated),
+        Reason::ClientGone => Some(Cancellation::ClientGone),
+        Reason::Abandoned => None,
+    });
     let mut tree = Tree::new(
         outbox,
         Arc::clone(&stopped),

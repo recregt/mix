@@ -558,7 +558,7 @@ mod tests {
         let cancelling = scope.clone();
         tokio::task::spawn_blocking(move || {
             let _ = wait_for_accept.recv();
-            cancelling.cancel();
+            cancelling.cancel(mix_exec::Reason::Interrupted);
         });
 
         let err = fetch_and_verify(

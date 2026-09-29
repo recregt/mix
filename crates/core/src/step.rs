@@ -226,7 +226,7 @@ mod tests {
             while !ready() {
                 tokio::task::yield_now().await;
             }
-            cancelling.cancel();
+            cancelling.cancel(mix_exec::Reason::Interrupted);
         });
         scope
     }
@@ -540,7 +540,7 @@ mod tests {
         let mut plan = Plan::new(steps);
 
         let scope = Scope::root();
-        scope.cancel();
+        scope.cancel(mix_exec::Reason::Interrupted);
         let outcome = plan.run(&scope).await;
 
         assert!(matches!(outcome, Outcome::Interrupted));
@@ -566,7 +566,7 @@ mod tests {
 
         async fn execute(&mut self, _scope: &Scope) -> Result<(), ProbeError> {
             self.log.lock().unwrap().push("execute:a".to_string());
-            self.interrupt.cancel();
+            self.interrupt.cancel(mix_exec::Reason::Interrupted);
             Ok(())
         }
 

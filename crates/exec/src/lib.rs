@@ -6,4 +6,4 @@ mod run;
 
 pub use error::Error;
 pub use run::{Command, Drain, Foreground};
-pub use scope::{Scope, Stop};
+pub use scope::{Reason, Scope, Stop};

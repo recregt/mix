@@ -173,7 +173,7 @@ impl ActivityReporter for SourceBuildGuard {
 
     fn build_started(&self, derivation: &str) {
         if !self.approved.contains(derivation) && self.refused.set(derivation.to_string()).is_ok() {
-            self.scope.cancel();
+            self.scope.cancel(mix_exec::Reason::Abandoned);
         }
         self.inner.build_started(derivation);
     }

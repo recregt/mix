@@ -1,6 +1,5 @@
 use std::future::Future;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use tokio_util::sync::CancellationToken;
 
@@ -11,23 +10,31 @@ pub enum Stop {
     Cancelled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reason {
+    Interrupted,
+    Terminated,
+    ClientGone,
+    Abandoned,
+}
+
 #[derive(Debug, Default)]
 struct Flag {
-    raised: AtomicBool,
+    reason: OnceLock<Reason>,
     parent: Option<Arc<Flag>>,
 }
 
 impl Flag {
     #[inline]
-    fn is_raised(&self) -> bool {
+    fn reason(&self) -> Option<Reason> {
         let mut flag = Some(self);
         while let Some(current) = flag {
-            if current.raised.load(Ordering::Acquire) {
-                return true;
+            if let Some(reason) = current.reason.get() {
+                return Some(*reason);
             }
             flag = current.parent.as_deref();
         }
-        false
+        None
     }
 }
 
@@ -56,7 +63,7 @@ impl Scope {
         Self {
             token: self.token.child_token(),
             flag: Arc::new(Flag {
-                raised: AtomicBool::new(false),
+                reason: OnceLock::new(),
                 parent: Some(Arc::clone(&self.flag)),
             }),
             processes: self.processes.clone(),
@@ -67,14 +74,19 @@ impl Scope {
         Self::with_processes(self.processes.clone())
     }
 
-    pub fn cancel(&self) {
-        self.flag.raised.store(true, Ordering::Release);
+    pub fn cancel(&self, reason: Reason) {
+        let _ = self.flag.reason.set(reason);
         self.token.cancel();
     }
 
     #[inline]
     pub fn is_stopped(&self) -> bool {
-        self.flag.is_raised()
+        self.flag.reason().is_some()
+    }
+
+    #[inline]
+    pub fn reason(&self) -> Option<Reason> {
+        self.flag.reason()
     }
 
     pub async fn stopped(&self) -> Stop {
@@ -105,10 +117,25 @@ mod tests {
         let child = root.child();
         let shield = root.shielded();
 
-        root.cancel();
+        root.cancel(Reason::Interrupted);
 
         assert!(child.is_stopped());
         assert!(!shield.is_stopped());
+    }
+
+    #[test]
+    fn the_first_reason_is_kept_and_the_nearest_one_is_reported() {
+        let root = Scope::root();
+        let child = root.child();
+
+        child.cancel(Reason::Abandoned);
+        root.cancel(Reason::Terminated);
+        root.cancel(Reason::ClientGone);
+
+        assert_eq!(root.reason(), Some(Reason::Terminated));
+        assert_eq!(child.reason(), Some(Reason::Abandoned));
+        assert_eq!(root.child().reason(), Some(Reason::Terminated));
+        assert_eq!(root.shielded().reason(), None);
     }
 
     #[test]
@@ -118,10 +145,10 @@ mod tests {
         let grandchild = child.child();
         let sibling = root.child();
 
-        sibling.cancel();
+        sibling.cancel(Reason::Interrupted);
         assert!(!grandchild.is_stopped());
 
-        root.cancel();
+        root.cancel(Reason::Interrupted);
         assert!(grandchild.is_stopped());
         assert!(!root.shielded().is_stopped());
     }
@@ -132,7 +159,7 @@ mod tests {
         let child = root.child();
         let waiting = tokio::spawn(async move { child.stopped().await });
 
-        root.cancel();
+        root.cancel(Reason::Interrupted);
 
         assert_eq!(waiting.await.unwrap(), Stop::Cancelled);
     }
@@ -154,7 +181,7 @@ mod tests {
     #[tokio::test]
     async fn guard_stops_waiting_when_the_scope_is_cancelled() {
         let scope = Scope::root();
-        scope.cancel();
+        scope.cancel(Reason::Interrupted);
 
         assert_eq!(
             scope.guard(std::future::pending::<()>()).await,

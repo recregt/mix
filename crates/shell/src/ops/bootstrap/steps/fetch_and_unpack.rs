@@ -690,7 +690,7 @@ mod tests {
         let dest_store = dest.path().join("store");
 
         let scope = mix_exec::Scope::root();
-        scope.cancel();
+        scope.cancel(mix_exec::Reason::Interrupted);
 
         let mut created = Vec::new();
         move_entries_into(
