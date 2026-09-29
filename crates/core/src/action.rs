@@ -7,6 +7,67 @@ use crate::privilege::InvokingUser;
 
 pub type Owner = (u32, u32);
 
+mod error_kind {
+    use std::io::ErrorKind;
+
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(super) const KINDS: &[ErrorKind] = &[
+        ErrorKind::NotFound,
+        ErrorKind::PermissionDenied,
+        ErrorKind::ConnectionRefused,
+        ErrorKind::ConnectionReset,
+        ErrorKind::HostUnreachable,
+        ErrorKind::NetworkUnreachable,
+        ErrorKind::ConnectionAborted,
+        ErrorKind::NotConnected,
+        ErrorKind::AddrInUse,
+        ErrorKind::AddrNotAvailable,
+        ErrorKind::NetworkDown,
+        ErrorKind::BrokenPipe,
+        ErrorKind::AlreadyExists,
+        ErrorKind::WouldBlock,
+        ErrorKind::NotADirectory,
+        ErrorKind::IsADirectory,
+        ErrorKind::DirectoryNotEmpty,
+        ErrorKind::ReadOnlyFilesystem,
+        ErrorKind::StaleNetworkFileHandle,
+        ErrorKind::InvalidInput,
+        ErrorKind::InvalidData,
+        ErrorKind::TimedOut,
+        ErrorKind::WriteZero,
+        ErrorKind::StorageFull,
+        ErrorKind::NotSeekable,
+        ErrorKind::QuotaExceeded,
+        ErrorKind::FileTooLarge,
+        ErrorKind::ResourceBusy,
+        ErrorKind::ExecutableFileBusy,
+        ErrorKind::Deadlock,
+        ErrorKind::CrossesDevices,
+        ErrorKind::TooManyLinks,
+        ErrorKind::InvalidFilename,
+        ErrorKind::ArgumentListTooLong,
+        ErrorKind::Interrupted,
+        ErrorKind::Unsupported,
+        ErrorKind::UnexpectedEof,
+        ErrorKind::OutOfMemory,
+        ErrorKind::Other,
+    ];
+
+    pub fn serialize<S: Serializer>(kind: &ErrorKind, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(&format_args!("{kind:?}"))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<ErrorKind, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        Ok(KINDS
+            .iter()
+            .copied()
+            .find(|kind| format!("{kind:?}") == name)
+            .unwrap_or(ErrorKind::Other))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FileId {
     pub dev: u64,
@@ -172,12 +233,12 @@ impl Action {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Performed {
     pub undo: Vec<Action>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Failure {
     Conflict {
         subject: String,
@@ -186,6 +247,7 @@ pub enum Failure {
     },
     Io {
         path: PathBuf,
+        #[serde(with = "error_kind")]
         kind: std::io::ErrorKind,
     },
     CommandFailed {
@@ -195,6 +257,7 @@ pub enum Failure {
     },
     SpawnFailed {
         program: String,
+        #[serde(with = "error_kind")]
         kind: std::io::ErrorKind,
     },
     Unit(Box<UnitFailure>),
@@ -210,7 +273,7 @@ pub enum Failure {
     Cancelled,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnitOperation {
     Inspect,
     Reload,
@@ -235,7 +298,7 @@ impl UnitOperation {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UnitFailure {
     pub operation: UnitOperation,
     pub unit: String,
@@ -347,6 +410,19 @@ mod tests {
 
     fn unit(name: &str) -> String {
         name.to_string()
+    }
+
+    #[test]
+    fn every_io_error_kind_survives_serialization() {
+        for kind in error_kind::KINDS {
+            let failure = Failure::Io {
+                path: "/home/alice".into(),
+                kind: *kind,
+            };
+            let json = serde_json::to_string(&failure).unwrap();
+
+            assert_eq!(serde_json::from_str::<Failure>(&json).unwrap(), failure);
+        }
     }
 
     fn restore(path: &str) -> Action {
