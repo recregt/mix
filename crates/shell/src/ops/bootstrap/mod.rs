@@ -59,7 +59,7 @@ fn digest(hex: &str) -> Result<Digest> {
     Ok(Digest(bytes))
 }
 
-fn runtime(mirror: Option<&str>) -> Result<Runtime> {
+pub fn runtime(mirror: Option<&str>) -> Result<Runtime> {
     let pin = tarball::host_pin()?;
     let file = pin.url.rsplit('/').next().unwrap_or(pin.url);
     Ok(Runtime {

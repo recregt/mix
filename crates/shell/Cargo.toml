@@ -9,6 +9,7 @@ license = "MPL-2.0"
 [features]
 default = []
 embed-tarball = []
+machine-tests = []
 
 [dependencies]
 mix-core = { path = "../core" }
@@ -53,3 +54,7 @@ harness = false
 [[bench]]
 name = "target"
 harness = false
+
+[[test]]
+name = "machine"
+required-features = ["machine-tests"]
