@@ -37,7 +37,8 @@ pub fn path_of(action: &Action) -> Option<&Path> {
         | Action::SetAside { path, .. }
         | Action::RemoveCreated { path, .. }
         | Action::RemoveCreatedTree { path, .. }
-        | Action::Restore { path, .. } => Some(path),
+        | Action::Restore { path, .. }
+        | Action::ReclaimTree { path, .. } => Some(path),
         _ => None,
     }
 }
@@ -199,6 +200,26 @@ impl Agent {
             },
             None => Ok(()),
         }
+    }
+}
+
+pub fn core_error(failure: Failure, path: &Path) -> mix_core::Error {
+    match failure {
+        Failure::Io { path, kind } => mix_core::Error::Io {
+            path,
+            source: kind.into(),
+        },
+        Failure::SpawnFailed { program, kind } => mix_core::Error::Exec {
+            command: program,
+            source: kind.into(),
+        },
+        Failure::Cancelled => mix_core::Error::Cancelled {
+            command: format!("change {}", path.display()),
+        },
+        other => mix_core::Error::Command {
+            command: format!("change {}", path.display()),
+            detail: format!("{other:?}"),
+        },
     }
 }
 

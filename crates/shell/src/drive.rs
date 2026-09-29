@@ -200,15 +200,26 @@ impl Performer {
             Action::Commit => return self.commit(prepared).await,
             _ => {}
         }
-        if let Some(path) = home::path_of(action)
-            && let Some(uid) = home::owner(&self.files, path)
-        {
-            return self
-                .agent(uid, path, scope)?
-                .perform(action, prepared)
-                .await;
-        }
-        if let Some(outcome) = self.files.perform(action, prepared) {
+        if let Some(path) = home::path_of(action) {
+            let outcome = match home::owner(&self.files, path) {
+                Some(uid) => {
+                    self.agent(uid, path, scope)?
+                        .perform(action, prepared)
+                        .await
+                }
+                None => self.files.perform(action, prepared).expect("a file action"),
+            };
+            if let (Action::ReclaimTree { .. }, Ok(performed)) = (action, &outcome) {
+                let asides = performed
+                    .undo
+                    .iter()
+                    .filter_map(|undo| match undo {
+                        Action::Restore { from, .. } => Some(from.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                self.adopt(asides, scope).await?;
+            }
             return outcome;
         }
         if let Some(outcome) = identity::perform(action, scope, prepared).await {
@@ -232,10 +243,15 @@ impl Performer {
     pub async fn adopt(&mut self, pending: Vec<PathBuf>, scope: &Scope) -> Result<(), Failure> {
         let mut theirs: BTreeMap<u32, Vec<PathBuf>> = BTreeMap::new();
         let mut ours = Vec::new();
+        let running = nix::unistd::geteuid().as_raw();
         for path in pending {
-            match home::owner(&self.files, &path) {
-                Some(uid) => theirs.entry(uid).or_default().push(path),
-                None => ours.push(path),
+            match self
+                .files
+                .owner_of(&path)
+                .or(home::owner(&self.files, &path))
+            {
+                Some(uid) if uid != running => theirs.entry(uid).or_default().push(path),
+                _ => ours.push(path),
             }
         }
         self.files.adopt(ours);

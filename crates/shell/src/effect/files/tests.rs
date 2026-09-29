@@ -499,3 +499,79 @@ fn a_tree_belongs_to_the_first_directory_root_does_not_own() {
     assert_eq!(files.tree_owner(Path::new("/linked/alice/x")), None);
     assert_eq!(files.tree_owner(Path::new("/x")), None);
 }
+
+fn my_ids() -> Owner {
+    (me(), nix::unistd::Gid::current().as_raw())
+}
+
+#[test]
+fn a_reclaimed_tree_is_a_fresh_copy_and_its_undo_puts_the_original_back() {
+    let mut root = root();
+    std::fs::create_dir_all(root.real("/var/state/.git")).unwrap();
+    std::fs::write(root.real("/var/state/.git/HEAD"), "ref").unwrap();
+    std::fs::set_permissions(
+        root.real("/var/state/.git/HEAD"),
+        std::fs::Permissions::from_mode(0o444),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("/etc/shadow", root.real("/var/state/link")).unwrap();
+    std::fs::set_permissions(
+        root.real("/var/state"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let before = root.tree();
+    let original = root.id("/var/state");
+
+    let undo = root
+        .apply(Action::ReclaimTree {
+            path: "/var/state".into(),
+            expect: original,
+            owner: my_ids(),
+            mode: 0o700,
+        })
+        .unwrap()
+        .undo;
+
+    assert_ne!(root.id("/var/state"), original);
+    assert_eq!(
+        std::fs::read(root.real("/var/state/.git/HEAD")).unwrap(),
+        b"ref"
+    );
+    assert_eq!(
+        std::fs::read_link(root.real("/var/state/link")).unwrap(),
+        Path::new("/etc/shadow")
+    );
+    assert_eq!(
+        std::fs::metadata(root.real("/var/state"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o700
+    );
+    assert!(root.files.pending().is_empty());
+    for action in undo {
+        root.apply(action).unwrap();
+    }
+    assert_eq!(root.tree(), before);
+    assert_eq!(root.id("/var/state"), original);
+}
+
+#[test]
+fn a_reclaim_is_only_carried_out_by_the_new_owner() {
+    let mut root = root();
+    std::fs::create_dir(root.real("/var/state")).unwrap();
+    let before = root.tree();
+    let expect = root.id("/var/state");
+
+    let refused = root.apply(Action::ReclaimTree {
+        path: "/var/state".into(),
+        expect,
+        owner: (me() + 1, 0),
+        mode: 0o700,
+    });
+
+    assert!(matches!(refused, Err(Failure::Conflict { .. })));
+    assert_eq!(root.tree(), before);
+}

@@ -433,6 +433,12 @@ impl Files {
             Action::RemoveCreated { path, expect } => self.remove_created(path, *expect),
             Action::RemoveCreatedTree { path, expect } => self.remove_created_tree(path, *expect),
             Action::Restore { path, from, expect } => self.restore(path, from, *expect),
+            Action::ReclaimTree {
+                path,
+                expect,
+                owner,
+                mode,
+            } => self.reclaim(path, *expect, *owner, *mode, prepared),
             Action::Commit => self.commit(),
             _ => return None,
         })
@@ -734,11 +740,101 @@ impl Files {
         done(Vec::new())
     }
 
+    fn reclaim(
+        &mut self,
+        path: &Path,
+        expect: FileId,
+        owner: Owner,
+        mode: u32,
+        prepared: &mut Prepared<'_>,
+    ) -> Outcome {
+        let running = (
+            nix::unistd::geteuid().as_raw(),
+            nix::unistd::getegid().as_raw(),
+        );
+        if running != owner {
+            return Err(conflict(
+                path,
+                format!("a copy made as {owner:?}"),
+                format!("a process running as {running:?}"),
+            ));
+        }
+        let place = self.place(path)?;
+        Self::expect_id(&place, &place.name, expect)?;
+        let staged = self.sibling(&place, "reclaim");
+        let discard = |files: &Self| {
+            let _ = files.remove_tree(&place, &staged);
+        };
+        if let Err(errno) = copy_tree_at(&place.dir, &place.name, &place.dir, &staged, Some(mode)) {
+            discard(self);
+            return Err(io(path, errno));
+        }
+        let copied = match Self::stat(&place, &staged) {
+            Ok(Some(stat)) => id(&stat),
+            Ok(None) => return Err(conflict(path, "the copy", "nothing")),
+            Err(failure) => {
+                discard(self);
+                return Err(failure);
+            }
+        };
+        let aside = self.sibling(&place, "aside");
+        let undo = vec![
+            Action::RemoveCreatedTree {
+                path: path.to_path_buf(),
+                expect: copied,
+            },
+            Action::Restore {
+                path: path.to_path_buf(),
+                from: path.with_file_name(&aside),
+                expect: Expect::Absent,
+            },
+        ];
+        if let Err(failure) = prepared(&undo) {
+            discard(self);
+            return Err(failure);
+        }
+        if let Err(errno) = Self::rename(&place, &place.name, &aside, RenameFlags::NOREPLACE) {
+            discard(self);
+            return Err(io(path, errno));
+        }
+        if let Err(failure) = Self::expect_id(&place, &aside, expect) {
+            let _ = Self::rename(&place, &aside, &place.name, RenameFlags::NOREPLACE);
+            discard(self);
+            return Err(failure);
+        }
+        if let Err(errno) = Self::rename(&place, &staged, &place.name, RenameFlags::NOREPLACE) {
+            let _ = Self::rename(&place, &aside, &place.name, RenameFlags::NOREPLACE);
+            discard(self);
+            return Err(io(path, errno));
+        }
+        Self::sync(&place)?;
+        done(undo)
+    }
+
+    pub fn owner_of(&self, path: &Path) -> Option<u32> {
+        let place = self.place_for_reading(path).ok()?;
+        Self::stat(&place, &place.name)
+            .ok()
+            .flatten()
+            .map(|stat| stat.stx_uid)
+    }
+
     fn commit(&mut self) -> Outcome {
         let mut first = None;
         let mut kept = Vec::new();
+        let running = nix::unistd::geteuid().as_raw();
         for pending in std::mem::take(&mut self.pending) {
             let removed = self.place(&pending).and_then(|place| {
+                match Self::stat(&place, &place.name)? {
+                    Some(stat) if stat.stx_uid != running => {
+                        return Err(conflict(
+                            &pending,
+                            format!("something owned by uid {running}"),
+                            format!("something owned by uid {}", stat.stx_uid),
+                        ));
+                    }
+                    _ => {}
+                }
                 self.remove_tree(&place, &place.name)?;
                 Self::sync(&place)
             });
@@ -806,6 +902,69 @@ impl Files {
         let mut contents = Vec::new();
         std::fs::File::from(node).read_to_end(&mut contents).ok()?;
         Some(contents)
+    }
+}
+
+fn copy_tree_at(
+    from_dir: &OwnedFd,
+    from: &OsStr,
+    to_dir: &OwnedFd,
+    to: &OsStr,
+    top_mode: Option<u32>,
+) -> Result<(), Errno> {
+    let stat = sys::statx(from_dir, from, AtFlags::SYMLINK_NOFOLLOW, WANTED)?;
+    let mode = Mode::from_raw_mode(top_mode.unwrap_or(self::mode(&stat) & !0o6000));
+    match kind(&stat) {
+        Kind::Directory => {
+            sys::mkdirat(to_dir, to, Mode::from_raw_mode(0o700))?;
+            let source = sys::openat(
+                from_dir,
+                from,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )?;
+            let target = sys::openat(
+                to_dir,
+                to,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )?;
+            let names: Vec<OsString> = sys::Dir::read_from(&source)?
+                .filter_map(Result::ok)
+                .map(|entry| OsStr::from_bytes(entry.file_name().to_bytes()).to_os_string())
+                .filter(|entry| entry != "." && entry != "..")
+                .collect();
+            for name in names {
+                copy_tree_at(&source, &name, &target, &name, None)?;
+            }
+            sys::fchmod(&target, mode)?;
+            sys::fsync(&target)
+        }
+        Kind::File => {
+            let source = sys::openat(
+                from_dir,
+                from,
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )?;
+            let target = sys::openat(
+                to_dir,
+                to,
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::from_raw_mode(0o600),
+            )?;
+            let mut reader = std::fs::File::from(source);
+            let mut writer = std::fs::File::from(target);
+            std::io::copy(&mut reader, &mut writer)
+                .map_err(|error| Errno::from_io_error(&error).unwrap_or(Errno::IO))?;
+            sys::fchmod(&writer, mode)?;
+            sys::fsync(&writer)
+        }
+        Kind::Symlink => {
+            let target = sys::readlinkat(from_dir, from, Vec::new())?;
+            sys::symlinkat(target.as_c_str(), to_dir, to)
+        }
+        _ => Err(Errno::OPNOTSUPP),
     }
 }
 

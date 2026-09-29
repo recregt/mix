@@ -6,10 +6,9 @@
 
 use std::path::{Path, PathBuf};
 
-use mix_core::action::Failure;
 use mix_core::paths::{FLAKE_LOCK, FLAKE_NIX, HOME_NIX, STATE_FILE};
 use mix_core::privilege::InvokingUser;
-use mix_core::{Error, Result, Scope};
+use mix_core::{Result, Scope};
 
 use crate::effect::exec::{run_as, status_as};
 use crate::effect::fs::exists;
@@ -151,23 +150,7 @@ async fn write_gitignore(state_dir: &Path, scope: &Scope) -> Result<()> {
     let path = state_dir.join(GITIGNORE);
     home::write_file(&path, GITIGNORE_CONTENTS.as_bytes(), 0o644, scope)
         .await
-        .map_err(|failure| match failure {
-            Failure::Io { path, kind } => Error::Io {
-                path,
-                source: kind.into(),
-            },
-            Failure::SpawnFailed { program, kind } => Error::Exec {
-                command: program,
-                source: kind.into(),
-            },
-            Failure::Cancelled => Error::Cancelled {
-                command: format!("write {}", path.display()),
-            },
-            other => Error::Command {
-                command: format!("write {}", path.display()),
-                detail: format!("{other:?}"),
-            },
-        })
+        .map_err(|failure| home::core_error(failure, &path))
 }
 
 #[cfg(test)]
