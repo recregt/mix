@@ -9,6 +9,7 @@ use mix_core::{ActivityReporter, Scope};
 use crate::HostConfig;
 use crate::effect::exec::{run_as, run_as_reporting};
 use crate::effect::files::Prepared;
+use crate::effect::tools::trusted;
 use crate::profile::{self, BuildPolicy};
 
 pub struct ProfileContext {
@@ -122,10 +123,13 @@ async fn switch_to(
                 .await
                 .map_err(profile_failure)
         }
-        None => run_as(user, "rm", &["-f", &link], scope)
-            .await
-            .map(|_| ())
-            .map_err(core_failure),
+        None => {
+            let rm = trusted("rm")?;
+            run_as(user, &rm.to_string_lossy(), &["-f", &link], scope)
+                .await
+                .map(|_| ())
+                .map_err(core_failure)
+        }
     }
 }
 
