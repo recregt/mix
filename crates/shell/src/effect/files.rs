@@ -270,6 +270,7 @@ impl Files {
             } => self.set_owner(path, *owner, *expect, prepared),
             Action::SetAside { path, expect } => self.set_aside(path, *expect, prepared),
             Action::RemoveCreated { path, expect } => self.remove_created(path, *expect),
+            Action::RemoveCreatedTree { path, expect } => self.remove_created_tree(path, *expect),
             Action::Restore { path, from, expect } => self.restore(path, from, *expect),
             Action::Commit => self.commit(),
             _ => return None,
@@ -497,6 +498,24 @@ impl Files {
                 errno => io(path, errno),
             });
         }
+        Self::sync(&place)?;
+        done(Vec::new())
+    }
+
+    fn remove_created_tree(&mut self, path: &Path, expect: FileId) -> Outcome {
+        let place = self.place(path)?;
+        let doomed = self.sibling(&place, "remove");
+        Self::rename(&place, &place.name, &doomed, RenameFlags::NOREPLACE).map_err(|errno| {
+            match errno {
+                Errno::NOENT => conflict(path, format!("{expect:?}"), "nothing"),
+                errno => io(path, errno),
+            }
+        })?;
+        if let Err(failure) = Self::expect_id(&place, &doomed, expect) {
+            let _ = Self::rename(&place, &doomed, &place.name, RenameFlags::NOREPLACE);
+            return Err(failure);
+        }
+        self.remove_tree(&place, &doomed)?;
         Self::sync(&place)?;
         done(Vec::new())
     }

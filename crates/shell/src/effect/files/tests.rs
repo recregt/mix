@@ -381,3 +381,35 @@ fn the_file_system_shows_what_the_model_predicts() {
     undo(&mut root, &journal);
     assert_eq!(root.tree(), initial);
 }
+
+#[test]
+fn a_created_tree_is_removed_whole_but_only_if_it_is_still_the_one_made() {
+    let mut root = root();
+    std::fs::create_dir_all(root.real("/var/.git/objects")).unwrap();
+    std::fs::write(root.real("/var/.git/HEAD"), "ref").unwrap();
+    let id = root.id("/var/.git");
+
+    let stale = root.apply(Action::RemoveCreatedTree {
+        path: "/var/.git".into(),
+        expect: FileId {
+            dev: id.dev,
+            ino: id.ino + 1,
+            born: id.born,
+        },
+    });
+    assert!(matches!(stale, Err(Failure::Conflict { .. })));
+    assert!(root.real("/var/.git/HEAD").exists());
+
+    root.apply(Action::RemoveCreatedTree {
+        path: "/var/.git".into(),
+        expect: id,
+    })
+    .unwrap();
+
+    assert!(!root.real("/var/.git").exists());
+    assert!(
+        root.tree()
+            .iter()
+            .all(|(path, ..)| !path.to_string_lossy().contains("mix-remove"))
+    );
+}
