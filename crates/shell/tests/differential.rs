@@ -21,6 +21,7 @@ fn me() -> Owner {
 #[derive(Clone, Copy)]
 enum Op {
     CreateDir(&'static str, u32),
+    CreateDirs(&'static str, u32),
     Put(&'static str, &'static str, u32),
     SetMode(&'static str, u32),
     SetAside(&'static str),
@@ -45,6 +46,11 @@ fn action(op: Op, side: &mut dyn Side) -> Action {
     };
     match op {
         Op::CreateDir(path, mode) => Action::CreateDir {
+            path: path.into(),
+            mode,
+            owner: None,
+        },
+        Op::CreateDirs(path, mode) => Action::CreateDirs {
             path: path.into(),
             mode,
             owner: None,
@@ -265,8 +271,10 @@ fn same(model: &Model, real: &Real, after: &str) {
     assert_eq!(comparable(model), comparable(real), "after {after}");
 }
 
-const FORWARD: [Op; 10] = [
+const FORWARD: [Op; 12] = [
     Op::CreateDir("/srv/a", 0o750),
+    Op::CreateDirs("/srv/d/e/f", 0o700),
+    Op::CreateDirs("/srv/d/e/f", 0o700),
     Op::Put("/srv/a/f", "one", 0o640),
     Op::Put("/srv/a/f", "two", 0o640),
     Op::SetMode("/srv/a/f", 0o600),

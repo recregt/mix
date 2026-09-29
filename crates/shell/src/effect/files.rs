@@ -426,6 +426,9 @@ impl Files {
 
     pub fn perform(&mut self, action: &Action, prepared: &mut Prepared<'_>) -> Option<Outcome> {
         Some(match action {
+            Action::CreateDirs { path, mode, owner } => {
+                self.create_dirs(path, *mode, *owner, prepared)
+            }
             Action::CreateDir { path, mode, owner } => {
                 self.create_dir(path, *mode, *owner, prepared)
             }
@@ -461,6 +464,65 @@ impl Files {
             Action::Commit => self.commit(),
             _ => return None,
         })
+    }
+
+    fn create_dirs(
+        &mut self,
+        path: &Path,
+        mode: u32,
+        owner: Option<Owner>,
+        prepared: &mut Prepared<'_>,
+    ) -> Outcome {
+        match self.path_facts(path).kind {
+            Kind::Missing => {}
+            Kind::Directory => return done(Vec::new()),
+            Kind::Unreadable(kind) => {
+                return Err(Failure::Io {
+                    path: path.to_path_buf(),
+                    kind,
+                });
+            }
+            _ => return Err(conflict(path, "a directory", "something else")),
+        }
+        let mut top = path;
+        while let Some(parent) = top.parent()
+            && parent != top
+            && self.path_facts(parent).kind == Kind::Missing
+        {
+            top = parent;
+        }
+        let place = self.place(top)?;
+        let staged = self.sibling(&place, "new");
+        let built = build_chain(&place.dir, &staged, top, path, mode, owner);
+        let discard = |files: &Self| {
+            let _ = files.remove_tree(&place, &staged);
+        };
+        let created = match built.and_then(|()| {
+            Self::stat(&place, &staged)?.ok_or_else(|| conflict(top, "the staged tree", "nothing"))
+        }) {
+            Ok(stat) => id(&stat),
+            Err(failure) => {
+                discard(self);
+                return Err(failure);
+            }
+        };
+        let undo = vec![Action::RemoveCreatedTree {
+            path: top.to_path_buf(),
+            expect: created,
+        }];
+        if let Err(failure) = prepared(&undo) {
+            discard(self);
+            return Err(failure);
+        }
+        if let Err(errno) = Self::rename(&place, &staged, &place.name, RenameFlags::NOREPLACE) {
+            discard(self);
+            return Err(match errno {
+                Errno::EXIST => conflict(top, "nothing", "something already there"),
+                errno => io(top, errno),
+            });
+        }
+        Self::sync(&place)?;
+        done(undo)
     }
 
     fn create_dir(
@@ -1030,6 +1092,51 @@ impl Files {
         std::fs::File::from(node).read_to_end(&mut contents).ok()?;
         Some(contents)
     }
+}
+
+fn build_chain(
+    parent: &OwnedFd,
+    staged: &OsStr,
+    top: &Path,
+    leaf: &Path,
+    mode: u32,
+    owner: Option<Owner>,
+) -> Result<(), Failure> {
+    let fail = |errno| io(top, errno);
+    let mut names = vec![staged.to_os_string()];
+    names.extend(
+        leaf.strip_prefix(top)
+            .map_err(|_| conflict(leaf, "a path below the created top", "another path"))?
+            .components()
+            .filter_map(|component| match component {
+                Component::Normal(part) => Some(part.to_os_string()),
+                _ => None,
+            }),
+    );
+    let mut dirs: Vec<OwnedFd> = Vec::new();
+    for name in &names {
+        let at = dirs.last().unwrap_or(parent);
+        sys::mkdirat(at, name, Mode::from_raw_mode(0o700)).map_err(fail)?;
+        let dir = sys::openat(
+            at,
+            name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(fail)?;
+        dirs.push(dir);
+    }
+    let last = dirs.len() - 1;
+    for (index, dir) in dirs.iter().enumerate().rev() {
+        if let Some(owner) = owner {
+            let (uid, gid) = ids(owner);
+            sys::fchown(dir, uid, gid).map_err(fail)?;
+        }
+        let wanted = if index == last { mode } else { 0o755 };
+        sys::fchmod(dir, Mode::from_raw_mode(wanted)).map_err(fail)?;
+        sys::fsync(dir).map_err(fail)?;
+    }
+    Ok(())
 }
 
 fn copy_tree_at(

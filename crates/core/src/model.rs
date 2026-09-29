@@ -365,6 +365,40 @@ impl World {
                     expect: id,
                 }])
             }
+            Action::CreateDirs { path, mode, owner } => {
+                let mut missing: Vec<PathBuf> = path
+                    .ancestors()
+                    .take_while(|dir| !self.files.contains_key(*dir))
+                    .map(Path::to_path_buf)
+                    .collect();
+                missing.reverse();
+                let Some(top) = missing.first().cloned() else {
+                    return match self.files.get(path).map(|entry| &entry.content) {
+                        Some(Content::Directory) => done(Vec::new()),
+                        _ => Err(conflict(path, "a directory", "something else")),
+                    };
+                };
+                self.parent_is_dir(&top)?;
+                let mut top_id = None;
+                for dir in missing {
+                    let id = self.fresh();
+                    top_id.get_or_insert(id);
+                    self.files.insert(
+                        dir.clone(),
+                        Entry {
+                            content: Content::Directory,
+                            mode: if dir == *path { *mode } else { 0o755 },
+                            owner: owner.unwrap_or(ROOT),
+                            id,
+                            changed: id.ino,
+                        },
+                    );
+                }
+                done(vec![Action::RemoveCreatedTree {
+                    path: top,
+                    expect: top_id.expect("at least the top was created"),
+                }])
+            }
             Action::PutFile {
                 path,
                 contents,

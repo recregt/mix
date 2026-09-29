@@ -102,6 +102,11 @@ pub enum Action {
         mode: u32,
         owner: Option<Owner>,
     },
+    CreateDirs {
+        path: PathBuf,
+        mode: u32,
+        owner: Option<Owner>,
+    },
     PutFile {
         path: PathBuf,
         contents: Arc<[u8]>,
@@ -289,6 +294,10 @@ pub enum Failure {
         found: String,
     },
     Cancelled,
+    Unrepairable {
+        artifact: String,
+        reason: crate::health::Unfixable,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

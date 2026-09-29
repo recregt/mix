@@ -7,7 +7,9 @@ use crate::models::Target;
 /// The reason is a value rather than a sentence: what a reader should do about it differs per
 /// command — `mix repair` offers a way out, the health gate in front of the other commands only
 /// says why it stopped — so the words are chosen where the command is known.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, serde::Serialize, serde::Deserialize,
+)]
 pub enum Unfixable {
     /// Something is in the way that repair will not delete.
     #[error("exists but is not a directory")]

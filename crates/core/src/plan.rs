@@ -582,6 +582,7 @@ pub fn describe(action: &Action) -> (Operation, String) {
     let path = |path: &std::path::Path| path.display().to_string();
     match action {
         Action::CreateDir { path: at, .. } => (Operation::CreateDir, path(at)),
+        Action::CreateDirs { path: at, .. } => (Operation::CreateDirs, path(at)),
         Action::PutFile { path: at, .. } => (Operation::PutFile, path(at)),
         Action::SetMode { path: at, .. } => (Operation::SetMode, path(at)),
         Action::SetOwner { path: at, .. } => (Operation::SetOwner, path(at)),
@@ -725,6 +726,9 @@ pub fn diagnostic(failure: &Failure) -> Diagnostic {
             })),
         ),
         Failure::Cancelled => (Code::Internal, "cancelled".to_string(), None),
+        Failure::Unrepairable { artifact, reason } => {
+            (Code::Unrepairable, format!("{artifact}: {reason}"), None)
+        }
     };
     Diagnostic {
         code: code as i32,

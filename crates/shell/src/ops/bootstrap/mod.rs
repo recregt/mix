@@ -119,6 +119,9 @@ pub fn error_from(failure: Failure) -> Error {
             detail: format!("expected {expected}, found {found}"),
         },
         Failure::Cancelled => Error::Interrupted,
+        Failure::Unrepairable { artifact, reason } => {
+            Error::Target(crate::target::Error::Unrepairable { artifact, reason })
+        }
     }
 }
 
