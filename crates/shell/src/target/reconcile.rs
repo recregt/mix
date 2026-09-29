@@ -16,7 +16,7 @@ use mix_core::action::{Action, Fact, PathFacts, Query};
 
 use crate::drive::Performer;
 use crate::effect::exec::run;
-use crate::effect::files::Files;
+use crate::effect::files::{self, Files};
 use crate::effect::fs::{self, Owner};
 use crate::effect::home;
 use crate::effect::systemd;
@@ -79,8 +79,8 @@ async fn directory(
         Finding::Missing | Finding::Unreadable { .. } => {
             fs::create_dir_all_owned(path, mode, owner).await
         }
-        _ if taken_from_owner(path, owner) => {
-            reclaim(path, mode, owner.expect("checked above"), scope).await
+        _ if taken_from_owner(path, owner, finding) => {
+            Box::pin(reclaim(path, mode, owner.expect("checked above"), scope)).await
         }
         // The owner is what drifted, and the inspection measured it: set it and nothing else.
         Finding::Owner { .. } => fs::set_owner(path, owner).await,
@@ -92,15 +92,20 @@ async fn directory(
     }
 }
 
-fn taken_from_owner(path: &Path, owner: Owner) -> bool {
+fn taken_from_owner(path: &Path, owner: Owner, finding: Finding) -> bool {
     let Some((uid, _)) = owner else {
         return false;
     };
+    let known = match finding {
+        Finding::Owner { actual, .. } => Some(actual.0),
+        _ => None,
+    };
     uid != 0
-        && Files::open(Path::new("/"), "inspect").is_ok_and(|files| {
-            files.tree_owner(path) == Some(uid)
-                && files.owner_of(path).is_some_and(|found| found != uid)
-        })
+        && known != Some(uid)
+        && files::tree_owner_of(path) == Some(uid)
+        && known
+            .or_else(|| files::owner_at(path))
+            .is_some_and(|own| own != uid)
 }
 
 async fn reclaim(path: &Path, mode: u32, owner: (u32, u32), scope: &Scope) -> Result<()> {

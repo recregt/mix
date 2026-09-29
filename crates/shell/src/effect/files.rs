@@ -134,38 +134,7 @@ impl Files {
     }
 
     pub fn tree_owner(&self, path: &Path) -> Option<u32> {
-        let parts: Vec<&OsStr> = path
-            .components()
-            .filter_map(|component| match component {
-                Component::Normal(part) => Some(part),
-                _ => None,
-            })
-            .collect();
-        let (_, ancestors) = parts.split_last()?;
-        let mut dir = sys::openat(
-            &self.root,
-            ".",
-            OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
-            Mode::empty(),
-        )
-        .ok()?;
-        for name in ancestors {
-            let stat = sys::statx(&dir, *name, AtFlags::SYMLINK_NOFOLLOW, WANTED).ok()?;
-            if kind(&stat) != Kind::Directory {
-                return None;
-            }
-            if stat.stx_uid != 0 {
-                return Some(stat.stx_uid);
-            }
-            dir = sys::openat(
-                &dir,
-                *name,
-                OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                Mode::empty(),
-            )
-            .ok()?;
-        }
-        None
+        walk(&self.root, path)
     }
 
     pub fn adopt(&mut self, pending: impl IntoIterator<Item = PathBuf>) {
@@ -1107,6 +1076,58 @@ fn copy_tree_at(
         }
         _ => Err(Errno::OPNOTSUPP),
     }
+}
+
+pub fn owner_at(path: &Path) -> Option<u32> {
+    sys::statx(sys::CWD, path, AtFlags::SYMLINK_NOFOLLOW, StatxFlags::UID)
+        .ok()
+        .map(|stat| stat.stx_uid)
+}
+
+pub fn tree_owner_of(path: &Path) -> Option<u32> {
+    let bytes = path.as_os_str().as_bytes();
+    for (at, byte) in bytes.iter().enumerate().skip(1) {
+        if *byte != b'/' {
+            continue;
+        }
+        match owner_at(Path::new(OsStr::from_bytes(&bytes[..at])))? {
+            0 => {}
+            uid => return Some(uid),
+        }
+    }
+    None
+}
+
+fn walk(root: &OwnedFd, path: &Path) -> Option<u32> {
+    let mut parts = path
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(part) => Some(part),
+            _ => None,
+        })
+        .peekable();
+    let mut dir: Option<OwnedFd> = None;
+    while let Some(name) = parts.next() {
+        parts.peek()?;
+        let parent = dir.as_ref().unwrap_or(root);
+        let stat = sys::statx(parent, name, AtFlags::SYMLINK_NOFOLLOW, WANTED).ok()?;
+        if kind(&stat) != Kind::Directory {
+            return None;
+        }
+        if stat.stx_uid != 0 {
+            return Some(stat.stx_uid);
+        }
+        dir = Some(
+            sys::openat(
+                parent,
+                name,
+                OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .ok()?,
+        );
+    }
+    None
 }
 
 fn remove_tree_at(dir: &OwnedFd, name: &OsStr) -> Result<(), Errno> {
