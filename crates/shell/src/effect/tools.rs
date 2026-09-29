@@ -116,7 +116,13 @@ mod tests {
     }
 
     fn checkout() -> u32 {
-        std::fs::metadata(env!("CARGO_MANIFEST_DIR")).unwrap().uid()
+        target()
+            .canonicalize()
+            .unwrap()
+            .ancestors()
+            .map(|dir| std::fs::metadata(dir).unwrap().uid())
+            .find(|uid| *uid != 0)
+            .unwrap_or(0)
     }
 
     fn scratch() -> tempfile::TempDir {
