@@ -1,7 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crate::outbox::Outbox;
 use crate::v1::{
@@ -12,22 +11,20 @@ use crate::v1::{
 
 pub type Stopped = Arc<dyn Fn() -> Option<Cancellation> + Send + Sync>;
 
-pub const ROOT: u64 = 1;
+pub type NodeId = u64;
 
-struct Shared {
-    outbox: Arc<Outbox>,
-    stopped: Stopped,
-    next: AtomicU64,
-}
+pub const ROOT: NodeId = 1;
 
-impl Shared {
-    fn allocate(&self) -> u64 {
-        self.next.fetch_add(1, Ordering::Relaxed)
-    }
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum Misuse {
+    #[error("node {0} is not running")]
+    NotOpen(NodeId),
 
-    fn emit(&self, event: Event) {
-        self.outbox.push(event);
-    }
+    #[error("node {id} cannot finish while its child {child} is running")]
+    ChildrenOpen { id: NodeId, child: NodeId },
+
+    #[error("node {parent} already has a child keyed {key}")]
+    DuplicateKey { parent: NodeId, key: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -125,15 +122,16 @@ pub fn output(bytes: &[u8], stream: Stream) -> Progress {
     })
 }
 
-#[derive(Default)]
-struct State {
+struct Open {
+    parent: NodeId,
     planned: Vec<String>,
     used: HashSet<String>,
+    children: BTreeSet<NodeId>,
     bytes: Option<Bytes>,
     builds: Option<Builds>,
 }
 
-impl State {
+impl Open {
     fn changed(&mut self, progress: &Progress) -> bool {
         match progress {
             Progress::Line(_) => true,
@@ -143,30 +141,146 @@ impl State {
     }
 }
 
-pub struct Node<'parent> {
-    shared: Arc<Shared>,
-    id: u64,
-    state: Mutex<State>,
-    finished: bool,
-    _parent: PhantomData<&'parent ()>,
+pub struct Tree {
+    outbox: Arc<Outbox>,
+    stopped: Stopped,
+    next: NodeId,
+    open: HashMap<NodeId, Open>,
 }
 
-impl Node<'static> {
-    pub fn root(outbox: Arc<Outbox>, stopped: Stopped, start: Start) -> Self {
+impl Tree {
+    pub fn new(outbox: Arc<Outbox>, stopped: Stopped, start: Start) -> Self {
         debug_assert!(matches!(start.kind, node_started::Kind::Command(_)));
-        let shared = Arc::new(Shared {
+        let mut tree = Self {
             outbox,
             stopped,
-            next: AtomicU64::new(ROOT),
-        });
-        Self::open(shared, 0, start)
+            next: ROOT,
+            open: HashMap::new(),
+        };
+        tree.open_node(0, start);
+        tree
     }
-}
 
-impl<'parent> Node<'parent> {
-    fn open(shared: Arc<Shared>, parent: u64, start: Start) -> Self {
-        let id = shared.allocate();
-        shared.emit(Event::NodeStarted(NodeStarted {
+    pub fn is_open(&self, id: NodeId) -> bool {
+        self.open.contains_key(&id)
+    }
+
+    pub fn start(&mut self, parent: NodeId, start: Start) -> Result<NodeId, Misuse> {
+        self.claim(parent, &start.key)?;
+        Ok(self.open_node(parent, start))
+    }
+
+    pub fn not_run(
+        &mut self,
+        parent: NodeId,
+        key: impl Into<String>,
+        reason: NotRunReason,
+    ) -> Result<(), Misuse> {
+        let key = key.into();
+        self.claim(parent, &key)?;
+        self.emit_not_run(parent, key, reason);
+        Ok(())
+    }
+
+    pub fn progress(&mut self, id: NodeId, progress: Progress) -> Result<(), Misuse> {
+        let open = self.open.get_mut(&id).ok_or(Misuse::NotOpen(id))?;
+        if open.changed(&progress) {
+            self.outbox.push(Event::NodeProgress(NodeProgress {
+                id,
+                progress: Some(progress),
+            }));
+        }
+        Ok(())
+    }
+
+    pub fn warn(&mut self, id: NodeId, mut diagnostic: Diagnostic) -> Result<(), Misuse> {
+        if !self.is_open(id) {
+            return Err(Misuse::NotOpen(id));
+        }
+        diagnostic.node = id;
+        self.outbox.push(Event::Diagnostic(diagnostic));
+        Ok(())
+    }
+
+    pub fn finish(&mut self, id: NodeId, ending: Ending) -> Result<(), Misuse> {
+        let open = self.open.get(&id).ok_or(Misuse::NotOpen(id))?;
+        if let Some(child) = open.children.first() {
+            return Err(Misuse::ChildrenOpen { id, child: *child });
+        }
+        let open = self.open.remove(&id).expect("checked above");
+        if let Some(parent) = self.open.get_mut(&open.parent) {
+            parent.children.remove(&id);
+        }
+        for key in open.planned.iter().filter(|key| !open.used.contains(*key)) {
+            self.emit_not_run(id, key.clone(), NotRunReason::NotReached);
+        }
+        self.outbox.push(Event::NodeFinished(NodeFinished {
+            id,
+            status: ending.status as i32,
+            diagnostic: ending.diagnostic,
+            exit_code: ending.exit_code,
+            cancellation: ending.cancellation as i32,
+            result: ending.result,
+        }));
+        Ok(())
+    }
+
+    pub fn abandon(&mut self, id: NodeId) -> Result<(), Misuse> {
+        let ending = self.abandoned();
+        let mut open: Vec<NodeId> = self
+            .open
+            .keys()
+            .copied()
+            .filter(|node| self.descends_from(*node, id))
+            .collect();
+        if open.is_empty() {
+            return Err(Misuse::NotOpen(id));
+        }
+        open.sort_unstable_by(|a, b| b.cmp(a));
+        for node in open {
+            self.finish(node, ending.clone())
+                .expect("a child always has a higher id than its parent");
+        }
+        Ok(())
+    }
+
+    fn abandoned(&self) -> Ending {
+        match (self.stopped)() {
+            Some(cause) => Ending::cancelled(cause),
+            None => Ending::new(Status::Failed),
+        }
+    }
+
+    fn descends_from(&self, mut node: NodeId, ancestor: NodeId) -> bool {
+        loop {
+            if node == ancestor {
+                return true;
+            }
+            match self.open.get(&node) {
+                Some(open) => node = open.parent,
+                None => return false,
+            }
+        }
+    }
+
+    fn claim(&mut self, parent: NodeId, key: &str) -> Result<(), Misuse> {
+        let open = self.open.get_mut(&parent).ok_or(Misuse::NotOpen(parent))?;
+        if !open.used.insert(key.to_string()) {
+            return Err(Misuse::DuplicateKey {
+                parent,
+                key: key.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn open_node(&mut self, parent: NodeId, start: Start) -> NodeId {
+        let id = self.next;
+        self.next += 1;
+        if let Some(parent) = self.open.get_mut(&parent) {
+            parent.children.insert(id);
+        }
+        self.outbox.push(Event::NodeStarted(NodeStarted {
             id,
             parent,
             key: start.key,
@@ -174,25 +288,71 @@ impl<'parent> Node<'parent> {
             shielded: start.shielded,
             kind: Some(start.kind),
         }));
-        Node {
-            shared,
+        self.open.insert(
             id,
-            state: Mutex::new(State {
+            Open {
+                parent,
                 planned: start.planned,
-                ..State::default()
-            }),
+                used: HashSet::new(),
+                children: BTreeSet::new(),
+                bytes: None,
+                builds: None,
+            },
+        );
+        id
+    }
+
+    fn emit_not_run(&self, parent: NodeId, key: String, reason: NotRunReason) {
+        self.outbox.push(Event::NotRun(NotRun {
+            parent,
+            key,
+            reason: reason as i32,
+        }));
+    }
+}
+
+impl Drop for Tree {
+    fn drop(&mut self) {
+        if self.is_open(ROOT) {
+            let _ = self.abandon(ROOT);
+        }
+    }
+}
+
+pub struct Node<'parent> {
+    tree: Arc<Mutex<Tree>>,
+    id: NodeId,
+    finished: bool,
+    _parent: PhantomData<&'parent ()>,
+}
+
+impl Node<'static> {
+    pub fn root(outbox: Arc<Outbox>, stopped: Stopped, start: Start) -> Self {
+        Node {
+            tree: Arc::new(Mutex::new(Tree::new(outbox, stopped, start))),
+            id: ROOT,
             finished: false,
             _parent: PhantomData,
         }
     }
+}
 
-    pub fn id(&self) -> u64 {
+impl<'parent> Node<'parent> {
+    pub fn id(&self) -> NodeId {
         self.id
     }
 
     pub fn start(&self, start: Start) -> Node<'_> {
-        self.claim(&start.key);
-        Node::open(self.shared.clone(), self.id, start)
+        let id = self
+            .tree()
+            .start(self.id, start)
+            .unwrap_or_else(|misuse| panic!("{misuse}"));
+        Node {
+            tree: Arc::clone(&self.tree),
+            id,
+            finished: false,
+            _parent: PhantomData,
+        }
     }
 
     pub fn child(&self, key: impl Into<String>, kind: node_started::Kind) -> Node<'_> {
@@ -200,69 +360,32 @@ impl<'parent> Node<'parent> {
     }
 
     pub fn not_run(&self, key: impl Into<String>, reason: NotRunReason) {
-        let key = key.into();
-        self.claim(&key);
-        self.emit_not_run(key, reason);
+        self.tree()
+            .not_run(self.id, key, reason)
+            .unwrap_or_else(|misuse| panic!("{misuse}"));
     }
 
     pub fn progress(&self, progress: Progress) {
-        if !self.state().changed(&progress) {
-            return;
-        }
-        self.shared.emit(Event::NodeProgress(NodeProgress {
-            id: self.id,
-            progress: Some(progress),
-        }));
+        self.tree()
+            .progress(self.id, progress)
+            .expect("a borrowed node is running");
     }
 
-    pub fn warn(&self, mut diagnostic: Diagnostic) {
-        diagnostic.node = self.id;
-        self.shared.emit(Event::Diagnostic(diagnostic));
+    pub fn warn(&self, diagnostic: Diagnostic) {
+        self.tree()
+            .warn(self.id, diagnostic)
+            .expect("a borrowed node is running");
     }
 
     pub fn finish(mut self, ending: Ending) {
-        self.close(ending);
-    }
-
-    fn state(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn claim(&self, key: &str) {
-        let fresh = self.state().used.insert(key.to_string());
-        debug_assert!(fresh, "node {} already has a child keyed {key}", self.id);
-    }
-
-    fn emit_not_run(&self, key: String, reason: NotRunReason) {
-        self.shared.emit(Event::NotRun(NotRun {
-            parent: self.id,
-            key,
-            reason: reason as i32,
-        }));
-    }
-
-    fn close(&mut self, ending: Ending) {
-        let unreached: Vec<String> = {
-            let state = self.state();
-            state
-                .planned
-                .iter()
-                .filter(|key| !state.used.contains(*key))
-                .cloned()
-                .collect()
-        };
-        for key in unreached {
-            self.emit_not_run(key, NotRunReason::NotReached);
-        }
-        self.shared.emit(Event::NodeFinished(NodeFinished {
-            id: self.id,
-            status: ending.status as i32,
-            diagnostic: ending.diagnostic,
-            exit_code: ending.exit_code,
-            cancellation: ending.cancellation as i32,
-            result: ending.result,
-        }));
         self.finished = true;
+        self.tree()
+            .finish(self.id, ending)
+            .expect("a node's children finish before it can be moved");
+    }
+
+    fn tree(&self) -> MutexGuard<'_, Tree> {
+        self.tree.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -271,17 +394,16 @@ impl Drop for Node<'_> {
         if self.finished {
             return;
         }
-        let ending = match (self.shared.stopped)() {
-            Some(cause) => Ending::cancelled(cause),
-            None => Ending::new(Status::Failed),
-        };
-        self.close(ending);
+        let mut tree = self.tree();
+        if tree.is_open(self.id) {
+            let _ = tree.abandon(self.id);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     use super::*;
     use crate::v1::{Envelope, Plan, Step};
@@ -715,5 +837,105 @@ mod tests {
                 ("bad \u{fffd} byte".to_string(), Stream::Stderr)
             ]
         );
+    }
+
+    fn tree(stopped: Stopped) -> (Arc<Outbox>, Tree) {
+        let outbox = Arc::new(Outbox::new("request", || {}));
+        let tree = Tree::new(
+            outbox.clone(),
+            stopped,
+            Start::command("bootstrap", Command::default()),
+        );
+        (outbox, tree)
+    }
+
+    #[test]
+    fn a_tree_refuses_misuse_and_emits_nothing_for_it() {
+        let (outbox, mut tree) = tree(never());
+        let first = tree.start(ROOT, Start::new("step", step())).unwrap();
+        outbox.drain();
+
+        assert_eq!(
+            tree.start(ROOT, Start::new("step", step())),
+            Err(Misuse::DuplicateKey {
+                parent: ROOT,
+                key: "step".to_string()
+            })
+        );
+        assert_eq!(
+            tree.finish(ROOT, Ending::succeeded()),
+            Err(Misuse::ChildrenOpen {
+                id: ROOT,
+                child: first
+            })
+        );
+        assert_eq!(
+            tree.progress(99, output(b"x", Stream::Stdout)),
+            Err(Misuse::NotOpen(99))
+        );
+        assert_eq!(
+            tree.not_run(99, "later", NotRunReason::Skipped),
+            Err(Misuse::NotOpen(99))
+        );
+        tree.finish(first, Ending::succeeded()).unwrap();
+        outbox.drain();
+        assert_eq!(
+            tree.finish(first, Ending::succeeded()),
+            Err(Misuse::NotOpen(first))
+        );
+        assert!(outbox.drain().is_empty());
+    }
+
+    #[test]
+    fn abandoning_a_node_closes_its_subtree_children_first_with_the_cause() {
+        let (outbox, mut tree) = tree(Arc::new(|| Some(Cancellation::Interrupted)));
+        let plan = tree
+            .start(
+                ROOT,
+                Start::new("plan", node_started::Kind::Plan(Plan::default())),
+            )
+            .unwrap();
+        let fetch = tree.start(plan, Start::new("fetch", step())).unwrap();
+        let download = tree.start(fetch, Start::new("download", step())).unwrap();
+
+        tree.abandon(plan).unwrap();
+
+        let closed: Vec<(u64, Status, Cancellation)> = outbox
+            .drain()
+            .into_iter()
+            .filter_map(|envelope| match envelope.event {
+                Some(Event::NodeFinished(node)) => {
+                    Some((node.id, node.status(), node.cancellation()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            closed,
+            [
+                (download, Status::Cancelled, Cancellation::Interrupted),
+                (fetch, Status::Cancelled, Cancellation::Interrupted),
+                (plan, Status::Cancelled, Cancellation::Interrupted)
+            ]
+        );
+        assert!(tree.is_open(ROOT));
+    }
+
+    #[test]
+    fn dropping_a_tree_closes_every_node_it_left_open() {
+        let (outbox, mut tree) = tree(never());
+        let first = tree.start(ROOT, Start::new("step", step())).unwrap();
+        tree.start(first, Start::new("inner", step())).unwrap();
+
+        drop(tree);
+
+        let failed = outbox
+            .drain()
+            .into_iter()
+            .filter(|envelope| {
+                matches!(&envelope.event, Some(Event::NodeFinished(node)) if node.status() == Status::Failed)
+            })
+            .count();
+        assert_eq!(failed, 3);
     }
 }

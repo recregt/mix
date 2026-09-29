@@ -5,7 +5,9 @@ use mix_events::v1::{
     Bytes, Cancellation, Command, Diagnostic, Envelope, Log, NotRunReason, Plan, ProcessResult,
     Rollback, Status, Step, envelope::Event, node_finished, node_progress, node_started,
 };
-use mix_events::{Ending, Node, Outbox, Outcome, Start, Validated, Violation, validate};
+use mix_events::{
+    Ending, Node, NodeId, Outbox, Outcome, ROOT, Start, Tree, Validated, Violation, validate,
+};
 use proptest::prelude::*;
 
 struct Consumer {
@@ -528,7 +530,77 @@ fn indices(stream: &[Envelope], matches: impl Fn(&Event) -> bool) -> Vec<usize> 
         .collect()
 }
 
+#[derive(Debug, Clone)]
+enum TreeOp {
+    Start(prop::sample::Index, u8),
+    NotRun(prop::sample::Index, u8),
+    Progress(prop::sample::Index, u8),
+    Finish(prop::sample::Index),
+    Abandon(prop::sample::Index),
+}
+
+fn tree_op() -> impl Strategy<Value = TreeOp> {
+    prop_oneof![
+        3 => (any::<prop::sample::Index>(), 0u8..4).prop_map(|(at, key)| TreeOp::Start(at, key)),
+        1 => (any::<prop::sample::Index>(), 0u8..4).prop_map(|(at, key)| TreeOp::NotRun(at, key)),
+        2 => (any::<prop::sample::Index>(), any::<u8>()).prop_map(|(at, done)| TreeOp::Progress(at, done)),
+        2 => any::<prop::sample::Index>().prop_map(TreeOp::Finish),
+        1 => any::<prop::sample::Index>().prop_map(TreeOp::Abandon),
+    ]
+}
+
 proptest! {
+    #[test]
+    fn a_tree_driven_by_anything_yields_a_valid_stream_and_refuses_silently(
+        ops in prop::collection::vec(tree_op(), 0..80),
+        stopped in any::<bool>(),
+    ) {
+        let outbox = Arc::new(Outbox::new("request", || {}));
+        let cause = stopped.then_some(Cancellation::ClientGone);
+        let mut tree = Tree::new(
+            outbox.clone(),
+            Arc::new(move || cause),
+            Start::command("command", Command::default()),
+        );
+        let mut ids: Vec<NodeId> = vec![ROOT];
+        let mut seen = Vec::new();
+        for op in ops {
+            let refused = match op {
+                TreeOp::Start(at, key) => match tree.start(
+                    *at.get(&ids),
+                    Start::new(format!("k{key}"), node_started::Kind::Step(Step::default())),
+                ) {
+                    Ok(id) => {
+                        ids.push(id);
+                        false
+                    }
+                    Err(_) => true,
+                },
+                TreeOp::NotRun(at, key) => tree
+                    .not_run(*at.get(&ids), format!("k{key}"), NotRunReason::Skipped)
+                    .is_err(),
+                TreeOp::Progress(at, done) => tree
+                    .progress(
+                        *at.get(&ids),
+                        node_progress::Progress::Bytes(Bytes {
+                            done: u64::from(done),
+                            total: None,
+                        }),
+                    )
+                    .is_err(),
+                TreeOp::Finish(at) => tree.finish(*at.get(&ids), Ending::succeeded()).is_err(),
+                TreeOp::Abandon(at) => tree.abandon(*at.get(&ids)).is_err(),
+            };
+            let emitted = outbox.drain();
+            prop_assert!(!refused || emitted.is_empty(), "a refused operation emitted {:?}", emitted);
+            seen.extend(emitted);
+        }
+        drop(tree);
+        seen.extend(outbox.drain());
+
+        prop_assert!(validate(&seen).is_ok(), "{:?}", validate(&seen));
+    }
+
     #[test]
     fn a_consumer_at_any_pace_ends_with_every_node_s_latest_progress(shape in shape()) {
         let (stream, latest) = produced_with_latest(&shape);
