@@ -1,7 +1,7 @@
 import pytest
 
 from support.container import MIX_USERS_GROUP, create_user, daemon_trusts, group_members
-from support.mirror import MIRROR_TEST_USERS, NIX_CONF_CONTENT, bootstrap_root, mirror_args
+from support.mirror import MIRROR_TEST_USERS, bootstrap_root, mirror_args, nix_conf_content
 
 
 def test_bootstrap_accepts_mirror_as_a_cli_flag(container, mock_nix_server):
@@ -94,9 +94,11 @@ def test_bootstrap_auto_escalates_for_a_sudo_user(container, mock_nix_server, mi
     assert "pkgs = nixpkgs.legacyPackages.x86_64-linux;" in flake_contents
     assert "ciuser = home-manager.lib.homeManagerConfiguration {" in flake_contents
 
-    assert container.exec("cat", "/etc/nix/nix.conf", check=True).stdout == NIX_CONF_CONTENT
+    assert container.exec("cat", "/etc/nix/nix.conf", check=True).stdout == nix_conf_content(
+        mock_nix_server["url"], mirror_key
+    )
     assert group_members(container, MIX_USERS_GROUP) == ["ciuser"]
-    assert daemon_trusts(container, "ciuser")
+    assert not daemon_trusts(container, "ciuser")
 
     git_dir = f"{state_dir}/.git"
     assert container.path_exists(git_dir)

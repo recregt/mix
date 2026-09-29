@@ -53,7 +53,7 @@ def test_an_interrupted_install_stops_a_frozen_nix_then_puts_the_list_back(
 ):
     state_before = container.exec("cat", f"{STATE_DIR}/state", check=True).stdout
     proc = container.start_background(
-        "mix", "-v", "install", INSTALL_TEST_PACKAGE, *mirror_args(mock_nix_server, mirror_cache),
+        "mix", "-v", "install", INSTALL_TEST_PACKAGE,
         user=USER,
     )
     evaluation = _pid_of(container, NIX_EVALUATION)
@@ -79,7 +79,7 @@ def test_a_deadline_set_by_the_caller_rolls_the_install_back(
     state_before = container.exec("cat", f"{STATE_DIR}/state", check=True).stdout
     proc = container.start_background(
         "timeout", "-s", "TERM", "5",
-        "mix", "-v", "install", INSTALL_TEST_PACKAGE, *mirror_args(mock_nix_server, mirror_cache),
+        "mix", "-v", "install", INSTALL_TEST_PACKAGE,
         user=USER,
     )
     evaluation = _pid_of(container, NIX_EVALUATION)
@@ -125,7 +125,7 @@ def test_ctrl_z_pauses_nix_and_resuming_lets_the_install_finish(
     container, mock_nix_server, mirror_cache
 ):
     proc = container.start_background(
-        "mix", "install", INSTALL_TEST_PACKAGE, *mirror_args(mock_nix_server, mirror_cache),
+        "mix", "install", INSTALL_TEST_PACKAGE,
         user=USER,
     )
     evaluation = _pid_of(container, NIX_EVALUATION)

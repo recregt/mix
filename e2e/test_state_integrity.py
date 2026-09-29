@@ -2,7 +2,7 @@ import json
 import pathlib
 import pytest
 
-from support.mirror import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS, mirror_args, silent_mirror
+from support.mirror import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS, policy_mirror, silent_mirror
 
 USER = MIRROR_TEST_USERS[0]
 STATE_DIR = f"/home/{USER}/.local/state/mix"
@@ -17,7 +17,6 @@ def _install(container, mock_nix_server, mirror_cache, *flags):
         *flags,
         "install",
         INSTALL_TEST_PACKAGE,
-        *mirror_args(mock_nix_server, mirror_cache),
         user=USER,
     )
 
@@ -34,17 +33,13 @@ def _packages(raw: str) -> list[str]:
     return json.loads(raw)["packages"]
 
 
-def _kill_during(container, mock_nix_server, mirror_cache, marker: str, env=None, mirror=None) -> None:
-    args = mirror_args(mock_nix_server, mirror_cache)
-    if mirror is not None:
-        args[1] = mirror
+def _kill_during(container, marker: str, env=None) -> None:
     proc = container.start_background(
         "mix",
         "-vv",
         "--no-progress",
         "install",
         INSTALL_TEST_PACKAGE,
-        *args,
         env=env,
         user=USER,
     )
@@ -78,8 +73,8 @@ def test_the_active_generation_carries_the_exact_package_list(
 def test_a_command_killed_before_the_switch_is_undone_by_the_next_one(
     container, mock_nix_server, mirror_cache
 ):
-    with silent_mirror() as silent:
-        _kill_during(container, mock_nix_server, mirror_cache, "--dry-run", mirror=silent)
+    with silent_mirror() as silent, policy_mirror(container, silent):
+        _kill_during(container, "--dry-run")
     assert INSTALL_TEST_PACKAGE in _packages(_state(container))
     assert not container.path_exists(PACKAGE_BIN)
 
@@ -103,8 +98,6 @@ def test_a_command_killed_after_the_switch_leaves_a_consistent_profile(
 
     _kill_during(
         container,
-        mock_nix_server,
-        mirror_cache,
         "/tmp/stalled-git",
         env={"MIX_GIT_PATH": "/tmp/stalled-git"},
     )
@@ -182,7 +175,6 @@ def test_remove_restores_a_broken_package_list_before_removing(
         "mix",
         "remove",
         INSTALL_TEST_PACKAGE,
-        *mirror_args(mock_nix_server, mirror_cache),
         user=USER,
     )
 

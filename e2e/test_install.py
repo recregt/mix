@@ -6,7 +6,6 @@ from support.mirror import (
     INSTALL_TEST_PACKAGE,
     MIRROR_TEST_USERS,
     UNCACHED_TEST_PACKAGE,
-    mirror_args,
 )
 
 USER = MIRROR_TEST_USERS[0]
@@ -18,9 +17,8 @@ def test_install_adds_a_package_as_a_regular_user_with_no_sudo(
     container, mock_nix_server, mirror_cache
 ):
     state_dir = f"/home/{USER}/.local/state/mix"
-    mirror = mirror_args(mock_nix_server, mirror_cache)
 
-    result = container.exec("mix", "install", INSTALL_TEST_PACKAGE, *mirror, user=USER)
+    result = container.exec("mix", "install", INSTALL_TEST_PACKAGE, user=USER)
 
     assert result.returncode == 0, result.stderr
     assert INSTALL_TEST_PACKAGE in result.stdout.lower()
@@ -43,7 +41,7 @@ def test_install_adds_a_package_as_a_regular_user_with_no_sudo(
 
     # Re-running the same install is a no-op that still succeeds, so a script can install
     # unconditionally.
-    again = container.exec("mix", "install", INSTALL_TEST_PACKAGE, *mirror, user=USER)
+    again = container.exec("mix", "install", INSTALL_TEST_PACKAGE, user=USER)
     assert again.returncode == 0, again.stderr
     assert "already installed" in (again.stdout + again.stderr).lower()
     assert container.exec("cat", f"{state_dir}/state", check=True).stdout == state
@@ -57,7 +55,7 @@ def test_install_skips_a_package_that_is_already_installed(
     state_before = container.exec("cat", f"{state_dir}/state", check=True).stdout
 
     result = container.exec(
-        "mix", "install", "git", *mirror_args(mock_nix_server, mirror_cache), user=USER
+        "mix", "install", "git", user=USER
     )
 
     assert result.returncode == 0, result.stderr
@@ -68,10 +66,9 @@ def test_install_skips_a_package_that_is_already_installed(
 @pytest.mark.bootstrapped
 @pytest.mark.verbatim_output
 def test_install_is_script_friendly(container, mock_nix_server, mirror_cache):
-    mirror = mirror_args(mock_nix_server, mirror_cache)
 
     result = container.exec(
-        "mix", "install", "--json", INSTALL_TEST_PACKAGE, "git", *mirror, user=USER
+        "mix", "install", "--json", INSTALL_TEST_PACKAGE, "git", user=USER
     )
 
     # Stdout is the report and nothing else, so a script never has to parse prose.
@@ -81,11 +78,11 @@ def test_install_is_script_friendly(container, mock_nix_server, mirror_cache):
         "skipped": ["git"],
     }
 
-    again = container.exec("mix", "install", "--json", INSTALL_TEST_PACKAGE, *mirror, user=USER)
+    again = container.exec("mix", "install", "--json", INSTALL_TEST_PACKAGE, user=USER)
     assert again.returncode == 0, again.stderr
     assert json.loads(again.stdout) == {"added": [], "skipped": [INSTALL_TEST_PACKAGE]}
 
-    plain = container.exec("mix", "--no-progress", "install", INSTALL_TEST_PACKAGE, *mirror, user=USER)
+    plain = container.exec("mix", "--no-progress", "install", INSTALL_TEST_PACKAGE, user=USER)
     assert plain.returncode == 0, plain.stderr
     assert "already installed" in (plain.stdout + plain.stderr).lower()
     assert "\x1b[" not in plain.stderr, "nothing should be drawn in place"
@@ -110,13 +107,12 @@ def test_install_refuses_a_package_the_cache_cannot_serve(
     state_before = container.exec("cat", f"{state_dir}/state", check=True).stdout
     home_before = container.exec("cat", f"{state_dir}/home.nix", check=True).stdout
 
-    # The mirror is the only substituter here, and it was never given this package, so
+    # The policy's mirror is the only substituter here, and it was never given this package, so
     # installing it could only mean compiling it.
     result = container.exec(
         "mix",
         "install",
         UNCACHED_TEST_PACKAGE,
-        *mirror_args(mock_nix_server, mirror_cache),
         user=USER,
     )
 
@@ -124,8 +120,7 @@ def test_install_refuses_a_package_the_cache_cannot_serve(
     output = (result.stdout + result.stderr).lower()
     assert f"✗ {UNCACHED_TEST_PACKAGE}-" in output
     assert "must be built from source, which can take a long time" in output
-    assert f"to build it anyway, run: mix install {UNCACHED_TEST_PACKAGE} --mirror" in output
-    assert output.rstrip().endswith("--build")
+    assert f"to build it anyway, run: mix install {UNCACHED_TEST_PACKAGE} --build" in output
     assert "hex0" not in output
     assert "bash-" not in output
 
@@ -145,7 +140,6 @@ def test_install_with_the_build_flag_installs_a_cached_package_as_usual(
         "install",
         "--build",
         INSTALL_TEST_PACKAGE,
-        *mirror_args(mock_nix_server, mirror_cache),
         user=USER,
     )
 
@@ -165,7 +159,6 @@ def test_install_rolls_back_state_and_home_nix_when_activation_fails(
         "mix",
         "install",
         "doesnotexistinnixpkgs",
-        *mirror_args(mock_nix_server, mirror_cache),
         user=USER,
     )
 

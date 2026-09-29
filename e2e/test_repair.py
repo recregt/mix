@@ -1,7 +1,7 @@
 import pytest
 
 from support.container import MIX_USERS_GROUP, group_members
-from support.mirror import MIRROR_TEST_USERS, NIX_CONF_CONTENT, bootstrap_root
+from support.mirror import MIRROR_TEST_USERS, bootstrap_root, nix_conf_content
 
 DEFAULT_PROFILE_BIN = "/nix/var/nix/profiles/default/bin"
 SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -130,7 +130,9 @@ def test_repair_fixes_injected_drift(container, mock_nix_server):
     repair = container.exec("mix", "repair")
     assert repair.returncode == 0, repair.stderr
 
-    assert container.exec("cat", "/etc/nix/nix.conf").stdout == NIX_CONF_CONTENT
+    assert container.exec("cat", "/etc/nix/nix.conf").stdout == nix_conf_content(
+        mock_nix_server["url"]
+    )
     assert container.exec("getent", "passwd", "nixbld1").returncode == 0
     assert container.exec("systemctl", "is-active", "nix-daemon.socket").stdout.strip() == "active"
 
