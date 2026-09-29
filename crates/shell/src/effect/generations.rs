@@ -105,13 +105,13 @@ fn undo_activation(user: &InvokingUser, previous: Option<u64>, new: u64) -> Vec<
             user: user.clone(),
             generation: new,
         },
+        Action::ApplyGeneration { user: user.clone() },
     ]
 }
 
 async fn switch_to(
     user: &InvokingUser,
     generation: Option<u64>,
-    context: &ProfileContext,
     scope: &Scope,
 ) -> Result<(), Failure> {
     let link = profile_link(user);
@@ -126,15 +126,8 @@ async fn switch_to(
                 scope,
             )
             .await
-            .map_err(core_failure)?;
-            let target =
-                std::fs::canonicalize(profile_link(user)).map_err(|error| Failure::Io {
-                    path: profile_link(user),
-                    kind: error.kind(),
-                })?;
-            profile::activate_generation(user, &target.to_string_lossy(), &context.activity, scope)
-                .await
-                .map_err(profile_failure)
+            .map(|_| ())
+            .map_err(core_failure)
         }
         None => {
             let rm = trusted("rm")?;
@@ -163,6 +156,9 @@ pub async fn perform(
             expect,
         } => {
             let found = current(user);
+            if found == *generation {
+                return Some(Ok(Performed { undo: Vec::new() }));
+            }
             if found != *expect {
                 return Some(Err(Failure::Conflict {
                     subject: profile_link(user).display().to_string(),
@@ -177,7 +173,16 @@ pub async fn perform(
             }];
             match prepared(&undo) {
                 Err(failure) => Err(failure),
-                Ok(()) => switch_to(user, *generation, context, scope)
+                Ok(()) => switch_to(user, *generation, scope)
+                    .await
+                    .map(|()| Performed { undo }),
+            }
+        }
+        Action::ApplyGeneration { user } => {
+            let undo = vec![Action::ApplyGeneration { user: user.clone() }];
+            match prepared(&undo) {
+                Err(failure) => Err(failure),
+                Ok(()) => apply(user, context, scope)
                     .await
                     .map(|()| Performed { undo }),
             }
@@ -205,6 +210,19 @@ pub async fn perform(
         }
         _ => return None,
     })
+}
+
+async fn apply(
+    user: &InvokingUser,
+    context: &ProfileContext,
+    scope: &Scope,
+) -> Result<(), Failure> {
+    let Ok(target) = std::fs::canonicalize(profile_link(user)) else {
+        return Ok(());
+    };
+    profile::activate_generation(user, &target.to_string_lossy(), &context.activity, scope)
+        .await
+        .map_err(profile_failure)
 }
 
 async fn activate(
@@ -238,7 +256,7 @@ async fn activate(
     {
         let shielded = scope.shielded();
         if previous != Some(new) {
-            let _ = switch_to(user, previous, context, &shielded).await;
+            let _ = switch_to(user, previous, &shielded).await;
         }
         if !before.contains(&new) {
             let _ = run_as_reporting(
@@ -255,17 +273,23 @@ async fn activate(
             )
             .await;
         }
+        if previous != Some(new) {
+            let _ = apply(user, context, &shielded).await;
+        }
         return Err(profile_failure(error));
     }
     Ok(Performed {
         undo: if previous == Some(new) {
             Vec::new()
         } else if before.contains(&new) {
-            vec![Action::SwitchGeneration {
-                user: user.clone(),
-                generation: previous,
-                expect: Some(new),
-            }]
+            vec![
+                Action::SwitchGeneration {
+                    user: user.clone(),
+                    generation: previous,
+                    expect: Some(new),
+                },
+                Action::ApplyGeneration { user: user.clone() },
+            ]
         } else {
             undo_activation(user, previous, new)
         },
@@ -286,7 +310,7 @@ mod tests {
     }
 
     #[test]
-    fn undoing_an_activation_switches_back_then_deletes_the_new_generation() {
+    fn undoing_an_activation_switches_back_deletes_the_new_generation_then_applies() {
         let user = InvokingUser {
             uid: 1000,
             gid: 1000,
@@ -303,9 +327,10 @@ mod tests {
                     expect: Some(1)
                 },
                 Action::DeleteGeneration {
-                    user,
+                    user: user.clone(),
                     generation: 1
-                }
+                },
+                Action::ApplyGeneration { user }
             ]
         );
     }

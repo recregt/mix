@@ -802,11 +802,14 @@ impl World {
                     return done(if previous == Some(last) {
                         Vec::new()
                     } else {
-                        vec![Action::SwitchGeneration {
-                            user: user.clone(),
-                            generation: previous,
-                            expect: Some(last),
-                        }]
+                        vec![
+                            Action::SwitchGeneration {
+                                user: user.clone(),
+                                generation: previous,
+                                expect: Some(last),
+                            },
+                            Action::ApplyGeneration { user: user.clone() },
+                        ]
                     });
                 }
                 let generation = last.map_or(1, |last| last + 1);
@@ -823,6 +826,7 @@ impl World {
                         user: user.clone(),
                         generation,
                     },
+                    Action::ApplyGeneration { user: user.clone() },
                 ])
             }
             Action::DeleteGeneration { user, generation } => {
@@ -867,6 +871,9 @@ impl World {
                     generation: *expect,
                     expect: *generation,
                 }])
+            }
+            Action::ApplyGeneration { user } => {
+                done(vec![Action::ApplyGeneration { user: user.clone() }])
             }
             Action::RecordState { user } => {
                 let git = crate::paths::mix_state_dir(&user.home).join(".git");
@@ -1543,11 +1550,14 @@ mod tests {
         let back = world.apply(&activate).unwrap();
         assert_eq!(
             back.undo,
-            [Action::SwitchGeneration {
-                user: user.clone(),
-                generation: None,
-                expect: Some(1),
-            }]
+            [
+                Action::SwitchGeneration {
+                    user: user.clone(),
+                    generation: None,
+                    expect: Some(1),
+                },
+                Action::ApplyGeneration { user: user.clone() },
+            ]
         );
         assert_eq!(
             world.profile(&user).map(|p| p.generations.clone()),

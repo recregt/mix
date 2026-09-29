@@ -533,6 +533,7 @@ pub fn describe(action: &Action) -> (Operation, String) {
         Action::SwitchGeneration { user, .. } => (Operation::SwitchGeneration, user.name.clone()),
         Action::DeleteGeneration { user, .. } => (Operation::DeleteGeneration, user.name.clone()),
         Action::RecordState { user } => (Operation::RecordState, user.name.clone()),
+        Action::ApplyGeneration { user } => (Operation::ApplyGeneration, user.name.clone()),
         Action::Commit => (Operation::Commit, String::new()),
     }
 }

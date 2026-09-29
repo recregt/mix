@@ -223,6 +223,9 @@ pub enum Action {
         user: InvokingUser,
         generation: u64,
     },
+    ApplyGeneration {
+        user: InvokingUser,
+    },
     RecordState {
         user: InvokingUser,
     },
@@ -231,7 +234,10 @@ pub enum Action {
 
 impl Action {
     pub fn is_sync(&self) -> bool {
-        matches!(self, Action::DaemonReload | Action::RestartUnit { .. })
+        matches!(
+            self,
+            Action::DaemonReload | Action::RestartUnit { .. } | Action::ApplyGeneration { .. }
+        )
     }
 
     pub fn needs_loaded_units(&self) -> bool {
