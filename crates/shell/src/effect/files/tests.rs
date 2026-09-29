@@ -157,7 +157,11 @@ fn a_write_on_stale_facts_changes_nothing() {
         contents: bytes("ours"),
         mode: 0o644,
         owner: None,
-        expect: Expect::Present(FileId { dev: 0, ino: 0 }),
+        expect: Expect::Present(FileId {
+            dev: 0,
+            ino: 0,
+            born: None,
+        }),
     });
 
     assert!(matches!(absent, Err(Failure::Conflict { .. })));

@@ -9,6 +9,7 @@ pub type Owner = (u32, u32);
 pub struct FileId {
     pub dev: u64,
     pub ino: u64,
+    pub born: Option<(i64, u32)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -284,7 +285,11 @@ mod tests {
         Action::Restore {
             path: PathBuf::from(path),
             from: PathBuf::from(format!("{path}.mix-backup")),
-            expect: Expect::Present(FileId { dev: 1, ino: 2 }),
+            expect: Expect::Present(FileId {
+                dev: 1,
+                ino: 2,
+                born: None,
+            }),
         }
     }
 

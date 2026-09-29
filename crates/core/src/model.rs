@@ -9,7 +9,7 @@ use crate::action::{
 use crate::paths::DEFAULT_PROFILE_NIX_ENV;
 use crate::privilege::InvokingUser;
 
-pub const UNIT_DIR: &str = "/etc/systemd/system";
+pub use crate::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
 
 const ROOT: Owner = (0, 0);
 
@@ -181,7 +181,11 @@ impl World {
     fn fresh(&mut self) -> FileId {
         let ino = self.next_ino;
         self.next_ino += 1;
-        FileId { dev: 1, ino }
+        FileId {
+            dev: 1,
+            ino,
+            born: Some((ino as i64, 0)),
+        }
     }
 
     fn parent_is_dir(&self, path: &Path) -> Result<(), Failure> {

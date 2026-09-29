@@ -8,7 +8,8 @@ use mix_core::action::{
     Action, Expect, Fact, Failure, FileId, Kind, Outcome, Owner, PathFacts, Performed, Query,
 };
 use rustix::fs::{
-    self as sys, AtFlags, FileType, Gid, Mode, OFlags, RenameFlags, ResolveFlags, Stat, Uid,
+    self as sys, AtFlags, FileType, Gid, Mode, OFlags, RenameFlags, ResolveFlags, Statx,
+    StatxFlags, Uid,
 };
 use rustix::io::Errno;
 
@@ -40,15 +41,21 @@ fn conflict(path: &Path, expected: impl Into<String>, found: impl Into<String>) 
     }
 }
 
-fn id(stat: &Stat) -> FileId {
+const WANTED: StatxFlags = StatxFlags::BASIC_STATS.union(StatxFlags::BTIME);
+
+fn id(stat: &Statx) -> FileId {
+    let born = StatxFlags::from_bits_retain(stat.stx_mask)
+        .contains(StatxFlags::BTIME)
+        .then_some((stat.stx_btime.tv_sec, stat.stx_btime.tv_nsec));
     FileId {
-        dev: stat.st_dev,
-        ino: stat.st_ino,
+        dev: (u64::from(stat.stx_dev_major) << 32) | u64::from(stat.stx_dev_minor),
+        ino: stat.stx_ino,
+        born,
     }
 }
 
-fn kind(stat: &Stat) -> Kind {
-    match FileType::from_raw_mode(stat.st_mode) {
+fn kind(stat: &Statx) -> Kind {
+    match FileType::from_raw_mode(u32::from(stat.stx_mode)) {
         FileType::Directory => Kind::Directory,
         FileType::RegularFile => Kind::File,
         FileType::Symlink => Kind::Symlink,
@@ -56,12 +63,16 @@ fn kind(stat: &Stat) -> Kind {
     }
 }
 
-fn mode(stat: &Stat) -> u32 {
-    stat.st_mode & 0o7777
+fn mode(stat: &Statx) -> u32 {
+    u32::from(stat.stx_mode) & 0o7777
 }
 
-fn owner_of(stat: &Stat) -> Owner {
-    (stat.st_uid, stat.st_gid)
+fn owner_of(stat: &Statx) -> Owner {
+    (stat.stx_uid, stat.stx_gid)
+}
+
+fn statx_fd(fd: &OwnedFd) -> Result<Statx, Errno> {
+    sys::statx(fd, "", AtFlags::EMPTY_PATH, WANTED)
 }
 
 fn ids(owner: Owner) -> (Option<Uid>, Option<Gid>) {
@@ -141,8 +152,8 @@ impl Files {
         name
     }
 
-    fn stat(place: &Place, name: &OsStr) -> Result<Option<Stat>, Failure> {
-        match sys::statat(&place.dir, name, AtFlags::SYMLINK_NOFOLLOW) {
+    fn stat(place: &Place, name: &OsStr) -> Result<Option<Statx>, Failure> {
+        match sys::statx(&place.dir, name, AtFlags::SYMLINK_NOFOLLOW, WANTED) {
             Ok(stat) => Ok(Some(stat)),
             Err(Errno::NOENT) => Ok(None),
             Err(errno) => Err(io(&place.path, errno)),
@@ -182,7 +193,7 @@ impl Files {
             let (uid, gid) = ids(owner);
             sys::fchown(node, uid, gid).map_err(failed)?;
         }
-        Ok(id(&sys::fstat(node).map_err(failed)?))
+        Ok(id(&statx_fd(node).map_err(failed)?))
     }
 
     fn write_new(
@@ -221,7 +232,7 @@ impl Files {
         }
     }
 
-    fn expect_id(place: &Place, name: &OsStr, expect: FileId) -> Result<Stat, Failure> {
+    fn expect_id(place: &Place, name: &OsStr, expect: FileId) -> Result<Statx, Failure> {
         match Self::stat(place, name)? {
             Some(stat) if id(&stat) == expect => Ok(stat),
             Some(stat) => Err(conflict(
@@ -331,7 +342,7 @@ impl Files {
     fn set_mode(&mut self, path: &Path, mode: u32, expect: u32) -> Outcome {
         let place = self.place(path)?;
         let node = Self::open_node(&place, &place.name)?;
-        let stat = sys::fstat(&node).map_err(|errno| io(path, errno))?;
+        let stat = statx_fd(&node).map_err(|errno| io(path, errno))?;
         if self::mode(&stat) != expect {
             return Err(conflict(
                 path,
@@ -350,7 +361,7 @@ impl Files {
     fn set_owner(&mut self, path: &Path, owner: Owner, expect: Owner) -> Outcome {
         let place = self.place(path)?;
         let node = Self::open_node(&place, &place.name)?;
-        let stat = sys::fstat(&node).map_err(|errno| io(path, errno))?;
+        let stat = statx_fd(&node).map_err(|errno| io(path, errno))?;
         if owner_of(&stat) != expect {
             return Err(conflict(
                 path,
@@ -526,7 +537,7 @@ impl Files {
     fn contents(&self, path: &Path) -> Option<Vec<u8>> {
         let place = self.place(path).ok()?;
         let node = Self::open_node(&place, &place.name).ok()?;
-        if kind(&sys::fstat(&node).ok()?) != Kind::File {
+        if kind(&statx_fd(&node).ok()?) != Kind::File {
             return None;
         }
         let mut contents = Vec::new();
@@ -536,7 +547,7 @@ impl Files {
 }
 
 fn remove_tree_at(dir: &OwnedFd, name: &OsStr) -> Result<(), Errno> {
-    let stat = match sys::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW) {
+    let stat = match sys::statx(dir, name, AtFlags::SYMLINK_NOFOLLOW, WANTED) {
         Ok(stat) => stat,
         Err(Errno::NOENT) => return Ok(()),
         Err(errno) => return Err(errno),
