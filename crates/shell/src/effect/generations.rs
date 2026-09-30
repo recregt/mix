@@ -11,7 +11,7 @@ use crate::HostConfig;
 use crate::effect::exec::{run_as, run_as_reporting};
 use crate::effect::files::Prepared;
 use crate::effect::tools::trusted;
-use crate::profile::{self, BuildPolicy};
+use crate::profile;
 
 pub struct ProfileContext {
     pub mirror: Option<String>,
@@ -83,17 +83,6 @@ pub fn core_failure(error: mix_core::Error) -> Failure {
     }
 }
 
-fn profile_failure(error: profile::Error) -> Failure {
-    match error {
-        profile::Error::Core(error) => core_failure(error),
-        other => Failure::CommandFailed {
-            program: "nix build".to_string(),
-            status: None,
-            output_tail: other.to_string(),
-        },
-    }
-}
-
 fn undo_activation(user: &InvokingUser, previous: Option<u64>, new: u64) -> Vec<Action> {
     vec![
         Action::SwitchGeneration {
@@ -146,10 +135,7 @@ pub async fn perform(
     prepared: &mut Prepared<'_>,
 ) -> Option<Outcome> {
     Some(match action {
-        Action::ActivateProfile {
-            user,
-            allow_source_builds,
-        } => activate(user, *allow_source_builds, context, scope, prepared).await,
+        Action::ActivateProfile { user } => activate(user, context, scope, prepared).await,
         Action::SwitchGeneration {
             user,
             generation,
@@ -222,12 +208,11 @@ async fn apply(
     };
     profile::activate_generation(user, &target.to_string_lossy(), &context.activity, scope)
         .await
-        .map_err(profile_failure)
+        .map_err(core_failure)
 }
 
 async fn activate(
     user: &InvokingUser,
-    allow_source_builds: bool,
     context: &ProfileContext,
     scope: &Scope,
     prepared: &mut Prepared<'_>,
@@ -236,23 +221,12 @@ async fn activate(
     let before = existing(user);
     let predicted = before.iter().max().map_or(1, |last| last + 1);
     prepared(&undo_activation(user, previous, predicted))?;
-    let policy = if allow_source_builds {
-        BuildPolicy::AllowSource
-    } else {
-        BuildPolicy::CacheOnly
-    };
-    let generation = profile::switch(
-        user,
-        context.mirror.as_deref(),
-        &context.activity,
-        scope,
-        policy,
-    )
-    .await
-    .map_err(profile_failure)?;
+    let generation = profile::switch(user, context.mirror.as_deref(), &context.activity, scope)
+        .await
+        .map_err(core_failure)?;
     let new = current(user).unwrap_or(predicted);
     if let Err(error) =
-        profile::activate_generation(user, &generation, &context.activity, scope).await
+        profile::activate_generation(user, &generation, &context.activity, &scope.shielded()).await
     {
         let shielded = scope.shielded();
         if previous != Some(new) {
@@ -276,7 +250,7 @@ async fn activate(
         if previous != Some(new) {
             let _ = apply(user, context, &shielded).await;
         }
-        return Err(profile_failure(error));
+        return Err(core_failure(error));
     }
     Ok(Performed {
         undo: if previous == Some(new) {

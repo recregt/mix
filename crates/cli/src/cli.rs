@@ -49,10 +49,6 @@ pub enum Command {
         /// Report the result as JSON on stdout, for scripts
         #[arg(long)]
         json: bool,
-
-        /// Compile packages the binary cache cannot provide, instead of refusing
-        #[arg(long)]
-        build: bool,
     },
 
     /// Remove packages from your home-manager profile
@@ -214,11 +210,6 @@ mod tests {
     #[test]
     fn remove_json_output_implies_plain_output() {
         assert!(!parse(&["mix", "remove", "--json", "ripgrep"]).draws_progress());
-    }
-
-    #[test]
-    fn remove_has_no_build_flag() {
-        assert!(Cli::try_parse_from(["mix", "remove", "--build", "ripgrep"]).is_err());
     }
 
     #[test]

@@ -74,7 +74,7 @@ def test_a_command_killed_before_the_switch_is_undone_by_the_next_one(
     container, mock_nix_server, mirror_cache
 ):
     with silent_mirror() as silent, policy_mirror(container, silent):
-        _kill_during(container, "--dry-run")
+        _kill_during(container, "--print-out-paths")
     assert INSTALL_TEST_PACKAGE in _packages(_state(container))
     assert not container.path_exists(PACKAGE_BIN)
 

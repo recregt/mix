@@ -1,8 +1,4 @@
-//! Reading and writing the files and directories `mix` declares.
-//!
-//! Every write here is one a reader could be interrupted in the middle of, so the ones that
-//! replace a file do it by rename: a destination is either what it was or what it is being made
-//! into, never half of either.
+//! Looking at the files and directories `mix` declares, and handing a tree to its owner.
 
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -10,7 +6,6 @@ use std::path::{Path, PathBuf};
 use mix_core::{Error, Result};
 use nix::fcntl::{AT_FDCWD, AtFlags};
 use nix::unistd::{Gid, Uid, fchownat};
-use tokio::io::AsyncWriteExt;
 
 pub async fn exists(path: impl AsRef<Path>) -> bool {
     tokio::fs::try_exists(path.as_ref()).await.unwrap_or(false)
@@ -26,86 +21,6 @@ pub async fn is_dir(path: impl AsRef<Path>) -> bool {
     tokio::fs::metadata(path.as_ref())
         .await
         .is_ok_and(|meta| meta.is_dir())
-}
-
-pub async fn write_atomic(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) -> Result<()> {
-    let path = path.as_ref();
-    tracing::debug!("writing file atomically: {}", path.display());
-
-    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
-    let dir = dir.unwrap_or_else(|| Path::new("."));
-    let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-    let temp_path = dir.join(format!(
-        ".{file_name}.mix-tmp-{}-{}",
-        std::process::id(),
-        next_temp_nonce()
-    ));
-
-    let guard = TempFileGuard::new(temp_path.clone());
-    write_and_sync(&temp_path, contents.as_ref()).await?;
-
-    tokio::fs::rename(&temp_path, path)
-        .await
-        .map_err(|e| io_error(path, e))?;
-    guard.disarm();
-
-    sync_dir(dir).await;
-    Ok(())
-}
-
-fn next_temp_nonce() -> u64 {
-    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-}
-
-struct TempFileGuard {
-    path: std::path::PathBuf,
-    armed: bool,
-}
-
-impl TempFileGuard {
-    fn new(path: std::path::PathBuf) -> Self {
-        Self { path, armed: true }
-    }
-
-    fn disarm(mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for TempFileGuard {
-    fn drop(&mut self) {
-        if self.armed {
-            let _ = std::fs::remove_file(&self.path);
-        }
-    }
-}
-
-/// Flushes a directory entry so a rename into it survives a power loss.
-pub(crate) async fn sync_dir(dir: &Path) {
-    if let Ok(handle) = tokio::fs::File::open(dir).await {
-        let _ = handle.sync_all().await;
-    }
-}
-
-async fn write_and_sync(path: &Path, contents: &[u8]) -> Result<()> {
-    let mut file = tokio::fs::File::create(path)
-        .await
-        .map_err(|e| io_error(path, e))?;
-    file.write_all(contents)
-        .await
-        .map_err(|e| io_error(path, e))?;
-    file.sync_all().await.map_err(|e| io_error(path, e))
-}
-
-pub async fn remove_file(path: impl AsRef<Path>) -> Result<()> {
-    let path = path.as_ref();
-    tracing::debug!("removing file: {}", path.display());
-    match tokio::fs::remove_file(path).await {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(io_error(path, e)),
-    }
 }
 
 /// Gives everything under `root` the same owner, without following a symlink out of it.
@@ -158,102 +73,6 @@ mod tests {
     #[tokio::test]
     async fn path_exists_false_when_missing() {
         assert!(!exists("/does/not/exist/mix-test").await);
-    }
-
-    #[tokio::test]
-    async fn write_atomic_writes_the_full_contents() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("nix.conf");
-
-        write_atomic(&path, b"hello").await.unwrap();
-
-        assert_eq!(std::fs::read(&path).unwrap(), b"hello");
-    }
-
-    #[tokio::test]
-    async fn write_atomic_replaces_existing_content() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("nix.conf");
-        std::fs::write(&path, b"old").unwrap();
-
-        write_atomic(&path, b"new").await.unwrap();
-
-        assert_eq!(std::fs::read(&path).unwrap(), b"new");
-    }
-
-    #[tokio::test]
-    async fn write_atomic_leaves_no_temp_file_behind_on_success() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("nix.conf");
-
-        write_atomic(&path, b"hello").await.unwrap();
-
-        let entries: Vec<_> = std::fs::read_dir(dir.path())
-            .unwrap()
-            .map(|e| e.unwrap().file_name())
-            .collect();
-        assert_eq!(entries, vec![std::ffi::OsString::from("nix.conf")]);
-    }
-
-    #[tokio::test]
-    async fn write_atomic_does_not_touch_the_destination_when_the_write_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("missing-subdir").join("nix.conf");
-
-        assert!(write_atomic(&path, b"hello").await.is_err());
-
-        assert!(!path.exists());
-    }
-
-    #[tokio::test]
-    async fn write_atomic_temp_names_do_not_collide_under_concurrency() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("nix.conf");
-
-        let tasks: Vec<_> = (0..20)
-            .map(|i| {
-                let path = path.clone();
-                tokio::spawn(async move {
-                    write_atomic(&path, format!("content-{i}").into_bytes()).await
-                })
-            })
-            .collect();
-        for task in tasks {
-            task.await.unwrap().unwrap();
-        }
-
-        assert!(path.exists());
-        let entries: Vec<_> = std::fs::read_dir(dir.path())
-            .unwrap()
-            .map(|e| e.unwrap().file_name())
-            .collect();
-        assert_eq!(
-            entries,
-            vec![std::ffi::OsString::from("nix.conf")],
-            "no orphaned or colliding temp file should remain"
-        );
-    }
-
-    #[test]
-    fn temp_file_guard_removes_the_file_when_dropped_while_armed() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("leftover");
-        std::fs::write(&path, b"x").unwrap();
-
-        drop(TempFileGuard::new(path.clone()));
-
-        assert!(!path.exists());
-    }
-
-    #[test]
-    fn temp_file_guard_leaves_the_file_when_disarmed() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("kept");
-        std::fs::write(&path, b"x").unwrap();
-
-        TempFileGuard::new(path.clone()).disarm();
-
-        assert!(path.exists());
     }
 
     #[tokio::test]

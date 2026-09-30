@@ -1,7 +1,6 @@
 use mix_cli::explain;
 use mix_core::Category;
 use mix_shell::ops::doctor::HealthReport;
-use mix_shell::profile::Error as ActivationError;
 use mix_shell::profile::change::Error as InstallError;
 use mix_shell::target::{Error as TargetError, Finding, Unfixable};
 
@@ -12,28 +11,6 @@ fn main() {
     divan::main();
 }
 
-fn refused(n: usize) -> Vec<String> {
-    (0..n).map(|i| format!("package-{i}-1.2.3")).collect()
-}
-
-#[divan::bench(args = [1, 8, 64])]
-fn explain_a_refused_source_build(bencher: divan::Bencher, n: usize) {
-    let error = anyhow::Error::from(InstallError::Activation(
-        ActivationError::SourceBuildRequired {
-            packages: Some(refused(n)),
-        },
-    ));
-
-    bencher.bench(|| {
-        explain::install::explain(
-            divan::black_box(&error),
-            &PACKAGES,
-            "mix install package --build",
-        )
-        .message()
-    });
-}
-
 /// The cheapest shape: a raw error from the bottom of the tool, named for the command that hit
 /// it.
 #[divan::bench]
@@ -42,14 +19,7 @@ fn explain_a_held_lock(bencher: divan::Bencher) {
         path: "/var/lib/mix/lock".into(),
     }));
 
-    bencher.bench(|| {
-        explain::install::explain(
-            divan::black_box(&error),
-            &PACKAGES,
-            "mix install package --build",
-        )
-        .message()
-    });
+    bencher.bench(|| explain::install::explain(divan::black_box(&error), &PACKAGES).message());
 }
 
 /// The one that is written per artifact rather than per run: `mix repair` prints one of these

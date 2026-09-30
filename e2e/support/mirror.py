@@ -24,7 +24,6 @@ INSTALL_TEST_PACKAGE = "hello"
 
 # A package deliberately left out of the mirror's cache: installing it against that mirror can
 # only be done by compiling it.
-UNCACHED_TEST_PACKAGE = "cowsay"
 
 NIX_ARGS = ["--extra-experimental-features", "nix-command flakes"]
 
@@ -302,7 +301,10 @@ class _MirrorHandler(http.server.SimpleHTTPRequestHandler):
         pass
 
     def copyfile(self, source, outputfile):
-        self.connection.sendfile(source)
+        try:
+            self.connection.sendfile(source)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
 
 
 def start_mirror_server() -> http.server.ThreadingHTTPServer:

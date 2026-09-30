@@ -1,14 +1,13 @@
 //! Running another program, and following what it writes while it runs.
 //!
 //! Everything `mix` cannot do itself is done by a process: nix, systemd, the user and group
-//! tools, git. A command either answers a question — [`status_as`], [`plan_as`] — or does work
+//! tools, git. A command either answers a question — [`status_as`] — or does work
 //! worth watching, and a failure is named by the command line that produced it.
 
 pub mod output;
 
 use std::sync::Arc;
 
-use mix_core::nix_plan::DryRun;
 use mix_core::paths::{DEFAULT_PROFILE_BIN, HOME_MANAGER_PROFILE_NAME, nix_profiles_dir};
 use mix_core::privilege::InvokingUser;
 use mix_core::{ActivityReporter, Result};
@@ -98,41 +97,6 @@ pub async fn run_as_reporting(
     Ok(stdout_of(&command.run(scope).await.map_err(exec_error)?))
 }
 
-pub async fn run_as_with_input(
-    user: &InvokingUser,
-    program: &str,
-    args: &[&str],
-    input: Vec<u8>,
-    scope: &Scope,
-) -> Result<String> {
-    let output = command_as(user, program, args)
-        .input(input)
-        .run(scope)
-        .await
-        .map_err(exec_error)?;
-    Ok(stdout_of(&output))
-}
-
-/// Runs a nix dry run as `user` and reads back the plan it printed.
-///
-/// A dry run answers a question instead of doing work: it prints its plan and exits, so its
-/// output is read once it is complete rather than streamed, and it is left in plain text so a
-/// failure still reads as prose.
-pub async fn plan_as(
-    user: &InvokingUser,
-    program: &str,
-    args: &[&str],
-    scope: &Scope,
-) -> Result<DryRun> {
-    let output = command_as(user, program, args)
-        .run(scope)
-        .await
-        .map_err(exec_error)?;
-    let stderr = String::from_utf8(output.stderr)
-        .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned());
-    Ok(DryRun::new(stderr))
-}
-
 pub async fn status_as(
     user: &InvokingUser,
     program: &str,
@@ -173,102 +137,6 @@ mod tests {
             name: "mix-test".to_string(),
             home: std::env::temp_dir(),
         }
-    }
-
-    #[tokio::test]
-    async fn plan_as_reads_back_the_derivations_a_dry_run_would_build() {
-        let plan = plan_as(
-            &current_user(),
-            "/bin/sh",
-            &[
-                "-c",
-                "printf 'this derivation will be built:\\n  \
-                 /nix/store/00000000000000000000000000000001-hello.drv\\n' >&2",
-            ],
-            &mix_exec::Scope::root(),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(
-            plan.plan().unwrap().to_build(),
-            ["/nix/store/00000000000000000000000000000001-hello.drv"]
-        );
-    }
-
-    #[tokio::test]
-    async fn plan_as_hands_back_a_plan_it_could_not_read_rather_than_an_empty_one() {
-        let plan = plan_as(
-            &current_user(),
-            "/bin/sh",
-            &[
-                "-c",
-                "printf 'these 1 derivations are going to be built:\\n  \
-                 /nix/store/00000000000000000000000000000001-hello.drv\\n' >&2",
-            ],
-            &mix_exec::Scope::root(),
-        )
-        .await
-        .unwrap();
-
-        assert!(matches!(
-            plan.plan(),
-            Err(mix_core::nix_plan::PlanError::Unannounced(_))
-        ));
-    }
-
-    #[tokio::test]
-    async fn input_larger_than_a_pipe_buffer_is_written_while_the_output_is_read() {
-        let input = vec![b'x'; 1024 * 1024];
-
-        let output = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            run_as_with_input(
-                &current_user(),
-                "/bin/cat",
-                &[],
-                input.clone(),
-                &mix_exec::Scope::root(),
-            ),
-        )
-        .await
-        .expect("writing stdin must not wait for the output to be read")
-        .unwrap();
-
-        assert_eq!(output.len(), input.len());
-    }
-
-    #[tokio::test]
-    async fn a_command_that_ignores_its_input_still_finishes() {
-        let output = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            run_as_with_input(
-                &current_user(),
-                "/bin/sh",
-                &["-c", "echo done"],
-                vec![b'x'; 1024 * 1024],
-                &mix_exec::Scope::root(),
-            ),
-        )
-        .await
-        .expect("a reader that never reads must not hang the writer")
-        .unwrap();
-
-        assert_eq!(output, "done");
-    }
-
-    #[tokio::test]
-    async fn plan_as_reports_a_dry_run_that_failed_rather_than_an_empty_plan() {
-        let err = plan_as(
-            &current_user(),
-            "/bin/sh",
-            &["-c", "echo \"error: attribute 'nope' missing\" >&2; exit 1"],
-            &mix_exec::Scope::root(),
-        )
-        .await
-        .unwrap_err();
-
-        assert!(err.to_string().contains("attribute 'nope' missing"));
     }
 
     #[tokio::test]

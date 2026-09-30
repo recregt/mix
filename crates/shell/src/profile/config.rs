@@ -1,13 +1,12 @@
+use mix_core::change::render_home;
 use mix_core::identity::MIX_USERS_GROUP;
 use mix_core::models::UserConfig;
-use mix_core::paths::{GENERATION_STATE_FILE, HOME_NIX, STATE_FILE, mix_state_dir};
+use mix_core::paths::{HOME_NIX, mix_state_dir};
 use mix_core::privilege::InvokingUser;
 use mix_core::state::StateManifest;
 use mix_core::system::{Arch, Os};
 use mix_nixgen::lock::{self, LockedInput, NarHash};
-use mix_nixgen::{
-    CopyIntoGeneration, FileName, FlakeConfig, HomeModule, InvalidInput, Rev, StateVersion, System,
-};
+use mix_nixgen::{FlakeConfig, Rev, System};
 use mix_pins::{
     HOME_MANAGER_LAST_MODIFIED, HOME_MANAGER_NAR_HASH, HOME_MANAGER_REV, NIXPKGS_LAST_MODIFIED,
     NIXPKGS_NAR_HASH, NIXPKGS_REV,
@@ -29,13 +28,6 @@ const HOME_MANAGER_LOCK: LockedInput = LockedInput {
     last_modified: HOME_MANAGER_LAST_MODIFIED,
 };
 
-const HOME_MANAGER_STATE_VERSION: StateVersion = StateVersion::new_static("24.05");
-
-const STATE_INTO_GENERATION: CopyIntoGeneration = CopyIntoGeneration {
-    source: FileName::new_static(STATE_FILE),
-    target: FileName::new_static(GENERATION_STATE_FILE),
-};
-
 fn render_lock() -> String {
     lock::render(NIXPKGS_LOCK, HOME_MANAGER_LOCK)
 }
@@ -47,18 +39,6 @@ fn nix_system(arch: Arch, os: Os) -> System {
         (Arch::X86_64, Os::MacOs) => System::X86_64Darwin,
         (Arch::Aarch64, Os::MacOs) => System::Aarch64Darwin,
     }
-}
-
-pub(crate) fn render_home<S: AsRef<str>>(
-    user: &InvokingUser,
-    packages: impl IntoIterator<Item = S>,
-) -> Result<String, InvalidInput> {
-    Ok(
-        HomeModule::new(&user.name, &user.home, HOME_MANAGER_STATE_VERSION)?
-            .copy_into_generation(STATE_INTO_GENERATION)
-            .packages(packages)?
-            .render(),
-    )
 }
 
 pub fn user_config_for(user: InvokingUser) -> Option<UserConfig> {
@@ -99,6 +79,9 @@ pub fn existing_user_config_for(user: InvokingUser) -> Option<UserConfig> {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+
+    use mix_core::change::HOME_MANAGER_STATE_VERSION;
+    use mix_core::paths::STATE_FILE;
 
     use super::*;
 
@@ -165,27 +148,6 @@ mod tests {
         );
         assert_eq!(types["packages"], "listOf");
         assert_eq!(types["extraBuilderCommands"], "separatedString");
-    }
-
-    #[test]
-    fn render_home_includes_every_requested_package() {
-        let home = tempfile::tempdir().unwrap();
-        let rendered = render_home(&sample_user(home.path()), ["git", "ripgrep"]).unwrap();
-        assert!(rendered.contains("git"));
-        assert!(rendered.contains("ripgrep"));
-    }
-
-    #[test]
-    fn render_home_copies_the_package_list_into_the_generation() {
-        let home = tempfile::tempdir().unwrap();
-        let rendered = render_home(&sample_user(home.path()), ["git"]).unwrap();
-        assert!(rendered.contains(r#"extraBuilderCommands = "cp ${./state} $out/mix-state";"#));
-    }
-
-    #[test]
-    fn render_home_rejects_an_invalid_package_name() {
-        let home = tempfile::tempdir().unwrap();
-        assert!(render_home(&sample_user(home.path()), ["not a valid ident"]).is_err());
     }
 
     #[test]

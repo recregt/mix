@@ -252,12 +252,6 @@ fn failure_to_wire(failure: Failure) -> proto::Failure {
     let detail = |detail: String| proto::Detail { detail };
     let kind = match failure {
         Failure::Core(error) => Kind::Core(core_to_wire(error)),
-        Failure::SourceBuildRequired { packages } => {
-            Kind::SourceBuildRequired(proto::SourceBuildRequired {
-                named: packages.is_some(),
-                packages: packages.unwrap_or_default(),
-            })
-        }
         Failure::Network(message) => Kind::Network(detail(message)),
         Failure::Integrity { artifact, detail } => {
             Kind::Integrity(proto::Integrity { artifact, detail })
@@ -317,9 +311,6 @@ fn failure_from_wire(failure: proto::Failure) -> Result<Failure, Malformed> {
     Ok(
         match failure.kind.ok_or_else(|| missing("a failure's kind"))? {
             Kind::Core(error) => Failure::Core(core_from_wire(error)?),
-            Kind::SourceBuildRequired(required) => Failure::SourceBuildRequired {
-                packages: required.named.then_some(required.packages),
-            },
             Kind::Network(detail) => Failure::Network(detail.detail),
             Kind::Integrity(integrity) => Failure::Integrity {
                 artifact: integrity.artifact,
@@ -623,13 +614,6 @@ mod tests {
     #[test]
     fn every_failure_kind_survives_the_wire() {
         let failures = vec![
-            Failure::SourceBuildRequired {
-                packages: Some(vec!["cowsay-3.8.4".into()]),
-            },
-            Failure::SourceBuildRequired { packages: None },
-            Failure::SourceBuildRequired {
-                packages: Some(Vec::new()),
-            },
             Failure::Network("connection reset".into()),
             Failure::Integrity {
                 artifact: "nix archive".into(),

@@ -83,9 +83,6 @@ pub struct RepairReport {
 #[derive(Debug)]
 pub enum Failure {
     Core(mix_core::Error),
-    SourceBuildRequired {
-        packages: Option<Vec<String>>,
-    },
     Network(String),
     Integrity {
         artifact: String,

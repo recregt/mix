@@ -48,13 +48,9 @@ pub async fn run() -> ExitCode {
     // into a sentence.
     let explain: Box<dyn Fn(&anyhow::Error) -> Diagnostic + '_> = match &cli.command {
         Command::Bootstrap { .. } => Box::new(explain::bootstrap::explain),
-        Command::Install { packages, .. } => Box::new(|error| {
-            explain::install::explain(
-                error,
-                packages,
-                &explain::install::rerun_with_build(std::env::args()),
-            )
-        }),
+        Command::Install { packages, .. } => {
+            Box::new(|error| explain::install::explain(error, packages))
+        }
         Command::Remove { packages, .. } => {
             Box::new(|error| explain::remove::explain(error, packages))
         }
@@ -78,11 +74,7 @@ pub async fn run() -> ExitCode {
             )
             .await
         }
-        Command::Install {
-            packages,
-            json,
-            build,
-        } => commands::install::run(packages, *json, *build).await,
+        Command::Install { packages, json } => commands::install::run(packages, *json).await,
         Command::Remove { packages, json } => commands::remove::run(packages, *json).await,
         Command::Doctor => commands::doctor::run(cli.verbose).await,
         Command::Repair | Command::Worker | Command::HomeFiles { .. } => {

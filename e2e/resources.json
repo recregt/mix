@@ -84,11 +84,6 @@
     "cpu_cores": 0.707,
     "seconds": 9.2
   },
-  "test_install.py::test_install_refuses_a_package_the_cache_cannot_serve": {
-    "peak_bytes": 598691840,
-    "cpu_cores": 0.409,
-    "seconds": 11.8
-  },
   "test_install.py::test_install_rolls_back_state_and_home_nix_when_activation_fails": {
     "peak_bytes": 222347264,
     "cpu_cores": 0.157,
@@ -98,11 +93,6 @@
     "peak_bytes": 28676096,
     "cpu_cores": 0.081,
     "seconds": 2.9
-  },
-  "test_install.py::test_install_with_the_build_flag_installs_a_cached_package_as_usual": {
-    "peak_bytes": 611508224,
-    "cpu_cores": 0.678,
-    "seconds": 8.2
   },
   "test_interruption.py::test_a_store_left_half_rolled_back_is_provisioned_again": {
     "peak_bytes": 314417152,
@@ -163,16 +153,6 @@
     "peak_bytes": 231550976,
     "cpu_cores": 0.259,
     "seconds": 8.8
-  },
-  "test_nix_contract.py::test_derivations_are_described_the_way_mix_reads_them": {
-    "peak_bytes": 230641664,
-    "cpu_cores": 0.249,
-    "seconds": 10.5
-  },
-  "test_nix_contract.py::test_the_dry_run_plan_is_printed_the_way_mix_reads_it": {
-    "peak_bytes": 231034880,
-    "cpu_cores": 0.282,
-    "seconds": 8.7
   },
   "test_remove.py::test_remove_cannot_be_run_as_root": {
     "peak_bytes": 2212065280,

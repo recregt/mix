@@ -1,7 +1,6 @@
 use mix_rpc::{Failure, Host, RepairReport, TargetFailure, Unfixable};
 use mix_shell::ops::bootstrap::{Error as BootstrapError, Host as AppHost};
 use mix_shell::ops::repair::RepairReport as AppReport;
-use mix_shell::profile::Error as ActivationError;
 use mix_shell::target::{Error as TargetError, Unfixable as AppUnfixable};
 
 const NOT_ROOT: &str = "carry out privileged operations";
@@ -9,10 +8,6 @@ const NOT_ROOT: &str = "carry out privileged operations";
 pub fn failure_from_bootstrap(error: BootstrapError) -> Failure {
     match error {
         BootstrapError::Core(error) => Failure::Core(error),
-        BootstrapError::Activation(ActivationError::Core(error)) => Failure::Core(error),
-        BootstrapError::Activation(ActivationError::SourceBuildRequired { packages }) => {
-            Failure::SourceBuildRequired { packages }
-        }
         BootstrapError::Network(error) => Failure::Network(error.to_string()),
         BootstrapError::Integrity { artifact, detail } => Failure::Integrity { artifact, detail },
         BootstrapError::UnsupportedTarget(target) => Failure::UnsupportedTarget(target),
@@ -63,9 +58,6 @@ pub fn failure_from_bootstrap(error: BootstrapError) -> Failure {
 pub fn bootstrap_error_from(failure: Failure) -> BootstrapError {
     match failure {
         Failure::Core(error) => BootstrapError::Core(error),
-        Failure::SourceBuildRequired { packages } => {
-            BootstrapError::Activation(ActivationError::SourceBuildRequired { packages })
-        }
         Failure::Network(message) => BootstrapError::Network(message.into()),
         Failure::Integrity { artifact, detail } => BootstrapError::Integrity { artifact, detail },
         Failure::UnsupportedTarget(target) => BootstrapError::UnsupportedTarget(target),
@@ -164,9 +156,6 @@ mod tests {
         vec![
             BootstrapError::Core(mix_core::Error::Locked {
                 path: "/var/lib/mix/lock".into(),
-            }),
-            BootstrapError::Activation(ActivationError::SourceBuildRequired {
-                packages: Some(vec!["cowsay-3.8.4".into()]),
             }),
             BootstrapError::Network("connection reset".into()),
             BootstrapError::Integrity {

@@ -1415,8 +1415,8 @@ version = "0.1.0"
 dependencies = [
  "codspeed-divan-compat",
  "generativity",
- "memchr",
  "mix-events",
+ "mix-nixgen",
  "proptest",
  "serde",
  "serde_json",

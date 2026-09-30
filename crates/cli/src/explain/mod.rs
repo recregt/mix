@@ -18,7 +18,6 @@ pub mod install;
 pub mod remove;
 pub mod repair;
 
-mod activation;
 pub(crate) mod change;
 pub mod target;
 
@@ -68,14 +67,15 @@ impl Diagnostic {
         }
     }
 
-    /// The whole message, hint included, as one block for [`mix_ui`] to print.
-    ///
-    /// The hint is a line of its own: the printer indents continuation lines under the marker, so
-    /// a failure reads as one block rather than as a line and an afterthought.
-    pub(crate) fn written(text: String, summary_len: usize) -> Self {
+    pub(crate) fn hinting_parts(summary: &str, hint: &[&str]) -> Self {
+        let hint_len: usize = hint.iter().map(|part| part.len()).sum();
+        let mut text = String::with_capacity(summary.len() + 1 + hint_len);
+        text.push_str(summary);
+        text.push('\n');
+        hint.iter().for_each(|part| text.push_str(part));
         Self {
             text: text.into(),
-            summary_len,
+            summary_len: summary.len(),
         }
     }
 
@@ -110,18 +110,18 @@ pub(crate) fn core_error(
     use mix_core::Error;
 
     match error {
-        Error::Locked { .. } => Diagnostic::hinting(
+        Error::Locked { .. } => Diagnostic::hinting_parts(
             "another `mix` command is already running",
-            format!("Wait for it to finish, then run `{command}` again"),
+            &["Wait for it to finish, then run `", command, "` again"],
         ),
         Error::LockMissing { .. } => {
             Diagnostic::hinting("`mix` isn't set up yet", "Run `mix bootstrap` first")
         }
         Error::Cancelled { .. } => Diagnostic::new("interrupted before it could finish"),
         Error::Io { path, source } if source.kind() == std::io::ErrorKind::PermissionDenied => {
-            Diagnostic::hinting(
-                format!("no permission to use {}", path.display()),
-                format!("Check who owns it, then run `{command}` again"),
+            Diagnostic::hinting_parts(
+                &format!("no permission to use {}", path.display()),
+                &["Check who owns it, then run `", command, "` again"],
             )
         }
         Error::Io { .. } | Error::Command { .. } | Error::Exec { .. } => failed(action),

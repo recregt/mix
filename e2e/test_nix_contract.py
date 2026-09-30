@@ -17,11 +17,8 @@ def _with_plan(container, mock_nix_server):
     container.exec("bash", "-c", f"cat > {PLAN} <<'EOF'\n{source}EOF", check=True)
 
 
-def _nix(container, *args, stdin=None):
-    if stdin is None:
-        return container.exec(NIX_BINARY, *args)
-    quoted = " ".join(f"'{arg}'" for arg in (NIX_BINARY, *args))
-    return container.exec("bash", "-c", f"{quoted} <<'EOF'\n{stdin}\nEOF")
+def _nix(container, *args):
+    return container.exec(NIX_BINARY, *args)
 
 
 def _fixture(name: str, observed: str) -> str:
@@ -29,10 +26,6 @@ def _fixture(name: str, observed: str) -> str:
     if UPDATE:
         path.write_text(observed)
     return path.read_text()
-
-
-def _without_warnings(output: str) -> list[str]:
-    return [line for line in output.splitlines() if not line.startswith("warning:")]
 
 
 def _build_starts(output: str) -> list[dict]:
@@ -46,42 +39,6 @@ def _build_starts(output: str) -> list[dict]:
         for record in records
         if record["action"] == "start" and record["type"] == ACT_BUILD
     ]
-
-
-def test_the_dry_run_plan_is_printed_the_way_mix_reads_it(container, mock_nix_server):
-    _with_plan(container, mock_nix_server)
-
-    for attribute, fixture in (("generation", "dry-run-many.txt"), ("leaf", "dry-run-one.txt")):
-        result = _nix(container, "build", "-f", PLAN, attribute, "--dry-run")
-
-        assert result.returncode == 0, result.stderr
-        expected = _fixture(fixture, result.stderr)
-        assert _without_warnings(result.stderr) == _without_warnings(expected)
-
-
-def test_derivations_are_described_the_way_mix_reads_them(container, mock_nix_server):
-    _with_plan(container, mock_nix_server)
-    dry_run = _nix(container, "build", "-f", PLAN, "generation", "--dry-run")
-    assert dry_run.returncode == 0, dry_run.stderr
-    planned = [line.strip() for line in dry_run.stderr.splitlines() if line.startswith("  ")]
-
-    result = _nix(container, "derivation", "show", "--stdin", stdin="\n".join(planned))
-
-    assert result.returncode == 0, result.stderr
-    shown = json.loads(result.stdout)
-    assert shown == json.loads(_fixture("derivation-show.json", result.stdout))
-    assert shown["version"] == 4
-    for derivation in shown["derivations"].values():
-        assert isinstance(derivation["inputs"]["drvs"], dict)
-        assert all("path" in output for output in derivation["outputs"].values())
-
-    (profile,) = [
-        derivation
-        for key, derivation in shown["derivations"].items()
-        if key.endswith("-home-manager-path.drv")
-    ]
-    chosen = profile["structuredAttrs"]["chosenOutputs"]
-    assert all(isinstance(group["paths"], list) for group in chosen)
 
 
 def test_a_build_starting_is_logged_the_way_mix_reads_it(container, mock_nix_server):

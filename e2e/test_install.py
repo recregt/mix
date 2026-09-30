@@ -5,7 +5,6 @@ import pytest
 from support.mirror import (
     INSTALL_TEST_PACKAGE,
     MIRROR_TEST_USERS,
-    UNCACHED_TEST_PACKAGE,
 )
 
 USER = MIRROR_TEST_USERS[0]
@@ -96,55 +95,6 @@ def test_install_cannot_be_run_as_root(container, mock_nix_server, mirror_cache)
     assert result.returncode != 0
     assert "can't be run as root" in (result.stdout + result.stderr).lower()
     assert not container.path_exists(f"/home/{USER}/.nix-profile/bin/{INSTALL_TEST_PACKAGE}")
-
-
-@pytest.mark.bootstrapped
-@pytest.mark.verbatim_output
-def test_install_refuses_a_package_the_cache_cannot_serve(
-    container, mock_nix_server, mirror_cache
-):
-    state_dir = f"/home/{USER}/.local/state/mix"
-    state_before = container.exec("cat", f"{state_dir}/state", check=True).stdout
-    home_before = container.exec("cat", f"{state_dir}/home.nix", check=True).stdout
-
-    # The policy's mirror is the only substituter here, and it was never given this package, so
-    # installing it could only mean compiling it.
-    result = container.exec(
-        "mix",
-        "install",
-        UNCACHED_TEST_PACKAGE,
-        user=USER,
-    )
-
-    assert result.returncode != 0
-    output = (result.stdout + result.stderr).lower()
-    assert f"✗ {UNCACHED_TEST_PACKAGE}-" in output
-    assert "must be built from source, which can take a long time" in output
-    assert f"to build it anyway, run: mix install {UNCACHED_TEST_PACKAGE} --build" in output
-    assert "hex0" not in output
-    assert "bash-" not in output
-
-    # Refusing costs the user nothing: the profile and the files that describe it are untouched.
-    assert container.exec("cat", f"{state_dir}/state", check=True).stdout == state_before
-    assert container.exec("cat", f"{state_dir}/home.nix", check=True).stdout == home_before
-    assert not container.path_exists(f"/home/{USER}/.nix-profile/bin/{UNCACHED_TEST_PACKAGE}")
-
-
-@pytest.mark.bootstrapped
-def test_install_with_the_build_flag_installs_a_cached_package_as_usual(
-    container, mock_nix_server, mirror_cache
-):
-
-    result = container.exec(
-        "mix",
-        "install",
-        "--build",
-        INSTALL_TEST_PACKAGE,
-        user=USER,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert container.path_exists(f"/home/{USER}/.nix-profile/bin/{INSTALL_TEST_PACKAGE}")
 
 
 @pytest.mark.bootstrapped
