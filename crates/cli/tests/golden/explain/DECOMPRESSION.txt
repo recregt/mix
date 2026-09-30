@@ -1,0 +1,4 @@
+the downloaded setup files are damaged
+Run `mix install` again to download them again
+
+A downloaded archive could not be unpacked. It was probably damaged in transit; running the command again downloads it again.

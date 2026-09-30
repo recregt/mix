@@ -3,6 +3,7 @@ pub mod bootstrap;
 pub mod build_graph;
 pub mod change;
 pub mod constants;
+pub mod diagnose;
 pub mod error;
 pub mod health;
 pub mod journal;

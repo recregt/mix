@@ -20,6 +20,9 @@ pub async fn run() -> ExitCode {
     if let Command::HomeFiles { request } = &cli.command {
         return home_files(request);
     }
+    if let Command::Explain { code } = &cli.command {
+        return explain_code(code);
+    }
 
     mix_ui::init_tracing(cli.verbose, cli.draws_progress());
 
@@ -55,7 +58,7 @@ pub async fn run() -> ExitCode {
             Box::new(|error| explain::remove::explain(error, packages))
         }
         Command::Doctor => Box::new(explain::doctor::explain),
-        Command::Repair | Command::Worker | Command::HomeFiles { .. } => {
+        Command::Repair | Command::Worker | Command::HomeFiles { .. } | Command::Explain { .. } => {
             Box::new(explain::repair::explain)
         }
     };
@@ -77,7 +80,7 @@ pub async fn run() -> ExitCode {
         Command::Install { packages, json } => commands::install::run(packages, *json).await,
         Command::Remove { packages, json } => commands::remove::run(packages, *json).await,
         Command::Doctor => commands::doctor::run(cli.verbose).await,
-        Command::Repair | Command::Worker | Command::HomeFiles { .. } => {
+        Command::Repair | Command::Worker | Command::HomeFiles { .. } | Command::Explain { .. } => {
             commands::repair::run(cli.verbose).await
         }
     };
@@ -104,6 +107,23 @@ fn home_files(request: &str) -> ExitCode {
         Err(failure) => {
             let _ = writeln!(std::io::stderr(), "{failure:?}");
             ExitCode::FAILURE
+        }
+    }
+}
+
+fn explain_code(name: &str) -> ExitCode {
+    match explain::codes::parse(name) {
+        Some(code) => {
+            println!(
+                "{}\n\n{}",
+                explain::codes::name(code),
+                explain::codes::long(code)
+            );
+            ExitCode::SUCCESS
+        }
+        None => {
+            eprintln!("`{name}` is not a code `mix` uses. Codes look like LOCKED or NETWORK.");
+            ExitCode::from(2)
         }
     }
 }

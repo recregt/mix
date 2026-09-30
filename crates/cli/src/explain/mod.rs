@@ -13,13 +13,17 @@
 //! to do about it on the line underneath.
 
 pub mod bootstrap;
+pub mod codes;
 pub mod doctor;
 pub mod install;
 pub mod remove;
 pub mod repair;
 
 pub(crate) mod change;
+mod render;
 pub mod target;
+
+pub(crate) use render::{Context, render, rpc_fault};
 
 use std::borrow::Cow;
 use std::fmt::{self, Display};
@@ -97,36 +101,14 @@ impl Diagnostic {
 const REPORT_BUG: &str =
     "This is a bug in `mix`; please report it at https://github.com/recregt/mix/issues";
 
-/// What a raw `mix-core` failure means to somebody who ran `command`.
-///
-/// These are the errors every command can hit — the lock, a file, a process that would not
-/// start. The fact is the library's; naming the command to run again is not something it could
-/// have done.
 pub(crate) fn core_error(
     error: &mix_core::Error,
     command: &str,
     action: &dyn Display,
 ) -> Diagnostic {
-    use mix_core::Error;
+    use mix_events::Diagnose;
 
-    match error {
-        Error::Locked { .. } => Diagnostic::hinting_parts(
-            "another `mix` command is already running",
-            &["Wait for it to finish, then run `", command, "` again"],
-        ),
-        Error::LockMissing { .. } => {
-            Diagnostic::hinting("`mix` isn't set up yet", "Run `mix bootstrap` first")
-        }
-        Error::Cancelled { .. } => Diagnostic::new("interrupted before it could finish"),
-        Error::Io { path, source } if source.kind() == std::io::ErrorKind::PermissionDenied => {
-            Diagnostic::hinting_parts(
-                &format!("no permission to use {}", path.display()),
-                &["Check who owns it, then run `", command, "` again"],
-            )
-        }
-        Error::Io { .. } | Error::Command { .. } | Error::Exec { .. } => failed(action),
-        Error::TaskPanicked(_) => bug(),
-    }
+    render(&error.fault(), &Context { command, action })
 }
 
 pub(crate) fn failed(action: &dyn Display) -> Diagnostic {
@@ -141,21 +123,13 @@ pub(crate) fn bug() -> Diagnostic {
 }
 
 pub(crate) fn privileged(error: &mix_rpc::Error, action: &dyn Display) -> Diagnostic {
-    use mix_rpc::Error;
-
-    match error {
-        Error::Spawn(_) | Error::Launch(_) | Error::Connect(_) | Error::Refused(_) => {
-            Diagnostic::hinting(
-                format!("couldn't get administrator rights to {action}"),
-                "Make sure your account can use sudo, then try again",
-            )
-        }
-        Error::Ended => Diagnostic::hinting(
-            format!("stopped before it could {action}"),
-            "Run the same command again to finish; it picks up where it stopped",
-        ),
-        Error::Malformed(_) | Error::NotAConnection(_) => bug(),
-    }
+    render(
+        &rpc_fault(error),
+        &Context {
+            command: "",
+            action,
+        },
+    )
 }
 
 pub(crate) struct PackagesAction<'a> {

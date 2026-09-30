@@ -1,0 +1,4 @@
+Nix is already installed on this system, and `mix` needs to set up its own
+Uninstall it first, then run `mix install` again. Uninstalling removes everything you installed with it
+
+Nix is already installed on this system, set up by something other than `mix`. `mix` needs to own its installation, so uninstall the existing one first. That removes everything installed with it.

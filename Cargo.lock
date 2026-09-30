@@ -1398,6 +1398,7 @@ dependencies = [
  "codspeed-divan-compat",
  "futures-util",
  "mix-core",
+ "mix-events",
  "mix-exec",
  "mix-nixgen",
  "mix-rpc",

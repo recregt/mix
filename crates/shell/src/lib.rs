@@ -8,6 +8,7 @@
 mod context;
 
 pub mod bridge;
+pub mod diagnose;
 pub mod drive;
 
 pub mod effect;

@@ -68,6 +68,12 @@ pub enum Command {
     /// Repair configuration drift
     Repair,
 
+    /// Describe a failure code, such as LOCKED
+    Explain {
+        /// The code, as a failure prints it
+        code: String,
+    },
+
     #[command(
         hide = true,
         about = "Carry out privileged operations for another mix process"

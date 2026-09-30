@@ -1,0 +1,5 @@
+setting up `mix` needs administrator rights
+Run it again with sudo:
+  sudo mix install
+
+Setting up `mix` changes the whole system: it creates `/nix`, build users and a system service. Run `mix bootstrap` with sudo.

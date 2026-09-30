@@ -1,0 +1,4 @@
+`/nix/store` is on a different disk than `/nix`, and `mix` needs them on the same one
+Remove the separate mount for `/nix/store`, then run `mix install` again
+
+`/nix/store` is a separate mount from `/nix`, and `mix` moves the runtime into the store by renaming, which cannot cross filesystems. Remove the separate mount.

@@ -1,0 +1,4 @@
+the downloaded setup files are damaged
+Run `mix install` again to download them again
+
+A downloaded file did not match the checksum `mix` has pinned for it, so it was thrown away unused. It was damaged in transit, or the mirror serves the wrong file. Running the command again downloads it again.

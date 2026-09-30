@@ -4,9 +4,9 @@ use std::collections::VecDeque;
 use generativity::Id;
 pub use generativity::{Guard, make_guard};
 use mix_events::v1::{
-    Action as ActionNode, Cancellation, Code, CommandDetail, Diagnostic, IntegrityDetail, IoDetail,
-    NetworkDetail, Operation, Plan, Rollback, Severity, Step, StepsDetail, diagnostic::Detail,
-    node_started::Kind,
+    Action as ActionNode, Cancellation, Code, CommandDetail, ConflictDetail, Diagnostic,
+    IntegrityDetail, IoDetail, NetworkDetail, Operation, Plan, Rollback, Severity, Step,
+    StepsDetail, UnitDetail, diagnostic::Detail, node_started::Kind,
 };
 use mix_events::{Ending, NodeId, Start, Tree};
 
@@ -710,7 +710,11 @@ pub fn diagnostic(failure: &Failure) -> Diagnostic {
         } => (
             Code::Conflict,
             format!("{subject}: expected {expected}, found {found}"),
-            None,
+            Some(Detail::Conflict(ConflictDetail {
+                subject: subject.clone(),
+                expected: expected.clone(),
+                found: found.clone(),
+            })),
         ),
         Failure::Io { path, kind } => (
             if *kind == std::io::ErrorKind::PermissionDenied {
@@ -751,7 +755,11 @@ pub fn diagnostic(failure: &Failure) -> Diagnostic {
                 unit.sub_state,
                 unit.unit_result
             ),
-            None,
+            Some(Detail::Unit(UnitDetail {
+                operation: unit.operation.verb().to_string(),
+                unit: unit.unit.clone(),
+                invocation: unit.invocation.clone(),
+            })),
         ),
         Failure::SystemdUnreachable => (
             Code::SystemdUnreachable,
@@ -777,9 +785,13 @@ pub fn diagnostic(failure: &Failure) -> Diagnostic {
             })),
         ),
         Failure::Cancelled => (Code::Internal, "cancelled".to_string(), None),
-        Failure::Unrepairable { artifact, reason } => {
-            (Code::Unrepairable, format!("{artifact}: {reason}"), None)
-        }
+        Failure::Unrepairable { artifact, reason } => (
+            Code::Unrepairable,
+            format!("{artifact}: {reason}"),
+            Some(Detail::Unrepairable(crate::diagnose::unrepairable(
+                artifact, *reason,
+            ))),
+        ),
     };
     Diagnostic {
         code: code as i32,

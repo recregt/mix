@@ -1,0 +1,4 @@
+something went wrong inside `mix`
+This is a bug in `mix`; please report it at https://github.com/recregt/mix/issues
+
+Something went wrong inside `mix` itself: a task panicked, or two parts of `mix` disagreed about the protocol between them. Nothing on your system caused it. Report it at https://github.com/recregt/mix/issues with the output of the command run again with `-v`.

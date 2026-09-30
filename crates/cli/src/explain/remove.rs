@@ -2,7 +2,9 @@
 
 use mix_shell::ops::remove::Error;
 
-use super::{Diagnostic, change, failed, packages_action};
+use mix_events::Diagnose;
+
+use super::{Context, Diagnostic, failed, packages_action, render};
 
 /// How the command is spelled when the reader is told to run it again.
 const COMMAND: &str = "mix remove";
@@ -10,22 +12,15 @@ const COMMAND: &str = "mix remove";
 pub fn explain(error: &anyhow::Error, packages: &[String]) -> Diagnostic {
     let action = packages_action("remove", packages);
     match error.downcast_ref::<Error>() {
-        Some(Error::Change(error)) => change::describe(error, COMMAND, &action),
-        Some(Error::Protected(packages)) => protected(packages),
+        Some(error) => render(
+            &error.fault(),
+            &Context {
+                command: COMMAND,
+                action: &action,
+            },
+        ),
         None => failed(&action),
     }
-}
-
-fn protected(packages: &[String]) -> Diagnostic {
-    let hint = if packages.len() == 1 {
-        "`mix` needs it to work"
-    } else {
-        "`mix` needs them to work"
-    };
-    Diagnostic::hinting(
-        format!("`{}` can't be removed", packages.join("`, `")),
-        hint,
-    )
 }
 
 #[cfg(test)]

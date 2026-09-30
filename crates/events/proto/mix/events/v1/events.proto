@@ -370,6 +370,7 @@ enum Code {
   CODE_ALREADY_MANAGED = 29;
   CODE_CROSS_DEVICE_STORE = 30;
   CODE_ROLLBACK_INCOMPLETE = 31;
+  CODE_INVALID_MIRROR = 32;
   CODE_NOT_BOOTSTRAPPED = 41;
   CODE_ROOT_NOT_ALLOWED = 42;
   CODE_INVALID_PACKAGE = 43;
@@ -414,6 +415,8 @@ message Diagnostic {
     UnrepairableDetail unrepairable = 19;
     LockDetail lock = 20;
     StepsDetail steps = 21;
+    ConflictDetail conflict = 22;
+    UnitDetail unit = 23;
   }
 }
 
@@ -472,4 +475,16 @@ message LockDetail {
 
 message StepsDetail {
   repeated string steps = 1;
+}
+
+message ConflictDetail {
+  string subject = 1;
+  string expected = 2;
+  string found = 3;
+}
+
+message UnitDetail {
+  string operation = 1;
+  string unit = 2;
+  optional string invocation = 3;
 }

@@ -1,15 +1,14 @@
 //! What `mix bootstrap` says when it cannot finish.
 
-use mix_shell::ops::bootstrap::{Error, Host};
+use mix_events::Diagnose;
+use mix_shell::ops::bootstrap::Error;
 
-use super::{Diagnostic, core_error, failed};
+use super::{Context, Diagnostic, failed, render};
 
 /// How the command is spelled when the reader is told to run it again.
 const COMMAND: &str = "mix bootstrap";
 
 const ACTION: &str = "finish setting up `mix`";
-
-const DAMAGED: &str = "the downloaded setup files are damaged";
 
 pub fn explain(error: &anyhow::Error) -> Diagnostic {
     if let Some(error) = error.downcast_ref::<mix_rpc::Error>() {
@@ -22,117 +21,20 @@ pub fn explain(error: &anyhow::Error) -> Diagnostic {
 }
 
 pub(crate) fn describe(error: &Error, command: &str) -> Diagnostic {
-    match error {
-        Error::Core(e) => core_error(e, command, &ACTION),
-
-        Error::Network(_) => Diagnostic::hinting(
-            "couldn't download required setup files",
-            format!("Check your internet connection, then run `{command}` again"),
-        ),
-
-        Error::Integrity { .. } | Error::Decompression(_) => Diagnostic::hinting(
-            DAMAGED,
-            format!("Run `{command}` again to download them again"),
-        ),
-
-        Error::MalformedArchive(_) => Diagnostic::hinting(
-            "the downloaded setup files aren't in the expected format",
-            "If you use `--mirror`, check that it serves the right files",
-        ),
-
-        Error::Conflict { subject, .. } => Diagnostic::hinting(
-            format!("{subject} changed while mix was working, so mix left it alone"),
-            format!("Run `{command}` again; it starts from what is there now"),
-        ),
-
-        Error::InvalidMirror(reason) => Diagnostic::hinting(
-            format!("the mirror settings aren't valid: {reason}"),
-            "Pass `--mirror` as an http or https URL, and `--mirror-key` as a single <name>:<key> entry",
-        ),
-
-        Error::UnsupportedTarget(target) => Diagnostic::hinting(
-            format!("`mix` doesn't support this system ({target}) yet"),
-            "It runs on 64-bit Intel, AMD and ARM Linux",
-        ),
-
-        Error::Target(e) => super::target::describe(e, command, &ACTION),
-
-        Error::NotRoot(_) => Diagnostic::hinting(
-            "setting up `mix` needs administrator rights",
-            format!("Run it again with sudo:\n\x20 sudo {command}"),
-        ),
-
-        Error::UnsupportedHost => Diagnostic::hinting(
-            "this system is NixOS, which already does what `mix` does",
-            "You don't need `mix` here",
-        ),
-
-        Error::UnsupportedKernel => Diagnostic::hinting(
-            "`mix` needs WSL 2, and this is WSL 1",
-            "Upgrade it from Windows PowerShell:\n\x20 wsl --set-version <distro> 2",
-        ),
-
-        Error::SystemdNotReady { host: Host::Wsl } => Diagnostic::hinting(
-            "`mix` needs systemd, and it isn't running",
-            "Turn it on: add `[boot]` with `systemd=true` to `/etc/wsl.conf`, run \
-             `wsl.exe --shutdown` from Windows, then reopen the distro",
-        ),
-
-        Error::SystemdNotReady { host: Host::Native } => Diagnostic::hinting(
-            "`mix` needs systemd, and it isn't running",
-            format!("Make sure systemd is your init system, then run `{command}` again"),
-        ),
-
-        Error::SystemdUnreachable => Diagnostic::hinting(
-            "`mix` couldn't reach systemd",
-            format!(
-                "Check that the system bus is running with `systemctl status dbus`, then run \
-                 `{command}` again"
-            ),
-        ),
-
-        Error::Unit {
-            operation,
-            unit,
-            invocation,
-            ..
-        } => Diagnostic::hinting(
-            format!("systemd couldn't {operation} `{unit}`"),
-            match invocation {
-                Some(id) => format!(
-                    "See why with:\n\x20 journalctl _SYSTEMD_INVOCATION_ID={id}\nthen run \
-                     `{command}` again"
-                ),
-                None => {
-                    format!("See why with:\n\x20 journalctl -u {unit}\nthen run `{command}` again")
-                }
-            },
-        ),
-
-        Error::AlreadyManaged => Diagnostic::hinting(
-            "Nix is already installed on this system, and `mix` needs to set up its own",
-            format!(
-                "Uninstall it first, then run `{command}` again. Uninstalling removes everything \
-                 you installed with it"
-            ),
-        ),
-
-        Error::CrossDeviceStore { .. } => Diagnostic::hinting(
-            "`/nix/store` is on a different disk than `/nix`, and `mix` needs them on the same one",
-            format!("Remove the separate mount for `/nix/store`, then run `{command}` again"),
-        ),
-
-        Error::Rollback { cause, .. } => Diagnostic::hinting(
-            describe(cause, command).summary(),
-            "Some changes couldn't be undone. Run `mix doctor` to see what's left",
-        ),
-
-        Error::Interrupted => Diagnostic::new("stopped; everything it had changed was undone"),
-    }
+    render(
+        &error.fault(),
+        &Context {
+            command,
+            action: &ACTION,
+        },
+    )
 }
 
 #[cfg(test)]
 mod tests {
+    use mix_shell::ops::bootstrap::Host;
+
+    use super::super::render::DAMAGED;
     use super::*;
 
     fn message(error: Error) -> String {

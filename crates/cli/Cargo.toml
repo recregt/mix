@@ -21,6 +21,7 @@ nix = { workspace = true, features = ["signal"] }
 tokio = { workspace = true, features = ["signal"] }
 tracing = { workspace = true }
 tracing-subscriber = "0.3.23"
+mix-events = { path = "../events" }
 
 [dev-dependencies]
 mix-nixgen = { path = "../nixgen" }

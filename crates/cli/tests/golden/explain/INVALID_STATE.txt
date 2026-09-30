@@ -1,0 +1,4 @@
+"rm -rf" isn't a valid package name
+Package names look like `ripgrep` or `python3`
+
+The package list `mix` would write is not valid. This is a bug in `mix`; report it at https://github.com/recregt/mix/issues.

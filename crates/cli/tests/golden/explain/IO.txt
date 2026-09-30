@@ -1,0 +1,4 @@
+couldn't install ripgrep
+Run it again with `-v` to see what went wrong
+
+Reading or writing a file failed for a reason other than permissions: a missing directory, a full disk, a read-only filesystem. Run the command again with `-v` to see which path and which error.
