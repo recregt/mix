@@ -8,6 +8,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     prost_build::Config::new()
         .compile_well_known_types()
         .extern_path(".google.protobuf", "::pbjson_types")
+        .boxed(".mix.events.v1.NodeFinished.diagnostic")
+        .boxed(".mix.events.v1.Diagnostic.detail.conflict")
+        .boxed(".mix.events.v1.Diagnostic.detail.unit")
         .compile_fds(descriptors)?;
 
     pbjson_build::Builder::new()

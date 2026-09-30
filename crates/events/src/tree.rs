@@ -238,7 +238,7 @@ impl Tree {
         self.outbox.push(Event::NodeFinished(NodeFinished {
             id,
             status: ending.status as i32,
-            diagnostic: ending.diagnostic,
+            diagnostic: ending.diagnostic.map(Box::new),
             exit_code: ending.exit_code,
             cancellation: ending.cancellation as i32,
             result: ending.result,

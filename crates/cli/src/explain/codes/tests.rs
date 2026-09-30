@@ -23,16 +23,16 @@ fn detail(code: Code) -> Option<Detail> {
             path: "/home/mix-user/.local/state/mix/state".into(),
             kind: "PermissionDenied".into(),
         })),
-        Code::Conflict => Some(Detail::Conflict(ConflictDetail {
+        Code::Conflict => Some(Detail::Conflict(Box::new(ConflictDetail {
             subject: "/etc/nix/nix.conf".into(),
             expected: "the file mix wrote".into(),
             found: "another file".into(),
-        })),
-        Code::UnitFailed => Some(Detail::Unit(UnitDetail {
+        }))),
+        Code::UnitFailed => Some(Detail::Unit(Box::new(UnitDetail {
             operation: "start".into(),
             unit: "nix-daemon.socket".into(),
             invocation: None,
-        })),
+        }))),
         Code::UnsupportedTarget => Some(Detail::Target(TargetDetail {
             arch: "armv7l".into(),
             os: "linux".into(),

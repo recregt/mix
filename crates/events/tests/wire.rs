@@ -33,7 +33,7 @@ fn finished() -> Envelope {
         event: Some(envelope::Event::NodeFinished(NodeFinished {
             id: 1,
             status: Status::Failed as i32,
-            diagnostic: Some(Diagnostic {
+            diagnostic: Some(Box::new(Diagnostic {
                 code: Code::InvalidPackage as i32,
                 severity: Severity::Error as i32,
                 node: 2,
@@ -42,7 +42,7 @@ fn finished() -> Envelope {
                 detail: Some(diagnostic::Detail::Packages(PackagesDetail {
                     packages: vec!["hello".to_string()],
                 })),
-            }),
+            })),
             exit_code: 1,
             cancellation: 0,
             result: Some(node_finished::Result::Install(InstallResult::default())),

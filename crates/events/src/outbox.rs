@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::{Mutex, PoisonError};
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::v1::{Envelope, NodeProgress, envelope::Event, node_progress::Progress};
 
@@ -31,8 +31,9 @@ fn slot(event: &Event) -> Option<Slot> {
 struct Queue {
     head: u64,
     seq: u64,
-    items: VecDeque<Option<Event>>,
+    items: VecDeque<Event>,
     pending: FxHashMap<Slot, u64>,
+    superseded: FxHashSet<u64>,
 }
 
 pub struct Outbox {
@@ -57,10 +58,9 @@ impl Outbox {
             if let Some(slot) = slot(&event)
                 && let Some(superseded) = queue.pending.insert(slot, position)
             {
-                let index = (superseded - queue.head) as usize;
-                queue.items[index] = None;
+                queue.superseded.insert(superseded);
             }
-            queue.items.push_back(Some(event));
+            queue.items.push_back(event);
         }
         (self.wake)();
     }
@@ -81,10 +81,12 @@ impl Outbox {
 
     fn next(&self, queue: &mut Queue) -> Option<Envelope> {
         loop {
-            let item = queue.items.pop_front()?;
+            let event = queue.items.pop_front()?;
             let position = queue.head;
             queue.head += 1;
-            let Some(event) = item else { continue };
+            if !queue.superseded.is_empty() && queue.superseded.remove(&position) {
+                continue;
+            }
             if let Some(slot) = slot(&event)
                 && queue.pending.get(&slot) == Some(&position)
             {

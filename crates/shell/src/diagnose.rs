@@ -56,11 +56,11 @@ impl Diagnose for BootstrapError {
             } => failed(
                 Code::Conflict,
                 message,
-                Some(Detail::Conflict(ConflictDetail {
+                Some(Detail::Conflict(Box::new(ConflictDetail {
                     subject: subject.clone(),
                     expected: expected.clone(),
                     found: found.clone(),
-                })),
+                }))),
             ),
             BootstrapError::Decompression(_) => failed(Code::Decompression, message, None),
             BootstrapError::MalformedArchive(_) => failed(Code::MalformedArchive, message, None),
@@ -93,11 +93,11 @@ impl Diagnose for BootstrapError {
             } => failed(
                 Code::UnitFailed,
                 message,
-                Some(Detail::Unit(UnitDetail {
+                Some(Detail::Unit(Box::new(UnitDetail {
                     operation: operation.clone(),
                     unit: unit.clone(),
                     invocation: invocation.clone(),
-                })),
+                }))),
             ),
             BootstrapError::AlreadyManaged => failed(Code::AlreadyManaged, message, None),
             BootstrapError::CrossDeviceStore { path } => failed(

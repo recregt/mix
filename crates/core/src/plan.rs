@@ -710,11 +710,11 @@ pub fn diagnostic(failure: &Failure) -> Diagnostic {
         } => (
             Code::Conflict,
             format!("{subject}: expected {expected}, found {found}"),
-            Some(Detail::Conflict(ConflictDetail {
+            Some(Detail::Conflict(Box::new(ConflictDetail {
                 subject: subject.clone(),
                 expected: expected.clone(),
                 found: found.clone(),
-            })),
+            }))),
         ),
         Failure::Io { path, kind } => (
             if *kind == std::io::ErrorKind::PermissionDenied {
@@ -755,11 +755,11 @@ pub fn diagnostic(failure: &Failure) -> Diagnostic {
                 unit.sub_state,
                 unit.unit_result
             ),
-            Some(Detail::Unit(UnitDetail {
+            Some(Detail::Unit(Box::new(UnitDetail {
                 operation: unit.operation.verb().to_string(),
                 unit: unit.unit.clone(),
                 invocation: unit.invocation.clone(),
-            })),
+            }))),
         ),
         Failure::SystemdUnreachable => (
             Code::SystemdUnreachable,
