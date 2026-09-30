@@ -822,6 +822,7 @@ impl World {
                     crate::paths::FLAKE_NIX,
                     crate::paths::HOME_NIX,
                     crate::paths::FLAKE_LOCK,
+                    crate::paths::STATE_FILE,
                 ]
                 .iter()
                 .map(|file| self.contents(state.join(file)).map(Arc::from))
@@ -1197,6 +1198,11 @@ impl World {
                 })
             }
         }
+    }
+
+    pub fn active_list(&self, user: &InvokingUser) -> Option<&[u8]> {
+        let profile = self.profiles.get(&user.uid)?;
+        profile.built.get(&profile.active?)?.get(3)?.as_deref()
     }
 
     pub fn profile(&self, user: &InvokingUser) -> Option<&Profile> {

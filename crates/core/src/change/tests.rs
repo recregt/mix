@@ -7,6 +7,7 @@ use mix_events::{Outbox, ROOT, Start, Tree};
 use super::*;
 use crate::action::Digest;
 use crate::bootstrap::{Runtime, Settings};
+use crate::journal::{Record, Recovery, recover};
 use crate::model::World;
 use crate::models::UserConfig;
 use crate::plan::{Input, Next, Report, Runner, Verdict, make_guard};
@@ -521,6 +522,220 @@ fn nothing_to_change_makes_no_plan() {
     let change = install(&requested, current(manifest(&["git"]), Source::File)).unwrap();
 
     assert!(steps(&user(), &change, "Installing").unwrap().is_empty());
+}
+
+fn settled_with_profile(world: &World) -> Settled {
+    settle(
+        world
+            .contents(state_path())
+            .map(|raw| std::str::from_utf8(raw).unwrap()),
+        world
+            .active_list(&user())
+            .map(|raw| std::str::from_utf8(raw).unwrap()),
+    )
+}
+
+type Decide = fn(&[String], Settled) -> Change;
+
+fn installing(requested: &[String], settled: Settled) -> Change {
+    install(requested, settled).unwrap()
+}
+
+fn removing(requested: &[String], settled: Settled) -> Change {
+    remove(requested, settled).unwrap()
+}
+
+fn command(world: &mut World, decide: Decide, requested: &[String]) {
+    let change = decide(requested, settled_with_profile(world));
+    let steps = steps(&user(), &change, "Changing").unwrap();
+    let report = drive(world, Runner::new(ROOT, steps), |_| false);
+    assert_eq!(report.verdict, Verdict::Succeeded);
+}
+
+fn crashing_command(
+    world: &mut World,
+    decide: Decide,
+    requested: &[String],
+    crash_at: usize,
+    after_change: bool,
+) -> Option<Vec<Record>> {
+    let change = decide(requested, settled_with_profile(world));
+    let mut runner = Runner::new(ROOT, steps(&user(), &change, "Changing").unwrap());
+    make_guard!(guard);
+    let mut runner = runner.brand(guard);
+    let mut tree = Tree::new(
+        Arc::new(Outbox::new("request", || {})),
+        Arc::new(|| None),
+        Start::command("change", Command::default()),
+    );
+    let mut records = vec![Record::Began {
+        request: "r".into(),
+    }];
+    let mut input = None;
+    let mut seq = 0;
+    loop {
+        match runner.step(&mut tree, input.take()) {
+            Next::Observe(queries) => {
+                input = Some(Input::Facts(Ok(queries
+                    .iter()
+                    .map(|query| world.observe(query))
+                    .collect())));
+            }
+            Next::Perform(action) => {
+                if action == Action::Commit {
+                    records.push(Record::Committing);
+                }
+                let undo = world
+                    .clone()
+                    .apply(&action)
+                    .expect("the action applies")
+                    .undo;
+                records.push(Record::Prepared { seq, undo });
+                if seq as usize == crash_at && !after_change {
+                    return Some(records);
+                }
+                let outcome = world.apply(&action);
+                if seq as usize == crash_at && after_change {
+                    return Some(records);
+                }
+                records.push(Record::Done { seq });
+                if action == Action::Commit {
+                    records.push(Record::Ended);
+                }
+                seq += 1;
+                input = Some(Input::Done(outcome));
+            }
+            Next::Finished(_) => return None,
+        }
+    }
+}
+
+fn recovered(world: &mut World, records: &[Record]) {
+    match recover(records) {
+        Recovery::Nothing => {}
+        Recovery::RollBack { uncertain, certain } => {
+            for action in uncertain {
+                let _ = world.apply(&action);
+            }
+            for action in certain {
+                world.apply(&action).expect("a certain undo applies");
+            }
+        }
+        Recovery::FinishCommit { .. } => {
+            world.apply(&Action::Commit).expect("the commit finishes");
+        }
+    }
+}
+
+fn listed(world: &World) -> Vec<String> {
+    StateManifest::parse(std::str::from_utf8(world.contents(state_path()).unwrap()).unwrap())
+        .unwrap()
+        .packages
+}
+
+struct Scenario {
+    name: &'static str,
+    base: World,
+    decide: Decide,
+    requested: Vec<String>,
+    wanted: Vec<String>,
+}
+
+fn scenarios() -> Vec<Scenario> {
+    let installed = {
+        let mut world = bootstrapped();
+        command(&mut world, installing, &names(&["ripgrep", "fd"]));
+        world
+    };
+    vec![
+        Scenario {
+            name: "install",
+            base: bootstrapped(),
+            decide: installing,
+            requested: names(&["ripgrep", "fd"]),
+            wanted: names(&["git", "ripgrep", "fd"]),
+        },
+        Scenario {
+            name: "remove",
+            base: installed,
+            decide: removing,
+            requested: names(&["ripgrep"]),
+            wanted: names(&["git", "fd"]),
+        },
+    ]
+}
+
+#[test]
+fn a_crash_at_any_action_of_a_change_is_settled_by_the_next_command() {
+    for Scenario {
+        name,
+        base,
+        decide,
+        requested,
+        wanted,
+    } in scenarios()
+    {
+        let mut crash_at = 0;
+        loop {
+            let mut tried = false;
+            for (after_change, recovering) in
+                [(false, true), (true, true), (false, false), (true, false)]
+            {
+                let mut world = base.clone();
+                let Some(records) =
+                    crashing_command(&mut world, decide, &requested, crash_at, after_change)
+                else {
+                    continue;
+                };
+                tried = true;
+                let at = format!(
+                    "{name}: crash at action {crash_at}, after it: {after_change}, \
+                     journal recovered: {recovering}"
+                );
+
+                if recovering {
+                    recovered(&mut world, &records);
+                }
+                command(&mut world, decide, &requested);
+
+                assert_eq!(
+                    world.contents(state_path()),
+                    world.active_list(&user()),
+                    "{at}"
+                );
+                assert_eq!(listed(&world), wanted, "{at}");
+            }
+            if !tried {
+                break;
+            }
+            crash_at += 1;
+        }
+        assert!(
+            crash_at > 2,
+            "{name} has too few actions to crash in: {crash_at}"
+        );
+    }
+}
+
+#[test]
+fn a_finished_change_leaves_the_list_equal_to_the_profile() {
+    for Scenario {
+        name,
+        base: mut world,
+        decide,
+        requested,
+        wanted,
+    } in scenarios()
+    {
+        command(&mut world, decide, &requested);
+
+        assert_eq!(
+            world.contents(state_path()),
+            world.active_list(&user()),
+            "{name}"
+        );
+        assert_eq!(listed(&world), wanted, "{name}");
+    }
 }
 
 proptest::proptest! {
