@@ -30,12 +30,16 @@ pub async fn install(ctx: &Context, packages: &[String]) -> Result<Installed> {
     let cfg = ctx.user.as_ref().ok_or(change::Error::NotBootstrapped)?;
     let settled = change::settled(cfg);
     let decided = mix_core::change::install(packages, settled.clone())?;
-    let restored = change::restore(cfg, &settled).await?;
-
-    if !decided.changed.is_empty() {
-        let label = change::label("Installing", &decided.changed);
-        change::apply(ctx, cfg, &decided.manifest, &label).await?;
-    }
+    let restored = (decided.source != Source::File).then_some(decided.source);
+    change::run(
+        ctx,
+        cfg,
+        change::Verb::Install,
+        packages,
+        &decided,
+        &mut Vec::new(),
+    )
+    .await?;
 
     Ok(Installed {
         added: decided.changed,

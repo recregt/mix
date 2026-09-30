@@ -301,7 +301,10 @@ class _MirrorHandler(http.server.SimpleHTTPRequestHandler):
         pass
 
     def copyfile(self, source, outputfile):
-        self.connection.sendfile(source)
+        try:
+            self.connection.sendfile(source)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
 
 
 def start_mirror_server() -> http.server.ThreadingHTTPServer:

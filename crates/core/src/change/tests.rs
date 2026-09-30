@@ -1,6 +1,16 @@
 use std::path::PathBuf;
+use std::sync::Arc;
+
+use mix_events::v1::Command;
+use mix_events::{Outbox, ROOT, Start, Tree};
 
 use super::*;
+use crate::action::Digest;
+use crate::bootstrap::{Runtime, Settings};
+use crate::model::World;
+use crate::models::UserConfig;
+use crate::plan::{Input, Next, Report, Runner, Verdict, make_guard};
+use crate::policy::Policy;
 
 fn manifest(packages: &[&str]) -> StateManifest {
     StateManifest {
@@ -314,6 +324,203 @@ fn rendering_rejects_an_invalid_package_name() {
         render(&user(), &manifest(&["git", "not a valid ident"])),
         Err(Unrenderable::Package(_))
     ));
+}
+
+#[test]
+fn a_label_names_a_short_list_of_packages() {
+    assert_eq!(
+        label("Installing", &names(&["git", "fd"])),
+        "Installing git, fd"
+    );
+}
+
+#[test]
+fn a_label_counts_a_long_list_of_packages() {
+    let packages: Vec<String> = (0..12).map(|i| format!("package-{i}")).collect();
+
+    assert_eq!(label("Removing", &packages), "Removing 12 packages");
+}
+
+fn config() -> UserConfig {
+    UserConfig {
+        user: user(),
+        flake: "flake".into(),
+        lock: "lock".into(),
+        home: render_home(&user(), StateManifest::seed().packages).unwrap(),
+        restored_state: None,
+    }
+}
+
+fn drive(world: &mut World, mut runner: Runner, fail: impl Fn(&Action) -> bool) -> Report {
+    make_guard!(guard);
+    let mut runner = runner.brand(guard);
+    let mut tree = Tree::new(
+        Arc::new(Outbox::new("request", || {})),
+        Arc::new(|| None),
+        Start::command("install", Command::default()),
+    );
+    let mut input = None;
+    loop {
+        match runner.step(&mut tree, input.take()) {
+            Next::Observe(queries) => {
+                input = Some(Input::Facts(Ok(queries
+                    .iter()
+                    .map(|query| world.observe(query))
+                    .collect())));
+            }
+            Next::Perform(action) if fail(&action) => {
+                input = Some(Input::Done(Err(Failure::CommandFailed {
+                    program: "nix build".into(),
+                    status: Some(1),
+                    output_tail: "error: attribute missing".into(),
+                })));
+            }
+            Next::Perform(action) => input = Some(Input::Done(world.apply(&action))),
+            Next::Finished(closed) => return runner.report(closed).clone(),
+        }
+    }
+}
+
+fn bootstrapped() -> World {
+    let mut world = World::default();
+    let config = config();
+    world.with_dir(&config.user.home, 0o700, (config.user.uid, config.user.gid));
+    world.users.insert(
+        config.user.name.clone(),
+        crate::action::UserFacts {
+            uid: config.user.uid,
+            gid: config.user.gid,
+            home: config.user.home.clone(),
+            shell: "/bin/sh".into(),
+            comment: String::new(),
+        },
+    );
+    let settings = Settings {
+        policy: Policy::new(None, None).unwrap(),
+        user: Some(config),
+        force: false,
+        runtime: Runtime {
+            url: "https://mirror.internal/nix.tar.xz".into(),
+            sha256: Digest([7; 32]),
+            size: 1,
+        },
+        request: "bootstrap".into(),
+    };
+    let report = drive(
+        &mut world,
+        Runner::new(ROOT, crate::bootstrap::steps(&settings)),
+        |_| false,
+    );
+    assert_eq!(report.verdict, Verdict::Succeeded);
+    world
+}
+
+fn state_path() -> PathBuf {
+    mix_state_dir(&user().home).join(STATE_FILE)
+}
+
+fn home_nix_path() -> PathBuf {
+    mix_state_dir(&user().home).join(HOME_NIX)
+}
+
+fn settled_in(world: &World) -> Settled {
+    settle(
+        world
+            .contents(state_path())
+            .map(|raw| std::str::from_utf8(raw).unwrap()),
+        None,
+    )
+}
+
+fn active(world: &World) -> Option<u64> {
+    world.profile(&user()).and_then(|profile| profile.active)
+}
+
+#[test]
+fn an_install_writes_the_list_activates_it_and_records_it() {
+    let mut world = bootstrapped();
+    let before = active(&world);
+    let requested = names(&["ripgrep"]);
+    let change = install(&requested, settled_in(&world)).unwrap();
+
+    let report = drive(
+        &mut world,
+        Runner::new(ROOT, steps(&user(), &change, "Installing").unwrap()),
+        |_| false,
+    );
+
+    assert_eq!(report.verdict, Verdict::Succeeded);
+    let rendered = render(&user(), &manifest(&["git", "ripgrep"])).unwrap();
+    assert_eq!(
+        world.contents(state_path()),
+        Some(rendered.state.as_bytes())
+    );
+    assert_eq!(
+        world.contents(home_nix_path()),
+        Some(rendered.home_nix.as_bytes())
+    );
+    assert_ne!(active(&world), before);
+    assert!(matches!(
+        world.observe(&Query::Path(mix_state_dir(&user().home).join(".git"))),
+        Fact::Path(facts) if facts.kind == crate::action::Kind::Directory
+    ));
+}
+
+#[test]
+fn a_failed_activation_puts_both_files_back() {
+    let mut world = bootstrapped();
+    let state_before = world.contents(state_path()).map(<[u8]>::to_vec);
+    let home_before = world.contents(home_nix_path()).map(<[u8]>::to_vec);
+    let active_before = active(&world);
+    let requested = names(&["doesnotexistinnixpkgs"]);
+    let change = install(&requested, settled_in(&world)).unwrap();
+
+    let report = drive(
+        &mut world,
+        Runner::new(ROOT, steps(&user(), &change, "Installing").unwrap()),
+        |action| matches!(action, Action::ActivateProfile { .. }),
+    );
+
+    assert!(matches!(report.verdict, Verdict::Failed { .. }));
+    assert!(report.rollback_failures.is_empty());
+    assert_eq!(
+        world.contents(state_path()).map(<[u8]>::to_vec),
+        state_before
+    );
+    assert_eq!(
+        world.contents(home_nix_path()).map(<[u8]>::to_vec),
+        home_before
+    );
+    assert_eq!(active(&world), active_before);
+}
+
+#[test]
+fn a_list_restored_from_the_profile_is_written_without_activating() {
+    let mut world = bootstrapped();
+    world.with_file(state_path(), b"{broken", 0o644, (1000, 1000));
+    let active_before = active(&world);
+    let generation = manifest(&["git"]).render();
+    let requested = names(&["git"]);
+    let change = install(&requested, settle(Some("{broken"), Some(&generation))).unwrap();
+    let steps = steps(&user(), &change, "Installing").unwrap();
+
+    assert_eq!(steps.len(), 1);
+    let report = drive(&mut world, Runner::new(ROOT, steps), |_| false);
+
+    assert_eq!(report.verdict, Verdict::Succeeded);
+    assert_eq!(
+        world.contents(state_path()),
+        Some(manifest(&["git"]).render().as_bytes())
+    );
+    assert_eq!(active(&world), active_before);
+}
+
+#[test]
+fn nothing_to_change_makes_no_plan() {
+    let requested = names(&["git"]);
+    let change = install(&requested, current(manifest(&["git"]), Source::File)).unwrap();
+
+    assert!(steps(&user(), &change, "Installing").unwrap().is_empty());
 }
 
 proptest::proptest! {

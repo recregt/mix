@@ -58,17 +58,6 @@ fn as_refs(args: &[String]) -> Vec<&str> {
     args.iter().map(String::as_str).collect()
 }
 
-pub async fn activate(
-    user: &InvokingUser,
-    mirror: Option<&str>,
-    activity: &Arc<dyn ActivityReporter>,
-    host: &HostConfig,
-    scope: &Scope,
-) -> Result<bool> {
-    let generation = switch(user, mirror, activity, scope).await?;
-    finish(user, &generation, activity, host, scope).await
-}
-
 pub async fn switch(
     user: &InvokingUser,
     mirror: Option<&str>,
@@ -96,17 +85,6 @@ pub async fn switch(
         Some(Arc::clone(activity)),
     )
     .await
-}
-
-pub async fn finish(
-    user: &InvokingUser,
-    generation: &str,
-    activity: &Arc<dyn ActivityReporter>,
-    host: &HostConfig,
-    scope: &Scope,
-) -> Result<bool> {
-    activate_generation(user, generation, activity, scope).await?;
-    Ok(record(user, host, scope).await)
 }
 
 pub async fn activate_generation(

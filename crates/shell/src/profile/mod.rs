@@ -9,7 +9,7 @@ pub mod change;
 pub mod config;
 pub mod state;
 
-pub use activation::{activate, activate_generation, finish, record, switch};
+pub use activation::{activate_generation, record, switch};
 pub use config::{existing_user_config_for, user_config_for};
 
 pub type Result<T> = mix_core::Result<T>;

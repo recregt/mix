@@ -47,12 +47,16 @@ pub async fn remove(ctx: &Context, packages: &[String]) -> Result<Removed> {
     let cfg = ctx.user.as_ref().ok_or(change::Error::NotBootstrapped)?;
     let settled = change::settled(cfg);
     let decided = mix_core::change::remove(packages, settled.clone())?;
-    let restored = change::restore(cfg, &settled).await?;
-
-    if !decided.changed.is_empty() {
-        let label = change::label("Removing", &decided.changed);
-        change::apply(ctx, cfg, &decided.manifest, &label).await?;
-    }
+    let restored = (decided.source != Source::File).then_some(decided.source);
+    change::run(
+        ctx,
+        cfg,
+        change::Verb::Remove,
+        packages,
+        &decided,
+        &mut Vec::new(),
+    )
+    .await?;
 
     Ok(Removed {
         removed: decided.changed,

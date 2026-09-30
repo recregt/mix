@@ -23,7 +23,7 @@ use crate::policy::Policy;
 use crate::state::StateManifest;
 
 const DIR_MODE: u32 = 0o755;
-const FILE_MODE: u32 = 0o644;
+pub(crate) const FILE_MODE: u32 = 0o644;
 const NIXBLD_HOME_MODE: u32 = 0o555;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,17 +42,17 @@ pub struct Settings {
     pub request: String,
 }
 
-struct Facts<'a>(&'a [Fact]);
+pub(crate) struct Facts<'a>(pub(crate) &'a [Fact]);
 
 impl Facts<'_> {
-    fn path(&self, index: usize) -> &PathFacts {
+    pub(crate) fn path(&self, index: usize) -> &PathFacts {
         match &self.0[index] {
             Fact::Path(facts) => facts,
             other => unreachable!("a path query was answered with {other:?}"),
         }
     }
 
-    fn contents(&self, index: usize) -> Option<&[u8]> {
+    pub(crate) fn contents(&self, index: usize) -> Option<&[u8]> {
         match &self.0[index] {
             Fact::Contents(contents) => contents.as_deref(),
             other => unreachable!("a contents query was answered with {other:?}"),

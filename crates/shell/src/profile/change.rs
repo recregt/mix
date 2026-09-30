@@ -1,16 +1,20 @@
-use std::future::Future;
 use std::path::Path;
+use std::sync::Arc;
 
-use mix_core::change::{NewerList, Rendered, Unrenderable};
+use mix_core::action::Failure;
+use mix_core::change::{Change, NewerList, Unrenderable};
 use mix_core::models::UserConfig;
-use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
-use mix_core::state::StateManifest;
-use tracing::Instrument;
+use mix_core::plan::{Runner, Verdict, diagnostic};
+use mix_events::v1::{Command, command};
+use mix_events::{Ending, Outbox, ROOT, Start, Tree};
 
 use crate::Context;
-use crate::effect::fs::{remove_file, write_atomic};
-use crate::profile;
-use crate::profile::state::{self, Invalid, Settled, Source};
+use crate::bridge::Bridge;
+use crate::drive::{Journal, Observer, Performer, drive, stopped_by};
+use crate::effect::files::Files;
+use crate::effect::generations::ProfileContext;
+use crate::ops::bootstrap::request_id;
+use crate::profile::state::{self, Invalid, Settled};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -54,185 +58,127 @@ pub fn settled(cfg: &UserConfig) -> Settled {
     state::settle(&cfg.user.home)
 }
 
-pub async fn restore(cfg: &UserConfig, settled: &Settled) -> Result<Option<Source>> {
-    match settled {
-        Settled::Newer(_)
-        | Settled::Current {
-            source: Source::File,
-            ..
-        } => Ok(None),
-        Settled::Current { manifest, source } => {
-            let Rendered { state, home_nix } = render_candidate(cfg, manifest)?;
-            let state_dir = mix_state_dir(&cfg.user.home);
-            write_atomic(&state_dir.join(STATE_FILE), &state).await?;
-            write_atomic(&state_dir.join(HOME_NIX), &home_nix).await?;
-            Ok(Some(*source))
+pub enum Verb {
+    Install,
+    Remove,
+}
+
+impl Verb {
+    fn label(&self) -> &'static str {
+        match self {
+            Verb::Install => "Installing",
+            Verb::Remove => "Removing",
+        }
+    }
+
+    fn request(&self, packages: &[String]) -> command::Request {
+        let packages = packages.to_vec();
+        match self {
+            Verb::Install => command::Request::Install(mix_events::v1::InstallRequest { packages }),
+            Verb::Remove => command::Request::Remove(mix_events::v1::RemoveRequest { packages }),
+        }
+    }
+
+    fn key(&self) -> &'static str {
+        match self {
+            Verb::Install => "install",
+            Verb::Remove => "remove",
         }
     }
 }
 
-pub async fn apply(
+pub async fn run(
     ctx: &Context,
     cfg: &UserConfig,
-    manifest: &StateManifest,
-    label: &str,
+    verb: Verb,
+    requested: &[String],
+    change: &Change,
+    journal: &mut dyn Journal,
 ) -> Result<()> {
-    let activity = &ctx.reporters.activity;
-    let steps = &ctx.reporters.steps;
+    let steps = mix_core::change::steps(&cfg.user, change, verb.label())?;
+    if steps.is_empty() {
+        return Ok(());
+    }
     let scope = &ctx.scope;
-    let Rendered {
-        state: new_state,
-        home_nix: new_home,
-    } = render_candidate(cfg, manifest)?;
-
-    let state_dir = mix_state_dir(&cfg.user.home);
-    let state_path = state_dir.join(STATE_FILE);
-    let home_path = state_dir.join(HOME_NIX);
-    let span = tracing::info_span!("step", name = label);
-    steps.on_step_span(&span);
-
-    let applied = async {
-        let generation = write_then_switch(&state_path, &home_path, &new_state, &new_home, || {
-            profile::switch(&cfg.user, ctx.mirror(), activity, scope)
-        })
-        .await?;
-        profile::finish(
-            &cfg.user,
-            &generation,
-            activity,
-            &ctx.host,
-            &scope.shielded(),
-        )
-        .await?;
-        Ok(())
-    }
-    .instrument(span.clone())
+    let request = request_id();
+    let files = Files::open(Path::new("/"), &request).map_err(|source| mix_core::Error::Io {
+        path: "/".into(),
+        source,
+    })?;
+    let mut performer = Performer::new(files).with_profile(ProfileContext {
+        mirror: ctx.mirror().map(str::to_string),
+        activity: Arc::clone(&ctx.reporters.activity),
+        host: ctx.host.clone(),
+    });
+    let outbox = Arc::new(Outbox::new(request, || {}));
+    let mut bridge = Bridge::new(Arc::clone(&outbox), ctx.reporters.clone());
+    let stopped = stopped_by(scope);
+    let mut tree = Tree::new(
+        outbox,
+        Arc::clone(&stopped),
+        Start::command(
+            verb.key(),
+            Command {
+                mix_version: env!("CARGO_PKG_VERSION").to_string(),
+                schema_minor: mix_events::SCHEMA_MINOR,
+                request: Some(verb.request(requested)),
+            },
+        ),
+    );
+    let mut runner = Runner::new(ROOT, steps);
+    let report = drive(
+        &mut runner,
+        &mut tree,
+        &mut performer,
+        scope,
+        &stopped,
+        journal,
+        &mut bridge,
+    )
     .await;
-    steps.on_step_closed(&span, applied.is_err());
-    applied
-}
-
-pub fn label(verb: &str, packages: &[String]) -> String {
-    match packages.len() {
-        0..=3 => format!("{verb} {}", packages.join(", ")),
-        n => format!("{verb} {n} packages"),
-    }
-}
-
-fn render_candidate(cfg: &UserConfig, manifest: &StateManifest) -> Result<Rendered> {
-    Ok(mix_core::change::render(&cfg.user, manifest)?)
-}
-
-async fn write_then_switch<F, Fut>(
-    state_path: &Path,
-    home_path: &Path,
-    new_state: &str,
-    new_home: &str,
-    switch: F,
-) -> Result<String>
-where
-    F: FnOnce() -> Fut,
-    Fut: Future<Output = profile::Result<String>>,
-{
-    let previous_state = tokio::fs::read_to_string(state_path).await.ok();
-    let previous_home = tokio::fs::read_to_string(home_path).await.ok();
-
-    write_atomic(state_path, new_state).await?;
-    write_atomic(home_path, new_home).await?;
-
-    match switch().await {
-        Ok(generation) => Ok(generation),
-        Err(e) => {
-            put_back(state_path, previous_state.as_deref()).await;
-            put_back(home_path, previous_home.as_deref()).await;
-            Err(e.into())
-        }
-    }
-}
-
-async fn put_back(path: &Path, previous: Option<&str>) {
-    let restored = match previous {
-        Some(previous) => write_atomic(path, previous).await,
-        None => remove_file(path).await,
+    let (ending, outcome) = match &report.verdict {
+        Verdict::Succeeded => (Ending::succeeded(), Ok(())),
+        Verdict::Failed { failure, .. } => (
+            Ending::failed(diagnostic(failure)),
+            Err(error_of(failure.clone())),
+        ),
+        Verdict::Cancelled(cause) => (
+            Ending::cancelled(*cause),
+            Err(Error::Core(mix_core::Error::Cancelled {
+                command: format!("mix {}", verb.key()),
+            })),
+        ),
     };
-    if let Err(error) = restored {
-        tracing::info!("could not put {} back as it was: {error}", path.display());
-    }
+    let _ = tree.finish(ROOT, ending);
+    drop(tree);
+    bridge.flush();
+    outcome
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn label_names_a_short_list_of_packages() {
-        assert_eq!(
-            label("Installing", &["git".to_string(), "fd".to_string()]),
-            "Installing git, fd"
-        );
-    }
-
-    #[test]
-    fn label_counts_a_long_list_of_packages() {
-        let packages: Vec<String> = (0..12).map(|i| format!("package-{i}")).collect();
-
-        assert_eq!(label("Removing", &packages), "Removing 12 packages");
-    }
-
-    #[tokio::test]
-    async fn write_then_switch_restores_previous_content_when_the_switch_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let state_path = dir.path().join("state");
-        let home_path = dir.path().join("home.nix");
-        std::fs::write(&state_path, "old state").unwrap();
-        std::fs::write(&home_path, "old home").unwrap();
-
-        let err = write_then_switch(&state_path, &home_path, "new state", "new home", || {
-            std::future::ready(Err(mix_core::Error::Cancelled {
-                command: "nix build".to_string(),
-            }))
-        })
-        .await
-        .unwrap_err();
-
-        assert!(matches!(err, Error::Core(_)));
-        assert_eq!(std::fs::read_to_string(&state_path).unwrap(), "old state");
-        assert_eq!(std::fs::read_to_string(&home_path).unwrap(), "old home");
-    }
-
-    #[tokio::test]
-    async fn write_then_switch_leaves_nothing_behind_when_there_was_no_previous_content() {
-        let dir = tempfile::tempdir().unwrap();
-        let state_path = dir.path().join("state");
-        let home_path = dir.path().join("home.nix");
-
-        write_then_switch(&state_path, &home_path, "new state", "new home", || {
-            std::future::ready(Err(mix_core::Error::Cancelled {
-                command: "nix build".to_string(),
-            }))
-        })
-        .await
-        .unwrap_err();
-
-        assert!(!state_path.exists());
-        assert!(!home_path.exists());
-    }
-
-    #[tokio::test]
-    async fn write_then_switch_keeps_the_new_content_when_the_switch_succeeds() {
-        let dir = tempfile::tempdir().unwrap();
-        let state_path = dir.path().join("state");
-        let home_path = dir.path().join("home.nix");
-        std::fs::write(&state_path, "old state").unwrap();
-        std::fs::write(&home_path, "old home").unwrap();
-
-        write_then_switch(&state_path, &home_path, "new state", "new home", || {
-            std::future::ready(Ok("/nix/store/generation".to_string()))
-        })
-        .await
-        .unwrap();
-
-        assert_eq!(std::fs::read_to_string(&state_path).unwrap(), "new state");
-        assert_eq!(std::fs::read_to_string(&home_path).unwrap(), "new home");
-    }
+fn error_of(failure: Failure) -> Error {
+    Error::Core(match failure {
+        Failure::Io { path, kind } => mix_core::Error::Io {
+            path,
+            source: kind.into(),
+        },
+        Failure::SpawnFailed { program, kind } => mix_core::Error::Exec {
+            command: program,
+            source: kind.into(),
+        },
+        Failure::CommandFailed {
+            program,
+            output_tail,
+            ..
+        } => mix_core::Error::Command {
+            command: program,
+            detail: output_tail,
+        },
+        Failure::Cancelled => mix_core::Error::Cancelled {
+            command: "mix".to_string(),
+        },
+        other => mix_core::Error::Command {
+            command: "mix".to_string(),
+            detail: diagnostic(&other).message,
+        },
+    })
 }

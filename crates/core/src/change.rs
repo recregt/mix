@@ -1,6 +1,12 @@
+use std::borrow::Cow;
+use std::path::PathBuf;
+
 use mix_nixgen::{CopyIntoGeneration, FileName, HomeModule, InvalidInput, StateVersion};
 
-use crate::paths::{GENERATION_STATE_FILE, STATE_FILE};
+use crate::action::{Action, Fact, Failure, Query};
+use crate::bootstrap::{FILE_MODE, Facts, ensure_file};
+use crate::paths::{GENERATION_STATE_FILE, HOME_NIX, STATE_FILE, mix_state_dir};
+use crate::plan::StepSpec;
 use crate::privilege::InvokingUser;
 use crate::state::{REQUIRED_PACKAGES, StateManifest};
 
@@ -189,6 +195,131 @@ pub fn render(user: &InvokingUser, manifest: &StateManifest) -> Result<Rendered,
     let state = manifest.render();
     validate(&state)?;
     Ok(Rendered { state, home_nix })
+}
+
+struct WriteConfig {
+    user: InvokingUser,
+    rendered: Rendered,
+}
+
+impl WriteConfig {
+    fn files(&self) -> [(PathBuf, &str); 2] {
+        let state = mix_state_dir(&self.user.home);
+        [
+            (state.join(STATE_FILE), &self.rendered.state),
+            (state.join(HOME_NIX), &self.rendered.home_nix),
+        ]
+    }
+}
+
+impl StepSpec for WriteConfig {
+    fn key(&self) -> Cow<'static, str> {
+        "write-config".into()
+    }
+
+    fn title(&self) -> Cow<'static, str> {
+        "write the package list".into()
+    }
+
+    fn queries(&self) -> Vec<Query> {
+        self.files()
+            .into_iter()
+            .flat_map(|(path, _)| [Query::Path(path.clone()), Query::Contents(path)])
+            .collect()
+    }
+
+    fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
+        let facts = Facts(facts);
+        let owner = Some((self.user.uid, self.user.gid));
+        let mut actions = Vec::new();
+        for (index, (path, wanted)) in self.files().into_iter().enumerate() {
+            actions.extend(ensure_file(
+                &path,
+                facts.path(2 * index),
+                facts.contents(2 * index + 1),
+                wanted.as_bytes(),
+                FILE_MODE,
+                owner,
+            )?);
+        }
+        Ok(actions)
+    }
+}
+
+struct Activate {
+    user: InvokingUser,
+    title: String,
+}
+
+impl StepSpec for Activate {
+    fn key(&self) -> Cow<'static, str> {
+        "activate".into()
+    }
+
+    fn title(&self) -> Cow<'static, str> {
+        self.title.clone().into()
+    }
+
+    fn queries(&self) -> Vec<Query> {
+        Vec::new()
+    }
+
+    fn actions(&self, _: &[Fact]) -> Result<Vec<Action>, Failure> {
+        Ok(vec![Action::ActivateProfile {
+            user: self.user.clone(),
+        }])
+    }
+}
+
+struct Record(InvokingUser);
+
+impl StepSpec for Record {
+    fn key(&self) -> Cow<'static, str> {
+        "record".into()
+    }
+
+    fn title(&self) -> Cow<'static, str> {
+        "record the change".into()
+    }
+
+    fn queries(&self) -> Vec<Query> {
+        Vec::new()
+    }
+
+    fn actions(&self, _: &[Fact]) -> Result<Vec<Action>, Failure> {
+        Ok(vec![Action::RecordState {
+            user: self.0.clone(),
+        }])
+    }
+}
+
+pub fn label(verb: &str, packages: &[String]) -> String {
+    match packages.len() {
+        0..=3 => format!("{verb} {}", packages.join(", ")),
+        n => format!("{verb} {n} packages"),
+    }
+}
+
+pub fn steps(
+    user: &InvokingUser,
+    change: &Change,
+    verb: &str,
+) -> Result<Vec<Box<dyn StepSpec>>, Unrenderable> {
+    if change.changed.is_empty() && change.source == Source::File {
+        return Ok(Vec::new());
+    }
+    let mut steps: Vec<Box<dyn StepSpec>> = vec![Box::new(WriteConfig {
+        user: user.clone(),
+        rendered: render(user, &change.manifest)?,
+    })];
+    if !change.changed.is_empty() {
+        steps.push(Box::new(Activate {
+            user: user.clone(),
+            title: label(verb, &change.changed),
+        }));
+        steps.push(Box::new(Record(user.clone())));
+    }
+    Ok(steps)
 }
 
 #[cfg(test)]
