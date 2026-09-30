@@ -239,7 +239,7 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
     if let Err(failure) = journal.finish() {
         let _ = tree.warn(ROOT, warning(&failure));
     }
-    let _ = tree.finish(ROOT, ending);
+    let _ = tree.finish(ROOT, ending.for_root(false));
     drop(tree);
     bridge.flush();
     outcome(report)

@@ -64,6 +64,7 @@ pub async fn run() -> ExitCode {
         }
     };
 
+    let exit = render::human::Exit::default();
     let result = match &cli.command {
         Command::Bootstrap {
             mirror,
@@ -75,19 +76,23 @@ pub async fn run() -> ExitCode {
                 mirror_key.as_deref(),
                 *force,
                 cli.verbose,
+                &exit,
             )
             .await
         }
-        Command::Install { packages, json } => commands::install::run(packages, *json).await,
-        Command::Remove { packages, json } => commands::remove::run(packages, *json).await,
-        Command::Doctor => commands::doctor::run(cli.verbose).await,
+        Command::Install { packages, json } => commands::install::run(packages, *json, &exit).await,
+        Command::Remove { packages, json } => commands::remove::run(packages, *json, &exit).await,
+        Command::Doctor => commands::doctor::run(cli.verbose, &exit).await,
         Command::Repair | Command::Worker | Command::HomeFiles { .. } | Command::Explain { .. } => {
-            commands::repair::run(cli.verbose).await
+            commands::repair::run(cli.verbose, &exit).await
         }
     };
 
+    let from_root = exit
+        .code()
+        .map(|code| ExitCode::from(u8::try_from(code).unwrap_or(u8::MAX)));
     match result {
-        Ok(code) => code,
+        Ok(code) => from_root.unwrap_or(code),
         Err(e) => {
             let message = explain(&e).message();
             if cli.verbose > 0 {
@@ -95,7 +100,7 @@ pub async fn run() -> ExitCode {
             } else {
                 mix_ui::fail(message);
             }
-            ExitCode::FAILURE
+            from_root.unwrap_or(ExitCode::FAILURE)
         }
     }
 }

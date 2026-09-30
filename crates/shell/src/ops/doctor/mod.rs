@@ -116,7 +116,9 @@ pub async fn audit(ctx: &Context) -> Vec<HealthReport> {
     };
     let _ = tree.finish(
         ROOT,
-        Ending::succeeded().with_result(node_finished::Result::Doctor(result)),
+        Ending::succeeded()
+            .with_result(node_finished::Result::Doctor(result))
+            .for_root(!reports.iter().all(HealthReport::healthy)),
     );
     drop(tree);
     observer.flush();

@@ -115,6 +115,24 @@ impl Ending {
         self.exit_code = exit_code;
         self
     }
+
+    pub fn for_root(self, problems_remain: bool) -> Self {
+        let exit_code = match self.status {
+            Status::Failed => exit::FAILED,
+            Status::Cancelled => exit::INTERRUPTED,
+            _ if problems_remain => exit::PROBLEMS_REMAIN,
+            _ => exit::SUCCEEDED,
+        };
+        self.with_exit_code(exit_code)
+    }
+}
+
+pub mod exit {
+    pub const SUCCEEDED: u32 = 0;
+    pub const FAILED: u32 = 1;
+    pub const USAGE: u32 = 2;
+    pub const PROBLEMS_REMAIN: u32 = 3;
+    pub const INTERRUPTED: u32 = 130;
 }
 
 pub fn output(bytes: &[u8], stream: Stream) -> Progress {

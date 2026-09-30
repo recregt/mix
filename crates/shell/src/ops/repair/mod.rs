@@ -95,7 +95,8 @@ pub async fn repair(ctx: &Context) -> Repair {
     } else {
         Ending::succeeded()
     };
-    let _ = tree.finish(ROOT, ending.with_result(result));
+    let problems_remain = !repair.reports.iter().all(|report| report.fixed);
+    let _ = tree.finish(ROOT, ending.with_result(result).for_root(problems_remain));
     drop(tree);
     observer.flush();
     repair

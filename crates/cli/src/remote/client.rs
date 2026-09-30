@@ -9,7 +9,7 @@ use mix_shell::target::Error as TargetError;
 use prost::Message;
 
 use super::convert::{bootstrap_error_from, report_from_wire, target_error_from};
-use crate::render::human::{Human, Reporters};
+use crate::render::human::{Exit, Human, Reporters};
 
 const LAUNCHER: &str = "sudo";
 const WORKER: &str = "worker";
@@ -28,7 +28,7 @@ struct Replay {
 }
 
 impl Replay {
-    fn new() -> Self {
+    fn new(exit: &Exit) -> Self {
         let mix_ui::Reporters {
             activity,
             steps,
@@ -40,7 +40,8 @@ impl Replay {
                 downloads,
                 steps,
                 activity,
-            }),
+            })
+            .exit_to(exit),
         }
     }
 
@@ -74,9 +75,10 @@ impl Replay {
 
 async fn replay(
     events: impl Stream<Item = Result<Event, mix_rpc::Error>>,
+    exit: &Exit,
 ) -> Result<Outcome, mix_rpc::Error> {
     let interrupts = tokio::spawn(async { while tokio::signal::ctrl_c().await.is_ok() {} });
-    let mut replay = Replay::new();
+    let mut replay = Replay::new(exit);
     let mut events = std::pin::pin!(events);
     let mut outcome = None;
     while let Some(event) = events.next().await {
@@ -99,6 +101,7 @@ pub async fn bootstrap(
     mirror_key: Option<&str>,
     force: bool,
     verbosity: u8,
+    exit: &Exit,
 ) -> anyhow::Result<()> {
     let mut client = start().await?;
     let request = BootstrapRequest {
@@ -109,7 +112,7 @@ pub async fn bootstrap(
         force,
         log_level: level_for(verbosity),
     };
-    let outcome = replay(client.bootstrap(&request).await?).await?;
+    let outcome = replay(client.bootstrap(&request).await?, exit).await?;
     let _ = client.wait().await;
     match outcome {
         Outcome::BootstrapDone => Ok(()),
@@ -118,12 +121,12 @@ pub async fn bootstrap(
     }
 }
 
-pub async fn repair(verbosity: u8) -> anyhow::Result<Repair> {
+pub async fn repair(verbosity: u8, exit: &Exit) -> anyhow::Result<Repair> {
     let mut client = start().await?;
     let request = RepairRequest {
         log_level: level_for(verbosity),
     };
-    let outcome = replay(client.repair(&request).await?).await?;
+    let outcome = replay(client.repair(&request).await?, exit).await?;
     let _ = client.wait().await;
     match outcome {
         Outcome::RepairDone {

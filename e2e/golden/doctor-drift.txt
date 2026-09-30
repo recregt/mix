@@ -1,4 +1,4 @@
-exit 1
+exit 3
 --- stdout
 ✓ Filesystem (23 checks)
 ✓ Identity/Users (35 checks)

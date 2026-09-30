@@ -2,7 +2,7 @@ use std::process::ExitCode;
 
 use mix_shell::ops::doctor::HealthReport;
 
-pub async fn run(verbose: u8) -> anyhow::Result<ExitCode> {
+pub async fn run(verbose: u8, exit: &crate::render::human::Exit) -> anyhow::Result<ExitCode> {
     let reporters = mix_ui::reporters();
     let ctx = mix_shell::Context::new(mix_exec::Scope::root())
         .with_user(super::enrolled_user())
@@ -12,7 +12,8 @@ pub async fn run(verbose: u8) -> anyhow::Result<ExitCode> {
                 steps: reporters.steps,
                 activity: reporters.activity,
             })
-            .verbose(verbose > 0),
+            .verbose(verbose > 0)
+            .exit_to(exit),
         )
         .with_policy(super::policy());
     let reports = mix_shell::ops::doctor::audit(&ctx).await;

@@ -167,7 +167,7 @@ pub async fn run(
             })),
         ),
     };
-    let _ = tree.finish(ROOT, ending);
+    let _ = tree.finish(ROOT, ending.for_root(false));
     drop(tree);
     observer.flush();
     outcome
