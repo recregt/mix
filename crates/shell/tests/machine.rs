@@ -11,7 +11,7 @@ use mix_core::identity::{NIXBLD_GID, NIXBLD_GROUP, NIXBLD_HOME, NIXBLD_SHELL, NI
 use mix_core::model::{Profile, World};
 use mix_core::paths::{
     DEFAULT_PROFILE_NIX_ENV, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, NIX_DAEMON_SERVICE_SRC,
-    NIX_DAEMON_SOCKET_SRC, NIX_TREE_MODE, NIX_TREE_PATHS, POLICY_FILE, mix_state_dir,
+    NIX_DAEMON_SOCKET_SRC, NIX_TREE_MODE, NIX_TREE_PATHS, POLICY_FILE, STATE_FILE, mix_state_dir,
 };
 use mix_core::policy::Policy;
 use mix_core::privilege::InvokingUser;
@@ -305,7 +305,7 @@ fn every_profile_action_and_its_undo_match_the_model() {
     let user = enrolled();
     let owner = (user.uid, user.gid);
     let state = mix_state_dir(&user.home);
-    let config: Vec<Option<Arc<[u8]>>> = [FLAKE_NIX, HOME_NIX, FLAKE_LOCK]
+    let config: Vec<Option<Arc<[u8]>>> = [FLAKE_NIX, HOME_NIX, FLAKE_LOCK, STATE_FILE]
         .iter()
         .map(|file| std::fs::read(state.join(file)).ok().map(Arc::from))
         .collect();
@@ -328,7 +328,10 @@ fn every_profile_action_and_its_undo_match_the_model() {
         .with_dir(user.home.join(".local/state"), 0o755, owner)
         .with_dir(&state, 0o700, owner)
         .with_dir(state.join(".git"), 0o755, owner);
-    for (file, contents) in [FLAKE_NIX, HOME_NIX, FLAKE_LOCK].iter().zip(&config) {
+    for (file, contents) in [FLAKE_NIX, HOME_NIX, FLAKE_LOCK, STATE_FILE]
+        .iter()
+        .zip(&config)
+    {
         world.with_file(
             state.join(file),
             contents.as_deref().unwrap_or_default(),

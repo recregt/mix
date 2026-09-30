@@ -6,12 +6,14 @@ use mix_events::{Outbox, ROOT, Start, Tree};
 
 use super::*;
 use crate::action::Digest;
+use crate::action::{Expect, Kind};
 use crate::bootstrap::{Runtime, Settings};
 use crate::journal::{Record, Recovery, recover};
 use crate::model::World;
 use crate::models::UserConfig;
 use crate::plan::{Input, Next, Report, Runner, Verdict, make_guard};
 use crate::policy::Policy;
+use mix_events::v1::Cancellation;
 
 fn manifest(packages: &[&str]) -> StateManifest {
     StateManifest {
@@ -735,6 +737,190 @@ fn a_finished_change_leaves_the_list_equal_to_the_profile() {
             "{name}"
         );
         assert_eq!(listed(&world), wanted, "{name}");
+    }
+}
+
+fn performed(
+    world: &mut World,
+    change: &Change,
+    stop_before: Option<usize>,
+) -> (Report, Vec<Action>) {
+    let mut runner = Runner::new(ROOT, steps(&user(), change, "Installing").unwrap());
+    make_guard!(guard);
+    let mut runner = runner.brand(guard);
+    let mut tree = Tree::new(
+        Arc::new(Outbox::new("request", || {})),
+        Arc::new(|| None),
+        Start::command("install", Command::default()),
+    );
+    let mut input = None;
+    let mut actions = Vec::new();
+    let mut forward = 0;
+    loop {
+        match runner.step(&mut tree, input.take()) {
+            Next::Observe(queries) => {
+                input = Some(Input::Facts(Ok(queries
+                    .iter()
+                    .map(|query| world.observe(query))
+                    .collect())));
+            }
+            Next::Perform(action) => {
+                if !runner.rolling_back() && action != Action::Commit {
+                    if Some(forward) == stop_before {
+                        runner.stop(Cancellation::Interrupted);
+                    }
+                    forward += 1;
+                }
+                actions.push(action.clone());
+                input = Some(Input::Done(world.apply(&action)));
+            }
+            Next::Finished(closed) => return (runner.report(closed).clone(), actions),
+        }
+    }
+}
+
+#[test]
+fn an_install_performs_exactly_the_writes_the_activation_the_record_and_the_commit() {
+    let mut world = bootstrapped();
+    let state_id = match world.observe(&Query::Path(state_path())) {
+        Fact::Path(facts) => facts.id.unwrap(),
+        other => panic!("the state file is observed as a path, not {other:?}"),
+    };
+    let home_id = match world.observe(&Query::Path(home_nix_path())) {
+        Fact::Path(facts) => facts.id.unwrap(),
+        other => panic!("home.nix is observed as a path, not {other:?}"),
+    };
+    let requested = names(&["ripgrep"]);
+    let change = install(&requested, settled_in(&world)).unwrap();
+    let rendered = render(&user(), &change.manifest).unwrap();
+
+    let (report, actions) = performed(&mut world, &change, None);
+
+    assert_eq!(report.verdict, Verdict::Succeeded);
+    assert_eq!(
+        actions,
+        vec![
+            Action::PutFile {
+                path: state_path(),
+                contents: Arc::from(rendered.state.as_bytes()),
+                mode: 0o644,
+                owner: Some((1000, 1000)),
+                expect: Expect::Present(state_id),
+            },
+            Action::PutFile {
+                path: home_nix_path(),
+                contents: Arc::from(rendered.home_nix.as_bytes()),
+                mode: 0o644,
+                owner: Some((1000, 1000)),
+                expect: Expect::Present(home_id),
+            },
+            Action::ActivateProfile { user: user() },
+            Action::RecordState { user: user() },
+            Action::Commit,
+        ]
+    );
+}
+
+#[test]
+fn removing_a_package_that_is_not_installed_makes_no_plan() {
+    let requested = names(&["ripgrep"]);
+    let change = remove(&requested, current(manifest(&["git"]), Source::File)).unwrap();
+
+    assert_eq!(change.skipped, names(&["ripgrep"]));
+    assert!(steps(&user(), &change, "Removing").unwrap().is_empty());
+}
+
+#[test]
+fn an_install_over_a_broken_list_restores_it_and_adds_the_package() {
+    let mut world = bootstrapped();
+    let generation = manifest(&["git", "fd"]).render();
+    world.with_file(state_path(), b"{broken", 0o644, (1000, 1000));
+    let requested = names(&["ripgrep"]);
+    let change = install(&requested, settle(Some("{broken"), Some(&generation))).unwrap();
+
+    let (report, actions) = performed(&mut world, &change, None);
+
+    assert_eq!(report.verdict, Verdict::Succeeded);
+    assert_eq!(change.source, Source::Generation);
+    assert_eq!(listed(&world), names(&["git", "fd", "ripgrep"]));
+    assert!(actions.contains(&Action::ActivateProfile { user: user() }));
+}
+
+#[test]
+fn an_invalid_package_name_is_refused_before_any_action() {
+    let requested = names(&["not a valid ident"]);
+    let change = install(&requested, current(manifest(&["git"]), Source::File)).unwrap();
+
+    assert!(matches!(
+        steps(&user(), &change, "Installing"),
+        Err(Unrenderable::Package(_))
+    ));
+}
+
+#[test]
+fn an_interrupt_before_any_action_puts_the_change_back_unless_only_the_record_is_left() {
+    let base = bootstrapped();
+    let requested = names(&["ripgrep"]);
+    let change = install(&requested, settled_in(&base)).unwrap();
+    let mut finished = base.clone();
+    let (_, actions) = performed(&mut finished, &change, None);
+    let forward = actions
+        .iter()
+        .filter(|action| **action != Action::Commit)
+        .count();
+
+    for stop_before in 0..forward {
+        let mut world = base.clone();
+
+        let (report, actions) = performed(&mut world, &change, Some(stop_before));
+
+        let record_left = actions
+            .iter()
+            .filter(|action| **action != Action::Commit)
+            .position(|action| matches!(action, Action::RecordState { .. }))
+            == Some(stop_before);
+        if record_left {
+            assert_eq!(
+                report.verdict,
+                Verdict::Succeeded,
+                "stop before {stop_before}"
+            );
+            assert_eq!(listed(&world), names(&["git", "ripgrep"]));
+        } else {
+            assert!(
+                matches!(report.verdict, Verdict::Cancelled(_)),
+                "stop before {stop_before}: {:?}",
+                report.verdict
+            );
+            assert!(
+                report.rollback_failures.is_empty(),
+                "stop before {stop_before}"
+            );
+            assert_eq!(world.contents(state_path()), base.contents(state_path()));
+            assert_eq!(
+                world.contents(home_nix_path()),
+                base.contents(home_nix_path())
+            );
+            assert_eq!(active(&world), active(&base), "stop before {stop_before}");
+        }
+    }
+}
+
+#[test]
+fn the_written_files_keep_their_kind_and_owner() {
+    let mut world = bootstrapped();
+    let requested = names(&["ripgrep"]);
+    let change = install(&requested, settled_in(&world)).unwrap();
+
+    performed(&mut world, &change, None);
+
+    for path in [state_path(), home_nix_path()] {
+        let Fact::Path(facts) = world.observe(&Query::Path(path.clone())) else {
+            panic!("{} is observed as a path", path.display());
+        };
+        assert_eq!(facts.kind, Kind::File, "{}", path.display());
+        assert_eq!(facts.owner, (1000, 1000), "{}", path.display());
+        assert_eq!(facts.mode, 0o644, "{}", path.display());
     }
 }
 
