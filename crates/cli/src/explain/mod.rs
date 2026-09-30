@@ -20,7 +20,7 @@ pub mod remove;
 pub mod repair;
 
 pub(crate) mod change;
-mod render;
+pub(crate) mod render;
 pub mod target;
 
 pub(crate) use render::{Context, render, rpc_fault};

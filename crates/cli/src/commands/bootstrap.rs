@@ -1,7 +1,5 @@
 use std::process::ExitCode;
 
-use mix_core::paths::PROFILE_SNIPPET_DEST;
-
 pub async fn run(
     mirror: Option<&str>,
     mirror_key: Option<&str>,
@@ -36,10 +34,5 @@ pub async fn run(
     } else {
         crate::remote::client::bootstrap(mirror, mirror_key, force, verbosity).await?;
     }
-    mix_ui::ok("mix is ready!");
-    mix_ui::info("");
-    mix_ui::info(format!(
-        "to use installed packages in this terminal session, run:\n  source {PROFILE_SNIPPET_DEST}"
-    ));
     Ok(ExitCode::SUCCESS)
 }

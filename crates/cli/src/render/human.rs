@@ -89,9 +89,7 @@ impl Human {
                 _ => {}
             },
             Event::NodeFinished(node) if node.id == ROOT => {
-                if let Some(result) = &node.result {
-                    super::results::finished(result, self.results);
-                }
+                super::results::finished(&node, self.results);
             }
             Event::NodeFinished(node) if self.actions.remove(&node.id) => {
                 let span = self.spans.remove(&node.id);

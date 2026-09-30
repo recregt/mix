@@ -12,17 +12,18 @@ use mix_core::action::Failure;
 use mix_core::health;
 use mix_core::models::{Target, UserConfig, targets};
 use mix_core::paths::mix_state_dir;
-use mix_core::plan::{Runner, StepOutcome, Verdict, diagnostic};
-use mix_events::v1::{Command, RepairRequest, command};
-use mix_events::{Ending, Outbox, ROOT, Start, Tree};
+use mix_core::plan::{Runner, StepOutcome, Verdict};
+use mix_events::v1::{Cancellation, Command, RepairRequest, RepairResult, command, node_finished};
+use mix_events::{Diagnose, Ending, Fault, Outbox, ROOT, Start, Stopped, Tree};
 use mix_exec::Scope;
 
-use crate::drive::{Journal, Performer, drive, stopped_by};
+use crate::drive::{Journal, Observer, Performer, drive, stopped_by};
 use crate::effect::files::Files;
 use crate::effect::git;
 use crate::effect::home::core_error;
 use crate::effect::journal::{FileJournal, JOURNAL_DIR, recover_all};
 use crate::ops::bootstrap::request_id;
+use crate::render::Relay;
 use crate::target::Error;
 use crate::{Context, HostConfig};
 
@@ -35,6 +36,17 @@ pub struct RepairReport {
 }
 
 impl RepairReport {
+    fn wire(&self) -> mix_events::v1::RepairReport {
+        mix_events::v1::RepairReport {
+            target: self.name.clone(),
+            fixed: self.fixed,
+            failure: self.error.as_ref().and_then(|error| match error.fault() {
+                Fault::Failed(diagnostic) => Some(diagnostic),
+                Fault::Cancelled { .. } => None,
+            }),
+        }
+    }
+
     fn repaired(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -58,12 +70,49 @@ pub struct Repair {
 }
 
 pub async fn repair(ctx: &Context) -> Repair {
+    let request = request_id();
+    let outbox = Arc::new(Outbox::new(request.clone(), || {}));
+    let mut observer = Relay::new(Arc::clone(&outbox), Arc::clone(&ctx.render));
+    let stopped = stopped_by(&ctx.scope);
+    let mut tree = Tree::new(
+        outbox,
+        Arc::clone(&stopped),
+        Start::command(
+            "repair",
+            Command {
+                mix_version: env!("CARGO_PKG_VERSION").to_string(),
+                schema_minor: mix_events::SCHEMA_MINOR,
+                request: Some(command::Request::Repair(RepairRequest {})),
+            },
+        ),
+    );
+    let repair = repaired(ctx, &request, &mut tree, &stopped, &mut observer).await;
+    let result = node_finished::Result::Repair(RepairResult {
+        reports: repair.reports.iter().map(RepairReport::wire).collect(),
+    });
+    let ending = if repair.interrupted {
+        Ending::cancelled(Cancellation::Interrupted)
+    } else {
+        Ending::succeeded()
+    };
+    let _ = tree.finish(ROOT, ending.with_result(result));
+    drop(tree);
+    observer.flush();
+    repair
+}
+
+async fn repaired(
+    ctx: &Context,
+    request: &str,
+    tree: &mut Tree,
+    stopped: &Stopped,
+    observer: &mut Relay,
+) -> Repair {
     tracing::info!("repairing managed environment");
     let user_config = ctx.user.as_ref();
     let scope = &ctx.scope;
-    let request = request_id();
     let items = targets(user_config, &ctx.policy);
-    let files = match Files::open(Path::new("/"), &request) {
+    let files = match Files::open(Path::new("/"), request) {
         Ok(files) => files,
         Err(source) => {
             return Repair {
@@ -84,7 +133,7 @@ pub async fn repair(ctx: &Context) -> Repair {
     for (action, failure) in &recovered.failures {
         tracing::warn!("could not finish an interrupted request ({action:?}): {failure:?}");
     }
-    let mut journal = match FileJournal::create(journals, &request) {
+    let mut journal = match FileJournal::create(journals, request) {
         Ok(journal) => journal,
         Err(failure) => {
             return Repair {
@@ -96,8 +145,19 @@ pub async fn repair(ctx: &Context) -> Repair {
             };
         }
     };
-    let (mut reports, interrupted) =
-        put_back(items, &request, &mut performer, &mut journal, scope).await;
+    let (mut reports, interrupted) = put_back(
+        items,
+        request,
+        &mut performer,
+        &mut journal,
+        scope,
+        Events {
+            tree,
+            stopped,
+            observer,
+        },
+    )
+    .await;
     if let Err(failure) = journal.finish() {
         tracing::warn!("could not remove the finished journal: {failure:?}");
     }
@@ -119,46 +179,31 @@ fn error_of(failure: Failure, name: &str) -> Error {
     }
 }
 
+struct Events<'a> {
+    tree: &'a mut Tree,
+    stopped: &'a Stopped,
+    observer: &'a mut dyn Observer,
+}
+
 async fn put_back(
     items: Vec<Target<'_>>,
     request: &str,
     performer: &mut Performer,
     journal: &mut dyn Journal,
     scope: &Scope,
+    events: Events<'_>,
 ) -> (Vec<RepairReport>, bool) {
-    let outbox = Arc::new(Outbox::new(request.to_string(), || {}));
-    let stopped = stopped_by(scope);
-    let mut tree = Tree::new(
-        Arc::clone(&outbox),
-        Arc::clone(&stopped),
-        Start::command(
-            "repair",
-            Command {
-                mix_version: env!("CARGO_PKG_VERSION").to_string(),
-                schema_minor: mix_events::SCHEMA_MINOR,
-                request: Some(command::Request::Repair(RepairRequest {})),
-            },
-        ),
-    );
     let mut runner = Runner::new(ROOT, health::repair_steps(items, request)).independent();
     let report = drive(
         &mut runner,
-        &mut tree,
+        events.tree,
         performer,
         scope,
-        &stopped,
+        events.stopped,
         journal,
-        &mut (),
+        events.observer,
     )
     .await;
-    let ending = match &report.verdict {
-        Verdict::Succeeded => Ending::succeeded(),
-        Verdict::Failed { failure, .. } => Ending::failed(diagnostic(failure)),
-        Verdict::Cancelled(cause) => Ending::cancelled(*cause),
-    };
-    let _ = tree.finish(ROOT, ending);
-    drop(tree);
-    outbox.drain();
 
     let mut reports = Vec::new();
     for (name, outcome) in std::mem::take(&mut report.steps) {
@@ -245,7 +290,25 @@ mod tests {
     async fn repair_in(targets: Vec<Target<'_>>, scope: &Scope) -> (Vec<RepairReport>, bool) {
         let mut performer = Performer::new(Files::open(Path::new("/"), "r1").unwrap());
         let mut journal: Vec<Record> = Vec::new();
-        put_back(targets, "r1", &mut performer, &mut journal, scope).await
+        let stopped = stopped_by(scope);
+        let mut tree = Tree::new(
+            Arc::new(Outbox::new("r1", || {})),
+            Arc::clone(&stopped),
+            Start::command("repair", Command::default()),
+        );
+        put_back(
+            targets,
+            "r1",
+            &mut performer,
+            &mut journal,
+            scope,
+            Events {
+                tree: &mut tree,
+                stopped: &stopped,
+                observer: &mut (),
+            },
+        )
+        .await
     }
 
     #[tokio::test]

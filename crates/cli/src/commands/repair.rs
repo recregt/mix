@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 
-use mix_shell::ops::repair::{Repair, RepairReport};
+use mix_shell::ops::repair::Repair;
 
 pub async fn run(verbosity: u8) -> anyhow::Result<ExitCode> {
     let Repair {
@@ -8,8 +8,16 @@ pub async fn run(verbosity: u8) -> anyhow::Result<ExitCode> {
         interrupted,
     } = if mix_shell::effect::accounts::is_root() {
         let _lock = super::acquire_lock()?;
+        let reporters = mix_ui::reporters();
         let ctx = mix_shell::Context::new(mix_exec::Scope::root())
             .with_user(super::enrolled_user())
+            .with_render(crate::render::human::Human::new(
+                crate::render::human::Reporters {
+                    downloads: reporters.downloads,
+                    steps: reporters.steps,
+                    activity: reporters.activity,
+                },
+            ))
             .with_policy(super::policy())
             .with_host(super::host_config());
         let _watch = crate::controls::watch(
@@ -23,34 +31,9 @@ pub async fn run(verbosity: u8) -> anyhow::Result<ExitCode> {
         crate::remote::client::repair(verbosity).await?
     };
 
-    if reports.is_empty() && !interrupted {
-        mix_ui::ok("Nothing to repair, system health is intact.");
-        return Ok(ExitCode::SUCCESS);
-    }
-
-    render(&reports);
-
-    if interrupted {
-        mix_ui::fail(
-            "The repair was stopped before it finished. Run `mix repair` again to finish it.",
-        );
-        return Ok(ExitCode::FAILURE);
-    }
-
-    if reports.iter().all(|report| report.fixed) {
-        mix_ui::ok("System state repaired.");
-        Ok(ExitCode::SUCCESS)
-    } else {
-        mix_ui::fail("Some issues could not be repaired automatically.");
+    if interrupted || !reports.iter().all(|report| report.fixed) {
         Ok(ExitCode::FAILURE)
-    }
-}
-
-fn render(reports: &[RepairReport]) {
-    for report in reports {
-        match &report.error {
-            None => mix_ui::ok(format!("repaired: {}", report.name)),
-            Some(error) => mix_ui::fail_about(&report.name, &crate::explain::target::report(error)),
-        }
+    } else {
+        Ok(ExitCode::SUCCESS)
     }
 }

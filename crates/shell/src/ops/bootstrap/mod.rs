@@ -15,7 +15,8 @@ use mix_core::action::{Digest, Failure};
 use mix_core::bootstrap::{Runtime, Settings, steps};
 use mix_core::plan::{Report, Runner, Verdict, diagnostic};
 use mix_events::v1::{
-    BootstrapRequest, Command, Diagnostic, Severity, Step, command, node_started,
+    BootstrapRequest, BootstrapResult, Command, Diagnostic, Severity, Step, command, node_finished,
+    node_started,
 };
 use mix_events::{Ending, Outbox, ROOT, Start, Stopped, Tree};
 
@@ -229,7 +230,9 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
     )
     .await;
     let ending = match &report.verdict {
-        Verdict::Succeeded => Ending::succeeded(),
+        Verdict::Succeeded => {
+            Ending::succeeded().with_result(node_finished::Result::Bootstrap(BootstrapResult {}))
+        }
         Verdict::Failed { failure, .. } => Ending::failed(diagnostic(failure)),
         Verdict::Cancelled(cause) => Ending::cancelled(*cause),
     };
