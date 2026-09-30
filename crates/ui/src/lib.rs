@@ -141,7 +141,11 @@ pub fn status(status: Status, subject: &str) {
     status_to(&Stderr, status, subject);
 }
 
-pub fn output_line(line: &str) -> String {
+pub fn output_lines(text: &str) -> impl Iterator<Item = String> + '_ {
+    text.lines().map(output_line)
+}
+
+fn output_line(line: &str) -> String {
     let printable = activity::printable(line);
     let mut out = String::with_capacity(GUTTER + 3 + printable.len());
     for _ in 0..=GUTTER {
@@ -152,12 +156,14 @@ pub fn output_line(line: &str) -> String {
     out
 }
 
-pub fn output_to(out: &dyn Out, line: &str) {
-    out.line(&output_line(line));
+pub fn output_to(out: &dyn Out, text: &str) {
+    for line in output_lines(text) {
+        out.line(&line);
+    }
 }
 
-pub fn output(line: &str) {
-    output_to(&Stderr, line);
+pub fn output(text: &str) {
+    output_to(&Stderr, text);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -399,6 +405,20 @@ mod tests {
         assert_eq!(
             output_line("\u{1b}[1mbuilding hello"),
             format!("{}| building hello", " ".repeat(GUTTER + 1))
+        );
+    }
+
+    #[test]
+    fn a_message_of_several_lines_keeps_each_under_the_gutter() {
+        let gutter = " ".repeat(GUTTER + 1);
+        assert_eq!(
+            output_lines("error:\r\n  at home.nix:10:7\n  Did you mean ripgrep?")
+                .collect::<Vec<_>>(),
+            [
+                format!("{gutter}| error:"),
+                format!("{gutter}|   at home.nix:10:7"),
+                format!("{gutter}|   Did you mean ripgrep?"),
+            ]
         );
     }
 }

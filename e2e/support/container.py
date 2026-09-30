@@ -5,6 +5,7 @@ import os
 import pathlib
 import queue
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -208,14 +209,38 @@ class Container:
         )
         return BackgroundRun(self, process, capture)
 
-    def attach_captures(self, test: str) -> None:
+    def rendered(self, capture: str, verbosity: str) -> str:
+        return self.exec("mix", verbosity, "events", "show", capture).stdout
+
+    def snapshot(self) -> str:
+        probes = [
+            ("units", ["systemctl", "list-units", "--all", "--no-pager", "nix-*", "mix*"]),
+            (
+                "daemon journal",
+                ["journalctl", "--no-pager", "-u", "nix-daemon.service", "-u", "nix-daemon.socket"],
+            ),
+            ("processes", ["ps", "-eo", "pid,ppid,stat,wchan:24,etime,args", "--forest"]),
+            ("mix journal", ["sh", "-c", "ls -la /var/lib/mix/journal && cat /var/lib/mix/journal/*"]),
+        ]
+        sections = []
+        for title, probe in probes:
+            result = self.exec(*probe)
+            sections.append(f"=== {title}\n{result.stdout}{result.stderr}")
+        return "\n".join(sections)
+
+    def attach_failure(self, test: str, report) -> None:
         folder = REPO_ROOT / "target/e2e-events" / re.sub(r"[^\w.-]+", "_", test)
-        folder.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(folder, ignore_errors=True)
+        folder.mkdir(parents=True)
         for capture in self.captures:
-            subprocess.run(
-                ["podman", "cp", f"{self.name}:{capture}", str(folder)],
-                capture_output=True,
+            name = pathlib.PurePosixPath(capture).stem
+            (folder / f"{name}.ndjson").write_text(self.exec("cat", capture).stdout)
+            (folder / f"{name}.txt").write_text(self.rendered(capture, "-vv"))
+            report.sections.append(
+                (f"mix -v events show {capture}", self.rendered(capture, "-v"))
             )
+        (folder / "machine.txt").write_text(self.snapshot())
+        report.user_properties.append(("failure bundle", str(folder)))
 
     def exec(self, *args, env=None, check=False, user=None):
         cmd = ["podman", "exec"]
@@ -465,9 +490,6 @@ def container(request, container_image, mix_binary):
         resources.attach(name, cgroup)
         container = Container(name)
         yield container
-        report = getattr(request.node, "rep_call", None)
-        if report is not None and report.failed:
-            container.attach_captures(test)
     finally:
         if cgroup is not None:
             variant = "snapshot" if bootstrapped else "fresh"

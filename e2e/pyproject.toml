@@ -12,6 +12,7 @@ package = false
 
 [tool.pytest.ini_options]
 addopts = ["-p", "no:cacheprovider", "-rfE"]
+verbosity_assertions = 2
 markers = [
     "bootstrapped: start from a container where ciuser already ran `mix bootstrap`",
 ]

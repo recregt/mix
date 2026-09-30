@@ -40,7 +40,12 @@ def pytest_unconfigure(config):
 def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
-    setattr(item, f"rep_{report.when}", report)
+    container = getattr(item, "funcargs", {}).get("container")
+    if report.when == "call" and report.failed and container is not None:
+        try:
+            container.attach_failure(item.nodeid, report)
+        except OSError as error:
+            report.sections.append(("failure bundle", f"could not be gathered: {error!r}"))
 
 
 @pytest.hookimpl(optionalhook=True)
@@ -60,6 +65,19 @@ def pytest_collection_modifyitems(items):
 def pytest_terminal_summary(terminalreporter, config):
     if not _is_controller(config):
         return
+    bundles = sorted(
+        {
+            (report.nodeid, value)
+            for reports in terminalreporter.stats.values()
+            for report in reports
+            for name, value in getattr(report, "user_properties", ())
+            if name == "failure bundle"
+        }
+    )
+    if bundles:
+        terminalreporter.write_sep("-", "failure bundles")
+        for nodeid, folder in bundles:
+            terminalreporter.write_line(f"{nodeid}: {folder}")
     runs = resources.session_runs(os.environ.get("MIX_TEST_SESSION", ""))
     resources.trim_history()
     if not runs:

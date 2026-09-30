@@ -99,10 +99,12 @@ class Run:
 
     def __repr__(self) -> str:
         finished = [
-            e for e in self.envelopes if e.get("nodeFinished", {}).get("id") == ROOT
+            e["nodeFinished"]
+            for e in self.envelopes
+            if e.get("nodeFinished", {}).get("id") == ROOT
         ]
-        outcome = finished[0] if finished else None
-        return (
-            f"Run(returncode={self.returncode}, root={outcome}, steps={self.steps()})\n"
-            f"--- stderr\n{self.stderr}"
-        )
+        if not finished:
+            return f"Run(exited {self.returncode}, never finished)"
+        root = finished[0]
+        code = root.get("diagnostic", {}).get("code")
+        return f"Run(exited {self.returncode}, {root.get('status')}, {code})"
