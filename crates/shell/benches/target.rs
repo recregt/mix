@@ -4,7 +4,7 @@ use std::sync::Arc;
 use mix_core::health;
 use mix_core::journal::Record;
 use mix_core::models::Target;
-use mix_core::plan::{Report, Runner};
+use mix_core::plan::Runner;
 use mix_events::v1::Command;
 use mix_events::{Ending, Outbox, ROOT, Start, Tree};
 use mix_shell::drive::{Performer, drive};
@@ -69,7 +69,7 @@ fn repair(
     rt: &tokio::runtime::Runtime,
     performer: &mut Performer,
     targets: Vec<Target<'static>>,
-) -> Report {
+) -> Runner {
     let outbox = Arc::new(Outbox::new("bench", || {}));
     let mut tree = Tree::new(
         Arc::clone(&outbox),
@@ -80,7 +80,7 @@ fn repair(
     let mut journal: Vec<Record> = Vec::new();
     let scope = mix_exec::Scope::root();
     let stopped: mix_events::Stopped = Arc::new(|| None);
-    let report = rt.block_on(drive(
+    let closed = rt.block_on(drive(
         &mut runner,
         &mut tree,
         performer,
@@ -92,7 +92,8 @@ fn repair(
     let _ = tree.finish(ROOT, Ending::succeeded());
     drop(tree);
     divan::black_box(outbox.drain());
-    report
+    divan::black_box(runner.report(closed));
+    runner
 }
 
 /// The measurement both `mix doctor` and `mix repair` read: every declared target inspected once.

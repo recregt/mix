@@ -101,7 +101,7 @@ fn run(world: &mut World, settings: &Settings, script: Script) -> Run {
                 }
                 input = Some(Input::Done(outcome));
             }
-            Next::Finished(report) => break report,
+            Next::Finished(closed) => break runner.report(closed).clone(),
         }
     };
     let ending = match &report.verdict {

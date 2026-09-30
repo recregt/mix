@@ -105,7 +105,7 @@ fn drive(world: &mut World, mut runner: Runner) -> Report {
                     .collect())));
             }
             Next::Perform(action) => input = Some(Input::Done(world.apply(&action))),
-            Next::Finished(report) => return report,
+            Next::Finished(closed) => return runner.report(closed).clone(),
         }
     }
 }

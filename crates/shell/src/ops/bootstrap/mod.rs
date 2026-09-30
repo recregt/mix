@@ -124,11 +124,11 @@ pub fn error_from(failure: Failure) -> Error {
     }
 }
 
-fn outcome(report: Report) -> Result<Environment> {
-    let cause = match report.verdict {
+fn outcome(report: &Report) -> Result<Environment> {
+    let cause = match &report.verdict {
         Verdict::Succeeded => return Ok(Environment::new()),
         Verdict::Cancelled(_) => Error::Interrupted,
-        Verdict::Failed { failure, .. } => error_from(failure),
+        Verdict::Failed { failure, .. } => error_from(failure.clone()),
     };
     if report.rollback_failures.is_empty() {
         return Err(cause);
@@ -219,7 +219,7 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
     }
     let mut journal = FileJournal::create(journals, &request).map_err(error_from)?;
     let mut runner = Runner::new(ROOT, steps(&settings));
-    let report = drive(
+    let closed = drive(
         &mut runner,
         &mut tree,
         &mut performer,
@@ -229,6 +229,7 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
         &mut bridge,
     )
     .await;
+    let report = runner.report(closed);
     let ending = match &report.verdict {
         Verdict::Succeeded => Ending::succeeded(),
         Verdict::Failed { failure, .. } => Ending::failed(diagnostic(failure)),

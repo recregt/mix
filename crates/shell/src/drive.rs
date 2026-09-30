@@ -11,7 +11,7 @@ use mix_core::action::{Action, Fact, Failure, Kind, Outcome, PathFacts, Performe
 use mix_core::journal::Record;
 use mix_core::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
 use mix_core::paths::mix_state_dir;
-use mix_core::plan::{Input, Next, Report, Runner};
+use mix_core::plan::{Closed, Input, Next, Runner};
 use mix_core::privilege::InvokingUser;
 use mix_events::v1::node_progress::Progress;
 use mix_events::v1::{Bytes, Cancellation};
@@ -412,7 +412,7 @@ pub async fn drive(
     stopped: &Stopped,
     journal: &mut dyn Journal,
     observer: &mut dyn Observer,
-) -> Report {
+) -> Closed {
     let mut input = None;
     let mut seq = 0;
     let mut ended = false;
@@ -493,11 +493,11 @@ pub async fn drive(
                 }
                 input = Some(Input::Done(outcome));
             }
-            Next::Finished(report) => {
+            Next::Finished(closed) => {
                 if !ended {
                     keep(journal, &Record::Ended);
                 }
-                return report;
+                return closed;
             }
         }
     }
@@ -608,7 +608,7 @@ mod tests {
         root: &Path,
         last: &'static str,
         stopped: Stopped,
-    ) -> (Report, Vec<mix_events::v1::Envelope>) {
+    ) -> (mix_core::plan::Report, Vec<mix_events::v1::Envelope>) {
         let outbox = Arc::new(Outbox::new("request", || {}));
         let mut tree = Tree::new(
             outbox.clone(),
@@ -619,7 +619,7 @@ mod tests {
         let mut performer = Performer::new(Files::open(root, "r1").unwrap());
 
         let mut journal = Vec::new();
-        let report = drive(
+        let closed = drive(
             &mut runner,
             &mut tree,
             &mut performer,
@@ -631,7 +631,7 @@ mod tests {
         .await;
         assert_eq!(journal.last(), Some(&Record::Ended));
         drop(tree);
-        (report, outbox.drain())
+        (runner.report(closed).clone(), outbox.drain())
     }
 
     #[tokio::test]

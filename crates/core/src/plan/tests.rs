@@ -236,7 +236,7 @@ fn drive_runner(world: &mut World, mut runner: Runner, script: Script) -> Run {
                 };
                 input = Some(Input::Done(outcome));
             }
-            Next::Finished(report) => break report,
+            Next::Finished(closed) => break runner.report(closed).clone(),
         }
     };
     let ending = match &report.verdict {
@@ -567,7 +567,7 @@ fn a_commit_that_fails_still_succeeds_and_warns() {
                 })));
             }
             Next::Perform(action) => input = Some(Input::Done(world.apply(&action))),
-            Next::Finished(report) => break report,
+            Next::Finished(closed) => break runner.report(closed).clone(),
         }
     };
     tree.finish(ROOT, Ending::succeeded()).unwrap();
@@ -700,7 +700,7 @@ proptest! {
 }
 
 fn answer(
-    runner: &mut Runner,
+    mut runner: Runner,
     world: &mut World,
     observe: impl Fn(&World, &[Query]) -> Result<Vec<Fact>, Failure>,
     mut fail: impl FnMut(&Action) -> bool,
@@ -728,7 +728,7 @@ fn answer(
                 };
                 input = Some(Input::Done(outcome));
             }
-            Next::Finished(report) => return (report, performed),
+            Next::Finished(closed) => return (runner.report(closed).clone(), performed),
         }
     }
 }
@@ -737,10 +737,10 @@ fn answer(
 fn a_step_that_cannot_be_observed_fails_and_rolls_back_what_came_before() {
     let base = World::default();
     let mut world = base.clone();
-    let mut runner = Runner::new(ROOT, bootstrap_like());
+    let runner = Runner::new(ROOT, bootstrap_like());
 
     let (report, _) = answer(
-        &mut runner,
+        runner,
         &mut world,
         |world, queries| {
             if matches!(queries.first(), Some(Query::Group(_))) {
@@ -765,10 +765,10 @@ fn a_step_that_cannot_be_observed_fails_and_rolls_back_what_came_before() {
 #[test]
 fn every_undo_is_performed_shielded_and_no_forward_action_is() {
     let mut world = World::default();
-    let mut runner = Runner::new(ROOT, bootstrap_like());
+    let runner = Runner::new(ROOT, bootstrap_like());
 
     let (_, performed) = answer(
-        &mut runner,
+        runner,
         &mut world,
         |world, queries| Ok(queries.iter().map(|query| world.observe(query)).collect()),
         |action| matches!(action, Action::PutFile { path, .. } if path.ends_with("nix.conf")),
@@ -927,7 +927,7 @@ fn an_action_that_failed_after_taking_effect_is_undone_as_one_in_doubt() {
                         forward += 1;
                     }
                 }
-                Next::Finished(report) => break report,
+                Next::Finished(closed) => break runner.report(closed).clone(),
             }
         };
 
@@ -939,4 +939,39 @@ fn an_action_that_failed_after_taking_effect_is_undone_as_one_in_doubt() {
         );
         assert_eq!(world, base, "failing at {failing}");
     }
+}
+
+#[test]
+fn a_finished_plan_stepped_again_stays_finished() {
+    let mut world = World::default();
+    let outbox = Arc::new(Outbox::new("plan", || {}));
+    let mut tree = Tree::new(
+        outbox.clone(),
+        Arc::new(|| None),
+        Start::command("bootstrap", Command::default()),
+    );
+    let mut runner = Runner::new(ROOT, bootstrap_like());
+    let mut input = None;
+    let closed = loop {
+        match runner.step(&mut tree, input.take()) {
+            Next::Observe(queries) => {
+                input = Some(Input::Facts(Ok(queries
+                    .iter()
+                    .map(|query| world.observe(query))
+                    .collect())));
+            }
+            Next::Perform(action) => input = Some(Input::Done(world.apply(&action))),
+            Next::Finished(closed) => break closed,
+        }
+    };
+    let events = outbox.drain().len();
+
+    let Next::Finished(again) = runner.step(&mut tree, None) else {
+        panic!("a finished plan stays finished");
+    };
+    assert_eq!(outbox.drain().len(), 0);
+    assert!(events > 0);
+    let first = runner.report(closed).clone();
+    assert_eq!(first.verdict, Verdict::Succeeded);
+    assert_eq!(runner.report(again), &first);
 }

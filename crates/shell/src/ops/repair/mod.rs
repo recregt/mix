@@ -141,7 +141,7 @@ async fn put_back(
         ),
     );
     let mut runner = Runner::new(ROOT, health::repair_steps(items, request)).independent();
-    let report = drive(
+    let closed = drive(
         &mut runner,
         &mut tree,
         performer,
@@ -151,6 +151,7 @@ async fn put_back(
         &mut (),
     )
     .await;
+    let report = runner.report(closed);
     let ending = match &report.verdict {
         Verdict::Succeeded => Ending::succeeded(),
         Verdict::Failed { failure, .. } => Ending::failed(diagnostic(failure)),
@@ -161,7 +162,7 @@ async fn put_back(
     outbox.drain();
 
     let mut reports = Vec::new();
-    for (name, outcome) in report.steps {
+    for (name, outcome) in std::mem::take(&mut report.steps) {
         match outcome {
             StepOutcome::Changed => {
                 tracing::debug!("repaired: {name}");
@@ -175,7 +176,7 @@ async fn put_back(
             StepOutcome::Satisfied | StepOutcome::Cancelled(_) => {}
         }
     }
-    for (name, failure) in report.rollback_failures {
+    for (name, failure) in std::mem::take(&mut report.rollback_failures) {
         let error = error_of(failure, &name);
         reports.push(RepairReport::failed(name, error));
     }
