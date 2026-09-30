@@ -42,3 +42,11 @@ jobs:
           MIX_TEST_ALLOW_NETWORK: "1"
           PYTHONUNBUFFERED: "1"
         run: bash e2e/run.sh --durations=15
+
+      - name: Upload the events of failed tests
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-events
+          path: target/e2e-events/
+          if-no-files-found: ignore
