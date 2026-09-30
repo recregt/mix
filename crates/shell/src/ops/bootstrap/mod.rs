@@ -175,7 +175,6 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
     })?;
     let mut performer = Performer::new(files).with_profile(ProfileContext {
         mirror: ctx.mirror().map(str::to_string),
-        activity: Arc::clone(&ctx.reporters.activity),
         host: ctx.host.clone(),
     });
     let outbox = Arc::new(Outbox::new(request.clone(), || {}));

@@ -6,6 +6,8 @@ use mix_events::v1::{
 };
 use mix_events::{NodeId, Outbox};
 
+use mix_core::BuildProgress;
+
 use crate::Reporters;
 use crate::drive::Observer;
 
@@ -16,6 +18,7 @@ pub struct Bridge {
     titles: HashMap<NodeId, String>,
     received: HashMap<NodeId, u64>,
     actions: HashSet<NodeId>,
+    printed: HashSet<NodeId>,
 }
 
 impl Bridge {
@@ -27,6 +30,7 @@ impl Bridge {
             titles: HashMap::new(),
             received: HashMap::new(),
             actions: HashSet::new(),
+            printed: HashSet::new(),
         }
     }
 
@@ -63,8 +67,15 @@ impl Bridge {
                 _ => {}
             },
             Event::NodeFinished(node) if self.actions.remove(&node.id) => {
-                self.spans.remove(&node.id);
+                let span = self.spans.remove(&node.id);
                 self.received.remove(&node.id);
+                if self.printed.remove(&node.id) {
+                    let activity = Arc::clone(&self.reporters.activity);
+                    match span {
+                        Some(span) => span.in_scope(|| activity.clear()),
+                        None => activity.clear(),
+                    }
+                }
             }
             Event::NodeFinished(node) => {
                 self.received.remove(&node.id);
@@ -101,6 +112,38 @@ impl Bridge {
                         downloads.set_total(total);
                     }
                     downloads.add(bytes.done.saturating_sub(before));
+                });
+            }
+            Event::NodeProgress(NodeProgress {
+                id,
+                progress: Some(node_progress::Progress::Line(line)),
+            }) => {
+                let Some(span) = self.spans.get(&id) else {
+                    return;
+                };
+                self.printed.insert(id);
+                let activity = Arc::clone(&self.reporters.activity);
+                span.in_scope(|| activity.line(&line.text));
+            }
+            Event::NodeProgress(NodeProgress {
+                id,
+                progress: Some(node_progress::Progress::Builds(builds)),
+            }) => {
+                let Some(span) = self.spans.get(&id) else {
+                    return;
+                };
+                let activity = Arc::clone(&self.reporters.activity);
+                span.in_scope(|| {
+                    activity.progress(&BuildProgress {
+                        builds_done: builds.builds_done,
+                        builds_expected: builds.builds_expected,
+                        builds_running: builds.builds_running,
+                        downloads_done: builds.downloads_done,
+                        downloads_expected: builds.downloads_expected,
+                        downloads_running: builds.downloads_running,
+                        bytes_done: builds.bytes_done,
+                        bytes_expected: builds.bytes_expected,
+                    })
                 });
             }
             Event::Diagnostic(diagnostic) => tracing::warn!("{}", diagnostic.message),
@@ -221,6 +264,89 @@ mod tests {
                 "add 6",
                 "closed failed=false"
             ]
+        );
+    }
+
+    #[derive(Default)]
+    struct Printed(Mutex<Vec<String>>);
+
+    impl mix_core::ActivityReporter for Printed {
+        fn line(&self, line: &str) {
+            self.0.lock().unwrap().push(format!("line {line}"));
+        }
+
+        fn progress(&self, progress: &BuildProgress) {
+            self.0.lock().unwrap().push(format!(
+                "builds {}/{}",
+                progress.builds_done, progress.builds_expected
+            ));
+        }
+
+        fn clear(&self) {
+            self.0.lock().unwrap().push("clear".into());
+        }
+    }
+
+    fn action_under_a_step(tree: &mut Tree, key: &'static str) -> NodeId {
+        let step = tree
+            .start(
+                ROOT,
+                Start::new(key, node_started::Kind::Step(Step { title: key.into() })),
+            )
+            .unwrap();
+        tree.start(
+            step,
+            Start::new(
+                "action-1",
+                node_started::Kind::Action(mix_events::v1::Action {
+                    operation: mix_events::v1::Operation::ActivateProfile as i32,
+                    subject: "ciuser".into(),
+                }),
+            ),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn nix_output_and_counters_reach_the_display_and_are_cleared_after_the_action() {
+        let printed = Arc::new(Printed::default());
+        let outbox = Arc::new(Outbox::new("request", || {}));
+        let mut bridge = Bridge::new(
+            outbox.clone(),
+            Reporters {
+                downloads: Arc::new(Seen::default()),
+                steps: Arc::new(Seen::default()),
+                activity: printed.clone(),
+            },
+        );
+        let mut tree = Tree::new(
+            outbox,
+            Arc::new(|| None),
+            Start::command("install", Command::default()),
+        );
+        let quiet = action_under_a_step(&mut tree, "write-config");
+        tree.finish(quiet, Ending::succeeded()).unwrap();
+        let action = action_under_a_step(&mut tree, "activate");
+        tree.progress(
+            action,
+            mix_events::output(b"building hello", mix_events::v1::Stream::Stderr),
+        )
+        .unwrap();
+        tree.progress(
+            action,
+            node_progress::Progress::Builds(mix_events::v1::Builds {
+                builds_done: 1,
+                builds_expected: 3,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+        tree.finish(action, Ending::succeeded()).unwrap();
+        bridge.flush();
+
+        assert_eq!(
+            *printed.0.lock().unwrap(),
+            ["line building hello", "builds 1/3", "clear"]
         );
     }
 }

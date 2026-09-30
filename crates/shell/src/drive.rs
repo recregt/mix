@@ -6,17 +6,18 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::Instrument;
 
-use mix_core::DownloadProgress;
 use mix_core::action::{Action, Fact, Failure, Kind, Outcome, PathFacts, Performed, Query};
 use mix_core::journal::Record;
 use mix_core::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
 use mix_core::paths::mix_state_dir;
 use mix_core::plan::{Input, Next, Report, Runner, make_guard};
 use mix_core::privilege::InvokingUser;
+use mix_core::{ActivityReporter, BuildProgress, DownloadProgress};
 use mix_events::v1::node_progress::Progress;
-use mix_events::v1::{Bytes, Cancellation};
-use mix_events::{Stopped, Tree};
+use mix_events::v1::{Builds, Bytes, Cancellation, Stream};
+use mix_events::{Stopped, Tree, output};
 use mix_exec::Scope;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::effect::files::{Files, Prepared};
 use crate::effect::generations::{self, ProfileContext};
@@ -25,6 +26,52 @@ use crate::effect::identity;
 use crate::effect::runtime;
 use crate::effect::units::Units;
 use crate::profile;
+
+#[derive(Default)]
+struct Activity {
+    sender: Mutex<Option<UnboundedSender<Progress>>>,
+}
+
+impl Activity {
+    fn connect(&self, sender: Option<UnboundedSender<Progress>>) {
+        if let Ok(mut connected) = self.sender.lock() {
+            *connected = sender;
+        }
+    }
+
+    fn sender(&self) -> Option<UnboundedSender<Progress>> {
+        self.sender.lock().ok()?.clone()
+    }
+
+    fn send(&self, progress: Progress) {
+        if let Ok(connected) = self.sender.lock()
+            && let Some(sender) = connected.as_ref()
+        {
+            let _ = sender.send(progress);
+        }
+    }
+}
+
+impl ActivityReporter for Activity {
+    fn line(&self, line: &str) {
+        self.send(output(line.as_bytes(), Stream::Stderr));
+    }
+
+    fn progress(&self, progress: &BuildProgress) {
+        self.send(Progress::Builds(Builds {
+            builds_done: progress.builds_done,
+            builds_expected: progress.builds_expected,
+            builds_running: progress.builds_running,
+            downloads_done: progress.downloads_done,
+            downloads_expected: progress.downloads_expected,
+            downloads_running: progress.downloads_running,
+            bytes_done: progress.bytes_done,
+            bytes_expected: progress.bytes_expected,
+        }));
+    }
+
+    fn clear(&self) {}
+}
 
 struct Relay<'a> {
     report: Mutex<&'a mut (dyn FnMut(Progress) + Send)>,
@@ -55,6 +102,8 @@ pub struct Performer {
     units: Option<Units>,
     profile: Option<ProfileContext>,
     agent_program: Option<PathBuf>,
+    activity: std::sync::Arc<Activity>,
+    listening: Option<UnboundedReceiver<Progress>>,
 }
 
 impl Performer {
@@ -64,6 +113,8 @@ impl Performer {
             agents: BTreeMap::new(),
             units: None,
             profile: None,
+            activity: std::sync::Arc::default(),
+            listening: None,
             agent_program: None,
         }
     }
@@ -324,11 +375,15 @@ impl Performer {
         if let Some(outcome) = Box::pin(identity::perform(action, scope, prepared)).await {
             return outcome;
         }
-        if let Some(profile) = &self.profile
-            && let Some(outcome) =
-                Box::pin(generations::perform(action, profile, scope, prepared)).await
-        {
-            return outcome;
+        if let Some(profile) = &self.profile {
+            let activity: std::sync::Arc<dyn ActivityReporter> = self.activity.clone();
+            if let Some(outcome) = Box::pin(generations::perform(
+                action, profile, &activity, scope, prepared,
+            ))
+            .await
+            {
+                return outcome;
+            }
         }
         let units = Box::pin(self.units()).await?;
         if let Some(outcome) = Box::pin(units.perform(action, scope, prepared)).await {
@@ -415,6 +470,14 @@ pub async fn drive<'r>(
 ) -> &'r mut Report {
     make_guard!(guard);
     let mut runner = runner.brand(guard);
+    let (sender, mut receiver) = match (performer.activity.sender(), performer.listening.take()) {
+        (Some(sender), Some(receiver)) => (sender, receiver),
+        _ => {
+            let (sender, receiver) = unbounded_channel();
+            performer.activity.connect(Some(sender.clone()));
+            (sender, receiver)
+        }
+    };
     let mut input = None;
     let mut seq = 0;
     let mut ended = false;
@@ -445,9 +508,7 @@ pub async fn drive<'r>(
                 let mut announced: Option<Vec<Action>> = None;
                 let outcome = {
                     let mut progress = |progress: Progress| {
-                        if let Some(node) = node {
-                            let _ = tree.progress(node, progress);
-                        }
+                        let _ = sender.send(progress);
                     };
                     let mut prepared = |undo: &[Action]| {
                         if reverting || committing {
@@ -459,13 +520,30 @@ pub async fn drive<'r>(
                             undo: undo.to_vec(),
                         })
                     };
-                    let performing =
-                        performer.perform(&action, &scope, &mut progress, &mut prepared);
-                    match node.and_then(|node| observer.span(node)) {
-                        Some(span) => performing.instrument(span).await,
-                        None => performing.await,
+                    let span = node
+                        .and_then(|node| observer.span(node))
+                        .unwrap_or_else(tracing::Span::none);
+                    let performing = performer
+                        .perform(&action, &scope, &mut progress, &mut prepared)
+                        .instrument(span);
+                    let mut performing = std::pin::pin!(performing);
+                    loop {
+                        tokio::select! {
+                            outcome = &mut performing => break outcome,
+                            Some(progress) = receiver.recv() => {
+                                if let Some(node) = node {
+                                    let _ = tree.progress(node, progress);
+                                }
+                                observer.flush();
+                            }
+                        }
                     }
                 };
+                while let Ok(progress) = receiver.try_recv() {
+                    if let Some(node) = node {
+                        let _ = tree.progress(node, progress);
+                    }
+                }
                 observer.flush();
                 match (&outcome, reverting, committing) {
                     (Ok(_), true, _) => keep(journal, &Record::Reverted { action }),
@@ -496,6 +574,7 @@ pub async fn drive<'r>(
                 input = Some(Input::Done(outcome));
             }
             Next::Finished(closed) => {
+                performer.listening = Some(receiver);
                 if !ended {
                     keep(journal, &Record::Ended);
                 }
@@ -519,6 +598,37 @@ mod tests {
     use mix_events::{Outbox, ROOT, Start, validate};
 
     use super::*;
+
+    #[test]
+    fn nix_output_is_sent_only_while_a_plan_is_listening() {
+        let activity = Activity::default();
+        activity.line("before");
+        let (sender, mut receiver) = unbounded_channel();
+        activity.connect(Some(sender));
+
+        activity.line("building hello");
+        activity.progress(&BuildProgress {
+            builds_done: 1,
+            builds_expected: 2,
+            ..BuildProgress::default()
+        });
+        activity.connect(None);
+        activity.line("after");
+
+        assert_eq!(
+            receiver.try_recv().ok(),
+            Some(output(b"building hello", Stream::Stderr))
+        );
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(Progress::Builds(Builds {
+                builds_done: 1,
+                builds_expected: 2,
+                ..
+            }))
+        ));
+        assert!(receiver.try_recv().is_err());
+    }
 
     struct Ensure {
         key: &'static str,
