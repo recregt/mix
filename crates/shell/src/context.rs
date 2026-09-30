@@ -1,29 +1,8 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use mix_core::models::UserConfig;
 use mix_core::policy::{Mirror, Policy};
-use mix_core::{
-    ActivityReporter, DownloadProgress, NoopActivity, NoopProgress, NoopSteps, StepObserver,
-};
 use mix_exec::Scope;
-
-#[derive(Clone)]
-pub struct Reporters {
-    pub downloads: Arc<dyn DownloadProgress>,
-    pub steps: Arc<dyn StepObserver>,
-    pub activity: Arc<dyn ActivityReporter>,
-}
-
-impl Reporters {
-    pub fn silent() -> Self {
-        Self {
-            downloads: Arc::new(NoopProgress),
-            steps: Arc::new(NoopSteps),
-            activity: Arc::new(NoopActivity),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Default)]
 pub struct HostConfig {
@@ -33,9 +12,9 @@ pub struct HostConfig {
 pub struct Context {
     pub user: Option<UserConfig>,
     pub scope: Scope,
-    pub reporters: Reporters,
     pub policy: Policy,
     pub host: HostConfig,
+    pub render: crate::render::Shared,
 }
 
 impl Context {
@@ -43,9 +22,9 @@ impl Context {
         Self {
             user: None,
             scope,
-            reporters: Reporters::silent(),
             policy: Policy::default(),
             host: HostConfig::default(),
+            render: crate::render::shared(crate::render::Quiet),
         }
     }
 
@@ -54,8 +33,8 @@ impl Context {
         self
     }
 
-    pub fn with_reporters(mut self, reporters: Reporters) -> Self {
-        self.reporters = reporters;
+    pub fn with_render(mut self, render: impl crate::render::Render + 'static) -> Self {
+        self.render = crate::render::shared(render);
         self
     }
 

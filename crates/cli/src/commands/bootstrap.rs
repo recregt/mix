@@ -17,11 +17,13 @@ pub async fn run(
                 mix_shell::effect::accounts::invoking_user()
                     .and_then(mix_shell::profile::user_config_for),
             )
-            .with_reporters(mix_shell::Reporters {
-                downloads: reporters.downloads,
-                steps: reporters.steps,
-                activity: reporters.activity,
-            })
+            .with_render(crate::render::human::Human::new(
+                crate::render::human::Reporters {
+                    downloads: reporters.downloads,
+                    steps: reporters.steps,
+                    activity: reporters.activity,
+                },
+            ))
             .with_policy(policy)
             .with_host(super::host_config());
         let _watch = crate::controls::watch(

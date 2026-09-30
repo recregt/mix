@@ -256,11 +256,13 @@ impl mix_rpc::Worker for CliWorker {
                         mix_shell::effect::accounts::user_by_uid(caller.uid)
                             .and_then(mix_shell::profile::user_config_for),
                     )
-                    .with_reporters(mix_shell::Reporters {
-                        downloads: Arc::new(Downloads(events.clone())),
-                        steps: Arc::new(Steps(self.0.clone())),
-                        activity: Arc::new(Activity(events.clone())),
-                    })
+                    .with_render(crate::render::human::Human::new(
+                        crate::render::human::Reporters {
+                            downloads: Arc::new(Downloads(events.clone())),
+                            steps: Arc::new(Steps(self.0.clone())),
+                            activity: Arc::new(Activity(events.clone())),
+                        },
+                    ))
                     .with_policy(policy)
                     .with_host(crate::commands::host_config());
                 let _watch = controls::watch(

@@ -20,12 +20,12 @@ use mix_events::v1::{
 use mix_events::{Ending, Outbox, ROOT, Start, Stopped, Tree};
 
 use crate::Context;
-use crate::bridge::Bridge;
 use crate::drive::{Observer, Performer, drive, stopped_by};
 use crate::effect::files::Files;
 use crate::effect::generations::ProfileContext;
 use crate::effect::journal::{FileJournal, JOURNAL_DIR, recover_all, unfinished};
 use crate::effect::mirror::{filter_mirror, mirror_url};
+use crate::render::Relay;
 
 pub struct Environment(());
 
@@ -178,7 +178,7 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
         host: ctx.host.clone(),
     });
     let outbox = Arc::new(Outbox::new(request.clone(), || {}));
-    let mut bridge = Bridge::new(Arc::clone(&outbox), ctx.reporters.clone());
+    let mut bridge = Relay::new(Arc::clone(&outbox), Arc::clone(&ctx.render));
     let stopped: Stopped = stopped_by(scope);
     let mut tree = Tree::new(
         outbox,

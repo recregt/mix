@@ -1,18 +1,34 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use mix_core::{
+    ActivityReporter, BuildProgress, DownloadProgress, NoopActivity, NoopProgress, NoopSteps,
+    StepObserver,
+};
+use mix_events::NodeId;
 use mix_events::v1::{
     Envelope, NodeProgress, Status, envelope::Event, node_progress, node_started,
 };
-use mix_events::{NodeId, Outbox};
+use mix_shell::render::Render;
 
-use mix_core::BuildProgress;
+#[derive(Clone)]
+pub struct Reporters {
+    pub downloads: Arc<dyn DownloadProgress>,
+    pub steps: Arc<dyn StepObserver>,
+    pub activity: Arc<dyn ActivityReporter>,
+}
 
-use crate::Reporters;
-use crate::drive::Observer;
+impl Reporters {
+    pub fn silent() -> Self {
+        Self {
+            downloads: Arc::new(NoopProgress),
+            steps: Arc::new(NoopSteps),
+            activity: Arc::new(NoopActivity),
+        }
+    }
+}
 
-pub struct Bridge {
-    outbox: Arc<Outbox>,
+pub struct Human {
     reporters: Reporters,
     spans: HashMap<NodeId, tracing::Span>,
     titles: HashMap<NodeId, String>,
@@ -21,10 +37,9 @@ pub struct Bridge {
     printed: HashSet<NodeId>,
 }
 
-impl Bridge {
-    pub fn new(outbox: Arc<Outbox>, reporters: Reporters) -> Self {
+impl Human {
+    pub fn new(reporters: Reporters) -> Self {
         Self {
-            outbox,
             reporters,
             spans: HashMap::new(),
             titles: HashMap::new(),
@@ -152,11 +167,9 @@ impl Bridge {
     }
 }
 
-impl Observer for Bridge {
-    fn flush(&mut self) {
-        for envelope in self.outbox.drain() {
-            self.replay(envelope);
-        }
+impl Render for Human {
+    fn envelope(&mut self, envelope: Envelope) {
+        self.replay(envelope);
     }
 
     fn span(&self, node: NodeId) -> Option<tracing::Span> {
@@ -170,7 +183,7 @@ mod tests {
 
     use mix_core::{DownloadProgress, StepObserver};
     use mix_events::v1::{Bytes, Command, Step};
-    use mix_events::{Ending, ROOT, Start, Tree};
+    use mix_events::{Ending, Outbox, ROOT, Start, Tree};
 
     use super::*;
 
@@ -204,16 +217,13 @@ mod tests {
     fn a_step_and_its_download_reach_the_display_as_before() {
         let seen = Arc::new(Seen::default());
         let outbox = Arc::new(Outbox::new("request", || {}));
-        let mut bridge = Bridge::new(
-            outbox.clone(),
-            Reporters {
-                downloads: seen.clone(),
-                steps: seen.clone(),
-                activity: Arc::new(mix_core::NoopActivity),
-            },
-        );
+        let mut bridge = Human::new(Reporters {
+            downloads: seen.clone(),
+            steps: seen.clone(),
+            activity: Arc::new(mix_core::NoopActivity),
+        });
         let mut tree = Tree::new(
-            outbox,
+            outbox.clone(),
             Arc::new(|| None),
             Start::command("bootstrap", Command::default()),
         );
@@ -249,11 +259,17 @@ mod tests {
                 }),
             )
             .unwrap();
-            bridge.flush();
+            outbox
+                .drain()
+                .into_iter()
+                .for_each(|envelope| bridge.envelope(envelope));
         }
         tree.finish(action, Ending::succeeded()).unwrap();
         tree.finish(step, Ending::succeeded()).unwrap();
-        bridge.flush();
+        outbox
+            .drain()
+            .into_iter()
+            .for_each(|envelope| bridge.envelope(envelope));
 
         assert_eq!(
             *seen.0.lock().unwrap(),
@@ -311,16 +327,13 @@ mod tests {
     fn nix_output_and_counters_reach_the_display_and_are_cleared_after_the_action() {
         let printed = Arc::new(Printed::default());
         let outbox = Arc::new(Outbox::new("request", || {}));
-        let mut bridge = Bridge::new(
-            outbox.clone(),
-            Reporters {
-                downloads: Arc::new(Seen::default()),
-                steps: Arc::new(Seen::default()),
-                activity: printed.clone(),
-            },
-        );
+        let mut bridge = Human::new(Reporters {
+            downloads: Arc::new(Seen::default()),
+            steps: Arc::new(Seen::default()),
+            activity: printed.clone(),
+        });
         let mut tree = Tree::new(
-            outbox,
+            outbox.clone(),
             Arc::new(|| None),
             Start::command("install", Command::default()),
         );
@@ -342,7 +355,10 @@ mod tests {
         )
         .unwrap();
         tree.finish(action, Ending::succeeded()).unwrap();
-        bridge.flush();
+        outbox
+            .drain()
+            .into_iter()
+            .for_each(|envelope| bridge.envelope(envelope));
 
         assert_eq!(
             *printed.0.lock().unwrap(),

@@ -3,6 +3,7 @@ mod commands;
 mod controls;
 pub mod explain;
 mod remote;
+pub mod render;
 
 use std::io::Write as _;
 use std::process::ExitCode;

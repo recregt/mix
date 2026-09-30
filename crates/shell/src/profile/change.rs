@@ -9,12 +9,12 @@ use mix_events::v1::{Command, command};
 use mix_events::{Ending, Outbox, ROOT, Start, Tree};
 
 use crate::Context;
-use crate::bridge::Bridge;
 use crate::drive::{Journal, Observer, Performer, drive, stopped_by};
 use crate::effect::files::Files;
 use crate::effect::generations::ProfileContext;
 use crate::ops::bootstrap::request_id;
 use crate::profile::state::{self, Invalid, Settled};
+use crate::render::Relay;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -110,7 +110,7 @@ pub async fn run(
         host: ctx.host.clone(),
     });
     let outbox = Arc::new(Outbox::new(request, || {}));
-    let mut bridge = Bridge::new(Arc::clone(&outbox), ctx.reporters.clone());
+    let mut bridge = Relay::new(Arc::clone(&outbox), Arc::clone(&ctx.render));
     let stopped = stopped_by(scope);
     let mut tree = Tree::new(
         outbox,
