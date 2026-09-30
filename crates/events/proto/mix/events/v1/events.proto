@@ -13,7 +13,7 @@ message Envelope {
     NodeProgress node_progress = 11;
     NodeFinished node_finished = 12;
     NotRun not_run = 13;
-    Diagnostic diagnostic = 15;
+    Diagnostic diagnostic = 14;
   }
 }
 
@@ -71,8 +71,8 @@ message Plan {
 }
 
 message Step {
-  Verb verb = 2;
-  string subject = 3;
+  Verb verb = 1;
+  string subject = 2;
 }
 
 enum Verb {

@@ -29,8 +29,8 @@ message RepairResponse {
 
 message Event {
   oneof kind {
-    Finished finished = 9;
-    bytes envelope = 10;
+    bytes envelope = 1;
+    Finished finished = 2;
   }
 }
 
@@ -57,24 +57,24 @@ message RepairReport {
 message Failure {
   oneof kind {
     CoreFailure core = 1;
-    Detail network = 3;
-    Integrity integrity = 4;
-    Detail unsupported_target = 5;
-    TargetFailure target = 6;
-    Detail decompression = 7;
-    Detail malformed_archive = 8;
-    Detail not_root = 9;
-    Empty unsupported_host = 10;
-    Empty unsupported_kernel = 11;
-    SystemdNotReady systemd_not_ready = 12;
-    Empty already_managed = 13;
-    Path cross_device_store = 14;
-    Rollback rollback = 15;
-    Empty interrupted = 16;
-    Detail invalid_mirror = 17;
-    Conflict conflict = 18;
-    Empty systemd_unreachable = 19;
-    Unit unit = 20;
+    Detail network = 2;
+    Integrity integrity = 3;
+    Detail unsupported_target = 4;
+    TargetFailure target = 5;
+    Detail decompression = 6;
+    Detail malformed_archive = 7;
+    Detail not_root = 8;
+    Empty unsupported_host = 9;
+    Empty unsupported_kernel = 10;
+    SystemdNotReady systemd_not_ready = 11;
+    Empty already_managed = 12;
+    Path cross_device_store = 13;
+    Rollback rollback = 14;
+    Empty interrupted = 15;
+    Detail invalid_mirror = 16;
+    Conflict conflict = 17;
+    Empty systemd_unreachable = 18;
+    Unit unit = 19;
   }
 }
 
