@@ -1429,6 +1429,7 @@ dependencies = [
  "proptest",
  "prost",
  "prost-build",
+ "prost-types",
  "protox",
  "rustc-hash",
  "serde",

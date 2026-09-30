@@ -1,4 +1,5 @@
 use futures_util::{Stream, StreamExt};
+use mix_events::Normalize;
 use mix_events::v1::Envelope;
 use mix_rpc::{
     BootstrapRequest, Client, Event, Failure, Malformed, Mirror, Outcome, RepairRequest,
@@ -16,9 +17,11 @@ const LAUNCHER: &str = "sudo";
 const WORKER: &str = "worker";
 
 fn envelope(bytes: &[u8]) -> Result<Envelope, mix_rpc::Error> {
-    Envelope::decode(bytes).map_err(|error| {
+    let mut envelope = Envelope::decode(bytes).map_err(|error| {
         mix_rpc::Error::Malformed(Malformed(format!("an event envelope: {error}")))
-    })
+    })?;
+    envelope.normalize();
+    Ok(envelope)
 }
 
 async fn replay(

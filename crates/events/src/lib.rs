@@ -2,6 +2,11 @@
 pub mod v1 {
     include!(concat!(env!("OUT_DIR"), "/mix.events.v1.rs"));
     include!(concat!(env!("OUT_DIR"), "/mix.events.v1.serde.rs"));
+    include!(concat!(env!("OUT_DIR"), "/mix.events.v1.normalize.rs"));
+}
+
+pub trait Normalize {
+    fn normalize(&mut self);
 }
 
 pub mod capture;

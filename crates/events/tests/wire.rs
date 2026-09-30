@@ -117,3 +117,33 @@ fn an_envelope_carries_order_and_request_but_no_time() {
     fields.sort_unstable();
     assert_eq!(fields, ["nodeStarted", "request", "seq"]);
 }
+
+#[test]
+fn a_value_from_a_newer_schema_reads_as_unspecified_and_keeps_a_json_form() {
+    let mut newer = finished();
+    let Some(envelope::Event::NodeFinished(node)) = &mut newer.event else {
+        unreachable!()
+    };
+    node.status = 7247;
+    if let Some(diagnostic) = &mut node.diagnostic {
+        diagnostic.code = 9001;
+        diagnostic.causes.push(Diagnostic {
+            severity: 42,
+            ..Diagnostic::default()
+        });
+    }
+    let mut decoded = Envelope::decode(newer.encode_to_vec().as_slice()).unwrap();
+    assert!(serde_json::to_string(&decoded).is_err());
+
+    mix_events::Normalize::normalize(&mut decoded);
+
+    let json = serde_json::to_string(&decoded).unwrap();
+    let Some(envelope::Event::NodeFinished(node)) = &decoded.event else {
+        unreachable!()
+    };
+    assert_eq!(node.status(), Status::Unspecified);
+    let diagnostic = node.diagnostic.as_ref().unwrap();
+    assert_eq!(diagnostic.code(), Code::Unspecified);
+    assert_eq!(diagnostic.causes[0].severity(), Severity::Unspecified);
+    assert_eq!(serde_json::from_str::<Envelope>(&json).unwrap(), decoded);
+}

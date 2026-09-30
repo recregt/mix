@@ -133,6 +133,8 @@ pub fn read(input: impl BufRead) -> Result<Captured, Broken> {
                     return Err(Broken::Backwards(number));
                 }
                 last = at;
+                let mut envelope = envelope;
+                crate::Normalize::normalize(&mut envelope);
                 envelopes.push(envelope);
             }
             (None, Some(_)) => return Err(Broken::Incomplete(number)),
