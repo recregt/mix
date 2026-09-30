@@ -20,7 +20,6 @@ fn started() -> Envelope {
                 schema_minor: mix_events::SCHEMA_MINOR,
                 request: Some(command::Request::Install(InstallRequest {
                     packages: vec!["ripgrep".to_string()],
-                    allow_source_builds: false,
                 })),
             })),
         })),
@@ -35,7 +34,7 @@ fn finished() -> Envelope {
             id: 1,
             status: Status::Failed as i32,
             diagnostic: Some(Diagnostic {
-                code: Code::SourceBuildRequired as i32,
+                code: Code::InvalidPackage as i32,
                 severity: Severity::Error as i32,
                 node: 2,
                 message: String::new(),
@@ -68,7 +67,7 @@ fn the_json_form_names_enums() {
 
     let node = &json["nodeFinished"];
     assert_eq!(node["status"], "STATUS_FAILED");
-    assert_eq!(node["diagnostic"]["code"], "CODE_SOURCE_BUILD_REQUIRED");
+    assert_eq!(node["diagnostic"]["code"], "CODE_INVALID_PACKAGE");
     assert_eq!(node["diagnostic"]["packages"]["packages"][0], "hello");
 }
 

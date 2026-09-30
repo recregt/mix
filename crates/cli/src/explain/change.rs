@@ -3,16 +3,9 @@ use mix_shell::profile::state::{Invalid, Source};
 
 use super::{Diagnostic, bug, core_error};
 
-pub(crate) fn describe(
-    error: &Error,
-    command: &str,
-    action: &dyn std::fmt::Display,
-    rerun: Option<&str>,
-) -> Diagnostic {
+pub(crate) fn describe(error: &Error, command: &str, action: &dyn std::fmt::Display) -> Diagnostic {
     match error {
         Error::Core(e) => core_error(e, command, action),
-
-        Error::Activation(e) => super::activation::describe(e, command, action, rerun),
 
         Error::InvalidPackage(e) => match e.rejected() {
             Some(name) => bad_name(name),
@@ -63,13 +56,13 @@ mod tests {
     use super::*;
 
     fn message(error: &Error) -> String {
-        describe(error, "mix install", &"install ripgrep", None).message()
+        describe(error, "mix install", &"install ripgrep").message()
     }
 
     #[test]
     fn running_as_root_names_the_command_and_says_how_to_run_it_instead() {
         for command in ["mix install", "mix remove"] {
-            let message = describe(&Error::NotRoot, command, &"install ripgrep", None).message();
+            let message = describe(&Error::NotRoot, command, &"install ripgrep").message();
 
             assert!(message.contains(&format!("`{command}` can't be run as root")));
             assert!(message.contains("without sudo"));
@@ -140,7 +133,6 @@ mod tests {
                 }),
                 command,
                 &"install ripgrep",
-                None,
             )
             .message();
 

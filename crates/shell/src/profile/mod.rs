@@ -9,33 +9,7 @@ pub mod change;
 pub mod config;
 pub mod state;
 
-pub use activation::{BuildPolicy, activate, activate_generation, finish, record, switch};
+pub use activation::{activate, activate_generation, finish, record, switch};
 pub use config::{existing_user_config_for, user_config_for};
 
-/// What an activation could not do.
-///
-/// Facts only: the derivations the binary cache had nothing for, or a process that failed. What
-/// a reader should do about either depends on which command asked for the activation, so the
-/// words are written in `mix-cli`.
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error(transparent)]
-    Core(#[from] mix_core::Error),
-
-    #[error("{}", refusal(packages.as_deref()))]
-    SourceBuildRequired { packages: Option<Vec<String>> },
-}
-
-fn refusal(packages: Option<&[String]>) -> String {
-    match packages {
-        Some(packages) if !packages.is_empty() => {
-            format!(
-                "the binary cache has nothing to download for: {}",
-                packages.join(", ")
-            )
-        }
-        _ => "the binary cache cannot serve everything this build needs".to_string(),
-    }
-}
-
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = mix_core::Result<T>;

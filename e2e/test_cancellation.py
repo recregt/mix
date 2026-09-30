@@ -8,7 +8,6 @@ from support.mirror import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS, mirror_args
 USER = MIRROR_TEST_USERS[0]
 MIX = "/usr/local/bin/mix"
 STATE_DIR = f"/home/{USER}/.local/state/mix"
-NIX_EVALUATION = "bin/nix build .*--dry-run"
 NIX_BUILD = "bin/nix build .*--print-out-paths"
 PUTTING_BACK = "Cancelling... (putting the package list back)"
 CLEANING_UP = "Cancelling... (cleaning up)"
@@ -56,17 +55,17 @@ def test_an_interrupted_install_stops_a_frozen_nix_then_puts_the_list_back(
         "mix", "-v", "install", INSTALL_TEST_PACKAGE,
         user=USER,
     )
-    evaluation = _pid_of(container, NIX_EVALUATION)
-    container.exec("kill", "-STOP", evaluation, check=True)
+    build = _pid_of(container, NIX_BUILD)
+    container.exec("kill", "-STOP", build, check=True)
     client = _pid_of(container, f"^mix -vvv install {INSTALL_TEST_PACKAGE}")
-    assert _pgid(container, evaluation) != _pgid(container, client)
+    assert _pgid(container, build) != _pgid(container, client)
 
     container.exec("kill", "-INT", client, check=True)
     result = proc.wait(timeout=30)
 
     assert result.returncode != 0, result.stdout
     assert PUTTING_BACK in result.stdout
-    assert _gone(container, evaluation)
+    assert _gone(container, build)
     assert container.exec("cat", f"{STATE_DIR}/state", check=True).stdout == state_before
     home_nix = container.exec("cat", f"{STATE_DIR}/home.nix", check=True).stdout
     assert INSTALL_TEST_PACKAGE not in home_nix
@@ -82,14 +81,14 @@ def test_a_deadline_set_by_the_caller_rolls_the_install_back(
         "mix", "-v", "install", INSTALL_TEST_PACKAGE,
         user=USER,
     )
-    evaluation = _pid_of(container, NIX_EVALUATION)
-    container.exec("kill", "-STOP", evaluation, check=True)
+    build = _pid_of(container, NIX_BUILD)
+    container.exec("kill", "-STOP", build, check=True)
 
     result = proc.wait(timeout=60)
 
     assert result.returncode == 124, result.stdout
     assert PUTTING_BACK in result.stdout
-    assert _gone(container, evaluation)
+    assert _gone(container, build)
     assert container.exec("cat", f"{STATE_DIR}/state", check=True).stdout == state_before
 
 
@@ -128,15 +127,15 @@ def test_ctrl_z_pauses_nix_and_resuming_lets_the_install_finish(
         "mix", "install", INSTALL_TEST_PACKAGE,
         user=USER,
     )
-    evaluation = _pid_of(container, NIX_EVALUATION)
+    build = _pid_of(container, NIX_BUILD)
     client = _pid_of(container, f"^mix -vvv install {INSTALL_TEST_PACKAGE}")
 
     container.exec("kill", "-TSTP", client, check=True)
 
     _wait_for_state(container, client, lambda state: state.startswith("T"))
-    _wait_for_state(container, evaluation, lambda state: state.startswith("T"))
+    _wait_for_state(container, build, lambda state: state.startswith("T"))
     container.exec("kill", "-CONT", client, check=True)
-    _wait_for_state(container, evaluation, lambda state: not state.startswith("T"))
+    _wait_for_state(container, build, lambda state: not state.startswith("T"))
     result = proc.wait(timeout=120)
 
     assert result.returncode == 0, result.stdout

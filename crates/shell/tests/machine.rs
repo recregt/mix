@@ -364,10 +364,7 @@ fn every_profile_action_and_its_undo_match_the_model() {
     };
     let activate = {
         let user = user.clone();
-        move |_: &mut Machine, _: bool| Action::ActivateProfile {
-            user: user.clone(),
-            allow_source_builds: true,
-        }
+        move |_: &mut Machine, _: bool| Action::ActivateProfile { user: user.clone() }
     };
     let change = {
         let home_nix = home_nix.clone();

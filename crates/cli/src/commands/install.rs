@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 
-pub async fn run(packages: &[String], json: bool, build: bool) -> anyhow::Result<ExitCode> {
+pub async fn run(packages: &[String], json: bool) -> anyhow::Result<ExitCode> {
     let (_lock, user_config) = super::acquire_profile()?;
     let reporters = mix_ui::reporters();
     let ctx = mix_shell::Context::new(mix_exec::Scope::root())
@@ -19,7 +19,7 @@ pub async fn run(packages: &[String], json: bool, build: bool) -> anyhow::Result
         crate::controls::Side::Client,
     );
 
-    let installed = mix_shell::ops::install::install(&ctx, packages, build).await?;
+    let installed = mix_shell::ops::install::install(&ctx, packages).await?;
 
     if let Some(note) = installed
         .restored

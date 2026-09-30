@@ -25,8 +25,6 @@ pub(crate) fn describe(error: &Error, command: &str) -> Diagnostic {
     match error {
         Error::Core(e) => core_error(e, command, &ACTION),
 
-        Error::Activation(e) => super::activation::describe(e, command, &ACTION, None),
-
         Error::Network(_) => Diagnostic::hinting(
             "couldn't download required setup files",
             format!("Check your internet connection, then run `{command}` again"),

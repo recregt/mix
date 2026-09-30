@@ -24,7 +24,6 @@ INSTALL_TEST_PACKAGE = "hello"
 
 # A package deliberately left out of the mirror's cache: installing it against that mirror can
 # only be done by compiling it.
-UNCACHED_TEST_PACKAGE = "cowsay"
 
 NIX_ARGS = ["--extra-experimental-features", "nix-command flakes"]
 

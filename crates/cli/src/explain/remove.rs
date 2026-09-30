@@ -10,7 +10,7 @@ const COMMAND: &str = "mix remove";
 pub fn explain(error: &anyhow::Error, packages: &[String]) -> Diagnostic {
     let action = packages_action("remove", packages);
     match error.downcast_ref::<Error>() {
-        Some(Error::Change(error)) => change::describe(error, COMMAND, &action, None),
+        Some(Error::Change(error)) => change::describe(error, COMMAND, &action),
         Some(Error::Protected(packages)) => protected(packages),
         None => failed(&action),
     }

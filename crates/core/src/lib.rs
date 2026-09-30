@@ -9,7 +9,6 @@ pub mod journal;
 pub mod model;
 pub mod models;
 pub mod nix_log;
-pub mod nix_plan;
 pub mod plan;
 pub mod policy;
 pub mod privilege;
@@ -21,7 +20,6 @@ pub use constants::{identity, paths};
 pub use error::{Error, Result};
 pub use models::{Category, Target};
 pub use nix_log::{BuildProgress, NixLog};
-pub use nix_plan::BuildPlan;
 pub use progress::{
     ActivityReporter, DownloadProgress, NoopActivity, NoopProgress, NoopSteps, StepObserver,
 };

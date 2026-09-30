@@ -2,7 +2,6 @@ use mix_core::state::StateManifest;
 
 use crate::Context;
 
-use crate::profile::BuildPolicy;
 use crate::profile::change;
 use crate::profile::state::Source;
 
@@ -62,7 +61,6 @@ pub async fn remove(ctx: &Context, packages: &[String]) -> Result<Removed> {
         cfg,
         &state.without(&removed),
         &change::label("Removing", &removed),
-        BuildPolicy::AllowSource,
     )
     .await?;
 

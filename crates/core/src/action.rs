@@ -217,7 +217,6 @@ pub enum Action {
     },
     ActivateProfile {
         user: InvokingUser,
-        allow_source_builds: bool,
     },
     SwitchGeneration {
         user: InvokingUser,

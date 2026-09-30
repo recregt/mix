@@ -8,17 +8,14 @@ use tracing::Instrument;
 
 use crate::Context;
 use crate::effect::fs::{remove_file, write_atomic};
+use crate::profile;
 use crate::profile::config::render_home;
 use crate::profile::state::{self, Invalid, Settled, Source};
-use crate::profile::{self, BuildPolicy};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
     Core(#[from] mix_core::Error),
-
-    #[error(transparent)]
-    Activation(#[from] profile::Error),
 
     #[error(transparent)]
     InvalidPackage(#[from] mix_nixgen::InvalidInput),
@@ -60,7 +57,6 @@ pub async fn apply(
     cfg: &UserConfig,
     manifest: &StateManifest,
     label: &str,
-    policy: BuildPolicy,
 ) -> Result<()> {
     let activity = &ctx.reporters.activity;
     let steps = &ctx.reporters.steps;
@@ -75,7 +71,7 @@ pub async fn apply(
 
     let applied = async {
         let generation = write_then_switch(&state_path, &home_path, &new_state, &new_home, || {
-            profile::switch(&cfg.user, ctx.mirror(), activity, scope, policy)
+            profile::switch(&cfg.user, ctx.mirror(), activity, scope)
         })
         .await?;
         profile::finish(
@@ -243,14 +239,14 @@ mod tests {
         std::fs::write(&home_path, "old home").unwrap();
 
         let err = write_then_switch(&state_path, &home_path, "new state", "new home", || {
-            std::future::ready(Err(profile::Error::Core(mix_core::Error::Cancelled {
+            std::future::ready(Err(mix_core::Error::Cancelled {
                 command: "nix build".to_string(),
-            })))
+            }))
         })
         .await
         .unwrap_err();
 
-        assert!(matches!(err, Error::Activation(_)));
+        assert!(matches!(err, Error::Core(_)));
         assert_eq!(std::fs::read_to_string(&state_path).unwrap(), "old state");
         assert_eq!(std::fs::read_to_string(&home_path).unwrap(), "old home");
     }
@@ -262,9 +258,9 @@ mod tests {
         let home_path = dir.path().join("home.nix");
 
         write_then_switch(&state_path, &home_path, "new state", "new home", || {
-            std::future::ready(Err(profile::Error::Core(mix_core::Error::Cancelled {
+            std::future::ready(Err(mix_core::Error::Cancelled {
                 command: "nix build".to_string(),
-            })))
+            }))
         })
         .await
         .unwrap_err();

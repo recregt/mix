@@ -18,7 +18,6 @@ pub mod install;
 pub mod remove;
 pub mod repair;
 
-mod activation;
 pub(crate) mod change;
 pub mod target;
 
@@ -62,17 +61,6 @@ impl Diagnostic {
         let summary_len = text.len();
         text.push('\n');
         text.push_str(&hint);
-        Self {
-            text: text.into(),
-            summary_len,
-        }
-    }
-
-    /// The whole message, hint included, as one block for [`mix_ui`] to print.
-    ///
-    /// The hint is a line of its own: the printer indents continuation lines under the marker, so
-    /// a failure reads as one block rather than as a line and an afterthought.
-    pub(crate) fn written(text: String, summary_len: usize) -> Self {
         Self {
             text: text.into(),
             summary_len,

@@ -1415,7 +1415,6 @@ version = "0.1.0"
 dependencies = [
  "codspeed-divan-compat",
  "generativity",
- "memchr",
  "mix-events",
  "proptest",
  "serde",

@@ -732,7 +732,6 @@ impl StepSpec for ActivateHome {
         Ok(vec![
             Action::ActivateProfile {
                 user: self.0.user.clone(),
-                allow_source_builds: true,
             },
             Action::RecordState {
                 user: self.0.user.clone(),

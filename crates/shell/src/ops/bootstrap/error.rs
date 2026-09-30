@@ -18,10 +18,6 @@ pub enum Error {
     #[error(transparent)]
     Core(#[from] mix_core::Error),
 
-    /// The profile would not activate: bootstrap's last step is the same one `mix install` runs.
-    #[error(transparent)]
-    Activation(#[from] crate::profile::Error),
-
     #[error("network request failed: {0}")]
     Network(#[source] Box<dyn std::error::Error + Send + Sync>),
 
@@ -120,32 +116,6 @@ mod tests {
             err.to_string(),
             "cannot move /nix/store/pkg-a into /nix/store: it is on a different filesystem"
         );
-    }
-
-    /// An activation failure is carried as it was raised: bootstrap adds nothing to it, because
-    /// the same fact reaches a reader who ran `mix install` too.
-    #[test]
-    fn an_activation_failure_keeps_the_words_the_profile_layer_raised() {
-        let err = Error::Activation(crate::profile::Error::SourceBuildRequired {
-            packages: Some(vec!["hello-2.12.3".into(), "cowsay-3.8.4".into()]),
-        });
-
-        assert_eq!(
-            err.to_string(),
-            "the binary cache has nothing to download for: hello-2.12.3, cowsay-3.8.4"
-        );
-    }
-
-    #[test]
-    fn a_refusal_with_nothing_to_name_still_says_what_was_refused() {
-        for packages in [None, Some(Vec::new())] {
-            let err = Error::Activation(crate::profile::Error::SourceBuildRequired { packages });
-
-            assert_eq!(
-                err.to_string(),
-                "the binary cache cannot serve everything this build needs"
-            );
-        }
     }
 
     #[test]

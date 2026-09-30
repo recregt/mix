@@ -2,7 +2,6 @@ use mix_core::state::StateManifest;
 
 use crate::Context;
 
-use crate::profile::BuildPolicy;
 use crate::profile::change::{self, Result};
 use crate::profile::state::Source;
 
@@ -29,11 +28,7 @@ impl Installed {
     }
 }
 
-pub async fn install(
-    ctx: &Context,
-    packages: &[String],
-    allow_source_builds: bool,
-) -> Result<Installed> {
+pub async fn install(ctx: &Context, packages: &[String]) -> Result<Installed> {
     let cfg = ctx.user.as_ref().ok_or(change::Error::NotBootstrapped)?;
     let (state, restored) = change::settled(cfg).await?;
     let partition = state.partition(packages);
@@ -51,12 +46,7 @@ pub async fn install(
 
     let label = change::label("Installing", &added);
 
-    // Nothing is compiled behind the user's back: unless they asked for it, a package the binary
-    // cache cannot serve is refused before anything is built, with the files put back as they
-    // were.
-    let policy = BuildPolicy::from_allowing_source(allow_source_builds);
-
-    change::apply(ctx, cfg, &with_added(&state, &added), &label, policy).await?;
+    change::apply(ctx, cfg, &with_added(&state, &added), &label).await?;
 
     Ok(Installed {
         added,
@@ -118,7 +108,7 @@ mod tests {
     async fn install_skips_a_package_that_is_already_present() {
         let home = seeded_home();
 
-        let installed = install(&context(home.path()), &["git".to_string()], false)
+        let installed = install(&context(home.path()), &["git".to_string()])
             .await
             .unwrap();
 
@@ -132,7 +122,7 @@ mod tests {
         let state_before =
             std::fs::read_to_string(mix_state_dir(home.path()).join(STATE_FILE)).unwrap();
 
-        install(&context(home.path()), &["git".to_string()], false)
+        install(&context(home.path()), &["git".to_string()])
             .await
             .unwrap();
 
@@ -150,7 +140,6 @@ mod tests {
         let installed = install(
             &context(home.path()),
             &["git".to_string(), "git".to_string()],
-            false,
         )
         .await
         .unwrap();
@@ -163,13 +152,9 @@ mod tests {
     async fn install_leaves_nothing_written_for_an_invalid_package_name() {
         let home = seeded_home();
 
-        let err = install(
-            &context(home.path()),
-            &["not a valid ident".to_string()],
-            false,
-        )
-        .await
-        .unwrap_err();
+        let err = install(&context(home.path()), &["not a valid ident".to_string()])
+            .await
+            .unwrap_err();
 
         assert!(matches!(err, Error::InvalidPackage(_)));
         assert!(!mix_state_dir(home.path()).join(HOME_NIX).exists());

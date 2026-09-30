@@ -119,7 +119,6 @@ message RepairReport {
 message Failure {
   oneof kind {
     CoreFailure core = 1;
-    SourceBuildRequired source_build_required = 2;
     Detail network = 3;
     Integrity integrity = 4;
     Detail unsupported_target = 5;
@@ -167,11 +166,6 @@ message Path {
 message Integrity {
   string artifact = 1;
   string detail = 2;
-}
-
-message SourceBuildRequired {
-  repeated string packages = 1;
-  bool named = 2;
 }
 
 enum Host {
