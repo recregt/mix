@@ -580,3 +580,15 @@ fn a_runtime_whose_default_profile_was_lost_is_provisioned_again() {
     ));
     assert!(validate(&again.stream).is_ok());
 }
+
+#[test]
+fn every_step_is_named_in_the_users_words() {
+    for step in steps(&settings(Some(alice()), true)) {
+        let subject = step.title().subject;
+        assert_eq!(
+            crate::vocabulary::nix_mechanics_in(&subject),
+            Vec::<&str>::new(),
+            "{subject}"
+        );
+    }
+}

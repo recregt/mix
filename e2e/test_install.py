@@ -39,3 +39,16 @@ def test_install_adds_a_package_as_a_regular_user_with_no_sudo(
     assert again.succeeded(), again
     assert again.result("install") == {"skipped": [INSTALL_TEST_PACKAGE]}
     assert container.exec("cat", f"{state_dir}/state", check=True).stdout == state
+
+
+@pytest.mark.bootstrapped
+def test_an_unknown_package_is_named_and_nothing_changes(container, mock_nix_server, mirror_cache):
+    state_dir = f"/home/{USER}/.local/state/mix"
+    before = container.exec("cat", f"{state_dir}/state", check=True).stdout
+
+    run = container.mix("install", "ripgrep2", user=USER)
+
+    assert run.exit_code == 1, run
+    assert run.code == "CODE_UNKNOWN_PACKAGE", run
+    assert run.root["diagnostic"]["packages"]["packages"] == ["ripgrep2"], run
+    assert container.exec("cat", f"{state_dir}/state", check=True).stdout == before

@@ -69,14 +69,14 @@ pub enum Command {
         force: bool,
     },
 
-    /// Add packages to your home-manager profile
+    /// Add packages to your profile
     Install {
         /// Packages to add
         #[arg(required = true)]
         packages: Vec<String>,
     },
 
-    /// Remove packages from your home-manager profile
+    /// Remove packages from your profile
     Remove {
         /// Packages to remove
         #[arg(required = true)]
@@ -278,5 +278,28 @@ mod tests {
                 "CI={value:?} should force plain output"
             );
         }
+    }
+
+    #[test]
+    fn no_help_text_names_nix_mechanics() {
+        fn visit(command: &clap::Command, found: &mut Vec<String>) {
+            let texts = command
+                .get_about()
+                .into_iter()
+                .chain(command.get_arguments().filter_map(|arg| arg.get_help()))
+                .map(ToString::to_string);
+            for text in texts {
+                if !mix_core::vocabulary::nix_mechanics_in(&text).is_empty() {
+                    found.push(format!("{}: {text}", command.get_name()));
+                }
+            }
+            for sub in command.get_subcommands() {
+                visit(sub, found);
+            }
+        }
+
+        let mut found = Vec::new();
+        visit(&<Cli as clap::CommandFactory>::command(), &mut found);
+        assert_eq!(found, Vec::<String>::new());
     }
 }

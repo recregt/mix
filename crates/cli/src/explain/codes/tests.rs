@@ -203,3 +203,32 @@ fn every_diagnostic_mix_prints_follows_the_house_style() {
         );
     }
 }
+
+#[test]
+fn nothing_mix_says_by_default_names_nix_mechanics() {
+    let context = crate::explain::render::Context {
+        command: "mix install ripgrep",
+        action: &"install ripgrep",
+    };
+    for code in every_code() {
+        let wire = mix_events::v1::Diagnostic {
+            code: code as i32,
+            message: "it failed".into(),
+            detail: Some(mix_events::v1::diagnostic::Detail::Packages(
+                mix_events::v1::PackagesDetail {
+                    packages: vec!["ripgrep".into()],
+                },
+            )),
+            ..mix_events::v1::Diagnostic::default()
+        };
+        let words =
+            crate::explain::render::render(&mix_events::Fault::Failed(wire), &context).message();
+        for text in [words.as_str(), long(code)] {
+            assert_eq!(
+                mix_core::vocabulary::nix_mechanics_in(text),
+                Vec::<&str>::new(),
+                "{code:?}: {text}"
+            );
+        }
+    }
+}

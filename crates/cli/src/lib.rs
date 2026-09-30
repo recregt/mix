@@ -97,16 +97,23 @@ pub async fn run() -> ExitCode {
             if cli.output == cli::Output::Human {
                 let words = explain(&e);
                 let (summary, hint) = words.parts();
+                let fault = explain::fault_of(&e);
                 let code = (cli.verbose > 0)
-                    .then(|| explain::fault_of(&e).code())
+                    .then(|| fault.code())
                     .flatten()
                     .map(explain::codes::kebab);
+                let mut causes = explain::evidence(&fault);
+                for cause in mix_ui::causes_of(e.chain().nth(1), summary) {
+                    if !causes.iter().any(|known| known.contains(&cause)) {
+                        causes.push(cause);
+                    }
+                }
                 mix_ui::report(
                     mix_ui::Severity::Error,
                     &mix_ui::Report {
                         code: code.as_deref(),
                         summary,
-                        causes: mix_ui::causes_of(e.chain().nth(1), summary),
+                        causes,
                         helps: hint.into_iter().collect(),
                     },
                 );

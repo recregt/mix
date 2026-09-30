@@ -140,6 +140,17 @@ pub fn long(code: Code) -> &'static str {
              is missing or the repository belongs to another user. `mix repair` commits what is \
              there."
         }
+        Code::UnknownPackage => {
+            "The package list names something the package collection `mix` installs from does \
+             not have. Usually the name is misspelt, or the package goes by another name. Check \
+             the name, then run the command again."
+        }
+        Code::BuildFailed => {
+            "A package could not be built from source, and nothing was changed. The build's own \
+             output is under `Caused by`; `-vv` shows all of it. A package that fails to build \
+             here usually fails for everyone, so trying a different version or package is often \
+             the way forward."
+        }
         Code::NotBootstrapped => {
             "`mix` has not been set up for your user on this machine. Run `mix bootstrap` \
              first."

@@ -208,7 +208,9 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
         | Code::RollbackIncomplete
         | Code::InvalidPackage
         | Code::InvalidState
-        | Code::ProtectedPackage => None,
+        | Code::ProtectedPackage
+        | Code::UnknownPackage
+        | Code::BuildFailed => None,
     }
 }
 
@@ -293,6 +295,20 @@ fn detailed(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
         ),
         Code::InvalidPackage => match packages(diagnostic) {
             [name, ..] => bad_name(name),
+            [] => bug(),
+        },
+        Code::UnknownPackage => match packages(diagnostic) {
+            [name, ..] => Diagnostic::hinting(
+                format!("`{name}` isn't a package `mix` can find"),
+                format!("check the name, then run `{command}` again"),
+            ),
+            [] => bug(),
+        },
+        Code::BuildFailed => match packages(diagnostic) {
+            [package, ..] => Diagnostic::hinting(
+                format!("couldn't build {package}"),
+                "run it again with `-vv` to see the whole build",
+            ),
             [] => bug(),
         },
         Code::InvalidState => match packages(diagnostic) {

@@ -1,6 +1,6 @@
 use mix_events::v1::diagnostic::Detail;
 use mix_events::v1::{
-    Cancellation, Code, CommandDetail, Diagnostic, IoDetail, LockDetail, Severity,
+    Cancellation, Code, CommandDetail, Diagnostic, IoDetail, LockDetail, PackagesDetail, Severity,
     Unfixable as WireUnfixable, UnrepairableDetail,
 };
 use mix_events::{Diagnose, Fault};
@@ -19,6 +19,65 @@ pub fn failed(code: Code, message: impl Into<String>, detail: Option<Detail>) ->
         causes: Vec::new(),
         detail,
     })
+}
+
+fn command_code(tail: &str) -> Code {
+    match crate::nix_log::nix_error(tail).and_then(|error| error.failure) {
+        Some(crate::nix_log::NixFailure::Build { .. }) => Code::BuildFailed,
+        Some(crate::nix_log::NixFailure::UnknownPackage { .. }) => Code::UnknownPackage,
+        None => Code::CommandFailed,
+    }
+}
+
+pub fn command_failure(
+    command: &str,
+    exit_status: Option<i32>,
+    tail: &str,
+    message: String,
+) -> Diagnostic {
+    let invocation = |output_tail: String| CommandDetail {
+        command: command.to_string(),
+        exit_status,
+        output_tail,
+    };
+    let Some(error) = crate::nix_log::nix_error(tail) else {
+        return Diagnostic {
+            code: Code::CommandFailed as i32,
+            severity: Severity::Error as i32,
+            message,
+            detail: Some(Detail::Command(invocation(tail.to_string()))),
+            ..Diagnostic::default()
+        };
+    };
+    let (code, package) = match error.failure {
+        Some(crate::nix_log::NixFailure::Build { package }) => (Code::BuildFailed, package),
+        Some(crate::nix_log::NixFailure::UnknownPackage { name }) => (Code::UnknownPackage, name),
+        None => {
+            return Diagnostic {
+                code: Code::CommandFailed as i32,
+                severity: Severity::Error as i32,
+                message,
+                detail: Some(Detail::Command(invocation(error.message))),
+                ..Diagnostic::default()
+            };
+        }
+    };
+    Diagnostic {
+        code: code as i32,
+        severity: Severity::Error as i32,
+        node: 0,
+        message,
+        causes: vec![Diagnostic {
+            code: Code::CommandFailed as i32,
+            severity: Severity::Error as i32,
+            message: format!("`{command}` failed"),
+            detail: Some(Detail::Command(invocation(error.message))),
+            ..Diagnostic::default()
+        }],
+        detail: Some(Detail::Packages(PackagesDetail {
+            packages: vec![package],
+        })),
+    }
 }
 
 pub fn warning(code: Code, message: impl Into<String>, cause: &dyn Diagnose) -> Diagnostic {
@@ -92,7 +151,7 @@ impl Diagnose for Error {
                 Code::PermissionDenied
             }
             Error::Io { .. } => Code::Io,
-            Error::Command { .. } => Code::CommandFailed,
+            Error::Command { detail, .. } => command_code(detail),
             Error::Exec { .. } => Code::SpawnFailed,
             Error::TaskPanicked(_) => Code::Internal,
             Error::Cancelled { .. } => return None,
@@ -115,15 +174,9 @@ impl Diagnose for Error {
                     kind: format!("{:?}", source.kind()),
                 })),
             ),
-            Error::Command { command, detail } => failed(
-                Code::CommandFailed,
-                self.to_string(),
-                Some(Detail::Command(CommandDetail {
-                    command: command.clone(),
-                    exit_status: None,
-                    output_tail: detail.clone(),
-                })),
-            ),
+            Error::Command { command, detail } => {
+                Fault::Failed(command_failure(command, None, detail, self.to_string()))
+            }
             Error::Exec { command, .. } => failed(
                 Code::SpawnFailed,
                 self.to_string(),

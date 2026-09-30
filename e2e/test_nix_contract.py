@@ -75,6 +75,40 @@ def test_a_build_starting_is_logged_the_way_mix_reads_it(container, mock_nix_ser
     ]
 
 
+def _error_messages(output: str) -> list[str]:
+    records = [
+        json.loads(line.removeprefix("@nix "))
+        for line in output.splitlines()
+        if line.startswith("@nix ")
+    ]
+    return [
+        record["raw_msg"]
+        for record in records
+        if record["action"] == "msg" and record["level"] == 0
+    ]
+
+
+def test_a_missing_package_is_reported_the_way_mix_reads_it(container, mock_nix_server):
+    _with_plan(container, mock_nix_server)
+
+    result = _nix(
+        container,
+        "build",
+        "-f",
+        PLAN,
+        "missing",
+        "--no-link",
+        "--log-format",
+        "internal-json",
+    )
+
+    assert result.returncode != 0
+    (message,) = _error_messages(result.stderr)
+    assert "ripgrep2" in message
+    (expected,) = _error_messages(_fixture("missing-log.txt", result.stderr))
+    assert message == expected
+
+
 @pytest.mark.bootstrapped
 def test_nix_never_rewrites_the_lock(container, mock_nix_server, mirror_cache):
     lock = f"/home/{USER}/.local/state/mix/flake.lock"

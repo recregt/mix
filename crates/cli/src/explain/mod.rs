@@ -138,6 +138,67 @@ pub(crate) fn fault_of(error: &anyhow::Error) -> mix_events::Fault {
     mix_core::diagnose::failed(mix_events::v1::Code::Internal, error.to_string(), None)
 }
 
+pub fn evidence(fault: &mix_events::Fault) -> Vec<String> {
+    fn collect(diagnostic: &mix_events::v1::Diagnostic, cause: bool, out: &mut Vec<String>) {
+        let words = match &diagnostic.detail {
+            Some(mix_events::v1::diagnostic::Detail::Command(command)) => {
+                command.output_tail.trim()
+            }
+            _ if cause => diagnostic.message.trim(),
+            _ => "",
+        };
+        if !words.is_empty() && !out.iter().any(|known| known == words) {
+            out.push(words.to_string());
+        }
+        for inner in &diagnostic.causes {
+            collect(inner, true, out);
+        }
+    }
+
+    let mut out = Vec::new();
+    if let mix_events::Fault::Failed(diagnostic) = fault {
+        collect(diagnostic, false, &mut out);
+    }
+    out
+}
+
+#[cfg(test)]
+mod evidence_tests {
+    use mix_events::v1::{CommandDetail, Diagnostic as Wire, diagnostic::Detail};
+
+    use super::evidence;
+
+    #[test]
+    fn evidence_is_the_programs_own_words_and_each_causes_message() {
+        let fault = mix_events::Fault::Failed(Wire {
+            message: "the summary is worded elsewhere".into(),
+            causes: vec![
+                Wire {
+                    message: "`nix build` failed".into(),
+                    detail: Some(Detail::Command(CommandDetail {
+                        output_tail: "error: Cannot build 'hello'.\n".into(),
+                        ..CommandDetail::default()
+                    })),
+                    ..Wire::default()
+                },
+                Wire {
+                    message: "/var/lib/mix/journal/r1: PermissionDenied".into(),
+                    ..Wire::default()
+                },
+            ],
+            ..Wire::default()
+        });
+
+        assert_eq!(
+            evidence(&fault),
+            [
+                "error: Cannot build 'hello'.",
+                "/var/lib/mix/journal/r1: PermissionDenied"
+            ]
+        );
+    }
+}
+
 pub(crate) fn failed(action: &dyn Display) -> Diagnostic {
     Diagnostic::hinting(
         format!("couldn't {action}"),

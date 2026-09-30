@@ -18,6 +18,7 @@ pub mod progress;
 pub mod state;
 pub mod system;
 pub mod trace;
+pub mod vocabulary;
 
 pub use constants::{identity, paths};
 pub use error::{Error, Result};

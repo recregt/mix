@@ -232,3 +232,45 @@ fn a_warning_names_what_could_not_be_done_and_keeps_why() {
     assert_eq!(warning.causes.len(), 1);
     assert_eq!(warning.causes[0], crate::plan::diagnostic(&cause));
 }
+
+#[test]
+fn a_failed_build_names_its_package_and_keeps_nixs_message_as_the_cause() {
+    let error = Error::Command {
+        command: "/nix/var/nix/profiles/default/bin/nix build".into(),
+        detail: "copying...\nerror: Cannot build '/nix/store/bbx79xgf89bvd25i1sivdcykhy39bz14-hello-2.12.drv'.\n       Reason: builder failed with exit code 1.".into(),
+    };
+
+    assert_eq!(error.code(), Some(Code::BuildFailed));
+    let Fault::Failed(diagnostic) = error.fault() else {
+        panic!("a failed command is a failure");
+    };
+    assert_eq!(diagnostic.code(), Code::BuildFailed);
+    assert_eq!(
+        diagnostic.detail,
+        Some(Detail::Packages(mix_events::v1::PackagesDetail {
+            packages: vec!["hello-2.12".into()]
+        }))
+    );
+    let Some(Detail::Command(command)) = &diagnostic.causes[0].detail else {
+        panic!("the command is the cause");
+    };
+    assert!(command.output_tail.starts_with("error: Cannot build"));
+    assert!(!command.output_tail.contains("copying"));
+}
+
+#[test]
+fn a_command_that_is_not_nix_keeps_its_whole_tail() {
+    let error = Error::Command {
+        command: "git commit".into(),
+        detail: "fatal: not a git repository".into(),
+    };
+
+    assert_eq!(error.code(), Some(Code::CommandFailed));
+    let Fault::Failed(diagnostic) = error.fault() else {
+        panic!("a failed command is a failure");
+    };
+    assert!(matches!(
+        &diagnostic.detail,
+        Some(Detail::Command(command)) if command.output_tail == "fatal: not a git repository"
+    ));
+}

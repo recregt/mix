@@ -4,9 +4,9 @@ use std::collections::VecDeque;
 use generativity::Id;
 pub use generativity::{Guard, make_guard};
 use mix_events::v1::{
-    Action as ActionNode, Cancellation, Code, CommandDetail, ConflictDetail, Diagnostic,
-    IntegrityDetail, IoDetail, NetworkDetail, Operation, Plan, Rollback, Severity, Step,
-    StepsDetail, UnitDetail, Verb, diagnostic::Detail, node_started::Kind,
+    Action as ActionNode, Cancellation, Code, ConflictDetail, Diagnostic, IntegrityDetail,
+    IoDetail, NetworkDetail, Operation, Plan, Rollback, Severity, Step, StepsDetail, UnitDetail,
+    Verb, diagnostic::Detail, node_started::Kind,
 };
 use mix_events::{Ending, NodeId, Start, Tree};
 
@@ -748,15 +748,14 @@ pub fn diagnostic(failure: &Failure) -> Diagnostic {
             program,
             status,
             output_tail,
-        } => (
-            Code::CommandFailed,
-            format!("{program} failed"),
-            Some(Detail::Command(CommandDetail {
-                command: program.clone(),
-                exit_status: *status,
-                output_tail: output_tail.clone(),
-            })),
-        ),
+        } => {
+            return crate::diagnose::command_failure(
+                program,
+                *status,
+                output_tail,
+                format!("{program} failed"),
+            );
+        }
         Failure::SpawnFailed { program, kind } => {
             (Code::SpawnFailed, format!("{program}: {kind}"), None)
         }

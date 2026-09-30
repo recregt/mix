@@ -143,12 +143,9 @@ impl Human {
                         &mix_ui::Report {
                             code: code.as_deref(),
                             summary,
-                            causes: diagnostic
-                                .causes
-                                .iter()
-                                .map(|cause| cause.message.clone())
-                                .filter(|message| !message.is_empty())
-                                .collect(),
+                            causes: crate::explain::evidence(&mix_events::Fault::Failed(
+                                diagnostic.clone(),
+                            )),
                             helps: hint.into_iter().collect(),
                         },
                     );
