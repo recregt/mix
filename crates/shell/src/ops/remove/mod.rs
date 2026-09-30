@@ -1,4 +1,4 @@
-use mix_core::state::StateManifest;
+use mix_core::change::Refusal;
 
 use crate::Context;
 
@@ -15,6 +15,15 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl From<Refusal> for Error {
+    fn from(refusal: Refusal) -> Self {
+        match refusal {
+            Refusal::Protected(packages) => Error::Protected(packages),
+            Refusal::Newer(newer) => Error::Change(newer.into()),
+        }
+    }
+}
 
 #[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Removed {
@@ -36,37 +45,18 @@ impl Removed {
 
 pub async fn remove(ctx: &Context, packages: &[String]) -> Result<Removed> {
     let cfg = ctx.user.as_ref().ok_or(change::Error::NotBootstrapped)?;
-    let protected = StateManifest::protected(packages);
-    if !protected.is_empty() {
-        return Err(Error::Protected(
-            protected.into_iter().map(str::to_string).collect(),
-        ));
+    let settled = change::settled(cfg);
+    let decided = mix_core::change::remove(packages, settled.clone())?;
+    let restored = change::restore(cfg, &settled).await?;
+
+    if !decided.changed.is_empty() {
+        let label = change::label("Removing", &decided.changed);
+        change::apply(ctx, cfg, &decided.manifest, &label).await?;
     }
-
-    let (state, restored) = change::settled(cfg).await?;
-    let partition = state.partition(packages);
-    let removed: Vec<String> = partition.installed.iter().map(|p| p.to_string()).collect();
-    let skipped: Vec<String> = partition.missing.iter().map(|p| p.to_string()).collect();
-
-    if removed.is_empty() {
-        return Ok(Removed {
-            removed,
-            skipped,
-            restored,
-        });
-    }
-
-    change::apply(
-        ctx,
-        cfg,
-        &state.without(&removed),
-        &change::label("Removing", &removed),
-    )
-    .await?;
 
     Ok(Removed {
-        removed,
-        skipped,
+        removed: decided.changed,
+        skipped: decided.skipped,
         restored,
     })
 }
@@ -75,6 +65,7 @@ pub async fn remove(ctx: &Context, packages: &[String]) -> Result<Removed> {
 mod tests {
     use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
     use mix_core::privilege::InvokingUser;
+    use mix_core::state::StateManifest;
 
     use super::*;
 

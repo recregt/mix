@@ -1,5 +1,3 @@
-use mix_core::state::StateManifest;
-
 use crate::Context;
 
 use crate::profile::change::{self, Result};
@@ -30,46 +28,27 @@ impl Installed {
 
 pub async fn install(ctx: &Context, packages: &[String]) -> Result<Installed> {
     let cfg = ctx.user.as_ref().ok_or(change::Error::NotBootstrapped)?;
-    let (state, restored) = change::settled(cfg).await?;
-    let partition = state.partition(packages);
-    let skipped: Vec<String> = partition.installed.iter().map(|p| p.to_string()).collect();
-    let added: Vec<String> = partition.missing.iter().map(|p| p.to_string()).collect();
+    let settled = change::settled(cfg);
+    let decided = mix_core::change::install(packages, settled.clone())?;
+    let restored = change::restore(cfg, &settled).await?;
 
-    // Everything requested is already there: nothing to render, write or build.
-    if added.is_empty() {
-        return Ok(Installed {
-            added,
-            skipped,
-            restored,
-        });
+    if !decided.changed.is_empty() {
+        let label = change::label("Installing", &decided.changed);
+        change::apply(ctx, cfg, &decided.manifest, &label).await?;
     }
-
-    let label = change::label("Installing", &added);
-
-    change::apply(ctx, cfg, &with_added(&state, &added), &label).await?;
 
     Ok(Installed {
-        added,
-        skipped,
+        added: decided.changed,
+        skipped: decided.skipped,
         restored,
     })
-}
-
-fn with_added(state: &StateManifest, added: &[String]) -> StateManifest {
-    let mut packages = Vec::with_capacity(state.packages.len() + added.len());
-    packages.extend_from_slice(&state.packages);
-    packages.extend_from_slice(added);
-
-    StateManifest {
-        version: state.version,
-        packages,
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
     use mix_core::privilege::InvokingUser;
+    use mix_core::state::StateManifest;
 
     use super::*;
     use crate::profile::change::Error;
@@ -180,30 +159,5 @@ mod tests {
             Installed::default().to_json(),
             r#"{"added":[],"skipped":[]}"#
         );
-    }
-
-    #[test]
-    fn with_added_keeps_the_installed_packages_and_appends_the_new_ones() {
-        let state = StateManifest {
-            version: 1,
-            packages: vec!["git".to_string()],
-        };
-
-        let candidate = with_added(&state, &["ripgrep".to_string()]);
-
-        assert_eq!(
-            candidate.packages,
-            vec!["git".to_string(), "ripgrep".to_string()]
-        );
-    }
-
-    #[test]
-    fn with_added_keeps_the_manifest_version() {
-        let state = StateManifest {
-            version: 7,
-            packages: Vec::new(),
-        };
-
-        assert_eq!(with_added(&state, &["fd".to_string()]).version, 7);
     }
 }

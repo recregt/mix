@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::path::Path;
 
+use mix_core::change::{NewerList, Rendered, Unrenderable};
 use mix_core::models::UserConfig;
 use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
 use mix_core::state::StateManifest;
@@ -9,7 +10,6 @@ use tracing::Instrument;
 use crate::Context;
 use crate::effect::fs::{remove_file, write_atomic};
 use crate::profile;
-use crate::profile::config::render_home;
 use crate::profile::state::{self, Invalid, Settled, Source};
 
 #[derive(Debug, thiserror::Error)]
@@ -35,19 +35,38 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-pub async fn settled(cfg: &UserConfig) -> Result<(StateManifest, Option<Source>)> {
-    match state::settle(&cfg.user.home) {
-        Settled::Newer(version) => Err(Error::NewerState(version)),
-        Settled::Current {
-            manifest,
+impl From<Unrenderable> for Error {
+    fn from(error: Unrenderable) -> Self {
+        match error {
+            Unrenderable::Package(error) => Error::InvalidPackage(error),
+            Unrenderable::State(invalid) => Error::InvalidState(invalid),
+        }
+    }
+}
+
+impl From<NewerList> for Error {
+    fn from(NewerList(version): NewerList) -> Self {
+        Error::NewerState(version)
+    }
+}
+
+pub fn settled(cfg: &UserConfig) -> Settled {
+    state::settle(&cfg.user.home)
+}
+
+pub async fn restore(cfg: &UserConfig, settled: &Settled) -> Result<Option<Source>> {
+    match settled {
+        Settled::Newer(_)
+        | Settled::Current {
             source: Source::File,
-        } => Ok((manifest, None)),
+            ..
+        } => Ok(None),
         Settled::Current { manifest, source } => {
-            let (new_state, new_home) = render_candidate(cfg, &manifest)?;
+            let Rendered { state, home_nix } = render_candidate(cfg, manifest)?;
             let state_dir = mix_state_dir(&cfg.user.home);
-            write_atomic(&state_dir.join(STATE_FILE), &new_state).await?;
-            write_atomic(&state_dir.join(HOME_NIX), &new_home).await?;
-            Ok((manifest, Some(source)))
+            write_atomic(&state_dir.join(STATE_FILE), &state).await?;
+            write_atomic(&state_dir.join(HOME_NIX), &home_nix).await?;
+            Ok(Some(*source))
         }
     }
 }
@@ -61,7 +80,10 @@ pub async fn apply(
     let activity = &ctx.reporters.activity;
     let steps = &ctx.reporters.steps;
     let scope = &ctx.scope;
-    let (new_state, new_home) = render_candidate(cfg, manifest)?;
+    let Rendered {
+        state: new_state,
+        home_nix: new_home,
+    } = render_candidate(cfg, manifest)?;
 
     let state_dir = mix_state_dir(&cfg.user.home);
     let state_path = state_dir.join(STATE_FILE);
@@ -97,11 +119,8 @@ pub fn label(verb: &str, packages: &[String]) -> String {
     }
 }
 
-fn render_candidate(cfg: &UserConfig, manifest: &StateManifest) -> Result<(String, String)> {
-    let home = render_home(&cfg.user, &manifest.packages)?;
-    let rendered = manifest.render();
-    state::validate(&rendered)?;
-    Ok((rendered, home))
+fn render_candidate(cfg: &UserConfig, manifest: &StateManifest) -> Result<Rendered> {
+    Ok(mix_core::change::render(&cfg.user, manifest)?)
 }
 
 async fn write_then_switch<F, Fut>(
@@ -143,31 +162,7 @@ async fn put_back(path: &Path, previous: Option<&str>) {
 
 #[cfg(test)]
 mod tests {
-    use mix_core::privilege::InvokingUser;
-
     use super::*;
-
-    fn user_config(home: &Path) -> UserConfig {
-        UserConfig {
-            user: InvokingUser {
-                uid: 1000,
-                gid: 1000,
-                name: "mix-user".to_string(),
-                home: home.to_path_buf(),
-            },
-            flake: "flake-content".to_string(),
-            lock: "lock-content".to_string(),
-            home: "home-content".to_string(),
-            restored_state: None,
-        }
-    }
-
-    fn manifest(version: u32, packages: &[&str]) -> StateManifest {
-        StateManifest {
-            version,
-            packages: packages.iter().map(|p| p.to_string()).collect(),
-        }
-    }
 
     #[test]
     fn label_names_a_short_list_of_packages() {
@@ -182,52 +177,6 @@ mod tests {
         let packages: Vec<String> = (0..12).map(|i| format!("package-{i}")).collect();
 
         assert_eq!(label("Removing", &packages), "Removing 12 packages");
-    }
-
-    #[test]
-    fn render_candidate_renders_every_package_into_the_manifest_and_home_nix() {
-        let home = tempfile::tempdir().unwrap();
-
-        let (state, home_nix) =
-            render_candidate(&user_config(home.path()), &manifest(1, &["git", "ripgrep"])).unwrap();
-
-        assert_eq!(
-            StateManifest::parse(&state).unwrap().packages,
-            vec!["git".to_string(), "ripgrep".to_string()]
-        );
-        assert!(home_nix.contains("ripgrep"));
-        assert!(home_nix.contains("git"));
-    }
-
-    #[test]
-    fn render_candidate_refuses_a_format_it_does_not_write() {
-        let home = tempfile::tempdir().unwrap();
-
-        let err = render_candidate(&user_config(home.path()), &manifest(7, &["git"])).unwrap_err();
-
-        assert!(matches!(err, Error::InvalidState(Invalid::Newer(7))));
-    }
-
-    #[test]
-    fn render_candidate_refuses_a_list_without_git() {
-        let home = tempfile::tempdir().unwrap();
-
-        let err = render_candidate(&user_config(home.path()), &manifest(1, &[])).unwrap_err();
-
-        assert!(matches!(err, Error::InvalidState(Invalid::Missing("git"))));
-    }
-
-    #[test]
-    fn render_candidate_rejects_an_invalid_package_name() {
-        let home = tempfile::tempdir().unwrap();
-
-        let err = render_candidate(
-            &user_config(home.path()),
-            &manifest(1, &["not a valid ident"]),
-        )
-        .unwrap_err();
-
-        assert!(matches!(err, Error::InvalidPackage(_)));
     }
 
     #[tokio::test]

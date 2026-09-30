@@ -10,6 +10,7 @@ model = []
 
 [dependencies]
 mix-events = { path = "../events" }
+mix-nixgen = { path = "../nixgen" }
 serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

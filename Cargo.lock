@@ -1416,6 +1416,7 @@ dependencies = [
  "codspeed-divan-compat",
  "generativity",
  "mix-events",
+ "mix-nixgen",
  "proptest",
  "serde",
  "serde_json",

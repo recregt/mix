@@ -1,6 +1,7 @@
 pub mod action;
 pub mod bootstrap;
 pub mod build_graph;
+pub mod change;
 pub mod constants;
 pub mod error;
 pub mod health;
