@@ -20,7 +20,7 @@ generativity = "1.2.1"
 [dev-dependencies]
 proptest = { workspace = true }
 divan = { workspace = true }
-trybuild = "1.0.121"
+trybuild = "=1.0.121"
 
 [[bench]]
 name = "nix_log"
