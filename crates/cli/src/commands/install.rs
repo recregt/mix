@@ -7,7 +7,7 @@ pub async fn run(
     let (_lock, user_config) = super::acquire_profile()?;
     let ctx = mix_shell::Context::new(mix_exec::Scope::root())
         .with_user(Some(user_config))
-        .with_render(view.sinks(mix_ui::display(false))?)
+        .with_render(view.sinks(mix_ui::display())?)
         .with_policy(super::policy())
         .with_host(super::host_config());
     let _watch = crate::controls::watch(

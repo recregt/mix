@@ -62,10 +62,10 @@ pub enum Verb {
 }
 
 impl Verb {
-    fn label(&self) -> &'static str {
+    fn doing(&self) -> mix_events::v1::Verb {
         match self {
-            Verb::Install => "Installing",
-            Verb::Remove => "Removing",
+            Verb::Install => mix_events::v1::Verb::Installing,
+            Verb::Remove => mix_events::v1::Verb::Removing,
         }
     }
 
@@ -109,7 +109,7 @@ pub async fn run(
     change: &Change,
     journal: &mut dyn Journal,
 ) -> Result<()> {
-    let steps = mix_core::change::steps(&cfg.user, change, verb.label())?;
+    let steps = mix_core::change::steps(&cfg.user, change, verb.doing())?;
     let scope = &ctx.scope;
     let request = ctx.request.id.clone();
     let mut observer = ctx.relay();

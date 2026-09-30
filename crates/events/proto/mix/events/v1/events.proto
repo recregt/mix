@@ -71,7 +71,22 @@ message Plan {
 }
 
 message Step {
-  string title = 1;
+  Verb verb = 2;
+  string subject = 3;
+}
+
+enum Verb {
+  VERB_UNSPECIFIED = 0;
+  VERB_CREATING = 1;
+  VERB_REMOVING = 2;
+  VERB_INSTALLING = 3;
+  VERB_WRITING = 4;
+  VERB_CONFIGURING = 5;
+  VERB_ACTIVATING = 6;
+  VERB_RECORDING = 7;
+  VERB_RESTARTING = 8;
+  VERB_REPAIRING = 9;
+  VERB_RECOVERING = 10;
 }
 
 message Rollback {

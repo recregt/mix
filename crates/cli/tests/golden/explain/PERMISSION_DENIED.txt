@@ -1,4 +1,4 @@
 no permission to use /home/mix-user/.local/state/mix/state
-Check who owns it, then run `mix install` again
+check who owns it, then run `mix install` again
 
 `mix` was not allowed to use a file or directory. Usually something under your home directory is owned by another user, often root after a command was run with sudo. Check who owns the path named in the message, give it back to yourself, and run the command again.

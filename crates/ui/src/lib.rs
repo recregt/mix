@@ -4,41 +4,30 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub mod activity;
 mod display;
-mod live;
-pub mod message;
 mod progress;
+mod status;
 
 pub use display::{Display, Silent, StepLine, display};
-pub use progress::{init, step_style};
+pub use progress::{init, live_style};
+pub use status::Status;
 
-/// Whether anything may be drawn in place. Set once by [`init`], so a caller that never
-/// initialises the output keeps the default.
+use status::{GUTTER, Tone};
+
 static PROGRESS: AtomicBool = AtomicBool::new(true);
 
-/// Colour of the marker a finished line keeps, written out rather than styled through a
-/// formatter: a line is built in one pass, and these are constants.
 const GREEN: &str = "\u{1b}[32m";
 const RED: &str = "\u{1b}[31m";
 const YELLOW: &str = "\u{1b}[33m";
+const CYAN: &str = "\u{1b}[36m";
 const BOLD: &str = "\u{1b}[1m";
 const RESET: &str = "\u{1b}[0m";
 
-/// Markers a printed line opens with, and the columns they take with the space after them.
-const DONE: &str = "✓";
-const FAILED: &str = "✗";
-const LEFT_ALONE: &str = "•";
-const WARNING: &str = "!";
-const MARKER_WIDTH: usize = 2;
-
-/// How many causes are worth printing under a failure. A chain longer than this is a library
-/// explaining itself to its own author, not to the person running the command.
 const MAX_CAUSES: usize = 4;
 
 pub(crate) fn set_progress_enabled(enabled: bool) {
     PROGRESS.store(enabled, Ordering::Relaxed);
 }
 
-/// Whether progress bars and live output are drawn at all.
 pub fn progress_enabled() -> bool {
     PROGRESS.load(Ordering::Relaxed)
 }
@@ -47,41 +36,18 @@ fn colors_enabled(is_terminal: bool) -> bool {
     is_terminal && std::env::var_os("NO_COLOR").is_none()
 }
 
-/// Neither answer can change while the process runs, and asking costs a `stat` of the stream
-/// plus a walk of the environment — per printed line, on a command that prints one line per
-/// check.
-fn stdout_colors() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| colors_enabled(std::io::stdout().is_terminal()))
-}
-
 pub(crate) fn stderr_colors() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| colors_enabled(std::io::stderr().is_terminal()))
 }
 
-/// Prints a finished line without letting it collide with whatever is being drawn in place.
-///
-/// A progress bar owns the last lines of the terminal, and a plain `println!` writes straight
-/// past it: the two end up interleaved on the same row, and the bar redraws over what was
-/// printed. Suspending the drawing for the write is what keeps the output readable. Nothing is
-/// suspended when nothing is being drawn, which costs one atomic load.
-///
-/// The line arrives fully built, so the write is one `write_all` under one lock rather than a
-/// formatter run holding the stream for the length of the message.
-fn print_line(line: &str, to_stderr: bool) {
+fn print_line(line: &str) {
     let write = || {
-        let bytes = line.as_bytes();
-        let written = if to_stderr {
-            let mut out = std::io::stderr().lock();
-            out.write_all(bytes).and_then(|()| out.write_all(b"\n"))
-        } else {
-            let mut out = std::io::stdout().lock();
-            out.write_all(bytes).and_then(|()| out.write_all(b"\n"))
-        };
-        let _ = written;
+        let mut out = std::io::stderr().lock();
+        let _ = out
+            .write_all(line.as_bytes())
+            .and_then(|()| out.write_all(b"\n"));
     };
-
     if progress_enabled() {
         progress::board().suspend(write);
     } else {
@@ -89,198 +55,156 @@ fn print_line(line: &str, to_stderr: bool) {
     }
 }
 
-/// What a printed line says about the thing it reports.
+fn painted(out: &mut String, colour: &str, text: &str, colours: bool) {
+    if colours {
+        out.push_str(BOLD);
+        out.push_str(colour);
+        out.push_str(text);
+        out.push_str(RESET);
+    } else {
+        out.push_str(text);
+    }
+}
+
+pub fn status_line(status: Status, subject: &str, colours: bool) -> String {
+    let text = status.text();
+    let mut out = String::with_capacity(GUTTER + 1 + subject.len() + 16);
+    for _ in text.len()..GUTTER {
+        out.push(' ');
+    }
+    let colour = match status.tone() {
+        Tone::Plain => GREEN,
+        Tone::Caution => YELLOW,
+    };
+    painted(&mut out, colour, text, colours);
+    out.push(' ');
+    out.push_str(subject);
+    out
+}
+
+pub fn status(status: Status, subject: &str) {
+    print_line(&status_line(status, subject, stderr_colors()));
+}
+
+pub fn output_line(line: &str) -> String {
+    let printable = activity::printable(line);
+    let mut out = String::with_capacity(GUTTER + 3 + printable.len());
+    for _ in 0..=GUTTER {
+        out.push(' ');
+    }
+    out.push_str("| ");
+    out.push_str(&printable);
+    out
+}
+
+pub fn output(line: &str) {
+    print_line(&output_line(line));
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Status {
-    /// It worked.
-    Done,
-    /// It did not.
-    Failed,
-    /// It was deliberately left alone, e.g. a package that is already installed.
-    LeftAlone,
-    /// Neither: something the user is being told.
-    Plain,
+pub enum Severity {
+    Error,
     Warning,
 }
 
-impl Status {
-    /// The marker the line opens with, and the colour it is drawn in.
-    fn marker(self) -> Option<(&'static str, &'static str)> {
-        match self {
-            Status::Done => Some((DONE, GREEN)),
-            Status::Failed => Some((FAILED, RED)),
-            Status::LeftAlone => Some((LEFT_ALONE, YELLOW)),
-            Status::Warning => Some((WARNING, YELLOW)),
-            Status::Plain => None,
-        }
+#[derive(Debug, Default)]
+pub struct Report<'a> {
+    pub code: Option<&'a str>,
+    pub summary: &'a str,
+    pub causes: Vec<String>,
+    pub helps: Vec<&'a str>,
+}
+
+fn write_help(out: &mut String, text: &str, colours: bool) {
+    let mut lines = text.lines();
+    out.push_str("\n  ");
+    painted(out, CYAN, "help", colours);
+    out.push_str(": ");
+    out.push_str(lines.next().unwrap_or_default());
+    for line in lines {
+        out.push_str("\n        ");
+        out.push_str(line);
     }
 }
 
-/// Builds a whole line — marker, message, full stop — in one buffer.
-///
-/// Printing costs the string the line is printed from and nothing else: the marker, the raised
-/// first letter, the indent under it, the code spans and the full stop are all written in the
-/// one pass, where they used to be a string per part and a formatter run on top.
-pub fn status_line(status: Status, message: &str, colour: bool) -> String {
-    let marker = status.marker();
-    // The message, the marker, and room for the full stop and the sequences the marker and any
-    // code spans are drawn with.
-    let mut out = String::with_capacity(message.len() + 24);
-
-    if let Some((glyph, colour_code)) = marker {
-        if colour {
-            out.push_str(colour_code);
-            out.push_str(glyph);
-            out.push_str(RESET);
-        } else {
-            out.push_str(glyph);
-        }
-        out.push(' ');
-    }
-
-    let indent = if marker.is_some() { MARKER_WIDTH } else { 0 };
-    message::write_message(&mut out, message, indent, colour);
-    out
-}
-
-/// The same line about a named artifact: `✓ /nix/store: missing`.
-///
-/// The name is printed as it arrived and the rest is read as prose. A caller that has the two
-/// separately does not have to hope the shape of the joined line gives them away.
-pub fn status_line_about(status: Status, name: &str, message: &str, colour: bool) -> String {
-    let marker = status.marker();
-    let mut out = String::with_capacity(name.len() + message.len() + 26);
-
-    if let Some((glyph, colour_code)) = marker {
-        if colour {
-            out.push_str(colour_code);
-            out.push_str(glyph);
-            out.push_str(RESET);
-        } else {
-            out.push_str(glyph);
-        }
-        out.push(' ');
-    }
-
-    let indent = if marker.is_some() { MARKER_WIDTH } else { 0 };
-    message::write_about(&mut out, name, message, indent, colour);
-    out
-}
-
-fn print_status(status: Status, message: &str, to_stderr: bool) {
-    let colour = if to_stderr {
-        stderr_colors()
-    } else {
-        stdout_colors()
+pub fn report_text(severity: Severity, report: &Report<'_>, colours: bool) -> String {
+    let (label, colour) = match severity {
+        Severity::Error => ("error", RED),
+        Severity::Warning => ("warning", YELLOW),
     };
-    print_line(&status_line(status, message, colour), to_stderr);
+    let mut out = String::with_capacity(report.summary.len() + 64);
+    match report.code {
+        Some(code) => painted(&mut out, colour, &format!("{label}[{code}]"), colours),
+        None => painted(&mut out, colour, label, colours),
+    }
+    out.push_str(": ");
+    out.push_str(report.summary);
+    if !report.causes.is_empty() {
+        out.push_str("\n\nCaused by:");
+        for cause in &report.causes {
+            for line in cause.lines() {
+                out.push_str("\n  ");
+                out.push_str(&activity::printable(line));
+            }
+        }
+    }
+    for help in &report.helps {
+        write_help(&mut out, help, colours);
+    }
+    out
+}
+
+pub fn house_style(text: &str) -> bool {
+    let starts_lowercase = text
+        .chars()
+        .next()
+        .is_none_or(|first| !first.is_uppercase());
+    let unfinished = !text.trim_end().ends_with('.');
+    starts_lowercase && unfinished
+}
+
+pub fn report(severity: Severity, report: &Report<'_>) {
+    debug_assert!(house_style(report.summary), "{:?}", report.summary);
+    debug_assert!(
+        report.helps.iter().all(|help| house_style(help)),
+        "{:?}",
+        report.helps
+    );
+    print_line(&report_text(severity, report, stderr_colors()));
+}
+
+pub fn note(text: &str) {
+    debug_assert!(house_style(text), "{text:?}");
+    let mut out = String::new();
+    painted(&mut out, CYAN, "note", stderr_colors());
+    out.push_str(": ");
+    out.push_str(text);
+    print_line(&out);
+}
+
+pub fn causes_of(first: Option<&dyn std::error::Error>, already: &str) -> Vec<String> {
+    let mut causes: Vec<String> = Vec::new();
+    let mut source = first;
+    while let Some(cause) = source.filter(|_| causes.len() < MAX_CAUSES) {
+        let text = cause.to_string();
+        let text = text.trim();
+        if !text.is_empty()
+            && !already.contains(text)
+            && !causes.iter().any(|known| known.contains(text))
+        {
+            causes.push(text.to_string());
+        }
+        source = cause.source();
+    }
+    causes
 }
 
 pub fn restore_terminal() {
-    use std::io::{IsTerminal, Write};
     let mut stderr = std::io::stderr();
     if stderr.is_terminal() {
         let _ = stderr.write_all(b"\x1b[?25h");
         let _ = stderr.flush();
     }
-}
-
-pub fn ok(message: impl std::fmt::Display) {
-    print_status(Status::Done, &message.to_string(), false);
-}
-
-pub fn fail(message: impl std::fmt::Display) {
-    print_status(Status::Failed, &message.to_string(), true);
-}
-
-/// Reports a failure about a named artifact: the name as it is, and what was found about it.
-pub fn fail_about(name: &str, message: &str) {
-    print_line(
-        &status_line_about(Status::Failed, name, message, stderr_colors()),
-        true,
-    );
-}
-
-/// Reports something that was deliberately left alone, e.g. a package that is already installed.
-pub fn skipped(message: impl std::fmt::Display) {
-    print_status(Status::LeftAlone, &message.to_string(), true);
-}
-
-pub fn warn(message: impl std::fmt::Display) {
-    print_status(Status::Warning, &message.to_string(), true);
-}
-
-pub fn info(message: impl std::fmt::Display) {
-    print_status(Status::Plain, &message.to_string(), true);
-}
-
-/// A line of detail for `-v`, printed as it is: no marker, no capital, no full stop.
-pub fn detail(message: &str) {
-    print_line(message, true);
-}
-
-pub fn header(message: impl std::fmt::Display) {
-    let message = message.to_string();
-    let mut out = String::with_capacity(message.len() + 8);
-    if stderr_colors() {
-        out.push_str(BOLD);
-    }
-    out.push_str(message.trim_end_matches(':'));
-    out.push(':');
-    if stderr_colors() {
-        out.push_str(RESET);
-    }
-    print_line(&out, true);
-}
-
-/// Reports a failure with the causes behind it.
-///
-/// An error's own message is written by whoever raised it, and it usually interpolates the
-/// cause it wraps. A boxed library error is the exception: `reqwest` says that a request failed
-/// and leaves *why* — the refused connection, the unresolved host — in its source chain, so a
-/// failure printed from the top message alone loses the only line that explains it. The chain is
-/// walked here, and a cause is printed only if the message does not already say it.
-pub fn fail_error(error: &dyn std::error::Error) {
-    print_line(&failure(&error.to_string(), error, stderr_colors()), true);
-}
-
-/// Reports a failure in words the caller has already chosen, with the causes behind it.
-///
-/// The message is the reader's — written where the command is known — and the chain is the
-/// library's: the two are printed as one block, and a cause the message already says is left out.
-pub fn fail_explained(message: &str, error: &dyn std::error::Error) {
-    print_line(&failure(message, error, stderr_colors()), true);
-}
-
-pub fn fail_in_detail(message: &str, error: &dyn std::error::Error) {
-    print_line(&causes(message, Some(error), stderr_colors()), true);
-}
-
-fn failure(message: &str, error: &dyn std::error::Error, colour: bool) -> String {
-    causes(message, error.source(), colour)
-}
-
-fn causes(message: &str, first: Option<&dyn std::error::Error>, colour: bool) -> String {
-    let mut out = status_line(Status::Failed, message, colour);
-
-    let mut source = first;
-    let mut printed = 0;
-    while let Some(cause) = source.filter(|_| printed < MAX_CAUSES) {
-        let text = cause.to_string();
-        let text = text.trim();
-        if !text.is_empty() && !out.contains(text) {
-            out.push('\n');
-            for _ in 0..MARKER_WIDTH {
-                out.push(' ');
-            }
-            out.push_str("caused by: ");
-            out.push_str(text);
-            printed += 1;
-        }
-        source = cause.source();
-    }
-
-    out
 }
 
 #[cfg(test)]
@@ -319,147 +243,95 @@ mod tests {
     }
 
     #[test]
-    fn a_status_line_opens_with_its_marker() {
+    fn a_status_is_right_aligned_in_the_gutter() {
         assert_eq!(
-            status_line(Status::Done, "nothing to install", false),
-            "✓ Nothing to install."
+            status_line(Status::Writing, "package list", false),
+            "     Writing package list"
+        );
+        assert_eq!(
+            status_line(Status::RollingBack, "package list", false),
+            "Rolling back package list"
         );
     }
 
     #[test]
-    fn a_status_line_colours_the_marker_and_nothing_else() {
-        let drawn = status_line(Status::Failed, "it failed", true);
-        assert_eq!(drawn, format!("{RED}✗{RESET} It failed."));
-    }
-
-    /// `mix doctor` and `mix repair` print one of these per artifact: the name is theirs, the
-    /// rest is a measurement.
-    #[test]
-    fn a_line_about_a_named_artifact_keeps_the_name_it_was_given() {
-        assert_eq!(
-            status_line_about(Status::Failed, "default profile", "missing", false),
-            "✗ default profile: missing."
-        );
+    fn a_status_colours_the_verb_and_nothing_else() {
+        let line = status_line(Status::Installed, "ripgrep", true);
+        assert!(line.ends_with(&format!("{RESET} ripgrep")));
+        assert!(line.contains(&format!("{BOLD}{GREEN}Installed")));
     }
 
     #[test]
-    fn a_hint_under_a_named_artifact_is_indented_under_the_marker() {
-        assert_eq!(
-            status_line_about(
-                Status::Failed,
-                "/nix",
-                "exists but is not a directory\nRemove it by hand",
-                false
-            ),
-            "✗ /nix: exists but is not a directory\n  Remove it by hand."
-        );
-    }
-
-    #[test]
-    fn a_hint_under_a_failure_sits_under_the_message() {
-        assert_eq!(
-            status_line(Status::Failed, "it failed.\nTry again.", false),
-            "✗ It failed.\n  Try again."
-        );
-    }
-
-    #[test]
-    fn a_line_without_a_marker_is_not_indented() {
-        assert_eq!(
-            status_line(
-                Status::Plain,
-                "root required.\nRe-running with sudo...",
-                false
-            ),
-            "Root required.\nRe-running with sudo..."
-        );
-    }
-
-    /// The message a library gives is the top of a chain, and the line that explains the failure
-    /// is usually further down it.
-    #[test]
-    fn a_failure_prints_the_cause_behind_it() {
-        let error = chain(&[
-            "network request failed",
-            "error sending request",
-            "connection refused (os error 111)",
-        ]);
-
-        let printed = failure(&error.to_string(), &error, false);
-
-        assert_eq!(
-            printed,
-            "✗ Network request failed.\n  \
-             caused by: error sending request\n  \
-             caused by: connection refused (os error 111)"
-        );
-    }
-
-    /// Most of the tool's own errors interpolate the cause they wrap, and printing it twice
-    /// would be noise.
-    #[test]
-    fn a_cause_the_message_already_says_is_not_repeated() {
-        let error = chain(&[
-            "running `nix build`: permission denied",
-            "permission denied",
-        ]);
-
-        assert_eq!(
-            failure(&error.to_string(), &error, false),
-            "✗ Running `nix build`: permission denied."
-        );
-    }
-
-    /// The words are the caller's — written where the command is known — and the chain is still
-    /// the library's: a cause those words do not already say belongs under them.
-    #[test]
-    fn an_explained_failure_keeps_the_causes_under_the_words_chosen_for_it() {
-        let error = chain(&[
-            "network request failed",
-            "connection refused (os error 111)",
-        ]);
-
-        let printed = failure(
-            "could not fetch the pinned nix archive\ncheck your network connection",
-            &error,
+    fn a_warning_names_its_code_and_puts_the_help_under_it() {
+        let text = report_text(
+            Severity::Warning,
+            &Report {
+                code: Some("git-record-failed"),
+                summary: "the change was made but not recorded in git",
+                helps: vec!["`mix repair` records it"],
+                ..Report::default()
+            },
             false,
         );
-
         assert_eq!(
-            printed,
-            "✗ Could not fetch the pinned nix archive\n  \
-             check your network connection.\n  \
-             caused by: connection refused (os error 111)"
+            text,
+            "warning[git-record-failed]: the change was made but not recorded in git\n  help: `mix repair` records it"
         );
+    }
+
+    #[test]
+    fn an_error_lists_its_causes_before_the_help() {
+        let text = report_text(
+            Severity::Error,
+            &Report {
+                summary: "couldn't install ripgrep",
+                causes: vec![
+                    "`nix build` exited with status 1".into(),
+                    "error: \u{1b}[31mbuilder failed\u{1b}[0m".into(),
+                ],
+                helps: vec!["Run it again with `-v`\nto see each step"],
+                ..Report::default()
+            },
+            false,
+        );
+        assert_eq!(
+            text,
+            "error: couldn't install ripgrep\n\nCaused by:\n  `nix build` exited with status 1\n  error: builder failed\n  help: Run it again with `-v`\n        to see each step"
+        );
+    }
+
+    #[test]
+    fn a_cause_already_said_is_not_repeated() {
+        let error = chain(&["top", "connection refused", "connection refused", "dns"]);
+        assert_eq!(
+            causes_of(
+                error.cause.as_deref().map(|c| c as &dyn std::error::Error),
+                "couldn't download"
+            ),
+            ["connection refused", "dns"]
+        );
+    }
+
+    #[test]
+    fn text_after_a_label_starts_lowercase_and_has_no_full_stop() {
+        assert!(house_style("the change was made but not recorded in git"));
+        assert!(house_style("`mix repair` records it"));
+        assert!(house_style("run it again with sudo:\n  sudo mix bootstrap"));
+        assert!(!house_style("Run `mix repair` to fix them"));
+        assert!(!house_style("some checks failed."));
     }
 
     #[test]
     fn a_chain_that_never_ends_is_cut_off() {
-        let messages: Vec<&'static str> =
-            vec!["top", "one", "two", "three", "four", "five", "six", "seven"];
-        let chained = chain(&messages);
-        let printed = failure(&chained.to_string(), &chained, false);
-
-        assert_eq!(printed.lines().count(), 1 + MAX_CAUSES);
+        let error = chain(&["a", "b", "c", "d", "e", "f", "g"]);
+        assert_eq!(causes_of(Some(&error), "").len(), MAX_CAUSES);
     }
 
     #[test]
-    fn a_warning_is_marked_apart_from_a_failure() {
+    fn a_programs_line_sits_under_the_gutter_without_its_escapes() {
         assert_eq!(
-            status_line(Status::Warning, "your list was reset", false),
-            "! Your list was reset."
-        );
-    }
-
-    #[test]
-    fn the_detailed_view_starts_with_the_error_itself() {
-        let error = std::io::Error::other("nix build failed: out of disk space");
-
-        let printed = causes("couldn't install ripgrep", Some(&error), false);
-
-        assert_eq!(
-            printed,
-            "✗ Couldn't install ripgrep.\n  caused by: nix build failed: out of disk space"
+            output_line("\u{1b}[1mbuilding hello"),
+            format!("{}| building hello", " ".repeat(GUTTER + 1))
         );
     }
 }

@@ -10,7 +10,7 @@ pub async fn run(view: &crate::render::sinks::View) -> anyhow::Result<ExitCode> 
         let _lock = super::acquire_lock()?;
         let ctx = mix_shell::Context::new(mix_exec::Scope::root())
             .with_user(super::enrolled_user())
-            .with_render(view.sinks(mix_ui::display(true))?)
+            .with_render(view.sinks(mix_ui::display())?)
             .with_policy(super::policy())
             .with_host(super::host_config());
         let _watch = crate::controls::watch(

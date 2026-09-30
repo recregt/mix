@@ -1,4 +1,4 @@
 another `mix` command is already running
-Wait for it to finish, then run `mix install` again
+wait for it to finish, then run `mix install` again
 
 Another `mix` command is already changing the system, and two changes at once could leave it half done. Wait for the other command to finish, then run yours again.

@@ -57,7 +57,7 @@ mod tests {
         .message();
 
         assert!(message.contains("/nix: exists but is not a directory"));
-        assert!(message.contains("Remove it, then run `mix repair` again"));
+        assert!(message.contains("remove it, then run `mix repair` again"));
     }
 
     #[test]

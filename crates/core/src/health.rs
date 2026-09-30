@@ -7,7 +7,8 @@ use crate::bootstrap::stale_restart;
 use crate::identity;
 use crate::models::Target;
 use crate::paths::{NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT};
-use crate::plan::StepSpec;
+use crate::plan::{StepSpec, Title};
+use mix_events::v1::Verb;
 
 const FILE_MODE: u32 = 0o644;
 
@@ -463,8 +464,8 @@ impl StepSpec for TargetStep {
         Cow::Owned(self.label.clone())
     }
 
-    fn title(&self) -> Cow<'static, str> {
-        Cow::Owned(self.label.clone())
+    fn title(&self) -> Title {
+        Title::new(Verb::Repairing, self.label.clone())
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -489,8 +490,8 @@ impl StepSpec for RestartIfStale {
         "restart-nix-daemon".into()
     }
 
-    fn title(&self) -> Cow<'static, str> {
-        "restart the nix daemon if its configuration changed".into()
+    fn title(&self) -> Title {
+        Title::new(Verb::Restarting, "Nix daemon")
     }
 
     fn queries(&self) -> Vec<Query> {

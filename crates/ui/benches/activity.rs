@@ -1,6 +1,6 @@
 use indicatif::{ProgressBar, ProgressDrawTarget, TermLike};
 use mix_core::BuildProgress;
-use mix_ui::activity::{FrameBuffer, MAX_WIDTH, Throttle, display_line, write_progress};
+use mix_ui::activity::{printable, write_progress};
 
 fn main() {
     divan::main();
@@ -22,29 +22,25 @@ fn wide_line() -> String {
 }
 
 #[divan::bench]
-fn render_a_plain_line(bencher: divan::Bencher) {
-    bencher.bench(|| display_line(divan::black_box(PLAIN)));
+fn clean_a_plain_line(bencher: divan::Bencher) {
+    bencher.bench(|| printable(divan::black_box(PLAIN)));
 }
 
 #[divan::bench]
-fn render_a_coloured_line(bencher: divan::Bencher) {
-    bencher.bench(|| display_line(divan::black_box(COLOURED)));
+fn clean_a_coloured_line(bencher: divan::Bencher) {
+    bencher.bench(|| printable(divan::black_box(COLOURED)));
 }
 
 #[divan::bench]
-fn render_a_long_line(bencher: divan::Bencher) {
+fn clean_a_long_line(bencher: divan::Bencher) {
     let line = long_line();
-    assert!(line.len() > MAX_WIDTH);
-    bencher.bench(|| display_line(divan::black_box(&line)));
+    bencher.bench(|| printable(divan::black_box(&line)));
 }
 
-/// Truncating by column rather than by character is what keeps a line of wide characters from
-/// wrapping the step's line; this is what that costs when it happens.
 #[divan::bench]
-fn render_a_wide_line(bencher: divan::Bencher) {
+fn clean_a_wide_line(bencher: divan::Bencher) {
     let line = wide_line();
-    assert!(line.len() > MAX_WIDTH);
-    bencher.bench(|| display_line(divan::black_box(&line)));
+    bencher.bench(|| printable(divan::black_box(&line)));
 }
 
 /// What nix reports part way through installing a package.
@@ -122,51 +118,12 @@ impl TermLike for Discard {
     }
 }
 
-/// What one turn of the spinner costs: the whole step line is rendered from its template and
-/// trimmed to the terminal on every frame, whether or not anything but the spinner moved.
-///
-/// This is the work the frame rate is a budget for, and the reason for spending that budget on
-/// frames the terminal will actually be shown.
 #[divan::bench]
-fn draw_a_spinner_frame(bencher: divan::Bencher) {
+fn draw_a_live_frame(bencher: divan::Bencher) {
     let bar = ProgressBar::with_draw_target(None, ProgressDrawTarget::term_like(Box::new(Discard)))
-        .with_style(mix_ui::step_style())
-        .with_prefix("Installing ripgrep");
-    bar.set_message("\u{1b}[2mbuilding  3/17 · downloading 12/37 · 48.2/91.0 MiB\u{1b}[0m");
+        .with_style(mix_ui::live_style())
+        .with_prefix("Activating")
+        .with_message("ripgrep");
 
     bencher.bench_local(|| bar.tick());
-}
-
-/// The frame a flooding build most often produces is the one already on screen: a counter it
-/// reports twice, or a line that trims to what the last one trimmed to. Dropping it here costs a
-/// comparison, where drawing it would cost [`draw_a_spinner_frame`] plus the handover.
-#[divan::bench]
-fn skip_an_unchanged_frame(bencher: divan::Bencher) {
-    let progress = counters();
-    let mut frames = FrameBuffer::new();
-    frames.build(|frame| write_progress(frame, &progress));
-
-    bencher.bench_local(|| {
-        frames
-            .build(|frame| write_progress(frame, divan::black_box(&progress)))
-            .is_some()
-    });
-}
-
-/// The cost a flooding process actually pays: the frame is not due, so the line is dropped.
-/// The interval is pinned well past the benchmark's runtime so every call takes that path.
-#[divan::bench(args = [64, 4096])]
-fn drop_a_burst_of_lines(bencher: divan::Bencher, lines: usize) {
-    let throttle = Throttle::with_interval_ms(60 * 60 * 1000);
-    throttle.due();
-
-    bencher.bench(|| {
-        let mut drawn = 0usize;
-        for _ in 0..divan::black_box(lines) {
-            if throttle.due() {
-                drawn += 1;
-            }
-        }
-        drawn
-    });
 }

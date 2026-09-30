@@ -6,9 +6,10 @@ use mix_nixgen::{CopyIntoGeneration, FileName, HomeModule, InvalidInput, StateVe
 use crate::action::{Action, Fact, Failure, Query};
 use crate::bootstrap::{FILE_MODE, Facts, ensure_file};
 use crate::paths::{GENERATION_STATE_FILE, HOME_NIX, STATE_FILE, mix_state_dir};
-use crate::plan::StepSpec;
+use crate::plan::{StepSpec, Title};
 use crate::privilege::InvokingUser;
 use crate::state::{REQUIRED_PACKAGES, StateManifest};
+use mix_events::v1::Verb;
 
 pub const STATE_VERSION: u32 = 1;
 
@@ -217,8 +218,8 @@ impl StepSpec for WriteConfig {
         "write-config".into()
     }
 
-    fn title(&self) -> Cow<'static, str> {
-        "write the package list".into()
+    fn title(&self) -> Title {
+        Title::new(Verb::Writing, "package list")
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -248,7 +249,8 @@ impl StepSpec for WriteConfig {
 
 struct Activate {
     user: InvokingUser,
-    title: String,
+    verb: Verb,
+    packages: Vec<String>,
 }
 
 impl StepSpec for Activate {
@@ -256,8 +258,8 @@ impl StepSpec for Activate {
         "activate".into()
     }
 
-    fn title(&self) -> Cow<'static, str> {
-        self.title.clone().into()
+    fn title(&self) -> Title {
+        Title::new(self.verb, subject(&self.packages))
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -278,8 +280,8 @@ impl StepSpec for Record {
         "record".into()
     }
 
-    fn title(&self) -> Cow<'static, str> {
-        "record the change".into()
+    fn title(&self) -> Title {
+        Title::new(Verb::Recording, "change")
     }
 
     fn shielded(&self) -> bool {
@@ -297,17 +299,17 @@ impl StepSpec for Record {
     }
 }
 
-pub fn label(verb: &str, packages: &[String]) -> String {
+pub fn subject(packages: &[String]) -> String {
     match packages.len() {
-        0..=3 => format!("{verb} {}", packages.join(", ")),
-        n => format!("{verb} {n} packages"),
+        0..=3 => packages.join(", "),
+        n => format!("{n} packages"),
     }
 }
 
 pub fn steps(
     user: &InvokingUser,
     change: &Change,
-    verb: &str,
+    verb: Verb,
 ) -> Result<Vec<Box<dyn StepSpec>>, Unrenderable> {
     if change.changed.is_empty() && change.source == Source::File {
         return Ok(Vec::new());
@@ -319,7 +321,8 @@ pub fn steps(
     if !change.changed.is_empty() {
         steps.push(Box::new(Activate {
             user: user.clone(),
-            title: label(verb, &change.changed),
+            verb,
+            packages: change.changed.clone(),
         }));
         steps.push(Box::new(Record(user.clone())));
     }

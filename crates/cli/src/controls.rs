@@ -13,18 +13,18 @@ pub struct Stopping {
 }
 
 pub const BOOTSTRAP: Stopping = Stopping {
-    first: "Cancelling... (cleaning up). Press Ctrl-C again to stop now.",
-    forced: "Stopped before the cleanup finished. Run `mix bootstrap` again to finish it.",
+    first: "cancelling and cleaning up; press Ctrl-C again to stop now",
+    forced: "stopped before the cleanup finished; run `mix bootstrap` again to finish it",
 };
 
 pub const REPAIR: Stopping = Stopping {
-    first: "Stopping after the current repair... Press Ctrl-C again to stop now.",
-    forced: "Stopped in the middle of a repair. Run `mix repair` again to finish it.",
+    first: "stopping after the current repair; press Ctrl-C again to stop now",
+    forced: "stopped in the middle of a repair; run `mix repair` again to finish it",
 };
 
 pub const CHANGE: Stopping = Stopping {
-    first: "Cancelling... (putting the package list back). Press Ctrl-C again to stop now.",
-    forced: "Stopped before the package list was put back. The next mix command puts it back.",
+    first: "cancelling and putting the package list back; press Ctrl-C again to stop now",
+    forced: "stopped before the package list was put back; the next `mix` command puts it back",
 };
 
 const FORCED_EXIT: i32 = 130;
@@ -89,7 +89,7 @@ pub fn apply(scope: &Scope, notices: Option<&Stopping>, control: Control) {
         Control::Cancel(reason) => scope.cancel(reason),
         Control::ForceStop => {
             if let Some(notices) = notices {
-                mix_ui::warn(notices.forced);
+                mix_ui::note(notices.forced);
             }
             scope.processes().kill();
             mix_ui::restore_terminal();

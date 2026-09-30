@@ -48,7 +48,7 @@ mod tests {
 
         assert_eq!(
             explain(&error, &["x".to_string()]).message(),
-            "couldn't install x\nRun it again with `-v` to see what went wrong"
+            "couldn't install x\nrun it again with `-v` to see what went wrong"
         );
     }
 }

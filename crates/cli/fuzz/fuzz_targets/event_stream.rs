@@ -11,7 +11,7 @@ use prost::Message;
 
 fn consume(envelopes: &[Envelope]) {
     let _ = mix_events::validate(envelopes);
-    let mut human = Human::new(Arc::new(mix_ui::Silent)).verbosity(3);
+    let mut human = Human::new(Arc::new(mix_ui::Silent)).level(mix_events::Detail::Trace);
     for envelope in envelopes {
         let json = serde_json::to_string(envelope).expect("an envelope has a JSON form");
         let read: Envelope = serde_json::from_str(&json).expect("its JSON form reads back");

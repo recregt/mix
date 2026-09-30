@@ -800,8 +800,8 @@ mod tests {
             self.key.into()
         }
 
-        fn title(&self) -> Cow<'static, str> {
-            "ensure".into()
+        fn title(&self) -> mix_core::plan::Title {
+            mix_core::plan::Title::new(mix_events::v1::Verb::Creating, "ensure")
         }
 
         fn queries(&self) -> Vec<Query> {

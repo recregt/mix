@@ -14,7 +14,7 @@ pub async fn run(
                 mix_shell::effect::accounts::invoking_user()
                     .and_then(mix_shell::profile::user_config_for),
             )
-            .with_render(view.sinks(mix_ui::display(true))?)
+            .with_render(view.sinks(mix_ui::display())?)
             .with_policy(policy)
             .with_host(super::host_config());
         let _watch = crate::controls::watch(

@@ -1,4 +1,4 @@
 couldn't get administrator rights to install ripgrep
-Make sure your account can use sudo, then try again
+make sure your account can use sudo, then try again
 
 The command needs administrator rights, and `mix` asks for them through sudo. sudo could not be started, or refused. Make sure your account can use sudo.

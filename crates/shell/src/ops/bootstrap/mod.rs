@@ -198,7 +198,8 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
                 Start::new(
                     "recover",
                     node_started::Kind::Step(Step {
-                        title: "finish an interrupted request".to_string(),
+                        verb: mix_events::v1::Verb::Recovering as i32,
+                        subject: "interrupted request".to_string(),
                     }),
                 )
                 .shielded(),

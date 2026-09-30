@@ -33,12 +33,7 @@ pub(crate) fn warning(diagnostic: &Wire) -> Diagnostic {
         Ok(code @ (Code::JournalUnwritable | Code::CleanupIncomplete | Code::GitRecordFailed)) => {
             plain(code, &context).unwrap_or_else(bug)
         }
-        _ => match diagnostic.causes.first() {
-            Some(cause) if !cause.message.is_empty() => {
-                Diagnostic::new(format!("{}: {}", diagnostic.message, cause.message))
-            }
-            _ => Diagnostic::new(diagnostic.message.clone()),
-        },
+        _ => Diagnostic::new(diagnostic.message.clone()),
     }
 }
 
@@ -66,9 +61,9 @@ pub(crate) fn unfixable_of(reason: i32) -> Option<Unfixable> {
 
 pub(crate) fn unfixable(reason: Unfixable) -> &'static str {
     match reason {
-        Unfixable::NotADirectory => "Remove it, then run `mix repair` again",
-        Unfixable::MissingUser => "Recreate the user, or ignore this if it was removed on purpose",
-        Unfixable::MissingRuntime => "Run `mix bootstrap` to reinstall it",
+        Unfixable::NotADirectory => "remove it, then run `mix repair` again",
+        Unfixable::MissingUser => "recreate the user, or ignore this if it was removed on purpose",
+        Unfixable::MissingRuntime => "run `mix bootstrap` to reinstall it",
     }
 }
 
@@ -82,7 +77,7 @@ fn packages(diagnostic: &Wire) -> &[String] {
 fn bad_name(name: &str) -> Diagnostic {
     Diagnostic::hinting(
         format!("\"{name}\" isn't a valid package name"),
-        "Package names look like `ripgrep` or `python3`",
+        "package names look like `ripgrep` or `python3`",
     )
 }
 
@@ -120,17 +115,17 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
     match code {
         Code::Locked => Some(Diagnostic::hinting_parts(
             "another `mix` command is already running",
-            &["Wait for it to finish, then run `", command, "` again"],
+            &["wait for it to finish, then run `", command, "` again"],
         )),
         Code::LockMissing => Some(Diagnostic::hinting(
             "`mix` isn't set up yet",
-            "Run `mix bootstrap` first",
+            "run `mix bootstrap` first",
         )),
         Code::Io | Code::CommandFailed | Code::SpawnFailed => Some(failed(context.action)),
         Code::Internal | Code::Unspecified => Some(bug()),
         Code::JournalUnwritable => Some(Diagnostic::hinting(
             "`mix` couldn't record its progress",
-            "If this command is interrupted, `mix repair` may not be able to finish it",
+            "if this command is interrupted, `mix repair` may not be able to finish it",
         )),
         Code::CleanupIncomplete => Some(Diagnostic::hinting(
             "`mix` couldn't clean up after an unfinished step",
@@ -142,66 +137,66 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
         )),
         Code::Network => Some(Diagnostic::hinting(
             "couldn't download required setup files",
-            format!("Check your internet connection, then run `{command}` again"),
+            format!("check your internet connection, then run `{command}` again"),
         )),
         Code::Integrity | Code::Decompression => Some(Diagnostic::hinting(
             DAMAGED,
-            format!("Run `{command}` again to download them again"),
+            format!("run `{command}` again to download them again"),
         )),
         Code::MalformedArchive => Some(Diagnostic::hinting(
             "the downloaded setup files aren't in the expected format",
-            "If you use `--mirror`, check that it serves the right files",
+            "if you use `--mirror`, check that it serves the right files",
         )),
         Code::NotRoot => Some(Diagnostic::hinting(
             "setting up `mix` needs administrator rights",
-            format!("Run it again with sudo:\n\x20 sudo {command}"),
+            format!("run it again with sudo:\n\x20 sudo {command}"),
         )),
         Code::UnsupportedHost => Some(Diagnostic::hinting(
             "this system is NixOS, which already does what `mix` does",
-            "You don't need `mix` here",
+            "you don't need `mix` here",
         )),
         Code::UnsupportedKernel => Some(Diagnostic::hinting(
             "`mix` needs WSL 2, and this is WSL 1",
-            "Upgrade it from Windows PowerShell:\n\x20 wsl --set-version <distro> 2",
+            "upgrade it from Windows PowerShell:\n\x20 wsl --set-version <distro> 2",
         )),
         Code::SystemdUnreachable => Some(Diagnostic::hinting(
             "`mix` couldn't reach systemd",
             format!(
-                "Check that the system bus is running with `systemctl status dbus`, then run \
+                "check that the system bus is running with `systemctl status dbus`, then run \
                  `{command}` again"
             ),
         )),
         Code::AlreadyManaged => Some(Diagnostic::hinting(
-            "Nix is already installed on this system, and `mix` needs to set up its own",
+            "this system already has Nix, set up by something other than `mix`, which needs to set up its own",
             format!(
-                "Uninstall it first, then run `{command}` again. Uninstalling removes everything \
+                "uninstall it first, then run `{command}` again; uninstalling removes everything \
                  you installed with it"
             ),
         )),
         Code::CrossDeviceStore => Some(Diagnostic::hinting(
             "`/nix/store` is on a different disk than `/nix`, and `mix` needs them on the same one",
-            format!("Remove the separate mount for `/nix/store`, then run `{command}` again"),
+            format!("remove the separate mount for `/nix/store`, then run `{command}` again"),
         )),
         Code::NewerState => Some(Diagnostic::hinting(
             "this version of `mix` is older than the one that set up your packages",
-            "Update `mix` using your original install method, or visit \
+            "update `mix` using your original install method, or visit \
              https://github.com/recregt/mix",
         )),
         Code::RootNotAllowed => Some(Diagnostic::hinting(
             format!("`{command}` can't be run as root"),
-            "Run it again without sudo",
+            "run it again without sudo",
         )),
         Code::NotBootstrapped => Some(Diagnostic::hinting(
             "`mix` isn't set up for you yet",
-            "Run `mix bootstrap` first",
+            "run `mix bootstrap` first",
         )),
         Code::PrivilegesUnavailable => Some(Diagnostic::hinting(
             format!("couldn't get administrator rights to {}", context.action),
-            "Make sure your account can use sudo, then try again",
+            "make sure your account can use sudo, then try again",
         )),
         Code::WorkerEnded => Some(Diagnostic::hinting(
             format!("stopped before it could {}", context.action),
-            "Run the same command again to finish; it picks up where it stopped",
+            "run the same command again to finish; it picks up where it stopped",
         )),
         Code::PermissionDenied
         | Code::Conflict
@@ -224,7 +219,7 @@ fn detailed(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
         Code::PermissionDenied => match detail {
             Some(Detail::Io(io)) => Diagnostic::hinting_parts(
                 &format!("no permission to use {}", io.path),
-                &["Check who owns it, then run `", command, "` again"],
+                &["check who owns it, then run `", command, "` again"],
             ),
             _ => failed(context.action),
         },
@@ -234,13 +229,13 @@ fn detailed(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
                     "{} changed while mix was working, so mix left it alone",
                     conflict.subject
                 ),
-                format!("Run `{command}` again; it starts from what is there now"),
+                format!("run `{command}` again; it starts from what is there now"),
             ),
             _ => failed(context.action),
         },
         Code::InvalidMirror => Diagnostic::hinting(
             format!("the mirror settings aren't valid: {}", diagnostic.message),
-            "Pass `--mirror` as an http or https URL, and `--mirror-key` as a single <name>:<key> entry",
+            "pass `--mirror` as an http or https URL, and `--mirror-key` as a single <name>:<key> entry",
         ),
         Code::UnsupportedTarget => {
             let target = match detail {
@@ -250,7 +245,7 @@ fn detailed(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
             };
             Diagnostic::hinting(
                 format!("`mix` doesn't support this system ({target}) yet"),
-                "It runs on 64-bit Intel, AMD and ARM Linux",
+                "it runs on 64-bit Intel, AMD and ARM Linux",
             )
         }
         Code::Unrepairable => match detail {
@@ -265,12 +260,12 @@ fn detailed(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
         Code::SystemdNotReady => match detail {
             Some(Detail::Host(host)) if host.host() == Host::Wsl => Diagnostic::hinting(
                 "`mix` needs systemd, and it isn't running",
-                "Turn it on: add `[boot]` with `systemd=true` to `/etc/wsl.conf`, run \
+                "turn it on: add `[boot]` with `systemd=true` to `/etc/wsl.conf`, run \
                  `wsl.exe --shutdown` from Windows, then reopen the distro",
             ),
             _ => Diagnostic::hinting(
                 "`mix` needs systemd, and it isn't running",
-                format!("Make sure systemd is your init system, then run `{command}` again"),
+                format!("make sure systemd is your init system, then run `{command}` again"),
             ),
         },
         Code::UnitFailed => match detail {
@@ -278,11 +273,11 @@ fn detailed(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
                 format!("systemd couldn't {} `{}`", unit.operation, unit.unit),
                 match &unit.invocation {
                     Some(id) => format!(
-                        "See why with:\n\x20 journalctl _SYSTEMD_INVOCATION_ID={id}\nthen run \
+                        "see why with:\n\x20 journalctl _SYSTEMD_INVOCATION_ID={id}\nthen run \
                          `{command}` again"
                     ),
                     None => format!(
-                        "See why with:\n\x20 journalctl -u {}\nthen run `{command}` again",
+                        "see why with:\n\x20 journalctl -u {}\nthen run `{command}` again",
                         unit.unit
                     ),
                 },
@@ -294,7 +289,7 @@ fn detailed(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
                 Some(cause) => failure(cause, context).summary(),
                 None => "interrupted before it could finish".into(),
             },
-            "Some changes couldn't be undone. Run `mix doctor` to see what's left",
+            "some changes couldn't be undone; run `mix doctor` to see what's left",
         ),
         Code::InvalidPackage => match packages(diagnostic) {
             [name, ..] => bad_name(name),

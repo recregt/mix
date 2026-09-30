@@ -6,15 +6,29 @@ pub use generativity::{Guard, make_guard};
 use mix_events::v1::{
     Action as ActionNode, Cancellation, Code, CommandDetail, ConflictDetail, Diagnostic,
     IntegrityDetail, IoDetail, NetworkDetail, Operation, Plan, Rollback, Severity, Step,
-    StepsDetail, UnitDetail, diagnostic::Detail, node_started::Kind,
+    StepsDetail, UnitDetail, Verb, diagnostic::Detail, node_started::Kind,
 };
 use mix_events::{Ending, NodeId, Start, Tree};
 
 use crate::action::{Action, Fact, Failure, Outcome, Query, rollback_order};
 
+pub struct Title {
+    pub verb: Verb,
+    pub subject: Cow<'static, str>,
+}
+
+impl Title {
+    pub fn new(verb: Verb, subject: impl Into<Cow<'static, str>>) -> Self {
+        Self {
+            verb,
+            subject: subject.into(),
+        }
+    }
+}
+
 pub trait StepSpec: Send + Sync {
     fn key(&self) -> Cow<'static, str>;
-    fn title(&self) -> Cow<'static, str>;
+    fn title(&self) -> Title;
     fn queries(&self) -> Vec<Query>;
     fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure>;
 
@@ -329,10 +343,12 @@ impl Runner {
                         Ok(actions) => (actions, None),
                         Err(failure) => (Vec::new(), Some(failure)),
                     };
+                    let title = spec.title();
                     let mut start = Start::new(
                         spec.key(),
                         Kind::Step(Step {
-                            title: spec.title().to_string(),
+                            verb: title.verb as i32,
+                            subject: title.subject.into_owned(),
                         }),
                     );
                     if spec.shielded() {
@@ -667,7 +683,7 @@ pub fn describe(action: &Action) -> (Operation, String) {
         Action::DeleteGeneration { user, .. } => (Operation::DeleteGeneration, user.name.clone()),
         Action::RecordState { user } => (Operation::RecordState, user.name.clone()),
         Action::ApplyGeneration { user } => (Operation::ApplyGeneration, user.name.clone()),
-        Action::Commit => (Operation::Commit, String::new()),
+        Action::Commit => (Operation::Commit, "changes".to_string()),
     }
 }
 

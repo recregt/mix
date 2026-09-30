@@ -33,14 +33,14 @@ pub struct View {
     pub output: Output,
     pub events_file: Option<PathBuf>,
     pub verbose: u8,
+    pub quiet: bool,
     pub exit: Exit,
 }
 
 impl View {
     pub fn sinks(&self, display: Arc<dyn mix_ui::Display>) -> std::io::Result<Sinks> {
         Ok(Sinks {
-            human: (self.output == Output::Human)
-                .then(|| Human::new(display).verbosity(self.verbose)),
+            human: (self.output == Output::Human).then(|| Human::new(display).level(self.level())),
             json: self.output == Output::Json,
             file: self
                 .events_file
@@ -53,6 +53,15 @@ impl View {
 
     pub fn streams(&self) -> bool {
         self.output == Output::Json || self.events_file.is_some()
+    }
+
+    pub fn level(&self) -> Detail {
+        match (self.quiet, self.verbose) {
+            (true, _) => Detail::Outcome,
+            (false, 0) => Detail::Step,
+            (false, 1) => Detail::Action,
+            (false, _) => Detail::Trace,
+        }
     }
 
     pub fn notices(&self, stopping: Stopping) -> Option<Stopping> {
@@ -151,10 +160,14 @@ impl Recorder {
     fn lost(&mut self, error: &std::io::Error) {
         if !self.failed {
             self.failed = true;
-            mix_ui::warn(format!(
-                "could not record events to {}: {error}",
-                self.path.display()
-            ));
+            mix_ui::report(
+                mix_ui::Severity::Warning,
+                &mix_ui::Report {
+                    summary: &format!("couldn't record events to {}", self.path.display()),
+                    causes: vec![error.to_string()],
+                    ..mix_ui::Report::default()
+                },
+            );
         }
     }
 }

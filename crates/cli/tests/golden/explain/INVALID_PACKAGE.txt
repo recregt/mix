@@ -1,4 +1,4 @@
 "rm -rf" isn't a valid package name
-Package names look like `ripgrep` or `python3`
+package names look like `ripgrep` or `python3`
 
 A package name has to be a plain Nix identifier, such as `ripgrep` or `python3`, so that it cannot change the configuration it is written into.

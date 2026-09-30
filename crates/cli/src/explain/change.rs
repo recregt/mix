@@ -12,7 +12,7 @@ pub fn restored(source: Source) -> Option<Diagnostic> {
         Source::File | Source::Generation => None,
         Source::Fresh => Some(Diagnostic::hinting(
             "your package list was damaged and couldn't be recovered, so it was reset",
-            "Reinstall your packages with `mix install`",
+            "reinstall your packages with `mix install`",
         )),
     }
 }
@@ -65,7 +65,7 @@ mod tests {
         assert_eq!(from_state, from_render);
         assert_eq!(
             from_state,
-            "\"rip grep\" isn't a valid package name\nPackage names look like `ripgrep` or `python3`"
+            "\"rip grep\" isn't a valid package name\npackage names look like `ripgrep` or `python3`"
         );
         assert!(!from_state.to_lowercase().contains("nix"));
     }
@@ -81,7 +81,7 @@ mod tests {
         assert!(restored(Source::Generation).is_none());
         let note = restored(Source::Fresh).unwrap().message();
         assert!(note.contains("couldn't be recovered"));
-        assert!(note.ends_with("Reinstall your packages with `mix install`"));
+        assert!(note.ends_with("reinstall your packages with `mix install`"));
     }
 
     #[test]

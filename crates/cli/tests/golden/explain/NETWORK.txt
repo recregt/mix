@@ -1,4 +1,4 @@
 couldn't download required setup files
-Check your internet connection, then run `mix install` again
+check your internet connection, then run `mix install` again
 
 A download failed: the Nix runtime or a package could not be fetched. Check your internet connection, or the mirror given with `--mirror`, and run the command again.

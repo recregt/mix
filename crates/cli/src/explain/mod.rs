@@ -83,6 +83,11 @@ impl Diagnostic {
         }
     }
 
+    pub fn parts(&self) -> (&str, Option<&str>) {
+        let (summary, rest) = self.text.split_at(self.summary_len);
+        (summary, rest.strip_prefix('\n'))
+    }
+
     pub fn message(self) -> String {
         self.text.into_owned()
     }
@@ -99,7 +104,7 @@ impl Diagnostic {
 }
 
 const REPORT_BUG: &str =
-    "This is a bug in `mix`; please report it at https://github.com/recregt/mix/issues";
+    "this is a bug in `mix`; please report it at https://github.com/recregt/mix/issues";
 
 pub(crate) fn core_error(
     error: &mix_core::Error,
@@ -136,7 +141,7 @@ pub(crate) fn fault_of(error: &anyhow::Error) -> mix_events::Fault {
 pub(crate) fn failed(action: &dyn Display) -> Diagnostic {
     Diagnostic::hinting(
         format!("couldn't {action}"),
-        "Run it again with `-v` to see what went wrong",
+        "run it again with `-v` to see what went wrong",
     )
 }
 
@@ -225,7 +230,7 @@ mod tests {
         let message = core_error(&error, "mix doctor", &"finish the health check").message();
 
         assert!(message.starts_with("no permission to use /nix/store"));
-        assert!(message.contains("Check who owns it"));
+        assert!(message.contains("check who owns it"));
     }
 
     #[test]
@@ -239,7 +244,7 @@ mod tests {
 
         assert_eq!(
             message,
-            "couldn't install ripgrep\nRun it again with `-v` to see what went wrong"
+            "couldn't install ripgrep\nrun it again with `-v` to see what went wrong"
         );
     }
 
@@ -283,7 +288,7 @@ mod tests {
 
         assert_eq!(
             core_error(&error, "mix install", &"install ripgrep").message(),
-            "`mix` isn't set up yet\nRun `mix bootstrap` first"
+            "`mix` isn't set up yet\nrun `mix bootstrap` first"
         );
     }
 
@@ -298,7 +303,7 @@ mod tests {
         assert_eq!(
             message,
             "couldn't get administrator rights to finish the repair\n\
-             Make sure your account can use sudo, then try again"
+             make sure your account can use sudo, then try again"
         );
     }
 
@@ -307,6 +312,6 @@ mod tests {
         let message = privileged(&mix_rpc::Error::Ended, &"finish the repair").message();
 
         assert!(message.contains("stopped before it could finish the repair"));
-        assert!(message.contains("Run the same command again"));
+        assert!(message.contains("run the same command again"));
     }
 }

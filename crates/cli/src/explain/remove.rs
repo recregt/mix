@@ -83,7 +83,7 @@ mod tests {
 
         assert_eq!(
             explain(&error, &["git".to_string()]).message(),
-            "couldn't remove git\nRun it again with `-v` to see what went wrong"
+            "couldn't remove git\nrun it again with `-v` to see what went wrong"
         );
     }
 }

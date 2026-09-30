@@ -88,7 +88,7 @@ pub fn unhealthy(reports: &[HealthReport]) -> Diagnostic {
         match report.finding.and_then(Finding::unfixable) {
             Some(reason) => unfixable = unfixable.or(Some(reason)),
             None => {
-                return Diagnostic::hinting("some checks failed", "Run `mix repair` to fix them");
+                return Diagnostic::hinting("some checks failed", "run `mix repair` to fix them");
             }
         }
     }
@@ -110,6 +110,70 @@ mod tests {
             name: name.to_string(),
             category: Category::Filesystem,
             finding,
+        }
+    }
+
+    #[test]
+    fn every_finding_reads_in_the_house_style() {
+        let findings = [
+            Finding::Missing,
+            Finding::Unreadable {
+                kind: std::io::ErrorKind::PermissionDenied,
+            },
+            Finding::NotADirectory,
+            Finding::Mode {
+                actual: 0o700,
+                expected: 0o755,
+            },
+            Finding::Owner {
+                actual: (1, 1),
+                expected: (0, 0),
+            },
+            Finding::ContentDrift,
+            Finding::GroupMissing,
+            Finding::GroupGid {
+                actual: 1,
+                expected: 30000,
+            },
+            Finding::NotAMember { group: "nixbld" },
+            Finding::NoSuchUser,
+            Finding::UserMissing,
+            Finding::UserIds {
+                actual: (1, 1),
+                expected: (0, 0),
+            },
+            Finding::UnitMissing,
+            Finding::UnitDrift,
+            Finding::UnitInactive,
+            Finding::RuntimeMissing,
+        ];
+        for finding in findings {
+            match finding {
+                Finding::Missing
+                | Finding::Unreadable { .. }
+                | Finding::NotADirectory
+                | Finding::Mode { .. }
+                | Finding::Owner { .. }
+                | Finding::ContentDrift
+                | Finding::GroupMissing
+                | Finding::GroupGid { .. }
+                | Finding::NotAMember { .. }
+                | Finding::NoSuchUser
+                | Finding::UserMissing
+                | Finding::UserIds { .. }
+                | Finding::UnitMissing
+                | Finding::UnitDrift
+                | Finding::UnitInactive
+                | Finding::RuntimeMissing => {}
+            }
+            let reports = [report("/nix", Some(finding))];
+            for line in check(&reports[0]).lines() {
+                assert!(mix_ui::house_style(line), "{finding:?}: {line:?}");
+            }
+            let verdict = unhealthy(&reports);
+            let (summary, hint) = verdict.parts();
+            assert!(mix_ui::house_style(summary), "{summary:?}");
+            assert!(hint.is_none_or(mix_ui::house_style), "{hint:?}");
         }
     }
 
@@ -154,7 +218,7 @@ mod tests {
 
         assert_eq!(
             line,
-            "exists but is not a directory\nRemove it, then run `mix repair` again"
+            "exists but is not a directory\nremove it, then run `mix repair` again"
         );
     }
 

@@ -1376,7 +1376,6 @@ dependencies = [
  "indicatif",
  "mix-core",
  "owo-colors",
- "unicode-width 0.2.2",
 ]
 
 [[package]]

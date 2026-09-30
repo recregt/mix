@@ -1,4 +1,4 @@
 `mix` needs systemd, and it isn't running
-Turn it on: add `[boot]` with `systemd=true` to `/etc/wsl.conf`, run `wsl.exe --shutdown` from Windows, then reopen the distro
+turn it on: add `[boot]` with `systemd=true` to `/etc/wsl.conf`, run `wsl.exe --shutdown` from Windows, then reopen the distro
 
 `mix` runs the Nix daemon as a systemd service, and systemd is not running as the init system. On WSL, enable it with `systemd=true` under `[boot]` in `/etc/wsl.conf`, then restart the distro.

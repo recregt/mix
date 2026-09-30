@@ -35,6 +35,7 @@ pub async fn run() -> ExitCode {
         output: cli.output,
         events_file: cli.events_file.clone(),
         verbose: cli.verbose,
+        quiet: cli.quiet,
         exit: render::sinks::Exit::default(),
     };
     mix_ui::init(cli.draws_progress());
@@ -90,12 +91,21 @@ pub async fn run() -> ExitCode {
         Ok(code) => from_root.unwrap_or(code),
         Err(e) => {
             if cli.output == cli::Output::Human {
-                let message = explain(&e).message();
-                if cli.verbose > 0 {
-                    mix_ui::fail_in_detail(&message, &*e);
-                } else {
-                    mix_ui::fail(message);
-                }
+                let words = explain(&e);
+                let (summary, hint) = words.parts();
+                let code = (cli.verbose > 0)
+                    .then(|| explain::fault_of(&e).code())
+                    .flatten()
+                    .map(explain::codes::kebab);
+                mix_ui::report(
+                    mix_ui::Severity::Error,
+                    &mix_ui::Report {
+                        code: code.as_deref(),
+                        summary,
+                        causes: mix_ui::causes_of(e.chain().nth(1), summary),
+                        helps: hint.into_iter().collect(),
+                    },
+                );
             }
             from_root.unwrap_or(ExitCode::FAILURE)
         }

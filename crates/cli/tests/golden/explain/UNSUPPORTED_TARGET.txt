@@ -1,4 +1,4 @@
 `mix` doesn't support this system (armv7l-linux) yet
-It runs on 64-bit Intel, AMD and ARM Linux
+it runs on 64-bit Intel, AMD and ARM Linux
 
 `mix` runs on 64-bit Intel, AMD and ARM Linux. This system's architecture or operating system is not one of them.

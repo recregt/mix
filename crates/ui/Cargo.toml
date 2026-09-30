@@ -8,8 +8,6 @@ license = "MPL-2.0"
 [dependencies]
 mix-core = { path = "../core" }
 indicatif = "0.18.6"
-owo-colors = "4.4.0"
-unicode-width = "0.2.2"
 
 [dev-dependencies]
 console = "=0.16.6"
@@ -17,8 +15,4 @@ divan = { workspace = true }
 
 [[bench]]
 name = "activity"
-harness = false
-
-[[bench]]
-name = "message"
 harness = false

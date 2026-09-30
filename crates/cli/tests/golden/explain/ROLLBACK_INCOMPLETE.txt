@@ -1,4 +1,4 @@
 couldn't download required setup files
-Some changes couldn't be undone. Run `mix doctor` to see what's left
+some changes couldn't be undone; run `mix doctor` to see what's left
 
 The command failed, and undoing what it had already changed failed too, so some changes are still in place. `mix doctor` lists what is left; `mix repair` puts back what it can.

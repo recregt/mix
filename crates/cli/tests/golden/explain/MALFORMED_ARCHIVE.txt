@@ -1,4 +1,4 @@
 the downloaded setup files aren't in the expected format
-If you use `--mirror`, check that it serves the right files
+if you use `--mirror`, check that it serves the right files
 
 A downloaded archive unpacked, but its contents are not laid out the way the Nix runtime is. If you use `--mirror`, check that it serves the official Nix release.

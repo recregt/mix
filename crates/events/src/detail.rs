@@ -31,15 +31,14 @@ pub fn detail(event: &Event) -> Detail {
         Event::NodeFinished(_) | Event::NotRun(_) => Detail::Action,
         Event::NodeProgress(progress) => match &progress.progress {
             Some(Progress::Bytes(_) | Progress::Builds(_) | Progress::Stopping(_)) => Detail::Step,
+            Some(Progress::Command(_) | Progress::Fetch(_) | Progress::Build(_)) => Detail::Action,
             Some(
-                Progress::Command(_)
+                Progress::Line(_)
                 | Progress::CommandFinished(_)
-                | Progress::Fetch(_)
-                | Progress::Build(_),
-            ) => Detail::Action,
-            Some(Progress::Line(_) | Progress::Observed(_) | Progress::Journaled(_)) | None => {
-                Detail::Trace
-            }
+                | Progress::Observed(_)
+                | Progress::Journaled(_),
+            )
+            | None => Detail::Trace,
         },
         Event::Diagnostic(_) => Detail::Step,
     }

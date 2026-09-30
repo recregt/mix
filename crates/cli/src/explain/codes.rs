@@ -1,7 +1,7 @@
 use mix_events::v1::Code;
 
 pub fn parse(name: &str) -> Option<Code> {
-    let upper = name.trim().to_ascii_uppercase();
+    let upper = name.trim().to_ascii_uppercase().replace('-', "_");
     let full = if upper.starts_with("CODE_") {
         upper
     } else {
@@ -12,6 +12,10 @@ pub fn parse(name: &str) -> Option<Code> {
 
 pub fn name(code: Code) -> &'static str {
     code.as_str_name().trim_start_matches("CODE_")
+}
+
+pub fn kebab(code: Code) -> String {
+    name(code).to_ascii_lowercase().replace('_', "-")
 }
 
 pub fn long(code: Code) -> &'static str {

@@ -1,4 +1,4 @@
 the mirror settings aren't valid: the mirror must be an http or https URL
-Pass `--mirror` as an http or https URL, and `--mirror-key` as a single <name>:<key> entry
+pass `--mirror` as an http or https URL, and `--mirror-key` as a single <name>:<key> entry
 
 The mirror settings are not usable: `--mirror` must be an http or https URL, and `--mirror-key` a single `<name>:<key>` entry.

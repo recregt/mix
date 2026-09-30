@@ -1,4 +1,4 @@
 `mix` isn't set up for you yet
-Run `mix bootstrap` first
+run `mix bootstrap` first
 
 `mix` has not been set up for your user on this machine. Run `mix bootstrap` first.

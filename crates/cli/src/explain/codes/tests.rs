@@ -102,6 +102,14 @@ fn every_code_has_a_name_that_parses_back_and_a_long_text() {
 }
 
 #[test]
+fn the_kebab_name_shown_at_v_is_one_mix_explain_takes() {
+    for code in every_code() {
+        assert_eq!(parse(&kebab(code)), Some(code), "{code:?}");
+    }
+    assert_eq!(kebab(Code::GitRecordFailed), "git-record-failed");
+}
+
+#[test]
 fn a_name_mix_does_not_use_is_not_a_code() {
     assert_eq!(parse("NOPE"), None);
     assert_eq!(parse("UNSPECIFIED"), None);
@@ -156,5 +164,42 @@ fn every_worker_failure_has_a_code_unless_it_is_a_protocol_violation() {
                 "{error:?}: {code:?}"
             ),
         }
+    }
+}
+
+#[test]
+fn every_diagnostic_mix_prints_follows_the_house_style() {
+    let context = crate::explain::render::Context {
+        command: "mix install ripgrep",
+        action: &"install ripgrep",
+    };
+    for code in every_code() {
+        let wire = mix_events::v1::Diagnostic {
+            code: code as i32,
+            message: "it failed".into(),
+            ..mix_events::v1::Diagnostic::default()
+        };
+        for words in [
+            crate::explain::render::render(&mix_events::Fault::Failed(wire.clone()), &context),
+            crate::explain::render::warning(&wire),
+        ] {
+            let (summary, hint) = words.parts();
+            assert!(mix_ui::house_style(summary), "{code:?}: {summary:?}");
+            if let Some(hint) = hint {
+                assert!(mix_ui::house_style(hint), "{code:?}: {hint:?}");
+            }
+        }
+    }
+    for stopping in [
+        crate::controls::BOOTSTRAP,
+        crate::controls::REPAIR,
+        crate::controls::CHANGE,
+    ] {
+        assert!(mix_ui::house_style(stopping.first), "{:?}", stopping.first);
+        assert!(
+            mix_ui::house_style(stopping.forced),
+            "{:?}",
+            stopping.forced
+        );
     }
 }

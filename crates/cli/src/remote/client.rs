@@ -30,7 +30,7 @@ async fn replay(
 ) -> Result<Outcome, mix_rpc::Error> {
     let interrupts = tokio::spawn(async { while tokio::signal::ctrl_c().await.is_ok() {} });
     let mut sinks: Sinks = view
-        .sinks(mix_ui::display(true))
+        .sinks(mix_ui::display())
         .map_err(mix_rpc::Error::Spawn)?;
     let mut events = std::pin::pin!(events);
     let mut outcome = None;
@@ -46,7 +46,7 @@ async fn replay(
 
 async fn start(view: &View) -> anyhow::Result<Client> {
     if view.output == Output::Human {
-        mix_ui::info("Root required. Re-running with sudo...");
+        mix_ui::note("root is required, re-running with sudo");
     }
     let program = std::env::current_exe()?;
     Ok(Client::start(&program, &[WORKER], Some(LAUNCHER)).await?)

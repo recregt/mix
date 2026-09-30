@@ -5,9 +5,13 @@ use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 #[derive(Parser)]
 #[command(name = "mix", version, about = "Reproducible systems, made effortless")]
 pub struct Cli {
-    /// Verbosity: -v steps, -vv commands, -vvv output
-    #[arg(short, long, action = ArgAction::Count, global = true)]
+    /// Verbosity: -v commands and actions, -vv each program's output
+    #[arg(short, long, action = ArgAction::Count, global = true, conflicts_with = "quiet")]
     pub verbose: u8,
+
+    /// Print only results and errors
+    #[arg(short, long, global = true)]
+    pub quiet: bool,
 
     /// Never draw progress in place, even on a terminal
     #[arg(
