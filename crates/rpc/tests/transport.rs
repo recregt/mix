@@ -18,25 +18,16 @@ impl Worker for Scripted {
         request: BootstrapRequest,
         events: Events,
     ) -> Outcome {
-        let _ = events.send(Event::SpanOpened {
-            id: 1,
-            parent: None,
-            name: "step".into(),
-            fields: vec![("name".into(), "create nix dir".into())],
-        });
+        let _ = events.send(Event::Envelope(vec![8, 1]));
         let _ = events.send(Event::Log {
             level: Level::Info,
-            span: Some(1),
+            node: 1,
             message: format!(
                 "caller {} mirror {:?} force {}",
                 caller.uid,
                 request.mirror.map(|mirror| mirror.url),
                 request.force
             ),
-        });
-        let _ = events.send(Event::SpanClosed {
-            id: 1,
-            failed: false,
         });
         if request.force {
             Outcome::Failure(Failure::Rollback {
@@ -101,17 +92,11 @@ async fn a_request_streams_its_events_in_order_and_ends_with_one_outcome() {
         .collect()
         .await;
 
-    assert_eq!(events.len(), 4, "{events:?}");
-    assert!(matches!(&events[0], Event::SpanOpened { id: 1, name, .. } if name == "step"));
+    assert_eq!(events.len(), 3, "{events:?}");
+    assert!(matches!(&events[0], Event::Envelope(bytes) if bytes == &[8, 1]));
+    assert!(matches!(&events[1], Event::Log { node: 1, .. }));
     assert!(matches!(
         &events[2],
-        Event::SpanClosed {
-            id: 1,
-            failed: false
-        }
-    ));
-    assert!(matches!(
-        &events[3],
         Event::Finished(Outcome::BootstrapDone)
     ));
 }
@@ -218,7 +203,7 @@ impl Worker for CleansUpWhenAbandoned {
         _request: BootstrapRequest,
         events: Events,
     ) -> Outcome {
-        let _ = events.send(Event::ActivityLine("started".into()));
+        let _ = events.send(Event::Envelope(Vec::new()));
         events.closed().await;
         tokio::time::sleep(Duration::from_millis(200)).await;
         self.cleaned_up.store(true, Ordering::SeqCst);
@@ -247,7 +232,7 @@ async fn the_worker_waits_for_a_request_its_client_left() {
     let mut events = client.bootstrap(&request(false)).await.unwrap();
     assert!(matches!(
         events.next().await,
-        Some(Ok(Event::ActivityLine(line))) if line == "started"
+        Some(Ok(Event::Envelope(bytes))) if bytes.is_empty()
     ));
 
     drop(events);
@@ -275,7 +260,7 @@ impl Worker for WaitsForRelease {
         _request: BootstrapRequest,
         events: Events,
     ) -> Outcome {
-        let _ = events.send(Event::ActivityLine("started".into()));
+        let _ = events.send(Event::Envelope(Vec::new()));
         self.release.notified().await;
         Outcome::BootstrapDone
     }
@@ -302,7 +287,7 @@ async fn a_second_request_is_refused_while_the_first_is_running() {
     let mut first = client.bootstrap(&request(false)).await.unwrap();
     assert!(matches!(
         first.next().await,
-        Some(Ok(Event::ActivityLine(line))) if line == "started"
+        Some(Ok(Event::Envelope(bytes))) if bytes.is_empty()
     ));
 
     let second = client
@@ -340,10 +325,7 @@ async fn a_worker_that_dies_mid_request_reads_as_ended_not_refused() {
         .await
         .unwrap();
     let mut events = client.bootstrap(&request(false)).await.unwrap();
-    assert!(matches!(
-        events.next().await,
-        Some(Ok(Event::ActivityLine(_)))
-    ));
+    assert!(matches!(events.next().await, Some(Ok(Event::Envelope(_)))));
 
     worker_process.shutdown_background();
 

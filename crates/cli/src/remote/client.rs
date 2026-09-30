@@ -1,13 +1,15 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use futures_util::{Stream, StreamExt};
-use mix_core::{ActivityReporter, DownloadProgress, StepObserver};
-use mix_rpc::{BootstrapRequest, Client, Event, Failure, Level, Mirror, Outcome, RepairRequest};
+use mix_events::v1::Envelope;
+use mix_rpc::{
+    BootstrapRequest, Client, Event, Failure, Level, Malformed, Mirror, Outcome, RepairRequest,
+};
 use mix_shell::ops::repair::Repair;
+use mix_shell::render::Render;
 use mix_shell::target::Error as TargetError;
+use prost::Message;
 
 use super::convert::{bootstrap_error_from, report_from_wire, target_error_from};
+use crate::render::human::{Human, Reporters};
 
 const LAUNCHER: &str = "sudo";
 const WORKER: &str = "worker";
@@ -22,11 +24,7 @@ pub fn level_for(verbosity: u8) -> Level {
 }
 
 struct Replay {
-    spans: HashMap<u64, tracing::Span>,
-    open: Vec<u64>,
-    steps: Arc<dyn StepObserver>,
-    downloads: Arc<dyn DownloadProgress>,
-    activity: Arc<dyn ActivityReporter>,
+    human: Human,
 }
 
 impl Replay {
@@ -38,55 +36,28 @@ impl Replay {
             ..
         } = mix_ui::reporters();
         Self {
-            spans: HashMap::new(),
-            open: Vec::new(),
-            steps,
-            downloads,
-            activity,
+            human: Human::new(Reporters {
+                downloads,
+                steps,
+                activity,
+            }),
         }
     }
 
-    fn in_current(&self, f: impl FnOnce()) {
-        match self.open.last().and_then(|id| self.spans.get(id)) {
-            Some(span) => span.in_scope(f),
-            None => f(),
-        }
-    }
-
-    fn apply(&mut self, event: Event) -> Option<Outcome> {
+    fn apply(&mut self, event: Event) -> Result<Option<Outcome>, mix_rpc::Error> {
         match event {
-            Event::SpanOpened {
-                id,
-                parent,
-                name,
-                fields,
-            } => {
-                let parent = parent.and_then(|parent| self.spans.get(&parent)?.id());
-                let label = fields
-                    .iter()
-                    .find(|(field, _)| field == "name")
-                    .map_or("", |(_, value)| value.as_str());
-                let span = if name == "rollback" {
-                    tracing::info_span!(parent: parent, "rollback", name = label)
-                } else {
-                    tracing::info_span!(parent: parent, "step", name = label)
-                };
-                self.steps.on_step_span(&span);
-                self.spans.insert(id, span);
-                self.open.push(id);
-            }
-            Event::SpanClosed { id, failed } => {
-                if let Some(span) = self.spans.remove(&id) {
-                    self.steps.on_step_closed(&span, failed);
-                }
-                self.open.retain(|open| *open != id);
+            Event::Envelope(bytes) => {
+                let envelope = Envelope::decode(bytes.as_slice()).map_err(|error| {
+                    mix_rpc::Error::Malformed(Malformed(format!("an event envelope: {error}")))
+                })?;
+                self.human.envelope(envelope);
             }
             Event::Log {
                 level,
-                span,
+                node,
                 message,
             } => {
-                let parent = span.and_then(|span| self.spans.get(&span)?.id());
+                let parent = self.human.span(node).and_then(|span| span.id());
                 match level {
                     Level::Error => tracing::error!(parent: parent, "{message}"),
                     Level::Warn => tracing::warn!(parent: parent, "{message}"),
@@ -95,29 +66,9 @@ impl Replay {
                     Level::Trace => tracing::trace!(parent: parent, "{message}"),
                 }
             }
-            Event::DownloadStarted { total } => {
-                let downloads = Arc::clone(&self.downloads);
-                self.in_current(|| downloads.set_total(total));
-            }
-            Event::DownloadAdvanced { delta } => {
-                let downloads = Arc::clone(&self.downloads);
-                self.in_current(|| downloads.add(delta));
-            }
-            Event::ActivityLine(line) => {
-                let activity = Arc::clone(&self.activity);
-                self.in_current(|| activity.line(&line));
-            }
-            Event::ActivityProgress(progress) => {
-                let activity = Arc::clone(&self.activity);
-                self.in_current(|| activity.progress(&progress));
-            }
-            Event::ActivityCleared => {
-                let activity = Arc::clone(&self.activity);
-                self.in_current(|| activity.clear());
-            }
-            Event::Finished(outcome) => return Some(outcome),
+            Event::Finished(outcome) => return Ok(Some(outcome)),
         }
-        None
+        Ok(None)
     }
 }
 
@@ -129,7 +80,7 @@ async fn replay(
     let mut events = std::pin::pin!(events);
     let mut outcome = None;
     while let Some(event) = events.next().await {
-        if let Some(finished) = replay.apply(event?) {
+        if let Some(finished) = replay.apply(event?)? {
             outcome = Some(finished);
         }
     }

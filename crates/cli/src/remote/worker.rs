@@ -1,11 +1,14 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use mix_core::paths::LOCK_FILE;
-use mix_core::{ActivityReporter, BuildProgress, DownloadProgress, StepObserver};
+use mix_events::NodeId;
+use mix_events::v1::{Envelope, envelope};
 use mix_rpc::{BootstrapRequest, Caller, Event, Events, Failure, Level, Outcome, RepairRequest};
+use mix_shell::render::Render;
+use prost::Message;
 use tracing::Subscriber;
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id};
@@ -17,15 +20,13 @@ use crate::controls;
 
 use super::convert::{failure_from_bootstrap, report_to_wire};
 
-const FORWARDED_SPANS: [&str; 2] = ["step", "rollback"];
+const NODE_SPAN: &str = "node";
 const OWN_TARGETS: &str = "mix_";
 
 #[derive(Default)]
 struct Forwarding {
     events: Option<Events>,
     level: Option<Level>,
-    open: HashSet<u64>,
-    failed: HashSet<u64>,
 }
 
 #[derive(Clone, Default)]
@@ -41,7 +42,6 @@ impl Shared {
             *forwarding = Forwarding {
                 events: Some(events),
                 level: Some(level),
-                ..Forwarding::default()
             }
         });
     }
@@ -62,10 +62,20 @@ impl Shared {
 #[derive(Default)]
 struct Fields {
     message: String,
+    node: Option<u64>,
     rest: Vec<(String, String)>,
 }
 
 impl Visit for Fields {
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        if field.name() == "node" {
+            self.node = Some(value);
+        } else {
+            self.rest
+                .push((field.name().to_string(), value.to_string()));
+        }
+    }
+
     fn record_str(&mut self, field: &Field, value: &str) {
         if field.name() == "message" {
             self.message.push_str(value);
@@ -95,56 +105,22 @@ fn level_of(level: &tracing::Level) -> Level {
     }
 }
 
-struct Forwarder(Shared);
+struct Node(u64);
 
-impl<S> Layer<S> for Forwarder
+struct Logs(Shared);
+
+impl<S> Layer<S> for Logs
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
     fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
-        let name = attrs.metadata().name();
-        if !FORWARDED_SPANS.contains(&name) {
+        if attrs.metadata().name() != NODE_SPAN {
             return;
         }
         let mut fields = Fields::default();
         attrs.record(&mut fields);
-        let parent = attrs
-            .parent()
-            .cloned()
-            .or_else(|| {
-                attrs
-                    .is_contextual()
-                    .then(|| ctx.current_span().id().cloned())
-                    .flatten()
-            })
-            .map(|parent| parent.into_u64());
-        let id = id.into_u64();
-
-        let opened = self.0.with(|forwarding| {
-            forwarding.events.as_ref()?;
-            forwarding.open.insert(id);
-            Some(parent.filter(|parent| forwarding.open.contains(parent)))
-        });
-        if let Some(parent) = opened {
-            self.0.send(Event::SpanOpened {
-                id,
-                parent,
-                name: name.to_string(),
-                fields: fields.rest,
-            });
-        }
-    }
-
-    fn on_close(&self, id: Id, _ctx: Context<'_, S>) {
-        let id = id.into_u64();
-        let closed = self.0.with(|forwarding| {
-            forwarding
-                .open
-                .remove(&id)
-                .then(|| forwarding.failed.remove(&id))
-        });
-        if let Some(failed) = closed {
-            self.0.send(Event::SpanClosed { id, failed });
+        if let (Some(node), Some(span)) = (fields.node, ctx.span(id)) {
+            span.extensions_mut().insert(Node(node));
         }
     }
 
@@ -154,19 +130,20 @@ where
             return;
         }
         let level = level_of(metadata.level());
-        let span = self.0.with(|forwarding| {
-            let wanted = forwarding.level.is_some_and(|max| level <= max);
-            wanted.then(|| {
-                ctx.event_scope(event).and_then(|scope| {
-                    scope
-                        .map(|span| span.id().into_u64())
-                        .find(|id| forwarding.open.contains(id))
-                })
-            })
+        let wanted = self.0.with(|forwarding| {
+            forwarding.events.is_some() && forwarding.level.is_some_and(|max| level <= max)
         });
-        let Some(span) = span else {
+        if !wanted {
             return;
-        };
+        }
+        let node = ctx
+            .event_scope(event)
+            .and_then(|scope| {
+                scope
+                    .into_iter()
+                    .find_map(|span| span.extensions().get::<Node>().map(|node| node.0))
+            })
+            .unwrap_or_default();
         let mut fields = Fields::default();
         event.record(&mut fields);
         let mut message = fields.message;
@@ -175,50 +152,44 @@ where
         }
         self.0.send(Event::Log {
             level,
-            span,
+            node,
             message,
         });
     }
 }
 
-struct Downloads(Events);
-
-impl DownloadProgress for Downloads {
-    fn set_total(&self, total: u64) {
-        let _ = self.0.send(Event::DownloadStarted { total });
-    }
-
-    fn add(&self, delta: u64) {
-        let _ = self.0.send(Event::DownloadAdvanced { delta });
-    }
+struct Forward {
+    events: Events,
+    spans: HashMap<NodeId, tracing::Span>,
 }
 
-struct Steps(Shared);
-
-impl StepObserver for Steps {
-    fn on_step_span(&self, _span: &tracing::Span) {}
-
-    fn on_step_closed(&self, span: &tracing::Span, failed: bool) {
-        if failed && let Some(id) = span.id() {
-            self.0
-                .with(|forwarding| forwarding.failed.insert(id.into_u64()));
+impl Forward {
+    fn new(events: Events) -> Self {
+        Self {
+            events,
+            spans: HashMap::new(),
         }
     }
 }
 
-struct Activity(Events);
-
-impl ActivityReporter for Activity {
-    fn line(&self, line: &str) {
-        let _ = self.0.send(Event::ActivityLine(line.to_string()));
+impl Render for Forward {
+    fn envelope(&mut self, envelope: Envelope) {
+        match &envelope.event {
+            Some(envelope::Event::NodeStarted(started)) => {
+                let node = started.id;
+                self.spans
+                    .insert(node, tracing::info_span!(NODE_SPAN, node));
+            }
+            Some(envelope::Event::NodeFinished(finished)) => {
+                self.spans.remove(&finished.id);
+            }
+            _ => {}
+        }
+        let _ = self.events.send(Event::Envelope(envelope.encode_to_vec()));
     }
 
-    fn progress(&self, progress: &BuildProgress) {
-        let _ = self.0.send(Event::ActivityProgress(*progress));
-    }
-
-    fn clear(&self) {
-        let _ = self.0.send(Event::ActivityCleared);
+    fn span(&self, node: NodeId) -> Option<tracing::Span> {
+        self.spans.get(&node).cloned()
     }
 }
 
@@ -256,13 +227,7 @@ impl mix_rpc::Worker for CliWorker {
                         mix_shell::effect::accounts::user_by_uid(caller.uid)
                             .and_then(mix_shell::profile::user_config_for),
                     )
-                    .with_render(crate::render::human::Human::new(
-                        crate::render::human::Reporters {
-                            downloads: Arc::new(Downloads(events.clone())),
-                            steps: Arc::new(Steps(self.0.clone())),
-                            activity: Arc::new(Activity(events.clone())),
-                        },
-                    ))
+                    .with_render(Forward::new(events.clone()))
                     .with_policy(policy)
                     .with_host(crate::commands::host_config());
                 let _watch = controls::watch(
@@ -315,7 +280,7 @@ impl mix_rpc::Worker for CliWorker {
 pub async fn run() -> ExitCode {
     let shared = Shared::default();
     if tracing::subscriber::set_global_default(
-        tracing_subscriber::registry().with(Forwarder(shared.clone())),
+        tracing_subscriber::registry().with(Logs(shared.clone())),
     )
     .is_err()
     {

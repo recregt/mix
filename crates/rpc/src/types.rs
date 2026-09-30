@@ -1,7 +1,5 @@
 use std::path::PathBuf;
 
-pub use mix_core::BuildProgress;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Level {
     Error,
@@ -37,30 +35,12 @@ pub struct Caller {
 
 #[derive(Debug)]
 pub enum Event {
-    SpanOpened {
-        id: u64,
-        parent: Option<u64>,
-        name: String,
-        fields: Vec<(String, String)>,
-    },
-    SpanClosed {
-        id: u64,
-        failed: bool,
-    },
+    Envelope(Vec<u8>),
     Log {
         level: Level,
-        span: Option<u64>,
+        node: u64,
         message: String,
     },
-    DownloadStarted {
-        total: u64,
-    },
-    DownloadAdvanced {
-        delta: u64,
-    },
-    ActivityLine(String),
-    ActivityProgress(BuildProgress),
-    ActivityCleared,
     Finished(Outcome),
 }
 

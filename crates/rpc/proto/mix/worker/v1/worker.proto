@@ -32,28 +32,10 @@ message RepairResponse {
 
 message Event {
   oneof kind {
-    SpanOpened span_opened = 1;
-    SpanClosed span_closed = 2;
     Log log = 3;
-    DownloadStarted download_started = 4;
-    DownloadAdvanced download_advanced = 5;
-    ActivityLine activity_line = 6;
-    ActivityProgress activity_progress = 7;
-    ActivityCleared activity_cleared = 8;
     Finished finished = 9;
+    bytes envelope = 10;
   }
-}
-
-message SpanOpened {
-  uint64 id = 1;
-  optional uint64 parent = 2;
-  string name = 3;
-  map<string, string> fields = 4;
-}
-
-message SpanClosed {
-  uint64 id = 1;
-  bool failed = 2;
 }
 
 enum Level {
@@ -67,34 +49,9 @@ enum Level {
 
 message Log {
   Level level = 1;
-  optional uint64 span = 2;
+  uint64 node = 2;
   string message = 3;
 }
-
-message DownloadStarted {
-  uint64 total = 1;
-}
-
-message DownloadAdvanced {
-  uint64 delta = 1;
-}
-
-message ActivityLine {
-  string line = 1;
-}
-
-message ActivityProgress {
-  uint64 builds_done = 1;
-  uint64 builds_expected = 2;
-  uint64 builds_running = 3;
-  uint64 downloads_done = 4;
-  uint64 downloads_expected = 5;
-  uint64 downloads_running = 6;
-  uint64 bytes_done = 7;
-  uint64 bytes_expected = 8;
-}
-
-message ActivityCleared {}
 
 message Finished {
   oneof outcome {

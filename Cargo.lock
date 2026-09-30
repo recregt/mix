@@ -1405,6 +1405,7 @@ dependencies = [
  "mix-shell",
  "mix-ui",
  "nix",
+ "prost",
  "tokio",
  "tracing",
  "tracing-subscriber",

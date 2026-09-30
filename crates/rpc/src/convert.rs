@@ -2,8 +2,8 @@ use std::io::ErrorKind;
 
 use crate::proto;
 use crate::types::{
-    BootstrapRequest, BuildProgress, Event, Failure, Host, Level, Mirror, Outcome, RepairReport,
-    RepairRequest, TargetFailure, Unfixable,
+    BootstrapRequest, Event, Failure, Host, Level, Mirror, Outcome, RepairReport, RepairRequest,
+    TargetFailure, Unfixable,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -76,34 +76,16 @@ pub fn event_to_wire(event: Event) -> proto::Event {
     use proto::event::Kind;
 
     let kind = match event {
-        Event::SpanOpened {
-            id,
-            parent,
-            name,
-            fields,
-        } => Kind::SpanOpened(proto::SpanOpened {
-            id,
-            parent,
-            name,
-            fields: fields.into_iter().collect(),
-        }),
-        Event::SpanClosed { id, failed } => Kind::SpanClosed(proto::SpanClosed { id, failed }),
+        Event::Envelope(bytes) => Kind::Envelope(bytes),
         Event::Log {
             level,
-            span,
+            node,
             message,
         } => Kind::Log(proto::Log {
             level: level_to_wire(level),
-            span,
+            node,
             message,
         }),
-        Event::DownloadStarted { total } => Kind::DownloadStarted(proto::DownloadStarted { total }),
-        Event::DownloadAdvanced { delta } => {
-            Kind::DownloadAdvanced(proto::DownloadAdvanced { delta })
-        }
-        Event::ActivityLine(line) => Kind::ActivityLine(proto::ActivityLine { line }),
-        Event::ActivityProgress(progress) => Kind::ActivityProgress(progress_to_wire(progress)),
-        Event::ActivityCleared => Kind::ActivityCleared(proto::ActivityCleared {}),
         Event::Finished(outcome) => Kind::Finished(outcome_to_wire(outcome)),
     };
     proto::Event { kind: Some(kind) }
@@ -136,65 +118,15 @@ pub fn event_from_wire(event: proto::Event) -> Result<Event, Malformed> {
 
     Ok(
         match event.kind.ok_or_else(|| missing("an event's kind"))? {
-            Kind::SpanOpened(opened) => {
-                let mut fields: Vec<(String, String)> = opened.fields.into_iter().collect();
-                fields.sort_unstable();
-                Event::SpanOpened {
-                    id: opened.id,
-                    parent: opened.parent,
-                    name: opened.name,
-                    fields,
-                }
-            }
-            Kind::SpanClosed(closed) => Event::SpanClosed {
-                id: closed.id,
-                failed: closed.failed,
-            },
+            Kind::Envelope(bytes) => Event::Envelope(bytes),
             Kind::Log(log) => Event::Log {
                 level: level_from_wire(log.level)?,
-                span: log.span,
+                node: log.node,
                 message: log.message,
             },
-            Kind::DownloadStarted(started) => Event::DownloadStarted {
-                total: started.total,
-            },
-            Kind::DownloadAdvanced(advanced) => Event::DownloadAdvanced {
-                delta: advanced.delta,
-            },
-            Kind::ActivityLine(line) => Event::ActivityLine(line.line),
-            Kind::ActivityProgress(progress) => {
-                Event::ActivityProgress(progress_from_wire(progress))
-            }
-            Kind::ActivityCleared(_) => Event::ActivityCleared,
             Kind::Finished(finished) => Event::Finished(outcome_from_wire(finished)?),
         },
     )
-}
-
-fn progress_to_wire(progress: BuildProgress) -> proto::ActivityProgress {
-    proto::ActivityProgress {
-        builds_done: progress.builds_done,
-        builds_expected: progress.builds_expected,
-        builds_running: progress.builds_running,
-        downloads_done: progress.downloads_done,
-        downloads_expected: progress.downloads_expected,
-        downloads_running: progress.downloads_running,
-        bytes_done: progress.bytes_done,
-        bytes_expected: progress.bytes_expected,
-    }
-}
-
-fn progress_from_wire(progress: proto::ActivityProgress) -> BuildProgress {
-    BuildProgress {
-        builds_done: progress.builds_done,
-        builds_expected: progress.builds_expected,
-        builds_running: progress.builds_running,
-        downloads_done: progress.downloads_done,
-        downloads_expected: progress.downloads_expected,
-        downloads_running: progress.downloads_running,
-        bytes_done: progress.bytes_done,
-        bytes_expected: progress.bytes_expected,
-    }
 }
 
 fn outcome_to_wire(outcome: Outcome) -> proto::Finished {
@@ -681,46 +613,18 @@ mod tests {
     #[test]
     fn every_event_survives_the_wire() {
         let events = vec![
-            Event::SpanOpened {
-                id: 7,
-                parent: Some(3),
-                name: "step".into(),
-                fields: vec![("name".into(), "create nix dir".into())],
-            },
-            Event::SpanOpened {
-                id: 3,
-                parent: None,
-                name: "rollback".into(),
-                fields: Vec::new(),
-            },
-            Event::SpanClosed {
-                id: 7,
-                failed: true,
-            },
+            Event::Envelope(vec![0, 1, 2, 255]),
+            Event::Envelope(Vec::new()),
             Event::Log {
                 level: Level::Warn,
-                span: Some(7),
+                node: 7,
                 message: "Cancelling... (cleaning up)".into(),
             },
             Event::Log {
                 level: Level::Trace,
-                span: None,
+                node: 0,
                 message: "line with \"quotes\"\nand a newline\0".into(),
             },
-            Event::DownloadStarted { total: u64::MAX },
-            Event::DownloadAdvanced { delta: 1 },
-            Event::ActivityLine("building '/nix/store/x.drv'".into()),
-            Event::ActivityProgress(BuildProgress {
-                builds_done: 1,
-                builds_expected: 2,
-                builds_running: 3,
-                downloads_done: 4,
-                downloads_expected: 5,
-                downloads_running: 6,
-                bytes_done: 7,
-                bytes_expected: 8,
-            }),
-            Event::ActivityCleared,
             Event::Finished(Outcome::BootstrapDone),
             Event::Finished(Outcome::RepairDone {
                 interrupted: true,
