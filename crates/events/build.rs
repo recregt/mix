@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_macros)]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 

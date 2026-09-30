@@ -18,6 +18,10 @@ allow = [
 
 [bans]
 multiple-versions = "warn"
+deny = [
+    { crate = "tracing", wrappers = ["h2", "hyper-util", "tonic", "tower", "zbus"], reason = "events are explicit (D-55)" },
+    { crate = "log", wrappers = ["mockito", "prost-build", "reqwest", "rustls-platform-verifier"], reason = "events are explicit (D-55)" },
+]
 
 [sources]
 unknown-registry = "deny"

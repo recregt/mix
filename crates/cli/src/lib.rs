@@ -185,6 +185,7 @@ fn stream_the_failure(command: &Command, error: &anyhow::Error, view: &render::s
     }
 }
 
+#[allow(clippy::disallowed_methods)]
 fn home_files(request: &str) -> ExitCode {
     let input = std::io::BufReader::new(std::io::stdin());
     let output = std::io::BufWriter::new(std::io::stdout());
@@ -200,15 +201,22 @@ fn home_files(request: &str) -> ExitCode {
 fn explain_code(name: &str) -> ExitCode {
     match explain::codes::parse(name) {
         Some(code) => {
-            println!(
+            mix_ui::data(&format!(
                 "{}\n\n{}",
                 explain::codes::name(code),
                 explain::codes::long(code)
-            );
+            ));
             ExitCode::SUCCESS
         }
         None => {
-            eprintln!("`{name}` is not a code `mix` uses. Codes look like LOCKED or NETWORK.");
+            mix_ui::report(
+                mix_ui::Severity::Error,
+                &mix_ui::Report {
+                    summary: &format!("`{name}` isn't a code `mix` uses"),
+                    helps: vec!["codes look like `locked` or `network`"],
+                    ..mix_ui::Report::default()
+                },
+            );
             ExitCode::from(2)
         }
     }
@@ -224,22 +232,33 @@ fn check_events(path: &std::path::Path) -> ExitCode {
     let captured = match captured {
         Ok(captured) => captured,
         Err(reason) => {
-            eprintln!("{}: {reason}", path.display());
+            unreadable(path, reason);
             return ExitCode::FAILURE;
         }
     };
     match mix_events::validate(captured.envelopes.iter()) {
         Ok(validated) => {
             for entry in &validated.entries {
-                println!("{} {:?}", entry.path, entry.outcome);
+                mix_ui::data(&format!("{} {:?}", entry.path, entry.outcome));
             }
             ExitCode::SUCCESS
         }
         Err(violation) => {
-            eprintln!("{}: {violation:?}", path.display());
+            unreadable(path, format!("{violation:?}"));
             ExitCode::FAILURE
         }
     }
+}
+
+fn unreadable(path: &std::path::Path, reason: String) {
+    mix_ui::report(
+        mix_ui::Severity::Error,
+        &mix_ui::Report {
+            summary: &format!("{} isn't a valid events file", path.display()),
+            causes: vec![reason],
+            ..mix_ui::Report::default()
+        },
+    );
 }
 
 #[cfg(test)]

@@ -102,13 +102,26 @@ impl mix_rpc::Worker for CliWorker {
 
 pub async fn run() -> ExitCode {
     if !mix_shell::effect::accounts::is_root() {
-        eprintln!("mix worker must be started by mix itself, as root");
+        mix_ui::report(
+            mix_ui::Severity::Error,
+            &mix_ui::Report {
+                summary: "the worker must be started by `mix` itself, as root",
+                ..mix_ui::Report::default()
+            },
+        );
         return ExitCode::FAILURE;
     }
     match mix_rpc::serve_stdin(CliWorker).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("{error}");
+            mix_ui::report(
+                mix_ui::Severity::Error,
+                &mix_ui::Report {
+                    summary: "the worker stopped serving its client",
+                    causes: vec![error.to_string()],
+                    ..mix_ui::Report::default()
+                },
+            );
             ExitCode::FAILURE
         }
     }

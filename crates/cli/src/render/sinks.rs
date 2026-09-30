@@ -1,7 +1,6 @@
 #![cfg_attr(not(test), deny(clippy::wildcard_enum_match_arm))]
 
 use std::fs::File;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -128,12 +127,9 @@ impl Render for Sinks {
 }
 
 fn json_line(envelope: &Envelope) {
-    let Ok(mut line) = serde_json::to_vec(envelope) else {
-        return;
-    };
-    line.push(b'\n');
-    let mut stdout = std::io::stdout().lock();
-    let _ = stdout.write_all(&line).and_then(|()| stdout.flush());
+    if let Ok(line) = serde_json::to_string(envelope) {
+        mix_ui::data(&line);
+    }
 }
 
 struct Recorder {

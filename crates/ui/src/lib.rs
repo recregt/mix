@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 use std::io::{IsTerminal, Write};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -63,6 +65,21 @@ fn painted(out: &mut String, colour: &str, text: &str, colours: bool) {
         out.push_str(RESET);
     } else {
         out.push_str(text);
+    }
+}
+
+pub fn data(text: &str) {
+    let write = || {
+        let mut out = std::io::stdout().lock();
+        let _ = out
+            .write_all(text.as_bytes())
+            .and_then(|()| out.write_all(b"\n"))
+            .and_then(|()| out.flush());
+    };
+    if progress_enabled() {
+        progress::board().suspend(write);
+    } else {
+        write();
     }
 }
 
