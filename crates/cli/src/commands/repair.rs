@@ -1,5 +1,7 @@
 use std::process::ExitCode;
 
+use tracing::Instrument;
+
 use mix_shell::ops::repair::Repair;
 
 pub async fn run(view: &crate::render::sinks::View) -> anyhow::Result<ExitCode> {
@@ -19,12 +21,14 @@ pub async fn run(view: &crate::render::sinks::View) -> anyhow::Result<ExitCode> 
             .with_policy(super::policy())
             .with_host(super::host_config());
         let _watch = crate::controls::watch(
-            &ctx.scope,
+            &ctx,
             crate::controls::REPAIR,
             std::future::pending(),
             crate::controls::Side::Client,
         );
-        mix_shell::ops::repair::repair(&ctx).await
+        mix_shell::ops::repair::repair(&ctx)
+            .instrument(ctx.span())
+            .await
     } else {
         crate::remote::client::repair(view).await?
     };

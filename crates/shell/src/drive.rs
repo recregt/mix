@@ -422,6 +422,10 @@ impl Performer {
 pub trait Observer: Send {
     fn flush(&mut self);
     fn span(&self, node: mix_events::NodeId) -> Option<tracing::Span>;
+
+    fn woken(&self) -> Option<std::sync::Arc<tokio::sync::Notify>> {
+        None
+    }
 }
 
 impl Observer for () {
@@ -445,7 +449,7 @@ impl Journal for Vec<Record> {
 
 fn keep(journal: &mut dyn Journal, record: &Record) {
     if let Err(failure) = journal.append(record) {
-        tracing::warn!("could not record {record:?} in the journal: {failure:?}");
+        tracing::warn!(?record, ?failure, "could not record in the journal");
     }
 }
 
@@ -478,6 +482,8 @@ pub async fn drive<'r>(
             (sender, receiver)
         }
     };
+    let woken = observer.woken();
+    let observing = observer.span(mix_events::ROOT);
     let mut input = None;
     let mut seq = 0;
     let mut ended = false;
@@ -489,7 +495,11 @@ pub async fn drive<'r>(
         observer.flush();
         match next {
             Next::Observe(queries) => {
-                input = Some(Input::Facts(performer.observe(&queries).await));
+                let facts = match &observing {
+                    Some(span) => performer.observe(&queries).instrument(span.clone()).await,
+                    None => performer.observe(&queries).await,
+                };
+                input = Some(Input::Facts(facts));
             }
             Next::Perform(action) => {
                 let scope = if runner.shielded() {
@@ -536,6 +546,11 @@ pub async fn drive<'r>(
                                 }
                                 observer.flush();
                             }
+                            () = async {
+                                if let Some(woken) = &woken {
+                                    woken.notified().await;
+                                }
+                            }, if woken.is_some() => observer.flush(),
                         }
                     }
                 };

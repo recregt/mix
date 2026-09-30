@@ -155,7 +155,7 @@ impl Command {
 
     pub fn spawn_foreground(self, stdin: OwnedFd) -> Result<Foreground, Error> {
         let line = self.line();
-        tracing::debug!("starting in the foreground: {line}");
+        tracing::debug!(command = %line, "starting in the foreground");
         self.process()
             .stdin(Stdio::from(stdin))
             .spawn()
@@ -175,7 +175,7 @@ impl Command {
         Error,
     > {
         let line = self.line();
-        tracing::debug!("starting a session: {line}");
+        tracing::debug!(command = %line, "starting a session");
         let mut process = self.process();
         process
             .stdin(Stdio::piped())
@@ -219,7 +219,7 @@ impl Command {
 
     pub async fn output(self, scope: &Scope) -> Result<Output, Error> {
         let line = self.line();
-        tracing::debug!("running command: {line}");
+        tracing::debug!(command = %line, "running command");
 
         let mut process = self.process();
         process
@@ -273,9 +273,10 @@ impl Command {
         let stderr = stderr_task.await.unwrap_or_default();
 
         tracing::trace!(
-            "command output: {line}\nstdout: {}\nstderr: {}",
-            String::from_utf8_lossy(&stdout),
-            String::from_utf8_lossy(&stderr)
+            command = %line,
+            stdout = %String::from_utf8_lossy(&stdout),
+            stderr = %String::from_utf8_lossy(&stderr),
+            "command output"
         );
 
         Ok(Output {

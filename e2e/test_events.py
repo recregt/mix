@@ -20,7 +20,9 @@ def _recorded(container, *command, user=USER):
         for record in map(json.loads, lines[1:])
         if record["record"]["envelope"].get("nodeFinished", {}).get("id") == "1"
     ]
-    assert int(root.get("exitCode", 0)) == result.returncode, result.stdout + result.stderr
+    assert int(root.get("exitCode", 0)) == result.returncode, (
+        result.stdout + result.stderr
+    )
     return result, root
 
 
@@ -58,3 +60,65 @@ def test_a_failure_before_any_work_still_streams_its_diagnostic(
     envelopes = [json.loads(line) for line in result.stdout.splitlines()]
     (finished,) = [e["nodeFinished"] for e in envelopes if "nodeFinished" in e]
     assert finished["diagnostic"]["code"] == "CODE_ROOT_NOT_ALLOWED"
+
+
+def _logs(lines):
+    envelopes = [json.loads(line) for line in lines if line.strip()]
+    return [
+        envelope.get("record", {}).get("envelope", envelope).get("log")
+        for envelope in envelopes
+        if "log" in envelope.get("record", {}).get("envelope", envelope)
+    ]
+
+
+@pytest.mark.bootstrapped
+@pytest.mark.verbatim_output
+def test_logs_are_events_with_their_fields_and_each_sink_keeps_its_own_level(
+    container, mock_nix_server, mirror_cache
+):
+    result = container.exec(
+        "mix",
+        "--output",
+        "json",
+        "-vv",
+        "--events-file",
+        EVENTS,
+        "install",
+        INSTALL_TEST_PACKAGE,
+        user=USER,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stderr == ""
+    printed = _logs(result.stdout.splitlines())
+    commands = [log for log in printed if "command" in log.get("fields", {})]
+    assert commands, printed
+    assert all(log["target"].startswith("mix_") for log in commands)
+    assert {log["level"] for log in printed} <= {
+        "LEVEL_ERROR",
+        "LEVEL_WARN",
+        "LEVEL_INFO",
+        "LEVEL_DEBUG",
+    }
+
+    check = container.exec("mix", "events", "check", EVENTS, user=USER)
+    assert check.returncode == 0, check.stdout + check.stderr
+    recorded = _logs(
+        container.exec("cat", EVENTS, check=True, user=USER).stdout.splitlines()[1:]
+    )
+    assert "LEVEL_TRACE" in {log["level"] for log in recorded}
+
+
+@pytest.mark.bootstrapped
+@pytest.mark.verbatim_output
+def test_a_workers_logs_reach_the_stream_as_events(
+    container, mock_nix_server, mirror_cache
+):
+    container.exec("rm", "/etc/profile.d/mix-nix.sh", check=True)
+
+    result = container.exec("mix", "--output", "json", "-vv", "repair", user=USER)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stderr == ""
+    logs = _logs(result.stdout.splitlines())
+    assert any(log["target"].startswith("mix_") for log in logs), result.stdout

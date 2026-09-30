@@ -178,6 +178,7 @@ impl Tree {
             open: Vec::new(),
         };
         tree.open_node(0, start);
+        tree.outbox.open();
         tree
     }
 
@@ -253,14 +254,19 @@ impl Tree {
         for key in open.planned.iter().filter(|key| !open.used.contains(*key)) {
             self.emit_not_run(id, key.to_string(), NotRunReason::NotReached);
         }
-        self.outbox.push(Event::NodeFinished(NodeFinished {
+        let finished = Event::NodeFinished(NodeFinished {
             id,
             status: ending.status as i32,
             diagnostic: ending.diagnostic.map(Box::new),
             exit_code: ending.exit_code,
             cancellation: ending.cancellation as i32,
             result: ending.result,
-        }));
+        });
+        if id == ROOT {
+            self.outbox.push_last(finished);
+        } else {
+            self.outbox.push(finished);
+        }
         Ok(())
     }
 
@@ -484,6 +490,40 @@ mod tests {
             stopped,
             Start::command("bootstrap", Command::default()).planned(planned.iter().copied()),
         )
+    }
+
+    fn log(node: NodeId) -> crate::v1::Log {
+        crate::v1::Log {
+            node,
+            message: format!("at {node}"),
+            ..crate::v1::Log::default()
+        }
+    }
+
+    #[test]
+    fn a_log_counts_only_while_the_request_is_running() {
+        let outbox = Arc::new(Outbox::new("request", || {}));
+        outbox.log(log(0));
+        let mut tree = Tree::new(
+            Arc::clone(&outbox),
+            never(),
+            Start::command("doctor", Command::default()),
+        );
+        outbox.log(log(0));
+        outbox.log(log(ROOT));
+        tree.finish(ROOT, Ending::succeeded()).unwrap();
+        outbox.log(log(0));
+
+        let envelopes = outbox.drain();
+        crate::validate(envelopes.iter()).unwrap();
+        let messages: Vec<_> = envelopes
+            .iter()
+            .filter_map(|envelope| match &envelope.event {
+                Some(Event::Log(log)) => Some(log.message.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(messages, ["at 0", "at 1"]);
     }
 
     fn step() -> node_started::Kind {

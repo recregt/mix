@@ -138,7 +138,7 @@ pub async fn install(
     };
     let cleanup = created.clone();
     if let Err(error) = blocking(move || remove_runtime(&cleanup)).await? {
-        tracing::warn!("could not remove a partly installed runtime: {error}");
+        tracing::warn!(%error, "could not remove a partly installed runtime");
     }
     Err(failed)
 }

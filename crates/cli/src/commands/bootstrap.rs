@@ -1,5 +1,7 @@
 use std::process::ExitCode;
 
+use tracing::Instrument;
+
 pub async fn run(
     mirror: Option<&str>,
     mirror_key: Option<&str>,
@@ -23,12 +25,14 @@ pub async fn run(
             .with_policy(policy)
             .with_host(super::host_config());
         let _watch = crate::controls::watch(
-            &ctx.scope,
+            &ctx,
             crate::controls::BOOTSTRAP,
             std::future::pending(),
             crate::controls::Side::Client,
         );
-        mix_shell::ops::bootstrap::bootstrap(&ctx, force).await?;
+        mix_shell::ops::bootstrap::bootstrap(&ctx, force)
+            .instrument(ctx.span())
+            .await?;
     } else {
         crate::remote::client::bootstrap(mirror, mirror_key, force, view).await?;
     }

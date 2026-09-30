@@ -18,7 +18,7 @@ use mix_events::v1::{
     BootstrapRequest, BootstrapResult, Command, Diagnostic, Severity, Step, command, node_finished,
     node_started,
 };
-use mix_events::{Ending, Outbox, ROOT, Start, Stopped, Tree};
+use mix_events::{Ending, ROOT, Start, Stopped, Tree};
 
 use crate::Context;
 use crate::drive::{Observer, Performer, drive, stopped_by};
@@ -26,7 +26,6 @@ use crate::effect::files::Files;
 use crate::effect::generations::ProfileContext;
 use crate::effect::journal::{FileJournal, JOURNAL_DIR, recover_all, unfinished};
 use crate::effect::mirror::{filter_mirror, mirror_url};
-use crate::render::Relay;
 
 pub struct Environment(());
 
@@ -34,10 +33,6 @@ impl Environment {
     pub(crate) fn new() -> Self {
         Self(())
     }
-}
-
-pub fn request_id() -> String {
-    uuid::Uuid::now_v7().to_string()
 }
 
 fn warning(failure: &Failure) -> Diagnostic {
@@ -162,7 +157,7 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
         preflight::check_nix_not_installed(scope).await?;
     }
 
-    let request = request_id();
+    let request = ctx.request.id.clone();
     let settings = Settings {
         policy: ctx.policy.clone(),
         user: ctx.user.clone(),
@@ -178,11 +173,10 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
         mirror: ctx.mirror().map(str::to_string),
         host: ctx.host.clone(),
     });
-    let outbox = Arc::new(Outbox::new(request.clone(), || {}));
-    let mut bridge = Relay::new(Arc::clone(&outbox), Arc::clone(&ctx.render));
+    let mut bridge = ctx.relay();
     let stopped: Stopped = stopped_by(scope);
     let mut tree = Tree::new(
-        outbox,
+        Arc::clone(&ctx.request.outbox),
         Arc::clone(&stopped),
         Start::command(
             "bootstrap",

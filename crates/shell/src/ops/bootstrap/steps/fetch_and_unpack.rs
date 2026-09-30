@@ -177,7 +177,7 @@ fn remove_manifest_at(manifest_path: &Path) {
 fn recover_scratch_at(manifest_path: &Path) -> Option<PathBuf> {
     let path = read_manifest_at(manifest_path)?;
     if find_single_child(&path, |name| name.starts_with("nix-")).is_ok() {
-        tracing::info!("resuming interrupted provisioning from {}", path.display());
+        tracing::info!(journal = %path.display(), "resuming interrupted provisioning");
         Some(path)
     } else {
         remove_manifest_at(manifest_path);

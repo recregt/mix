@@ -31,27 +31,18 @@ pub async fn run() -> ExitCode {
         return check_events(file);
     }
 
-    mix_ui::init_tracing(cli.verbose, cli.draws_progress());
-
-    if !matches!(
-        cli.command,
-        Command::Doctor
-            | Command::Repair
-            | Command::Bootstrap { .. }
-            | Command::Install { .. }
-            | Command::Remove { .. }
-    ) {
-        let ctx =
-            mix_shell::Context::new(mix_exec::Scope::root()).with_user(commands::enrolled_user());
-        if let Some(report) = mix_shell::ops::doctor::audit(&ctx)
-            .await
-            .into_iter()
-            .find(|report| !report.healthy())
-        {
-            mix_ui::fail(explain::doctor::blocked(&report).message());
-            return ExitCode::FAILURE;
-        }
-    }
+    let view = render::sinks::View {
+        output: cli.output,
+        events_file: cli.events_file.clone(),
+        verbose: cli.verbose,
+        exit: render::sinks::Exit::default(),
+    };
+    mix_ui::init_tracing(
+        cli.verbose,
+        cli.draws_progress(),
+        cli.output == cli::Output::Human,
+        view.streams().then(mix_shell::logs::layer),
+    );
 
     // Which command was run is what decides how a failure should read, so the words are picked
     // before it runs: every crate below this one raises facts, and this is where they are put
@@ -72,12 +63,6 @@ pub async fn run() -> ExitCode {
         | Command::Events { .. } => Box::new(explain::repair::explain),
     };
 
-    let view = render::sinks::View {
-        output: cli.output,
-        events_file: cli.events_file.clone(),
-        verbose: cli.verbose,
-        exit: render::sinks::Exit::default(),
-    };
     let result = match &cli.command {
         Command::Bootstrap {
             mirror,
@@ -158,10 +143,7 @@ fn stream_the_failure(command: &Command, error: &anyhow::Error, view: &render::s
         | Command::Explain { .. }
         | Command::Events { .. } => ("repair", Request::Repair(RepairRequest {})),
     };
-    let outbox = std::sync::Arc::new(mix_events::Outbox::new(
-        mix_shell::ops::bootstrap::request_id(),
-        || {},
-    ));
+    let outbox = std::sync::Arc::new(mix_events::Outbox::new(mix_shell::request_id(), || {}));
     let mut tree = mix_events::Tree::new(
         std::sync::Arc::clone(&outbox),
         std::sync::Arc::new(|| None),

@@ -15,13 +15,11 @@ use mix_events::v1::{
     Command, DoctorRequest, DoctorResult, Inspection, InspectionReport, InspectionResult, command,
     node_finished, node_started,
 };
-use mix_events::{Ending, Outbox, ROOT, Start, Tree};
+use mix_events::{Ending, ROOT, Start, Tree};
 
 use crate::Context;
 use crate::drive::{Observer, Performer, stopped_by};
 use crate::effect::files::Files;
-use crate::ops::bootstrap::request_id;
-use crate::render::Relay;
 use crate::target::Finding;
 
 pub struct HealthReport {
@@ -40,10 +38,9 @@ impl HealthReport {
 pub async fn audit(ctx: &Context) -> Vec<HealthReport> {
     tracing::info!("auditing managed environment");
     let items = mix_core::models::targets(ctx.user.as_ref(), &ctx.policy);
-    let outbox = Arc::new(Outbox::new(request_id(), || {}));
-    let mut observer = Relay::new(Arc::clone(&outbox), Arc::clone(&ctx.render));
+    let mut observer = ctx.relay();
     let mut tree = Tree::new(
-        outbox,
+        Arc::clone(&ctx.request.outbox),
         stopped_by(&ctx.scope),
         Start::command(
             "doctor",
@@ -58,7 +55,7 @@ pub async fn audit(ctx: &Context) -> Vec<HealthReport> {
     let mut performer = match Files::open(Path::new("/"), "audit") {
         Ok(files) => Some(Performer::new(files)),
         Err(error) => {
-            tracing::debug!("cannot open the root to audit: {error}");
+            tracing::debug!(%error, "cannot open the root to audit");
             None
         }
     };
@@ -77,7 +74,7 @@ pub async fn audit(ctx: &Context) -> Vec<HealthReport> {
         };
         let name = target.label().into_owned();
         if let Some(finding) = &finding {
-            tracing::debug!("unhealthy: {name}: {finding:?}");
+            tracing::debug!(artifact = %name, ?finding, "unhealthy");
         }
         if let Ok(node) = tree.start(
             ROOT,

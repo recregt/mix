@@ -36,11 +36,6 @@ pub struct Caller {
 #[derive(Debug)]
 pub enum Event {
     Envelope(Vec<u8>),
-    Log {
-        level: Level,
-        node: u64,
-        message: String,
-    },
     Finished(Outcome),
 }
 

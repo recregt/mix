@@ -8,7 +8,7 @@ pub mod message;
 mod progress;
 
 pub use live::{Reporters, reporters};
-pub use progress::{init_tracing, step_style};
+pub use progress::{init_tracing, step_style, verbosity_level};
 
 /// Whether anything may be drawn in place. Set once by [`init_tracing`], so a caller that never
 /// initialises the output keeps the default.

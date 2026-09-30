@@ -103,11 +103,11 @@ pub async fn record(user: &InvokingUser, host: &HostConfig, scope: &Scope) -> bo
     let git = git::Git::resolve(user, host.git_binary.as_deref()).await;
     let created_git_dir = !fs::exists(state_dir.join(".git")).await;
     if created_git_dir && let Err(error) = git.init(user, &state_dir, scope).await {
-        tracing::info!("could not record the change in git: {error}");
+        tracing::info!(%error, "could not record the change in git");
         return false;
     }
     if let Err(error) = git.sync(user, &state_dir, scope).await {
-        tracing::info!("could not record the change in git: {error}");
+        tracing::info!(%error, "could not record the change in git");
     }
     created_git_dir
 }

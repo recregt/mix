@@ -1,5 +1,7 @@
 use std::process::ExitCode;
 
+use tracing::Instrument;
+
 pub async fn run(
     packages: &[String],
     view: &crate::render::sinks::View,
@@ -16,13 +18,15 @@ pub async fn run(
         .with_policy(super::policy())
         .with_host(super::host_config());
     let _watch = crate::controls::watch(
-        &ctx.scope,
+        &ctx,
         crate::controls::CHANGE,
         std::future::pending(),
         crate::controls::Side::Client,
     );
 
-    mix_shell::ops::install::install(&ctx, packages).await?;
+    mix_shell::ops::install::install(&ctx, packages)
+        .instrument(ctx.span())
+        .await?;
 
     Ok(ExitCode::SUCCESS)
 }

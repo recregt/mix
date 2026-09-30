@@ -10,13 +10,13 @@ use owo_colors::colors::{Green, Red};
 use tracing::field::{Field, Visit};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 use tracing_indicatif::{IndicatifLayer, TickSettings};
-use tracing_subscriber::Layer;
 use tracing_subscriber::field::RecordFields;
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::fmt::FormatFields;
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{Layer, Registry};
 
 /// A download knows its total, so it gets the one thing a spinner cannot give: a bar that says
 /// how much of the wait is left. `{wide_bar}` takes exactly the columns the rest of the line
@@ -35,6 +35,8 @@ const STEP_STYLE: &str = "{span_child_prefix}{spinner}{span_fields}{wide_msg}";
 const PROGRESS_CHARS: &str = "━╸━";
 
 const OWN_CRATES: [&str; 5] = ["mix_core", "mix_exec", "mix_shell", "mix_cli", "mix_ui"];
+
+const ANCHORS: &str = "mix_shell::logs";
 
 /// The spinner's frames: a three-dot arc sweeping once around the braille cell.
 ///
@@ -112,13 +114,17 @@ fn download_style() -> ProgressStyle {
     spinner_style(DOWNLOAD_STYLE, &finished(DONE, false)).progress_chars(PROGRESS_CHARS)
 }
 
-fn level_filter(verbosity: u8) -> LevelFilter {
+pub fn verbosity_level(verbosity: u8) -> tracing::Level {
     match verbosity {
-        0 => LevelFilter::WARN,
-        1 => LevelFilter::INFO,
-        2 => LevelFilter::DEBUG,
-        _ => LevelFilter::TRACE,
+        0 => tracing::Level::WARN,
+        1 => tracing::Level::INFO,
+        2 => tracing::Level::DEBUG,
+        _ => tracing::Level::TRACE,
     }
+}
+
+fn level_filter(verbosity: u8) -> LevelFilter {
+    LevelFilter::from_level(verbosity_level(verbosity))
 }
 
 struct NameOnlyFields;
@@ -166,6 +172,7 @@ fn own_crates_at(level: LevelFilter, default: LevelFilter) -> Targets {
         .fold(Targets::new(), |targets, name| {
             targets.with_target(*name, level)
         })
+        .with_target(ANCHORS, LevelFilter::OFF)
         .with_default(default)
 }
 
@@ -236,11 +243,20 @@ impl StepObserver for IndicatifStepObserver {
 ///
 /// With `progress` off nothing is drawn in place: no spinners, no live output, just log lines on
 /// stderr. That is what a script or a CI job wants even when it happens to own a terminal.
-pub fn init_tracing(verbosity: u8, progress: bool) {
+pub fn init_tracing<L>(verbosity: u8, progress: bool, terminal: bool, logs: L)
+where
+    L: Layer<Registry> + Send + Sync + 'static,
+{
     crate::set_progress_enabled(progress);
+    let registry = tracing_subscriber::registry().with(logs);
+
+    if !terminal {
+        registry.init();
+        return;
+    }
 
     if !progress {
-        tracing_subscriber::registry()
+        registry
             .with(
                 tracing_subscriber::fmt::layer()
                     .with_writer(std::io::stderr)
@@ -262,7 +278,7 @@ pub fn init_tracing(verbosity: u8, progress: bool) {
             ..Default::default()
         });
 
-    tracing_subscriber::registry()
+    registry
         .with(
             tracing_subscriber::fmt::layer()
                 .with_writer(indicatif_layer.get_stderr_writer())
@@ -293,6 +309,14 @@ mod tests {
             );
         }
         assert!(!targets.would_enable("hyper", &tracing::Level::DEBUG));
+    }
+
+    #[test]
+    fn the_spans_that_tie_logs_to_a_node_are_never_drawn_or_printed() {
+        for targets in [own_crates_only(), log_filter(3)] {
+            assert!(!targets.would_enable(ANCHORS, &tracing::Level::ERROR));
+            assert!(targets.would_enable("mix_shell::ops", &tracing::Level::TRACE));
+        }
     }
 
     #[derive(Clone, Debug)]

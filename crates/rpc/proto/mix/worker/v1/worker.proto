@@ -32,7 +32,6 @@ message RepairResponse {
 
 message Event {
   oneof kind {
-    Log log = 3;
     Finished finished = 9;
     bytes envelope = 10;
   }
@@ -45,12 +44,6 @@ enum Level {
   LEVEL_INFO = 3;
   LEVEL_DEBUG = 4;
   LEVEL_TRACE = 5;
-}
-
-message Log {
-  Level level = 1;
-  uint64 node = 2;
-  string message = 3;
 }
 
 message Finished {

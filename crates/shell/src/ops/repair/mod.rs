@@ -14,7 +14,7 @@ use mix_core::models::{Target, UserConfig, targets};
 use mix_core::paths::mix_state_dir;
 use mix_core::plan::{Runner, StepOutcome, Verdict};
 use mix_events::v1::{Cancellation, Command, RepairRequest, RepairResult, command, node_finished};
-use mix_events::{Diagnose, Ending, Fault, Outbox, ROOT, Start, Stopped, Tree};
+use mix_events::{Diagnose, Ending, Fault, ROOT, Start, Stopped, Tree};
 use mix_exec::Scope;
 
 use crate::drive::{Journal, Observer, Performer, drive, stopped_by};
@@ -22,7 +22,6 @@ use crate::effect::files::Files;
 use crate::effect::git;
 use crate::effect::home::core_error;
 use crate::effect::journal::{FileJournal, JOURNAL_DIR, recover_all};
-use crate::ops::bootstrap::request_id;
 use crate::render::Relay;
 use crate::target::Error;
 use crate::{Context, HostConfig};
@@ -70,12 +69,11 @@ pub struct Repair {
 }
 
 pub async fn repair(ctx: &Context) -> Repair {
-    let request = request_id();
-    let outbox = Arc::new(Outbox::new(request.clone(), || {}));
-    let mut observer = Relay::new(Arc::clone(&outbox), Arc::clone(&ctx.render));
+    let request = ctx.request.id.clone();
+    let mut observer = ctx.relay();
     let stopped = stopped_by(&ctx.scope);
     let mut tree = Tree::new(
-        outbox,
+        Arc::clone(&ctx.request.outbox),
         Arc::clone(&stopped),
         Start::command(
             "repair",
@@ -132,7 +130,7 @@ async fn repaired(
     let journals = Path::new(JOURNAL_DIR);
     let recovered = recover_all(journals, &mut performer, &scope.shielded()).await;
     for (action, failure) in &recovered.failures {
-        tracing::warn!("could not finish an interrupted request ({action:?}): {failure:?}");
+        tracing::warn!(?action, ?failure, "could not finish an interrupted request");
     }
     let mut journal = match FileJournal::create(journals, request) {
         Ok(journal) => journal,
@@ -160,7 +158,7 @@ async fn repaired(
     )
     .await;
     if let Err(failure) = journal.finish() {
-        tracing::warn!("could not remove the finished journal: {failure:?}");
+        tracing::warn!(?failure, "could not remove the finished journal");
     }
 
     if let Some(cfg) = user_config {
@@ -210,11 +208,11 @@ async fn put_back(
     for (name, outcome) in std::mem::take(&mut report.steps) {
         match outcome {
             StepOutcome::Changed => {
-                tracing::debug!("repaired: {name}");
+                tracing::debug!(artifact = %name, "repaired");
                 reports.push(RepairReport::repaired(name));
             }
             StepOutcome::Failed(failure) => {
-                tracing::debug!("failed to repair {name}: {failure:?}");
+                tracing::debug!(artifact = %name, ?failure, "failed to repair");
                 let error = error_of(failure, &name);
                 reports.push(RepairReport::failed(name, error));
             }
@@ -246,7 +244,7 @@ async fn commit_the_tracked_state(
         }
         Ok(false) => {}
         Err(e) => {
-            tracing::debug!("failed to commit git-tracked state: {e}");
+            tracing::debug!(error = %e, "failed to commit git-tracked state");
             reports.push(RepairReport::failed(NAME, e));
         }
     }
@@ -293,7 +291,7 @@ mod tests {
         let mut journal: Vec<Record> = Vec::new();
         let stopped = stopped_by(scope);
         let mut tree = Tree::new(
-            Arc::new(Outbox::new("r1", || {})),
+            Arc::new(mix_events::Outbox::new("r1", || {})),
             Arc::clone(&stopped),
             Start::command("repair", Command::default()),
         );

@@ -6,7 +6,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use mix_events::capture::Capture;
 use mix_events::capture::v1::Header;
-use mix_events::v1::{Envelope, envelope};
+use mix_events::v1::{Envelope, Level, envelope};
 use mix_events::{NodeId, ROOT};
 use mix_shell::render::Render;
 
@@ -38,7 +38,9 @@ impl View {
         Ok(Sinks {
             human: (self.output == Output::Human)
                 .then(|| Human::new(reporters).verbose(self.verbose > 0)),
-            json: self.output == Output::Json,
+            json: (self.output == Output::Json)
+                .then(|| level(mix_ui::verbosity_level(self.verbose))),
+            logs: self.recorded_logs(),
             file: self
                 .events_file
                 .as_deref()
@@ -51,11 +53,36 @@ impl View {
     pub fn streams(&self) -> bool {
         self.output == Output::Json || self.events_file.is_some()
     }
+
+    fn recorded_logs(&self) -> Option<tracing::Level> {
+        if self.events_file.is_some() {
+            Some(tracing::Level::TRACE)
+        } else {
+            (self.output == Output::Json).then(|| mix_ui::verbosity_level(self.verbose))
+        }
+    }
+
+    pub fn logs(&self) -> tracing::Level {
+        self.recorded_logs()
+            .unwrap_or_else(|| mix_ui::verbosity_level(self.verbose))
+    }
+}
+
+fn level(level: tracing::Level) -> i32 {
+    let level = match level {
+        tracing::Level::ERROR => Level::Error,
+        tracing::Level::WARN => Level::Warn,
+        tracing::Level::INFO => Level::Info,
+        tracing::Level::DEBUG => Level::Debug,
+        tracing::Level::TRACE => Level::Trace,
+    };
+    level as i32
 }
 
 pub struct Sinks {
     human: Option<Human>,
-    json: bool,
+    json: Option<i32>,
+    logs: Option<tracing::Level>,
     file: Option<Recorder>,
     exit: Exit,
 }
@@ -67,8 +94,11 @@ impl Render for Sinks {
         {
             self.exit.record(finished.exit_code);
         }
-        if self.json {
-            json_line(&envelope);
+        if let Some(wanted) = self.json {
+            match &envelope.event {
+                Some(envelope::Event::Log(log)) if log.level > wanted => {}
+                _ => json_line(&envelope),
+            }
         }
         if let Some(file) = &mut self.file {
             file.record(&envelope);
@@ -80,6 +110,10 @@ impl Render for Sinks {
 
     fn span(&self, node: NodeId) -> Option<tracing::Span> {
         self.human.as_ref()?.span(node)
+    }
+
+    fn logs(&self) -> Option<tracing::Level> {
+        self.logs
     }
 }
 

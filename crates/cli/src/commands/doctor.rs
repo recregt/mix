@@ -1,5 +1,7 @@
 use std::process::ExitCode;
 
+use tracing::Instrument;
+
 use mix_shell::ops::doctor::HealthReport;
 
 pub async fn run(view: &crate::render::sinks::View) -> anyhow::Result<ExitCode> {
@@ -12,7 +14,9 @@ pub async fn run(view: &crate::render::sinks::View) -> anyhow::Result<ExitCode> 
             activity: reporters.activity,
         })?)
         .with_policy(super::policy());
-    let reports = mix_shell::ops::doctor::audit(&ctx).await;
+    let reports = mix_shell::ops::doctor::audit(&ctx)
+        .instrument(ctx.span())
+        .await;
 
     if reports.iter().all(HealthReport::healthy) {
         Ok(ExitCode::SUCCESS)

@@ -1,5 +1,7 @@
 use std::process::ExitCode;
 
+use tracing::Instrument;
+
 use mix_shell::ops::remove::Error;
 
 pub async fn run(
@@ -18,13 +20,15 @@ pub async fn run(
         .with_policy(super::policy())
         .with_host(super::host_config());
     let _watch = crate::controls::watch(
-        &ctx.scope,
+        &ctx,
         crate::controls::CHANGE,
         std::future::pending(),
         crate::controls::Side::Client,
     );
 
-    mix_shell::ops::remove::remove(&ctx, packages).await?;
+    mix_shell::ops::remove::remove(&ctx, packages)
+        .instrument(ctx.span())
+        .await?;
 
     Ok(ExitCode::SUCCESS)
 }

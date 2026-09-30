@@ -77,15 +77,6 @@ pub fn event_to_wire(event: Event) -> proto::Event {
 
     let kind = match event {
         Event::Envelope(bytes) => Kind::Envelope(bytes),
-        Event::Log {
-            level,
-            node,
-            message,
-        } => Kind::Log(proto::Log {
-            level: level_to_wire(level),
-            node,
-            message,
-        }),
         Event::Finished(outcome) => Kind::Finished(outcome_to_wire(outcome)),
     };
     proto::Event { kind: Some(kind) }
@@ -119,11 +110,6 @@ pub fn event_from_wire(event: proto::Event) -> Result<Event, Malformed> {
     Ok(
         match event.kind.ok_or_else(|| missing("an event's kind"))? {
             Kind::Envelope(bytes) => Event::Envelope(bytes),
-            Kind::Log(log) => Event::Log {
-                level: level_from_wire(log.level)?,
-                node: log.node,
-                message: log.message,
-            },
             Kind::Finished(finished) => Event::Finished(outcome_from_wire(finished)?),
         },
     )
@@ -615,16 +601,6 @@ mod tests {
         let events = vec![
             Event::Envelope(vec![0, 1, 2, 255]),
             Event::Envelope(Vec::new()),
-            Event::Log {
-                level: Level::Warn,
-                node: 7,
-                message: "Cancelling... (cleaning up)".into(),
-            },
-            Event::Log {
-                level: Level::Trace,
-                node: 0,
-                message: "line with \"quotes\"\nand a newline\0".into(),
-            },
             Event::Finished(Outcome::BootstrapDone),
             Event::Finished(Outcome::RepairDone {
                 interrupted: true,

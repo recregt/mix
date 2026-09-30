@@ -6,15 +6,13 @@ use mix_core::change::{Change, NewerList, Unrenderable};
 use mix_core::models::UserConfig;
 use mix_core::plan::{Runner, Verdict, diagnostic};
 use mix_events::v1::{Command, InstallResult, RemoveResult, command, node_finished};
-use mix_events::{Ending, Outbox, ROOT, Start, Tree};
+use mix_events::{Ending, ROOT, Start, Tree};
 
 use crate::Context;
 use crate::drive::{Journal, Observer, Performer, drive, stopped_by};
 use crate::effect::files::Files;
 use crate::effect::generations::ProfileContext;
-use crate::ops::bootstrap::request_id;
 use crate::profile::state::{self, Invalid, Settled, Source};
-use crate::render::Relay;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -113,12 +111,11 @@ pub async fn run(
 ) -> Result<()> {
     let steps = mix_core::change::steps(&cfg.user, change, verb.label())?;
     let scope = &ctx.scope;
-    let request = request_id();
-    let outbox = Arc::new(Outbox::new(request.clone(), || {}));
-    let mut observer = Relay::new(Arc::clone(&outbox), Arc::clone(&ctx.render));
+    let request = ctx.request.id.clone();
+    let mut observer = ctx.relay();
     let stopped = stopped_by(scope);
     let mut tree = Tree::new(
-        outbox,
+        Arc::clone(&ctx.request.outbox),
         Arc::clone(&stopped),
         Start::command(
             verb.key(),

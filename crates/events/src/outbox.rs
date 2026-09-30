@@ -3,7 +3,7 @@ use std::sync::{Mutex, PoisonError};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::v1::{Envelope, NodeProgress, envelope::Event, node_progress::Progress};
+use crate::v1::{Envelope, Log, NodeProgress, envelope::Event, node_progress::Progress};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Gauge {
@@ -29,6 +29,7 @@ fn slot(event: &Event) -> Option<Slot> {
 
 #[derive(Default)]
 struct Queue {
+    live: bool,
     head: u64,
     seq: u64,
     items: VecDeque<Event>,
@@ -61,6 +62,33 @@ impl Outbox {
                 queue.superseded.insert(superseded);
             }
             queue.items.push_back(event);
+        }
+        (self.wake)();
+    }
+
+    pub(crate) fn open(&self) {
+        self.queue
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .live = true;
+    }
+
+    pub(crate) fn push_last(&self, event: Event) {
+        {
+            let mut queue = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
+            queue.live = false;
+            queue.items.push_back(event);
+        }
+        (self.wake)();
+    }
+
+    pub fn log(&self, log: Log) {
+        {
+            let mut queue = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
+            if !queue.live {
+                return;
+            }
+            queue.items.push_back(Event::Log(log));
         }
         (self.wake)();
     }

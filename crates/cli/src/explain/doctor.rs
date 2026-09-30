@@ -60,23 +60,6 @@ pub fn finding(finding: Finding) -> Cow<'static, str> {
     }
 }
 
-/// One line per check: the artifact, and what was measured about it.
-///
-/// Only the name keeps its own spelling; nothing is added to it.
-fn measured(report: &HealthReport) -> String {
-    match report.finding {
-        Some(found) => {
-            let words = finding(found);
-            let mut line = String::with_capacity(report.name.len() + words.len() + 2);
-            line.push_str(&report.name);
-            line.push_str(": ");
-            line.push_str(&words);
-            line
-        }
-        None => format!("{}: unhealthy", report.name),
-    }
-}
-
 /// What `mix doctor` says about a failed check, for printing under the artifact's own name.
 ///
 /// A check `mix repair` will reconcile is one line; one it will not is that line with the way
@@ -113,19 +96,6 @@ pub fn unhealthy(reports: &[HealthReport]) -> Diagnostic {
     match unfixable {
         Some(reason) => Diagnostic::hinting("some checks failed", super::target::unfixable(reason)),
         None => Diagnostic::new("some checks failed"),
-    }
-}
-
-/// The verdict when another command refuses to run on an unhealthy system.
-///
-/// The reader did not ask for an audit, so the check that failed is named where `mix doctor`
-/// would have printed it, and they are told where to look — unless the finding has a way out of
-/// its own, which is more use than being sent to a command that cannot fix it.
-pub fn blocked(report: &HealthReport) -> Diagnostic {
-    let summary = format!("`mix` found a problem: {}", measured(report));
-    match report.finding.and_then(Finding::unfixable) {
-        Some(reason) => Diagnostic::hinting(summary, super::target::unfixable(reason)),
-        None => Diagnostic::hinting(summary, "Run `mix repair` to fix it"),
     }
 }
 
@@ -193,30 +163,6 @@ mod tests {
         let line = check(&report("/nix", Some(Finding::ContentDrift)));
 
         assert!(!line.contains('\n'));
-    }
-
-    #[test]
-    fn a_blocked_command_names_the_check_and_where_to_look() {
-        let message = blocked(&report(
-            "/nix",
-            Some(Finding::Mode {
-                actual: 0o700,
-                expected: 0o755,
-            }),
-        ))
-        .message();
-
-        assert!(message.contains("/nix: mode is 700, expected 755"));
-        assert!(message.starts_with("`mix` found a problem"));
-        assert!(message.contains("mix repair"));
-    }
-
-    #[test]
-    fn a_blocked_command_sends_a_missing_runtime_to_bootstrap_instead() {
-        let message = blocked(&report("default profile", Some(Finding::RuntimeMissing))).message();
-
-        assert!(message.contains("default profile: missing"));
-        assert!(message.contains("mix bootstrap"));
     }
 
     #[test]

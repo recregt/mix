@@ -5,6 +5,7 @@ use mix_exec::Scope;
 use nix::sys::signal::Signal;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::task::JoinHandle;
+use tracing::Instrument;
 
 pub struct Stopping {
     pub first: &'static str,
@@ -114,7 +115,17 @@ fn listen(signal_number: Signal) -> tokio::signal::unix::Signal {
 }
 
 pub fn watch(
+    ctx: &mix_shell::Context,
+    stopping: Stopping,
+    client_gone: impl Future<Output = ()> + Send + 'static,
+    side: Side,
+) -> Watch {
+    watch_in(&ctx.scope, ctx.span(), stopping, client_gone, side)
+}
+
+fn watch_in(
     scope: &Scope,
+    span: tracing::Span,
     stopping: Stopping,
     client_gone: impl Future<Output = ()> + Send + 'static,
     side: Side,
@@ -124,30 +135,33 @@ pub fn watch(
     let mut suspend = listen(Signal::SIGTSTP);
     let mut resume = listen(Signal::SIGCONT);
     let scope = scope.clone();
-    Watch(tokio::spawn(async move {
-        let mut client_gone = std::pin::pin!(client_gone);
-        let mut client_left = false;
-        let mut translator = Translator::default();
-        loop {
-            let received = tokio::select! {
-                _ = interrupt.recv() => Received::Interrupt,
-                _ = terminate.recv() => Received::Terminate,
-                _ = suspend.recv() => Received::Suspend,
-                _ = resume.recv() => Received::Continue,
-                () = &mut client_gone, if !client_left => {
-                    client_left = true;
-                    Received::ClientGone
+    Watch(tokio::spawn(
+        async move {
+            let mut client_gone = std::pin::pin!(client_gone);
+            let mut client_left = false;
+            let mut translator = Translator::default();
+            loop {
+                let received = tokio::select! {
+                    _ = interrupt.recv() => Received::Interrupt,
+                    _ = terminate.recv() => Received::Terminate,
+                    _ = suspend.recv() => Received::Suspend,
+                    _ = resume.recv() => Received::Continue,
+                    () = &mut client_gone, if !client_left => {
+                        client_left = true;
+                        Received::ClientGone
+                    }
+                };
+                let Some(control) = translator.translate(received) else {
+                    continue;
+                };
+                apply(&scope, &stopping, control);
+                if control == Control::Pause && side == Side::Client {
+                    let _ = nix::sys::signal::raise(Signal::SIGSTOP);
                 }
-            };
-            let Some(control) = translator.translate(received) else {
-                continue;
-            };
-            apply(&scope, &stopping, control);
-            if control == Control::Pause && side == Side::Client {
-                let _ = nix::sys::signal::raise(Signal::SIGSTOP);
             }
         }
-    }))
+        .instrument(span),
+    ))
 }
 
 #[cfg(test)]
@@ -250,7 +264,13 @@ mod tests {
     async fn sigint_cancels_the_request() {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
         let scope = mix_exec::Scope::root();
-        let _watch = watch(&scope, BOOTSTRAP, std::future::pending(), Side::Client);
+        let _watch = watch_in(
+            &scope,
+            tracing::Span::none(),
+            BOOTSTRAP,
+            std::future::pending(),
+            Side::Client,
+        );
 
         signal::raise(Signal::SIGINT).unwrap();
 
@@ -261,7 +281,13 @@ mod tests {
     async fn sigterm_cancels_the_request() {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
         let scope = mix_exec::Scope::root();
-        let _watch = watch(&scope, BOOTSTRAP, std::future::pending(), Side::Client);
+        let _watch = watch_in(
+            &scope,
+            tracing::Span::none(),
+            BOOTSTRAP,
+            std::future::pending(),
+            Side::Client,
+        );
 
         signal::raise(Signal::SIGTERM).unwrap();
 
@@ -274,8 +300,9 @@ mod tests {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
         let scope = mix_exec::Scope::root();
         let (leave, left) = tokio::sync::oneshot::channel::<()>();
-        let _watch = watch(
+        let _watch = watch_in(
             &scope,
+            tracing::Span::none(),
             BOOTSTRAP,
             async {
                 let _ = left.await;
@@ -294,8 +321,9 @@ mod tests {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
         let scope = mix_exec::Scope::root();
         let (leave, left) = tokio::sync::oneshot::channel::<()>();
-        let watch = watch(
+        let watch = watch_in(
             &scope,
+            tracing::Span::none(),
             BOOTSTRAP,
             async {
                 let _ = left.await;

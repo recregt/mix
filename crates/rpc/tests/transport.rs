@@ -19,16 +19,15 @@ impl Worker for Scripted {
         events: Events,
     ) -> Outcome {
         let _ = events.send(Event::Envelope(vec![8, 1]));
-        let _ = events.send(Event::Log {
-            level: Level::Info,
-            node: 1,
-            message: format!(
+        let _ = events.send(Event::Envelope(
+            format!(
                 "caller {} mirror {:?} force {}",
                 caller.uid,
                 request.mirror.map(|mirror| mirror.url),
                 request.force
-            ),
-        });
+            )
+            .into_bytes(),
+        ));
         if request.force {
             Outcome::Failure(Failure::Rollback {
                 cause: Box::new(Failure::Interrupted),
@@ -94,7 +93,7 @@ async fn a_request_streams_its_events_in_order_and_ends_with_one_outcome() {
 
     assert_eq!(events.len(), 3, "{events:?}");
     assert!(matches!(&events[0], Event::Envelope(bytes) if bytes == &[8, 1]));
-    assert!(matches!(&events[1], Event::Log { node: 1, .. }));
+    assert!(matches!(&events[1], Event::Envelope(bytes) if bytes.starts_with(b"caller ")));
     assert!(matches!(
         &events[2],
         Event::Finished(Outcome::BootstrapDone)
@@ -113,12 +112,12 @@ async fn the_worker_learns_who_called_from_the_kernel_not_the_request() {
         .collect()
         .await;
 
-    let Event::Log { message, .. } = &events[1] else {
-        panic!("expected a log, got {:?}", events[1]);
+    let Event::Envelope(bytes) = &events[1] else {
+        panic!("expected an envelope, got {:?}", events[1]);
     };
     assert_eq!(
-        message,
-        &format!(
+        String::from_utf8_lossy(bytes),
+        format!(
             "caller {} mirror Some(\"http://mirror.internal\") force false",
             current_uid()
         )
