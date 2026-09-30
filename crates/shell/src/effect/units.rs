@@ -371,7 +371,7 @@ impl Units {
             if self
                 .observe(&dependent)
                 .await
-                .is_ok_and(|facts| facts.active_state == "active")
+                .is_ok_and(|facts| still_running(&facts.active_state))
             {
                 self.job(Job::Stop, &dependent, scope).await?;
             }
@@ -382,9 +382,23 @@ impl Units {
     }
 }
 
+fn still_running(active_state: &str) -> bool {
+    !matches!(active_state, "inactive" | "failed")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_service_still_stopping_is_waited_for_like_one_still_running() {
+        for state in ["active", "activating", "deactivating", "reloading"] {
+            assert!(still_running(state), "{state}");
+        }
+        for state in ["inactive", "failed"] {
+            assert!(!still_running(state), "{state}");
+        }
+    }
 
     #[test]
     fn each_unit_type_reads_its_result_from_its_own_interface() {
