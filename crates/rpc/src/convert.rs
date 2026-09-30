@@ -2,7 +2,7 @@ use std::io::ErrorKind;
 
 use crate::proto;
 use crate::types::{
-    BootstrapRequest, Event, Failure, Host, Level, Mirror, Outcome, RepairReport, RepairRequest,
+    BootstrapRequest, Event, Failure, Host, Mirror, Outcome, RepairReport, RepairRequest,
     TargetFailure, Unfixable,
 };
 
@@ -14,28 +14,6 @@ fn missing(what: &str) -> Malformed {
     Malformed(format!("{what} is missing"))
 }
 
-fn level_to_wire(level: Level) -> i32 {
-    match level {
-        Level::Error => proto::Level::Error,
-        Level::Warn => proto::Level::Warn,
-        Level::Info => proto::Level::Info,
-        Level::Debug => proto::Level::Debug,
-        Level::Trace => proto::Level::Trace,
-    }
-    .into()
-}
-
-fn level_from_wire(value: i32) -> Result<Level, Malformed> {
-    match proto::Level::try_from(value) {
-        Ok(proto::Level::Error) => Ok(Level::Error),
-        Ok(proto::Level::Warn) => Ok(Level::Warn),
-        Ok(proto::Level::Info) => Ok(Level::Info),
-        Ok(proto::Level::Debug) => Ok(Level::Debug),
-        Ok(proto::Level::Trace) => Ok(Level::Trace),
-        Ok(proto::Level::Unspecified) | Err(_) => Err(Malformed(format!("log level {value}"))),
-    }
-}
-
 pub fn bootstrap_request_to_wire(request: &BootstrapRequest) -> proto::BootstrapRequest {
     proto::BootstrapRequest {
         mirror: request.mirror.as_ref().map(|mirror| proto::Mirror {
@@ -43,7 +21,6 @@ pub fn bootstrap_request_to_wire(request: &BootstrapRequest) -> proto::Bootstrap
             key: mirror.key.clone(),
         }),
         force: request.force,
-        log_level: level_to_wire(request.log_level),
     }
 }
 
@@ -56,20 +33,17 @@ pub fn bootstrap_request_from_wire(
             key: mirror.key,
         }),
         force: request.force,
-        log_level: level_from_wire(request.log_level)?,
     })
 }
 
-pub fn repair_request_to_wire(request: &RepairRequest) -> proto::RepairRequest {
-    proto::RepairRequest {
-        log_level: level_to_wire(request.log_level),
-    }
+pub fn repair_request_to_wire(_request: &RepairRequest) -> proto::RepairRequest {
+    proto::RepairRequest {}
 }
 
-pub fn repair_request_from_wire(request: proto::RepairRequest) -> Result<RepairRequest, Malformed> {
-    Ok(RepairRequest {
-        log_level: level_from_wire(request.log_level)?,
-    })
+pub fn repair_request_from_wire(
+    _request: proto::RepairRequest,
+) -> Result<RepairRequest, Malformed> {
+    Ok(RepairRequest)
 }
 
 pub fn event_to_wire(event: Event) -> proto::Event {
@@ -633,16 +607,13 @@ mod tests {
                 key: Some("mix-mirror-1:AAAA".into()),
             }),
             force: true,
-            log_level: Level::Debug,
         };
         let bytes = bootstrap_request_to_wire(&request).encode_to_vec();
         let decoded =
             bootstrap_request_from_wire(proto::BootstrapRequest::decode(bytes.as_slice()).unwrap());
         assert_eq!(decoded, Ok(request));
 
-        let repair = RepairRequest {
-            log_level: Level::Warn,
-        };
+        let repair = RepairRequest;
         let bytes = repair_request_to_wire(&repair).encode_to_vec();
         let decoded =
             repair_request_from_wire(proto::RepairRequest::decode(bytes.as_slice()).unwrap());
@@ -657,24 +628,15 @@ mod tests {
                 key: Some("k".into()),
             }),
             force: true,
-            log_level: Level::Info,
         };
 
         assert_eq!(
             bootstrap_request_to_wire(&request).encode_to_vec(),
             [
                 0x0a, 0x0d, 0x0a, 0x08, b'h', b't', b't', b'p', b':', b'/', b'/', b'm', 0x12, 0x01,
-                b'k', 0x10, 0x01, 0x18, 0x03
+                b'k', 0x10, 0x01
             ]
         );
-    }
-
-    #[test]
-    fn an_unspecified_or_unknown_level_is_refused() {
-        for level in [0, 99] {
-            let request = proto::RepairRequest { log_level: level };
-            assert!(repair_request_from_wire(request).is_err(), "{level}");
-        }
     }
 
     #[test]

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use mix_events::v1::{
-    Bytes, Cancellation, Command, Diagnostic, Envelope, Log, NotRunReason, Plan, ProcessResult,
+    Bytes, Cancellation, Command, Diagnostic, Envelope, NotRunReason, Plan, ProcessResult,
     Rollback, Status, Step, envelope::Event, node_finished, node_progress, node_started,
 };
 use mix_events::{
@@ -241,18 +241,6 @@ fn progress_for_a_finished_node_is_refused() {
     });
 
     assert_eq!(result, Err(Violation::NotOpen { id: 5 }));
-}
-
-#[test]
-fn a_log_may_belong_to_the_request_rather_than_a_node() {
-    let result = edited(|stream| {
-        let mut log = stream[1].clone();
-        log.event = Some(Event::Log(Log::default()));
-        stream.insert(2, log);
-        renumber(stream);
-    });
-
-    assert!(result.is_ok(), "{result:?}");
 }
 
 #[test]

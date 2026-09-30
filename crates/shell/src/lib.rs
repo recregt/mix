@@ -11,7 +11,6 @@ pub mod diagnose;
 pub mod drive;
 
 pub mod effect;
-pub mod logs;
 pub mod ops;
 pub mod profile;
 pub mod render;

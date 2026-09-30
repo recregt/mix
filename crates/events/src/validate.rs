@@ -201,8 +201,6 @@ impl Validator {
             Event::NotRun(not_run) => self.not_run(not_run),
             Event::NodeProgress(progress) => self.open(progress.id),
             Event::Diagnostic(diagnostic) => self.open(diagnostic.node),
-            Event::Log(log) if log.node == 0 => Ok(()),
-            Event::Log(log) => self.open(log.node),
         }
     }
 

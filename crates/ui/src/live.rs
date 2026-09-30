@@ -1,37 +1,12 @@
 use std::fmt::Write as _;
-use std::io::IsTerminal;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use mix_core::{ActivityReporter, DownloadProgress, StepObserver};
-use tracing_indicatif::span_ext::IndicatifSpanExt;
+use indicatif::ProgressBar;
 
-use crate::activity::{FrameBuffer, LoggedActivity, SpanActivity};
-use crate::progress::{IndicatifDownloadProgress, IndicatifStepObserver};
+use crate::activity::FrameBuffer;
 
 const SECOND: Duration = Duration::from_secs(1);
-
-pub struct Reporters {
-    pub activity: Arc<dyn ActivityReporter>,
-    pub steps: Arc<dyn StepObserver>,
-    pub passing_steps: Arc<dyn StepObserver>,
-    pub downloads: Arc<dyn DownloadProgress>,
-}
-
-pub fn reporters() -> Reporters {
-    let live = (crate::progress_enabled() && std::io::stderr().is_terminal()).then(LiveLine::start);
-    let activity: Arc<dyn ActivityReporter> = match &live {
-        Some(live) => Arc::new(SpanActivity::new(Arc::clone(live))),
-        None if tracing::enabled!(tracing::Level::DEBUG) => Arc::new(LoggedActivity),
-        None => Arc::new(mix_core::NoopActivity),
-    };
-    Reporters {
-        activity,
-        steps: Arc::new(IndicatifStepObserver::new(live.clone(), true)),
-        passing_steps: Arc::new(IndicatifStepObserver::new(live.clone(), false)),
-        downloads: Arc::new(IndicatifDownloadProgress::new(live)),
-    }
-}
 
 pub(crate) struct LiveLine {
     line: Mutex<Line>,
@@ -39,7 +14,7 @@ pub(crate) struct LiveLine {
 }
 
 pub(crate) struct Line {
-    open: Vec<tracing::Span>,
+    open: Vec<(u64, ProgressBar)>,
     pub(crate) frame: FrameBuffer,
     since: Instant,
     shown: u64,
@@ -47,7 +22,7 @@ pub(crate) struct Line {
 }
 
 impl LiveLine {
-    fn start() -> Arc<Self> {
+    pub(crate) fn start() -> Arc<Self> {
         let live = Arc::new(Self::new());
         let refresher = Arc::clone(&live);
         let _ = std::thread::Builder::new()
@@ -91,18 +66,18 @@ impl LiveLine {
         }
     }
 
-    pub(crate) fn opened(&self, span: &tracing::Span) {
+    pub(crate) fn opened(&self, id: u64, bar: &ProgressBar) {
         let mut line = self.lock();
-        line.open.push(span.clone());
+        line.open.push((id, bar.clone()));
         line.frame.forget();
         line.restart(Instant::now());
         drop(line);
         self.changed.notify_one();
     }
 
-    pub(crate) fn closed(&self, span: &tracing::Span) {
+    pub(crate) fn closed(&self, id: u64) {
         let mut line = self.lock();
-        line.open.retain(|open| open.id() != span.id());
+        line.open.retain(|(open, _)| *open != id);
         line.frame.forget();
         line.restart(Instant::now());
         drop(line);
@@ -113,8 +88,8 @@ impl LiveLine {
         let mut line = self.lock();
         if line.shown > 0 {
             let Line { open, frame, .. } = &*line;
-            if let Some(span) = open.last() {
-                span.pb_set_message(frame.drawn());
+            if let Some((_, bar)) = open.last() {
+                bar.set_message(frame.drawn().to_string());
             }
         }
         line.restart(Instant::now());
@@ -128,7 +103,7 @@ impl Line {
     }
 
     fn refresh(&mut self, now: Instant) -> Option<Duration> {
-        let span = self.open.last()?;
+        let (_, bar) = self.open.last()?;
         let quiet = now.saturating_duration_since(self.since);
         let seconds = quiet.as_secs();
         if seconds > self.shown {
@@ -136,7 +111,7 @@ impl Line {
             self.message.clear();
             self.message.push_str(self.frame.drawn());
             write_quiet(&mut self.message, seconds);
-            span.pb_set_message(&self.message);
+            bar.set_message(self.message.clone());
         }
         Some((SECOND * (self.shown as u32 + 1)).saturating_sub(quiet))
     }
@@ -181,7 +156,7 @@ mod tests {
     #[test]
     fn a_step_is_refreshed_at_each_whole_second_of_quiet() {
         let live = LiveLine::new();
-        live.opened(&tracing::Span::none());
+        live.opened(0, &ProgressBar::hidden());
         let started = live.lock().since;
 
         let mut line = live.lock();
@@ -201,7 +176,7 @@ mod tests {
     #[test]
     fn output_starts_the_quiet_time_again() {
         let live = LiveLine::new();
-        live.opened(&tracing::Span::none());
+        live.opened(0, &ProgressBar::hidden());
         let started = live.lock().since;
         live.lock().refresh(started + Duration::from_secs(3));
 
@@ -219,9 +194,8 @@ mod tests {
     #[test]
     fn closing_the_last_step_stops_the_refresh() {
         let live = LiveLine::new();
-        let span = tracing::Span::none();
-        live.opened(&span);
-        live.closed(&span);
+        live.opened(0, &ProgressBar::hidden());
+        live.closed(0);
         assert_eq!(live.lock().refresh(Instant::now()), None);
     }
 }

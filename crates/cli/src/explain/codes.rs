@@ -63,6 +63,16 @@ pub fn long(code: Code) -> &'static str {
             "`mix` talks to systemd over the system bus, and nothing answered there. Check that \
              D-Bus is running with `systemctl status dbus`."
         }
+        Code::JournalUnwritable => {
+            "`mix` writes down each change before making it, so an interrupted command can be \
+             finished or undone later. Writing that record failed, usually because `/var/lib/mix` \
+             is full or read-only. The command itself went on; if it is interrupted before it \
+             ends, `mix repair` may not be able to finish it."
+        }
+        Code::CleanupIncomplete => {
+            "Something `mix` set up for a step that did not finish could not be removed \
+             afterwards. `mix doctor` lists what is left; `mix repair` puts back what it can."
+        }
         Code::Network => {
             "A download failed: the Nix runtime or a package could not be fetched. Check your \
              internet connection, or the mirror given with `--mirror`, and run the command again."
@@ -119,6 +129,12 @@ pub fn long(code: Code) -> &'static str {
         Code::InvalidMirror => {
             "The mirror settings are not usable: `--mirror` must be an http or https URL, and \
              `--mirror-key` a single `<name>:<key>` entry."
+        }
+        Code::GitRecordFailed => {
+            "`mix` keeps your package list in a git repository so every change can be seen and \
+             undone. The change itself was made, but committing it failed, often because `git` \
+             is missing or the repository belongs to another user. `mix repair` commits what is \
+             there."
         }
         Code::NotBootstrapped => {
             "`mix` has not been set up for your user on this machine. Run `mix bootstrap` \

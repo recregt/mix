@@ -16,7 +16,6 @@ const LOCK_DIR_MODE: u32 = 0o755;
 
 pub fn acquire_exclusive(path: impl AsRef<Path>) -> Result<LockGuard> {
     let path = path.as_ref();
-    tracing::debug!(path = %path.display(), "acquiring exclusive lock");
 
     let file = match File::open(path) {
         Ok(file) => file,

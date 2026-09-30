@@ -21,6 +21,26 @@ pub fn failed(code: Code, message: impl Into<String>, detail: Option<Detail>) ->
     })
 }
 
+pub fn warning(code: Code, message: impl Into<String>, cause: &dyn Diagnose) -> Diagnostic {
+    let cause = match cause.fault() {
+        Fault::Failed(diagnostic) => diagnostic,
+        Fault::Cancelled { .. } => Diagnostic {
+            code: Code::Unspecified as i32,
+            severity: Severity::Error as i32,
+            message: "interrupted".to_string(),
+            ..Diagnostic::default()
+        },
+    };
+    Diagnostic {
+        code: code as i32,
+        severity: Severity::Warning as i32,
+        node: 0,
+        message: message.into(),
+        causes: vec![cause],
+        detail: None,
+    }
+}
+
 pub fn unrepairable(artifact: &str, reason: Unfixable) -> UnrepairableDetail {
     UnrepairableDetail {
         artifact: artifact.to_string(),

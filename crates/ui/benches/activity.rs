@@ -1,4 +1,4 @@
-use indicatif::{ProgressBar, ProgressDrawTarget, ProgressState, ProgressStyle, TermLike};
+use indicatif::{ProgressBar, ProgressDrawTarget, TermLike};
 use mix_core::BuildProgress;
 use mix_ui::activity::{FrameBuffer, MAX_WIDTH, Throttle, display_line, write_progress};
 
@@ -122,22 +122,6 @@ impl TermLike for Discard {
     }
 }
 
-/// The keys the progress layer fills in for a step's span: its name, and the indent of a nested
-/// one.
-fn labelled(style: ProgressStyle, label: &'static str) -> ProgressStyle {
-    style
-        .with_key(
-            "span_fields",
-            move |_: &ProgressState, w: &mut dyn std::fmt::Write| {
-                let _ = w.write_str(label);
-            },
-        )
-        .with_key(
-            "span_child_prefix",
-            |_: &ProgressState, _: &mut dyn std::fmt::Write| {},
-        )
-}
-
 /// What one turn of the spinner costs: the whole step line is rendered from its template and
 /// trimmed to the terminal on every frame, whether or not anything but the spinner moved.
 ///
@@ -146,7 +130,8 @@ fn labelled(style: ProgressStyle, label: &'static str) -> ProgressStyle {
 #[divan::bench]
 fn draw_a_spinner_frame(bencher: divan::Bencher) {
     let bar = ProgressBar::with_draw_target(None, ProgressDrawTarget::term_like(Box::new(Discard)))
-        .with_style(labelled(mix_ui::step_style(), "Installing ripgrep"));
+        .with_style(mix_ui::step_style())
+        .with_prefix("Installing ripgrep");
     bar.set_message("\u{1b}[2mbuilding  3/17 · downloading 12/37 · 48.2/91.0 MiB\u{1b}[0m");
 
     bencher.bench_local(|| bar.tick());

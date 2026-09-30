@@ -67,3 +67,34 @@ async fn a_session_talks_both_ways_and_reports_how_it_ended() {
     assert_eq!(output.status.code(), Some(3));
     assert_eq!(output.stderr, b"done\n");
 }
+
+#[derive(Default)]
+struct Started(std::sync::Mutex<Vec<String>>);
+
+impl mix_exec::Watch for Started {
+    fn started(&self, command: &str) {
+        self.0.lock().unwrap().push(command.to_string());
+    }
+}
+
+#[tokio::test]
+async fn a_watched_scope_hears_of_every_command_it_starts_and_passes_the_watch_on() {
+    let started = std::sync::Arc::new(Started::default());
+    let request = mix_exec::Scope::root().watched(started.clone());
+
+    mix_exec::Command::new("true")
+        .output(&request.child())
+        .await
+        .unwrap();
+    mix_exec::Command::new("echo")
+        .arg("two words")
+        .output(&request.shielded())
+        .await
+        .unwrap();
+    mix_exec::Command::new("true")
+        .output(&mix_exec::Scope::root())
+        .await
+        .unwrap();
+
+    assert_eq!(*started.0.lock().unwrap(), ["true", r#"echo "two words""#]);
+}

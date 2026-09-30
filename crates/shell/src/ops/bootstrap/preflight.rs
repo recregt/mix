@@ -9,7 +9,6 @@ use crate::ops::bootstrap::detect::{self, Wsl};
 use crate::ops::bootstrap::error::{Error, Host, Result};
 
 pub async fn check_not_nixos() -> Result<()> {
-    tracing::debug!("checking host is not NixOS");
     check_not_nixos_at(Path::new("/etc/NIXOS")).await
 }
 
@@ -21,7 +20,6 @@ async fn check_not_nixos_at(marker: &Path) -> Result<()> {
 }
 
 pub async fn check_nix_not_installed(scope: &Scope) -> Result<()> {
-    tracing::debug!("checking for a pre-existing, unmanaged Nix installation");
     if is_file(NIX_OWNERSHIP_MARKER).await {
         return Ok(());
     }
@@ -39,7 +37,6 @@ pub async fn check_nix_not_installed(scope: &Scope) -> Result<()> {
 }
 
 pub async fn check_not_wsl1() -> Result<()> {
-    tracing::debug!("checking WSL version");
     if detect::wsl::detect().await == Wsl::V1 {
         return Err(Error::UnsupportedKernel);
     }
@@ -47,7 +44,6 @@ pub async fn check_not_wsl1() -> Result<()> {
 }
 
 pub async fn check_systemd_ready() -> Result<()> {
-    tracing::debug!("checking systemd is ready");
     if detect::wsl::systemd_active().await {
         return Ok(());
     }

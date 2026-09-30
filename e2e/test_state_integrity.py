@@ -159,7 +159,8 @@ def test_a_change_that_cannot_be_recorded_in_git_still_takes_effect(
     result = _install(container, mock_nix_server, mirror_cache)
 
     assert result.returncode == 0, result.stderr
-    assert "record" not in (result.stdout + result.stderr).lower()
+    assert "the change was made but not recorded in git" in result.stderr.lower()
+    assert "mix repair" in result.stderr
     assert _packages(_state(container)) == ["git", INSTALL_TEST_PACKAGE]
     _assert_consistent(container)
 

@@ -98,18 +98,13 @@ pub async fn activate_generation(
     Ok(())
 }
 
-pub async fn record(user: &InvokingUser, host: &HostConfig, scope: &Scope) -> bool {
+pub async fn record(user: &InvokingUser, host: &HostConfig, scope: &Scope) -> Result<()> {
     let state_dir = mix_state_dir(&user.home);
     let git = git::Git::resolve(user, host.git_binary.as_deref()).await;
-    let created_git_dir = !fs::exists(state_dir.join(".git")).await;
-    if created_git_dir && let Err(error) = git.init(user, &state_dir, scope).await {
-        tracing::info!(%error, "could not record the change in git");
-        return false;
+    if !fs::exists(state_dir.join(".git")).await {
+        git.init(user, &state_dir, scope).await?;
     }
-    if let Err(error) = git.sync(user, &state_dir, scope).await {
-        tracing::info!(%error, "could not record the change in git");
-    }
-    created_git_dir
+    git.sync(user, &state_dir, scope).await.map(|_| ())
 }
 
 #[cfg(test)]

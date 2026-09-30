@@ -3,14 +3,15 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub mod activity;
+mod display;
 mod live;
 pub mod message;
 mod progress;
 
-pub use live::{Reporters, reporters};
-pub use progress::{init_tracing, step_style, verbosity_level};
+pub use display::{Display, Silent, StepLine, display};
+pub use progress::{init, step_style};
 
-/// Whether anything may be drawn in place. Set once by [`init_tracing`], so a caller that never
+/// Whether anything may be drawn in place. Set once by [`init`], so a caller that never
 /// initialises the output keeps the default.
 static PROGRESS: AtomicBool = AtomicBool::new(true);
 
@@ -82,7 +83,7 @@ fn print_line(line: &str, to_stderr: bool) {
     };
 
     if progress_enabled() {
-        tracing_indicatif::suspend_tracing_indicatif(write);
+        progress::board().suspend(write);
     } else {
         write();
     }
@@ -211,6 +212,11 @@ pub fn warn(message: impl std::fmt::Display) {
 
 pub fn info(message: impl std::fmt::Display) {
     print_status(Status::Plain, &message.to_string(), true);
+}
+
+/// A line of detail for `-v`, printed as it is: no marker, no capital, no full stop.
+pub fn detail(message: &str) {
+    print_line(message, true);
 }
 
 pub fn header(message: impl std::fmt::Display) {

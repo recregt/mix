@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
-use mix_core::{ActivityReporter, BuildProgress};
-use tracing_indicatif::span_ext::IndicatifSpanExt;
+use indicatif::ProgressBar;
+use mix_core::BuildProgress;
 use unicode_width::UnicodeWidthChar;
 
 use crate::live::LiveLine;
@@ -356,20 +356,22 @@ impl FrameBuffer {
     }
 }
 
-pub(crate) struct SpanActivity {
+pub(crate) struct Activity {
     throttle: Throttle,
     /// Whether nix is reporting counters. Once it is, they own the line: a stray log line must
     /// not fight them for it, and dropping those lines costs an atomic load.
     counting: AtomicBool,
     live: Arc<LiveLine>,
+    bar: ProgressBar,
 }
 
-impl SpanActivity {
-    pub(crate) fn new(live: Arc<LiveLine>) -> Self {
+impl Activity {
+    pub(crate) fn new(live: Arc<LiveLine>, bar: ProgressBar) -> Self {
         Self {
             throttle: Throttle::new(),
             counting: AtomicBool::new(false),
             live,
+            bar,
         }
     }
 
@@ -378,7 +380,7 @@ impl SpanActivity {
     fn draw(&self, fill: impl FnOnce(&mut String)) {
         let mut line = self.live.lock();
         if let Some(frame) = line.frame.build(fill) {
-            tracing::Span::current().pb_set_message(frame);
+            self.bar.set_message(frame.to_string());
             line.restart(Instant::now());
         }
     }
@@ -386,12 +388,10 @@ impl SpanActivity {
     /// Takes the line back, after something else has drawn over it.
     fn cleared(&self) {
         self.live.lock().frame.forget();
-        tracing::Span::current().pb_set_message("");
+        self.bar.set_message("");
     }
-}
 
-impl ActivityReporter for SpanActivity {
-    fn line(&self, line: &str) {
+    pub(crate) fn line(&self, line: &str) {
         if self.counting.load(Ordering::Relaxed) || !self.throttle.due() {
             return;
         }
@@ -402,7 +402,7 @@ impl ActivityReporter for SpanActivity {
         self.draw(|frame| frame.push_str(&line));
     }
 
-    fn progress(&self, progress: &BuildProgress) {
+    pub(crate) fn progress(&self, progress: &BuildProgress) {
         if progress.is_idle() {
             // Counters that have gone back to nothing would otherwise stay on screen, frozen,
             // for the rest of the step.
@@ -418,27 +418,9 @@ impl ActivityReporter for SpanActivity {
         self.draw(|frame| write_progress(frame, progress));
     }
 
-    fn clear(&self) {
+    pub(crate) fn clear(&self) {
         self.counting.store(false, Ordering::Relaxed);
         self.cleared();
-    }
-}
-
-/// Forwards the output to the log instead of drawing it, for pipes and CI logs where a redrawn
-/// line would just be noise. Costs nothing until `-vv` turns the level on.
-pub(crate) struct LoggedActivity;
-
-impl ActivityReporter for LoggedActivity {
-    fn line(&self, line: &str) {
-        tracing::debug!("{line}");
-    }
-
-    fn progress(&self, _progress: &BuildProgress) {}
-
-    fn clear(&self) {}
-
-    fn build_started(&self, derivation: &str) {
-        tracing::debug!("building {derivation}");
     }
 }
 
@@ -551,7 +533,7 @@ mod tests {
 
     #[test]
     fn reporting_a_line_without_a_progress_bar_is_harmless() {
-        let reporter = SpanActivity::new(Arc::new(LiveLine::new()));
+        let reporter = Activity::new(Arc::new(LiveLine::new()), ProgressBar::hidden());
         reporter.line("no subscriber is installed");
         reporter.progress(&BuildProgress {
             builds_done: 1,
@@ -747,7 +729,7 @@ mod tests {
 
     #[test]
     fn counters_take_the_line_over_from_free_form_output() {
-        let reporter = SpanActivity::new(Arc::new(LiveLine::new()));
+        let reporter = Activity::new(Arc::new(LiveLine::new()), ProgressBar::hidden());
         reporter.progress(&progress());
         assert!(reporter.counting.load(Ordering::Relaxed));
 
@@ -758,7 +740,7 @@ mod tests {
 
     #[test]
     fn an_idle_snapshot_hands_the_line_back_to_free_form_output() {
-        let reporter = SpanActivity::new(Arc::new(LiveLine::new()));
+        let reporter = Activity::new(Arc::new(LiveLine::new()), ProgressBar::hidden());
         reporter.progress(&progress());
         reporter.progress(&BuildProgress::default());
         assert!(!reporter.counting.load(Ordering::Relaxed));

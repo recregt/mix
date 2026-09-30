@@ -43,8 +43,7 @@ def test_bootstrap_works_when_sudo_only_allows_mix(container, mock_nix_server, m
     output = result.stdout + result.stderr
     assert result.returncode == 0, output
     assert "not allowed to set the following environment variables" not in output
-    assert "fetching runtime archive" in output
-    assert f"url={url}/" in output
+    assert f"fetching {url}/" in output
     assert "mix is ready!" in output
 
 

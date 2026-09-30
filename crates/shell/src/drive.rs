@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use tracing::Instrument;
 
 use mix_core::action::{Action, Fact, Failure, Kind, Outcome, PathFacts, Performed, Query};
 use mix_core::journal::Record;
@@ -14,8 +13,11 @@ use mix_core::plan::{Input, Next, Report, Runner, make_guard};
 use mix_core::privilege::InvokingUser;
 use mix_core::{ActivityReporter, BuildProgress, DownloadProgress};
 use mix_events::v1::node_progress::Progress;
-use mix_events::v1::{Builds, Bytes, Cancellation, Stream};
-use mix_events::{Stopped, Tree, output};
+use mix_events::v1::{
+    BuildStarted, Builds, Bytes, Cancellation, Code, CommandStarted, Diagnostic, FetchStarted,
+    Stream,
+};
+use mix_events::{NodeId, ROOT, Stopped, Tree, output};
 use mix_exec::Scope;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
@@ -27,28 +29,68 @@ use crate::effect::runtime;
 use crate::effect::units::Units;
 use crate::profile;
 
+#[derive(Debug, PartialEq)]
+pub enum Signal {
+    Progress(Progress),
+    Warning(Box<Diagnostic>),
+}
+
+fn announce(announced: &mut bool, tree: &mut Tree, cause: Option<Cancellation>) {
+    if *announced {
+        return;
+    }
+    *announced = true;
+    if let Some(cause) = cause {
+        let _ = tree.progress(
+            ROOT,
+            Progress::Stopping(mix_events::v1::Stopping {
+                cause: cause as i32,
+            }),
+        );
+    }
+}
+
+fn apply(tree: &mut Tree, node: NodeId, signal: Signal) {
+    let _ = match signal {
+        Signal::Progress(progress) => tree.progress(node, progress),
+        Signal::Warning(diagnostic) => tree.warn(node, *diagnostic),
+    };
+}
+
 #[derive(Default)]
 struct Activity {
-    sender: Mutex<Option<UnboundedSender<Progress>>>,
+    sender: Mutex<Option<UnboundedSender<Signal>>>,
 }
 
 impl Activity {
-    fn connect(&self, sender: Option<UnboundedSender<Progress>>) {
+    fn connect(&self, sender: Option<UnboundedSender<Signal>>) {
         if let Ok(mut connected) = self.sender.lock() {
             *connected = sender;
         }
     }
 
-    fn sender(&self) -> Option<UnboundedSender<Progress>> {
+    fn sender(&self) -> Option<UnboundedSender<Signal>> {
         self.sender.lock().ok()?.clone()
     }
 
     fn send(&self, progress: Progress) {
+        self.signal(Signal::Progress(progress));
+    }
+
+    fn signal(&self, signal: Signal) {
         if let Ok(connected) = self.sender.lock()
             && let Some(sender) = connected.as_ref()
         {
-            let _ = sender.send(progress);
+            let _ = sender.send(signal);
         }
+    }
+}
+
+impl mix_exec::Watch for Activity {
+    fn started(&self, command: &str) {
+        self.send(Progress::Command(CommandStarted {
+            line: command.to_string(),
+        }));
     }
 }
 
@@ -71,15 +113,37 @@ impl ActivityReporter for Activity {
     }
 
     fn clear(&self) {}
+
+    fn build_started(&self, derivation: &str) {
+        self.send(Progress::Build(BuildStarted {
+            derivation: derivation.to_string(),
+        }));
+    }
 }
 
-struct Relay<'a> {
-    report: Mutex<&'a mut (dyn FnMut(Progress) + Send)>,
+pub(crate) struct Relay<'a> {
+    report: Mutex<&'a mut (dyn FnMut(Signal) + Send)>,
     total: AtomicU64,
     done: AtomicU64,
 }
 
+impl Relay<'_> {
+    pub(crate) fn warning(&self, diagnostic: Diagnostic) {
+        if let Ok(mut report) = self.report.lock() {
+            report(Signal::Warning(Box::new(diagnostic)));
+        }
+    }
+}
+
 impl DownloadProgress for Relay<'_> {
+    fn fetching(&self, url: &str) {
+        if let Ok(mut report) = self.report.lock() {
+            report(Signal::Progress(Progress::Fetch(FetchStarted {
+                url: url.to_string(),
+            })));
+        }
+    }
+
     fn set_total(&self, total: u64) {
         self.total.store(total, Ordering::Relaxed);
     }
@@ -88,10 +152,10 @@ impl DownloadProgress for Relay<'_> {
         let done = self.done.fetch_add(delta, Ordering::Relaxed) + delta;
         let total = self.total.load(Ordering::Relaxed);
         if let Ok(mut report) = self.report.lock() {
-            report(Progress::Bytes(Bytes {
+            report(Signal::Progress(Progress::Bytes(Bytes {
                 done,
                 total: (total > 0).then_some(total),
-            }));
+            })));
         }
     }
 }
@@ -103,7 +167,7 @@ pub struct Performer {
     profile: Option<ProfileContext>,
     agent_program: Option<PathBuf>,
     activity: std::sync::Arc<Activity>,
-    listening: Option<UnboundedReceiver<Progress>>,
+    listening: Option<UnboundedReceiver<Signal>>,
 }
 
 impl Performer {
@@ -232,6 +296,7 @@ impl Performer {
         &mut self,
         user: &InvokingUser,
         prepared: &mut Prepared<'_>,
+        report: &mut (dyn FnMut(Signal) + Send),
         scope: &Scope,
     ) -> Outcome {
         let git = mix_state_dir(&user.home).join(".git");
@@ -248,7 +313,13 @@ impl Performer {
             .as_ref()
             .map(|profile| profile.host.clone())
             .unwrap_or_default();
-        profile::record(user, &host, scope).await;
+        if let Err(error) = profile::record(user, &host, scope).await {
+            report(Signal::Warning(Box::new(mix_core::diagnose::warning(
+                Code::GitRecordFailed,
+                "could not record the change in git",
+                &error,
+            ))));
+        }
         let undo = match self.files.observe(&Query::Path(git.clone())) {
             Some(Fact::Path(PathFacts { id: Some(id), .. })) if !existed => {
                 vec![Action::RemoveCreatedTree {
@@ -289,13 +360,13 @@ impl Performer {
         &mut self,
         action: &Action,
         scope: &Scope,
-        progress: &mut (dyn FnMut(Progress) + Send),
+        report: &mut (dyn FnMut(Signal) + Send),
         prepared: &mut Prepared<'_>,
     ) -> Outcome {
         match action {
             Action::InstallRuntime { url, sha256, size } => {
                 let relay = Relay {
-                    report: Mutex::new(progress),
+                    report: Mutex::new(report),
                     total: AtomicU64::new(0),
                     done: AtomicU64::new(0),
                 };
@@ -308,7 +379,7 @@ impl Performer {
                 return Box::pin(runtime::remove(created, kept)).await;
             }
             Action::RecordState { user } => {
-                return Box::pin(self.record(user, prepared, scope)).await;
+                return Box::pin(self.record(user, prepared, report, scope)).await;
             }
             Action::InstallUnit {
                 unit,
@@ -421,19 +492,10 @@ impl Performer {
 
 pub trait Observer: Send {
     fn flush(&mut self);
-    fn span(&self, node: mix_events::NodeId) -> Option<tracing::Span>;
-
-    fn woken(&self) -> Option<std::sync::Arc<tokio::sync::Notify>> {
-        None
-    }
 }
 
 impl Observer for () {
     fn flush(&mut self) {}
-
-    fn span(&self, _node: mix_events::NodeId) -> Option<tracing::Span> {
-        None
-    }
 }
 
 pub trait Journal: Send {
@@ -447,9 +509,16 @@ impl Journal for Vec<Record> {
     }
 }
 
-fn keep(journal: &mut dyn Journal, record: &Record) {
+fn keep(journal: &mut dyn Journal, record: &Record, tree: &mut Tree, node: NodeId) {
     if let Err(failure) = journal.append(record) {
-        tracing::warn!(?record, ?failure, "could not record in the journal");
+        let _ = tree.warn(
+            node,
+            mix_core::diagnose::warning(
+                Code::JournalUnwritable,
+                "could not record progress in the journal",
+                &failure,
+            ),
+        );
     }
 }
 
@@ -482,24 +551,21 @@ pub async fn drive<'r>(
             (sender, receiver)
         }
     };
-    let woken = observer.woken();
-    let observing = observer.span(mix_events::ROOT);
+    let scope = &scope.watched(performer.activity.clone());
+    let mut stopping = false;
     let mut input = None;
     let mut seq = 0;
     let mut ended = false;
     loop {
         if let Some(cause) = stopped() {
+            announce(&mut stopping, tree, Some(cause));
             runner.stop(cause);
         }
         let next = runner.step(tree, input.take());
         observer.flush();
         match next {
             Next::Observe(queries) => {
-                let facts = match &observing {
-                    Some(span) => performer.observe(&queries).instrument(span.clone()).await,
-                    None => performer.observe(&queries).await,
-                };
-                input = Some(Input::Facts(facts));
+                input = Some(Input::Facts(performer.observe(&queries).await));
             }
             Next::Perform(action) => {
                 let scope = if runner.shielded() {
@@ -517,8 +583,8 @@ pub async fn drive<'r>(
                 let this = seq;
                 let mut announced: Option<Vec<Action>> = None;
                 let outcome = {
-                    let mut progress = |progress: Progress| {
-                        let _ = sender.send(progress);
+                    let mut report = |signal: Signal| {
+                        let _ = sender.send(signal);
                     };
                     let mut prepared = |undo: &[Action]| {
                         if reverting || committing {
@@ -530,40 +596,32 @@ pub async fn drive<'r>(
                             undo: undo.to_vec(),
                         })
                     };
-                    let span = node
-                        .and_then(|node| observer.span(node))
-                        .unwrap_or_else(tracing::Span::none);
-                    let performing = performer
-                        .perform(&action, &scope, &mut progress, &mut prepared)
-                        .instrument(span);
+                    let performing = performer.perform(&action, &scope, &mut report, &mut prepared);
                     let mut performing = std::pin::pin!(performing);
                     loop {
                         tokio::select! {
+                            biased;
                             outcome = &mut performing => break outcome,
-                            Some(progress) = receiver.recv() => {
-                                if let Some(node) = node {
-                                    let _ = tree.progress(node, progress);
-                                }
+                            Some(signal) = receiver.recv() => {
+                                apply(tree, node.unwrap_or(ROOT), signal);
                                 observer.flush();
                             }
-                            () = async {
-                                if let Some(woken) = &woken {
-                                    woken.notified().await;
-                                }
-                            }, if woken.is_some() => observer.flush(),
+                            _ = scope.stopped(), if !stopping => {
+                                announce(&mut stopping, tree, stopped());
+                                observer.flush();
+                            }
                         }
                     }
                 };
-                while let Ok(progress) = receiver.try_recv() {
-                    if let Some(node) = node {
-                        let _ = tree.progress(node, progress);
-                    }
+                let acting = node.unwrap_or(ROOT);
+                while let Ok(signal) = receiver.try_recv() {
+                    apply(tree, acting, signal);
                 }
                 observer.flush();
                 match (&outcome, reverting, committing) {
-                    (Ok(_), true, _) => keep(journal, &Record::Reverted { action }),
+                    (Ok(_), true, _) => keep(journal, &Record::Reverted { action }, tree, acting),
                     (Ok(_), false, true) => {
-                        keep(journal, &Record::Ended);
+                        keep(journal, &Record::Ended, tree, acting);
                         ended = true;
                     }
                     (Ok(performed), false, false) => {
@@ -575,7 +633,7 @@ pub async fn drive<'r>(
                                 undo: performed.undo.clone(),
                             }
                         };
-                        keep(journal, &record);
+                        keep(journal, &record, tree, acting);
                         seq += 1;
                     }
                     (Err(_), false, false) => {
@@ -591,7 +649,7 @@ pub async fn drive<'r>(
             Next::Finished(closed) => {
                 performer.listening = Some(receiver);
                 if !ended {
-                    keep(journal, &Record::Ended);
+                    keep(journal, &Record::Ended, tree, ROOT);
                 }
                 return runner.report(closed);
             }
@@ -632,17 +690,59 @@ mod tests {
 
         assert_eq!(
             receiver.try_recv().ok(),
-            Some(output(b"building hello", Stream::Stderr))
+            Some(Signal::Progress(output(b"building hello", Stream::Stderr)))
         );
         assert!(matches!(
             receiver.try_recv(),
-            Ok(Progress::Builds(Builds {
+            Ok(Signal::Progress(Progress::Builds(Builds {
                 builds_done: 1,
                 builds_expected: 2,
                 ..
-            }))
+            })))
         ));
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_command_a_build_and_a_warning_reach_the_node_that_is_acting() {
+        let activity = Activity::default();
+        let (sender, mut receiver) = unbounded_channel();
+        activity.connect(Some(sender));
+        mix_exec::Watch::started(&activity, "nix build .#hello");
+        activity.build_started("/nix/store/x-hello.drv");
+        activity.signal(Signal::Warning(Box::new(mix_core::diagnose::warning(
+            Code::GitRecordFailed,
+            "could not record the change in git",
+            &Failure::Cancelled,
+        ))));
+
+        let outbox = Arc::new(Outbox::new("request", || {}));
+        let mut tree = Tree::new(
+            Arc::clone(&outbox),
+            Arc::new(|| None),
+            Start::command("install", Command::default()),
+        );
+        while let Ok(signal) = receiver.try_recv() {
+            apply(&mut tree, ROOT, signal);
+        }
+        tree.finish(ROOT, mix_events::Ending::succeeded()).unwrap();
+
+        let stream = outbox.drain();
+        assert!(validate(&stream).is_ok());
+        let events: Vec<_> = stream.into_iter().filter_map(|e| e.event).collect();
+        use mix_events::v1::envelope::Event;
+        assert!(matches!(
+            &events[1],
+            Event::NodeProgress(p) if p.progress == Some(Progress::Command(CommandStarted { line: "nix build .#hello".into() }))
+        ));
+        assert!(matches!(
+            &events[2],
+            Event::NodeProgress(p) if p.progress == Some(Progress::Build(BuildStarted { derivation: "/nix/store/x-hello.drv".into() }))
+        ));
+        assert!(matches!(
+            &events[3],
+            Event::Diagnostic(d) if d.node == ROOT && d.code() == Code::GitRecordFailed
+        ));
     }
 
     struct Ensure {
@@ -814,18 +914,32 @@ mod tests {
         assert!(created.load(Ordering::Relaxed));
         assert_eq!(listing(root.path()), before);
         assert!(validate(&stream).is_ok());
+        let announced: Vec<_> = stream
+            .iter()
+            .filter_map(|envelope| match &envelope.event {
+                Some(mix_events::v1::envelope::Event::NodeProgress(progress)) => {
+                    match &progress.progress {
+                        Some(Progress::Stopping(stopping)) => Some((progress.id, stopping.cause())),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(announced, [(ROOT, Cancellation::Interrupted)]);
     }
 
     #[test]
     fn download_progress_becomes_byte_snapshots_against_the_total() {
         let mut seen = Vec::new();
         {
-            let mut report = |progress: Progress| seen.push(progress);
+            let mut report = |signal: Signal| seen.push(signal);
             let relay = Relay {
                 report: Mutex::new(&mut report),
                 total: AtomicU64::new(0),
                 done: AtomicU64::new(0),
             };
+            relay.fetching("http://mirror.internal/nix.tar.xz");
             relay.set_total(10);
             relay.add(4);
             relay.add(6);
@@ -834,14 +948,17 @@ mod tests {
         assert_eq!(
             seen,
             [
-                Progress::Bytes(Bytes {
+                Signal::Progress(Progress::Fetch(FetchStarted {
+                    url: "http://mirror.internal/nix.tar.xz".into()
+                })),
+                Signal::Progress(Progress::Bytes(Bytes {
                     done: 4,
                     total: Some(10)
-                }),
-                Progress::Bytes(Bytes {
+                })),
+                Signal::Progress(Progress::Bytes(Bytes {
                     done: 10,
                     total: Some(10)
-                })
+                }))
             ]
         );
     }

@@ -1,42 +1,26 @@
-use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 
-use indicatif::ProgressStyle;
-use mix_core::{DownloadProgress, StepObserver};
-
-use crate::live::LiveLine;
+use indicatif::{MultiProgress, ProgressDrawTarget, ProgressStyle};
 use owo_colors::OwoColorize;
 use owo_colors::colors::{Green, Red};
-use tracing::field::{Field, Visit};
-use tracing_indicatif::span_ext::IndicatifSpanExt;
-use tracing_indicatif::{IndicatifLayer, TickSettings};
-use tracing_subscriber::field::RecordFields;
-use tracing_subscriber::filter::{LevelFilter, Targets};
-use tracing_subscriber::fmt::FormatFields;
-use tracing_subscriber::fmt::format::Writer;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{Layer, Registry};
 
 /// A download knows its total, so it gets the one thing a spinner cannot give: a bar that says
 /// how much of the wait is left. `{wide_bar}` takes exactly the columns the rest of the line
 /// leaves free, so the line fits whatever the terminal's width happens to be.
-const DOWNLOAD_STYLE: &str = "{span_child_prefix}{spinner}{span_fields} {wide_bar:.cyan/dim} {bytes}/{total_bytes} ({binary_bytes_per_sec})";
+const DOWNLOAD_STYLE: &str =
+    "{spinner}{prefix} {wide_bar:.cyan/dim} {bytes}/{total_bytes} ({binary_bytes_per_sec})";
 
 /// `{wide_msg}` carries the live output of whatever the step is running. It stays empty until a
 /// command reports its first line, so a quiet step renders exactly as before, and the width it
 /// is given is measured against the real terminal: the live text is trimmed to the columns that
 /// are actually free, so a narrow terminal or a long step name can never wrap the line and set
 /// the whole display scrolling.
-const STEP_STYLE: &str = "{span_child_prefix}{spinner}{span_fields}{wide_msg}";
+const STEP_STYLE: &str = "{spinner}{prefix}{wide_msg}";
 
 /// Filled, leading edge, empty. A solid bar reads as one object at a glance, where a bar of
 /// blocks reads as a row of them.
 const PROGRESS_CHARS: &str = "━╸━";
-
-const OWN_CRATES: [&str; 5] = ["mix_core", "mix_exec", "mix_shell", "mix_cli", "mix_ui"];
-
-const ANCHORS: &str = "mix_shell::logs";
 
 /// The spinner's frames: a three-dot arc sweeping once around the braille cell.
 ///
@@ -57,7 +41,7 @@ const FAILED: &str = "✗";
 /// live text asks for one every [`FRAME_INTERVAL_MS`](crate::activity::FRAME_INTERVAL_MS). The
 /// two together have to fit in [`TERM_DRAW_HZ`], or indicatif starts dropping draws — and a
 /// dropped draw is a spinner frame that never reaches the terminal.
-const SPINNER_TICK_MS: u64 = 80;
+pub(crate) const SPINNER_TICK_MS: u64 = 80;
 
 /// Redraws allowed per second. Above what the spinner and the live text together ask for, so
 /// neither is dropped; a draw that is dropped is paid for in full anyway, since the line is
@@ -106,188 +90,35 @@ pub fn step_style() -> ProgressStyle {
 
 /// The same line, for a step that did not get there. The glyph a finished line keeps is the
 /// spinner's last frame, so swapping the style is what turns a `✓` into a `✗`.
-fn failed_step_style() -> ProgressStyle {
+pub(crate) fn failed_step_style() -> ProgressStyle {
     spinner_style(STEP_STYLE, &finished(FAILED, true))
 }
 
-fn download_style() -> ProgressStyle {
+pub(crate) fn download_style() -> ProgressStyle {
     spinner_style(DOWNLOAD_STYLE, &finished(DONE, false)).progress_chars(PROGRESS_CHARS)
 }
 
-pub fn verbosity_level(verbosity: u8) -> tracing::Level {
-    match verbosity {
-        0 => tracing::Level::WARN,
-        1 => tracing::Level::INFO,
-        2 => tracing::Level::DEBUG,
-        _ => tracing::Level::TRACE,
-    }
-}
+static BOARD: OnceLock<MultiProgress> = OnceLock::new();
 
-fn level_filter(verbosity: u8) -> LevelFilter {
-    LevelFilter::from_level(verbosity_level(verbosity))
-}
-
-struct NameOnlyFields;
-
-impl<'writer> FormatFields<'writer> for NameOnlyFields {
-    fn format_fields<R: RecordFields>(
-        &self,
-        mut writer: Writer<'writer>,
-        fields: R,
-    ) -> std::fmt::Result {
-        struct NameVisitor<'a, 'w> {
-            writer: &'a mut Writer<'w>,
-        }
-
-        impl Visit for NameVisitor<'_, '_> {
-            fn record_str(&mut self, field: &Field, value: &str) {
-                if field.name() == "name" {
-                    let _ = write!(self.writer, "{value}");
-                }
-            }
-
-            fn record_debug(&mut self, _field: &Field, _value: &dyn std::fmt::Debug) {}
-        }
-
-        fields.record(&mut NameVisitor {
-            writer: &mut writer,
-        });
-        Ok(())
-    }
-}
-
-fn own_crates_only() -> Targets {
-    own_crates_at(LevelFilter::TRACE, LevelFilter::OFF)
-}
-
-/// What `-v` turns up, and what it deliberately does not.
+/// Decides once whether anything is drawn in place, and where.
 ///
-/// Verbosity is a request for more of *this* tool's reasoning, not for its dependencies': a
-/// blanket level filter meant `-vv` also turned on every debug line `hyper`, `rustls` and
-/// `tokio` emit, which is thousands of lines around the one being looked for. Their warnings
-/// are still shown, at the level they were shown at before.
-fn own_crates_at(level: LevelFilter, default: LevelFilter) -> Targets {
-    OWN_CRATES
-        .iter()
-        .fold(Targets::new(), |targets, name| {
-            targets.with_target(*name, level)
-        })
-        .with_target(ANCHORS, LevelFilter::OFF)
-        .with_default(default)
-}
-
-fn log_filter(verbosity: u8) -> Targets {
-    own_crates_at(level_filter(verbosity), LevelFilter::WARN)
-}
-
-pub(crate) struct IndicatifDownloadProgress {
-    live: Option<Arc<LiveLine>>,
-}
-
-impl IndicatifDownloadProgress {
-    pub(crate) fn new(live: Option<Arc<LiveLine>>) -> Self {
-        Self { live }
-    }
-}
-
-impl DownloadProgress for IndicatifDownloadProgress {
-    fn set_total(&self, total: u64) {
-        let span = tracing::Span::current();
-        span.pb_set_style(&download_style());
-        span.pb_set_length(total);
-    }
-
-    fn add(&self, delta: u64) {
-        tracing::Span::current().pb_inc(delta);
-        if let Some(live) = &self.live {
-            live.received();
-        }
-    }
-}
-
-pub(crate) struct IndicatifStepObserver {
-    live: Option<Arc<LiveLine>>,
-    keep_line: bool,
-}
-
-impl IndicatifStepObserver {
-    pub(crate) fn new(live: Option<Arc<LiveLine>>, keep_line: bool) -> Self {
-        Self { live, keep_line }
-    }
-}
-
-impl StepObserver for IndicatifStepObserver {
-    fn on_step_span(&self, span: &tracing::Span) {
-        // Persist the line instead of clearing it: `finish_using_style` always forces an
-        // immediate draw regardless of the redraw rate limiter, so even a step that completes
-        // in a millisecond is guaranteed to render before its line disappears.
-        if self.keep_line {
-            span.pb_set_finish_message("");
-        }
-        if let Some(live) = &self.live {
-            live.opened(span);
-        }
-    }
-
-    fn on_step_closed(&self, span: &tracing::Span, failed: bool) {
-        if failed {
-            span.pb_set_style(&failed_step_style());
-        }
-        if let Some(live) = &self.live {
-            live.closed(span);
-        }
-    }
-}
-
-/// Sets up the output for the whole process.
-///
-/// With `progress` off nothing is drawn in place: no spinners, no live output, just log lines on
-/// stderr. That is what a script or a CI job wants even when it happens to own a terminal.
-pub fn init_tracing<L>(verbosity: u8, progress: bool, terminal: bool, logs: L)
-where
-    L: Layer<Registry> + Send + Sync + 'static,
-{
+/// Every line that is redrawn lives on one board, so a printed line can suspend all of them at
+/// once instead of writing through the middle of one.
+pub fn init(progress: bool) {
     crate::set_progress_enabled(progress);
-    let registry = tracing_subscriber::registry().with(logs);
+    let _ = BOARD.set(MultiProgress::with_draw_target(if progress {
+        ProgressDrawTarget::stderr_with_hz(TERM_DRAW_HZ)
+    } else {
+        ProgressDrawTarget::hidden()
+    }));
+}
 
-    if !terminal {
-        registry.init();
-        return;
-    }
+pub(crate) fn board() -> &'static MultiProgress {
+    BOARD.get_or_init(|| MultiProgress::with_draw_target(ProgressDrawTarget::hidden()))
+}
 
-    if !progress {
-        registry
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_writer(std::io::stderr)
-                    .without_time()
-                    .with_target(false)
-                    .with_filter(log_filter(verbosity)),
-            )
-            .init();
-        return;
-    }
-
-    let indicatif_layer = IndicatifLayer::new()
-        .with_span_field_formatter(NameOnlyFields)
-        .with_progress_style(step_style())
-        .with_tick_settings(TickSettings {
-            term_draw_hz: TERM_DRAW_HZ,
-            default_tick_interval: Some(Duration::from_millis(SPINNER_TICK_MS)),
-            footer_tick_interval: None,
-            ..Default::default()
-        });
-
-    registry
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_writer(indicatif_layer.get_stderr_writer())
-                .without_time()
-                .with_target(false)
-                .with_filter(log_filter(verbosity)),
-        )
-        .with(indicatif_layer.with_filter(own_crates_only()))
-        .init();
+pub(crate) fn spinner_tick() -> Duration {
+    Duration::from_millis(SPINNER_TICK_MS)
 }
 
 #[cfg(test)]
@@ -297,27 +128,6 @@ mod tests {
     use indicatif::{ProgressBar, ProgressDrawTarget, TermLike};
 
     use super::*;
-
-    #[test]
-    fn verbose_output_includes_the_commands_every_crate_runs() {
-        let targets = own_crates_at(LevelFilter::DEBUG, LevelFilter::OFF);
-
-        for name in ["mix_core", "mix_exec", "mix_shell", "mix_cli", "mix_ui"] {
-            assert!(
-                targets.would_enable(name, &tracing::Level::DEBUG),
-                "{name} is filtered out of verbose output"
-            );
-        }
-        assert!(!targets.would_enable("hyper", &tracing::Level::DEBUG));
-    }
-
-    #[test]
-    fn the_spans_that_tie_logs_to_a_node_are_never_drawn_or_printed() {
-        for targets in [own_crates_only(), log_filter(3)] {
-            assert!(!targets.would_enable(ANCHORS, &tracing::Level::ERROR));
-            assert!(targets.would_enable("mix_shell::ops", &tracing::Level::TRACE));
-        }
-    }
 
     #[derive(Clone, Debug)]
     struct RecordingTerm(Arc<Mutex<Vec<String>>>);
@@ -419,10 +229,7 @@ mod tests {
         assert_eq!(
             render(step_style(), ""),
             render(
-                spinner_style(
-                    "{span_child_prefix}{spinner}{span_fields}",
-                    &finished(DONE, false)
-                ),
+                spinner_style("{spinner}{prefix}", &finished(DONE, false)),
                 ""
             )
         );
@@ -485,27 +292,6 @@ mod tests {
     fn the_spinner_and_the_live_text_fit_the_draw_budget() {
         let asked = 1000 / SPINNER_TICK_MS + 1000 / crate::activity::FRAME_INTERVAL_MS;
         assert!(asked <= u64::from(TERM_DRAW_HZ), "{asked} draws a second");
-    }
-
-    /// `-vv` is a request for this tool's own reasoning; a dependency's debug stream is noise
-    /// around the line being looked for.
-    #[test]
-    fn verbosity_turns_up_this_tool_and_not_its_dependencies() {
-        let filter = log_filter(2);
-
-        assert!(filter.would_enable("mix_shell", &tracing::Level::DEBUG));
-        assert!(filter.would_enable("mix_shell::ops::bootstrap", &tracing::Level::DEBUG));
-        assert!(!filter.would_enable("hyper::client", &tracing::Level::DEBUG));
-    }
-
-    /// A dependency that has something to warn about is still worth hearing from.
-    #[test]
-    fn a_dependency_keeps_the_level_it_was_always_heard_at() {
-        for verbosity in [0, 1, 2, 3] {
-            let filter = log_filter(verbosity);
-            assert!(filter.would_enable("rustls::client", &tracing::Level::WARN));
-            assert!(!filter.would_enable("rustls::client", &tracing::Level::INFO));
-        }
     }
 
     #[test]

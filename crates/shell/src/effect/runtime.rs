@@ -2,10 +2,11 @@ use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use mix_core::DownloadProgress;
 use mix_core::action::{Digest, Failure, Outcome, Performed};
+use mix_events::v1::Code;
 use mix_exec::Scope;
 
+use crate::drive::Relay;
 use crate::effect::files::Prepared;
 use crate::ops::bootstrap::Error;
 use crate::ops::bootstrap::steps::fetch_and_unpack::{provision_runtime, remove_runtime};
@@ -88,11 +89,11 @@ async fn blocking<T: Send + 'static>(
         })
 }
 
-pub async fn install(
+pub(crate) async fn install(
     url: &str,
     sha256: &Digest,
     size: u64,
-    progress: &dyn DownloadProgress,
+    progress: &Relay<'_>,
     scope: &Scope,
     prepared: &mut Prepared<'_>,
 ) -> Outcome {
@@ -138,7 +139,11 @@ pub async fn install(
     };
     let cleanup = created.clone();
     if let Err(error) = blocking(move || remove_runtime(&cleanup)).await? {
-        tracing::warn!(%error, "could not remove a partly installed runtime");
+        progress.warning(mix_core::diagnose::warning(
+            Code::CleanupIncomplete,
+            "could not remove a partly installed runtime",
+            &error,
+        ));
     }
     Err(failed)
 }

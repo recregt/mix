@@ -22,6 +22,4 @@ pub use constants::{identity, paths};
 pub use error::{Error, Result};
 pub use models::{Category, Target};
 pub use nix_log::{BuildProgress, NixLog};
-pub use progress::{
-    ActivityReporter, DownloadProgress, NoopActivity, NoopProgress, NoopSteps, StepObserver,
-};
+pub use progress::{ActivityReporter, DownloadProgress, NoopActivity, NoopProgress};

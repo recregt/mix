@@ -1,14 +1,5 @@
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Level {
-    Error,
-    Warn,
-    Info,
-    Debug,
-    Trace,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mirror {
     pub url: String,
@@ -19,13 +10,10 @@ pub struct Mirror {
 pub struct BootstrapRequest {
     pub mirror: Option<Mirror>,
     pub force: bool,
-    pub log_level: Level,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RepairRequest {
-    pub log_level: Level,
-}
+pub struct RepairRequest;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Caller {

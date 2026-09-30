@@ -1,6 +1,7 @@
 use crate::nix_log::BuildProgress;
 
 pub trait DownloadProgress: Send + Sync {
+    fn fetching(&self, url: &str);
     fn set_total(&self, total: u64);
     fn add(&self, delta: u64);
 }
@@ -8,18 +9,9 @@ pub trait DownloadProgress: Send + Sync {
 pub struct NoopProgress;
 
 impl DownloadProgress for NoopProgress {
+    fn fetching(&self, _url: &str) {}
     fn set_total(&self, _total: u64) {}
     fn add(&self, _delta: u64) {}
-}
-
-/// Lets a presentation layer configure a step's tracing span the moment it's created, e.g. to
-/// keep a fast-finishing step's indicator visible instead of letting it flash and disappear.
-pub trait StepObserver: Send + Sync {
-    fn on_step_span(&self, span: &tracing::Span);
-
-    /// Called before a step's span is closed, so a presentation layer can mark the line it is
-    /// about to keep on screen as a failure rather than as a success.
-    fn on_step_closed(&self, _span: &tracing::Span, _failed: bool) {}
 }
 
 /// Receives a long-running child process's output as it is produced, one display line at a time.
@@ -38,12 +30,6 @@ pub trait ActivityReporter: Send + Sync {
     fn clear(&self);
 
     fn build_started(&self, _derivation: &str) {}
-}
-
-pub struct NoopSteps;
-
-impl StepObserver for NoopSteps {
-    fn on_step_span(&self, _span: &tracing::Span) {}
 }
 
 pub struct NoopActivity;

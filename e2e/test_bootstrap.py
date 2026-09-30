@@ -131,6 +131,5 @@ def test_a_mirror_set_only_in_the_environment_survives_the_sudo_re_run(
     assert result.returncode == 0, result.stderr
     output = result.stdout + result.stderr
     assert "re-running with sudo" in output.lower()
-    assert "fetching runtime archive" in output
-    assert f"url={url}/" in output
+    assert f"fetching {url}/" in output
     assert "releases.nixos.org" not in output

@@ -24,6 +24,24 @@ pub(crate) fn render(fault: &Fault, context: &Context<'_>) -> Diagnostic {
     }
 }
 
+pub(crate) fn warning(diagnostic: &Wire) -> Diagnostic {
+    let context = Context {
+        command: "mix",
+        action: &"",
+    };
+    match Code::try_from(diagnostic.code) {
+        Ok(code @ (Code::JournalUnwritable | Code::CleanupIncomplete | Code::GitRecordFailed)) => {
+            plain(code, &context).unwrap_or_else(bug)
+        }
+        _ => match diagnostic.causes.first() {
+            Some(cause) if !cause.message.is_empty() => {
+                Diagnostic::new(format!("{}: {}", diagnostic.message, cause.message))
+            }
+            _ => Diagnostic::new(diagnostic.message.clone()),
+        },
+    }
+}
+
 pub(crate) fn rpc_fault(error: &mix_rpc::Error) -> Fault {
     use mix_rpc::Error;
 
@@ -110,6 +128,18 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
         )),
         Code::Io | Code::CommandFailed | Code::SpawnFailed => Some(failed(context.action)),
         Code::Internal | Code::Unspecified => Some(bug()),
+        Code::JournalUnwritable => Some(Diagnostic::hinting(
+            "`mix` couldn't record its progress",
+            "If this command is interrupted, `mix repair` may not be able to finish it",
+        )),
+        Code::CleanupIncomplete => Some(Diagnostic::hinting(
+            "`mix` couldn't clean up after an unfinished step",
+            "`mix doctor` lists what is left, and `mix repair` puts back what it can",
+        )),
+        Code::GitRecordFailed => Some(Diagnostic::hinting(
+            "the change was made but not recorded in git",
+            "`mix repair` records it",
+        )),
         Code::Network => Some(Diagnostic::hinting(
             "couldn't download required setup files",
             format!("Check your internet connection, then run `{command}` again"),

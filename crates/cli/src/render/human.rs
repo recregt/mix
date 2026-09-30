@@ -1,60 +1,46 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use mix_core::{
-    ActivityReporter, BuildProgress, DownloadProgress, NoopActivity, NoopProgress, NoopSteps,
-    StepObserver,
-};
+use mix_core::BuildProgress;
+use mix_events::v1::command::Request;
 use mix_events::v1::{
     Envelope, NodeProgress, Status, envelope::Event, node_progress, node_started,
 };
 use mix_events::{NodeId, ROOT};
 use mix_shell::render::Render;
+use mix_ui::{Display, StepLine};
 
-#[derive(Clone)]
-pub struct Reporters {
-    pub downloads: Arc<dyn DownloadProgress>,
-    pub steps: Arc<dyn StepObserver>,
-    pub activity: Arc<dyn ActivityReporter>,
-}
-
-impl Reporters {
-    pub fn silent() -> Self {
-        Self {
-            downloads: Arc::new(NoopProgress),
-            steps: Arc::new(NoopSteps),
-            activity: Arc::new(NoopActivity),
-        }
-    }
-}
+use crate::controls::{self, Stopping};
 
 pub struct Human {
-    reporters: Reporters,
+    display: Arc<dyn Display>,
+    stopping: Option<Stopping>,
+    stop_noticed: bool,
     results: bool,
-    verbose: bool,
-    spans: HashMap<NodeId, tracing::Span>,
+    verbosity: u8,
+    lines: HashMap<NodeId, Arc<dyn StepLine>>,
     titles: HashMap<NodeId, String>,
-    received: HashMap<NodeId, u64>,
     actions: HashSet<NodeId>,
     printed: HashSet<NodeId>,
 }
 
 impl Human {
-    pub fn new(reporters: Reporters) -> Self {
+    pub fn new(display: Arc<dyn Display>) -> Self {
         Self {
-            reporters,
+            display,
+            stopping: None,
+            stop_noticed: false,
             results: true,
-            verbose: false,
-            spans: HashMap::new(),
+            verbosity: 0,
+            lines: HashMap::new(),
             titles: HashMap::new(),
-            received: HashMap::new(),
             actions: HashSet::new(),
             printed: HashSet::new(),
         }
     }
 
-    pub fn verbose(mut self, verbose: bool) -> Self {
-        self.verbose = verbose;
+    pub fn verbosity(mut self, verbosity: u8) -> Self {
+        self.verbosity = verbosity;
         self
     }
 
@@ -63,18 +49,25 @@ impl Human {
         self
     }
 
+    fn detail(&self, level: u8, line: impl FnOnce() -> String) {
+        if self.verbosity >= level {
+            mix_ui::detail(&line());
+        }
+    }
+
     fn replay(&mut self, envelope: Envelope) {
         let Some(event) = envelope.event else {
             return;
         };
         match event {
             Event::NodeStarted(node) => match node.kind {
+                Some(node_started::Kind::Command(command)) => {
+                    self.stopping = command.request.as_ref().and_then(stopping_for);
+                }
                 Some(node_started::Kind::Step(step)) => {
-                    tracing::info!("running: {}", step.title);
-                    let span = tracing::info_span!("step", name = step.title.as_str());
-                    self.reporters.steps.on_step_span(&span);
+                    self.detail(1, || format!("running: {}", step.title));
+                    self.lines.insert(node.id, self.display.step(&step.title));
                     self.titles.insert(node.id, step.title);
-                    self.spans.insert(node.id, span);
                 }
                 Some(node_started::Kind::Rollback(rollback)) => {
                     let title = self
@@ -82,91 +75,98 @@ impl Human {
                         .get(&rollback.undoes)
                         .cloned()
                         .unwrap_or_default();
-                    tracing::info!("rolling back: {title}");
-                    let span = tracing::info_span!("rollback", name = title.as_str());
-                    self.reporters.steps.on_step_span(&span);
-                    self.spans.insert(node.id, span);
+                    self.detail(1, || format!("rolling back: {title}"));
+                    self.lines.insert(node.id, self.display.step(&title));
                 }
                 Some(node_started::Kind::Action(_)) => {
-                    if let Some(span) = self.spans.get(&node.parent).cloned() {
+                    if let Some(line) = self.lines.get(&node.parent).cloned() {
                         self.actions.insert(node.id);
-                        self.spans.insert(node.id, span);
+                        self.lines.insert(node.id, line);
                     }
                 }
                 _ => {}
             },
             Event::NodeFinished(node) if node.id == ROOT => {
-                super::results::finished(&node, self.results, self.verbose);
+                super::results::finished(&node, self.results, self.verbosity > 0);
             }
             Event::NodeFinished(node) if self.actions.remove(&node.id) => {
-                let span = self.spans.remove(&node.id);
-                self.received.remove(&node.id);
-                if self.printed.remove(&node.id) {
-                    let activity = Arc::clone(&self.reporters.activity);
-                    match span {
-                        Some(span) => span.in_scope(|| activity.clear()),
-                        None => activity.clear(),
-                    }
+                let line = self.lines.remove(&node.id);
+                if self.printed.remove(&node.id)
+                    && let Some(line) = line
+                {
+                    line.clear();
                 }
             }
             Event::NodeFinished(node) => {
-                self.received.remove(&node.id);
                 let failed = node.status() == Status::Failed;
-                if failed && let Some(span) = self.spans.get(&node.id) {
+                if failed {
                     let message = node
                         .diagnostic
                         .as_ref()
                         .map(|diagnostic| diagnostic.message.clone())
                         .unwrap_or_default();
-                    span.in_scope(|| match self.titles.get(&node.id) {
-                        Some(title) => tracing::debug!("step failed: {title} ({message})"),
-                        None => tracing::error!("rollback failed: {message}"),
-                    });
-                }
-                if let Some(span) = self.spans.remove(&node.id) {
-                    self.reporters
-                        .steps
-                        .on_step_closed(&span, node.status() == Status::Failed);
-                }
-            }
-            Event::NodeProgress(NodeProgress {
-                id,
-                progress: Some(node_progress::Progress::Bytes(bytes)),
-            }) => {
-                let Some(span) = self.spans.get(&id) else {
-                    return;
-                };
-                let first = !self.received.contains_key(&id);
-                let before = self.received.insert(id, bytes.done).unwrap_or(0);
-                let downloads = Arc::clone(&self.reporters.downloads);
-                span.in_scope(|| {
-                    if first && let Some(total) = bytes.total {
-                        downloads.set_total(total);
+                    match self.titles.get(&node.id) {
+                        Some(title) => {
+                            self.detail(2, || format!("step failed: {title} ({message})"));
+                        }
+                        None if self.lines.contains_key(&node.id) => {
+                            mix_ui::detail(&format!("rollback failed: {message}"));
+                        }
+                        None => {}
                     }
-                    downloads.add(bytes.done.saturating_sub(before));
-                });
+                }
+                if let Some(line) = self.lines.remove(&node.id) {
+                    line.finish(failed);
+                }
             }
             Event::NodeProgress(NodeProgress {
                 id,
-                progress: Some(node_progress::Progress::Line(line)),
-            }) => {
-                let Some(span) = self.spans.get(&id) else {
-                    return;
-                };
-                self.printed.insert(id);
-                let activity = Arc::clone(&self.reporters.activity);
-                span.in_scope(|| activity.line(&line.text));
+                progress: Some(progress),
+            }) => self.progress(id, progress),
+            Event::Diagnostic(diagnostic) => {
+                mix_ui::warn(crate::explain::render::warning(&diagnostic).message());
             }
-            Event::NodeProgress(NodeProgress {
-                id,
-                progress: Some(node_progress::Progress::Builds(builds)),
-            }) => {
-                let Some(span) = self.spans.get(&id) else {
-                    return;
-                };
-                let activity = Arc::clone(&self.reporters.activity);
-                span.in_scope(|| {
-                    activity.progress(&BuildProgress {
+            _ => {}
+        }
+    }
+
+    fn progress(&mut self, id: NodeId, progress: node_progress::Progress) {
+        use node_progress::Progress;
+
+        match progress {
+            Progress::Stopping(_) => {
+                if let Some(stopping) = &self.stopping
+                    && !std::mem::replace(&mut self.stop_noticed, true)
+                {
+                    mix_ui::warn(stopping.first);
+                }
+            }
+            Progress::Command(command) => {
+                self.detail(2, || format!("running command: {}", command.line));
+            }
+            Progress::Fetch(fetch) => self.detail(1, || format!("fetching {}", fetch.url)),
+            Progress::Build(build) => {
+                if !mix_ui::progress_enabled() {
+                    self.detail(2, || format!("building {}", build.derivation));
+                }
+            }
+            Progress::Bytes(bytes) => {
+                if let Some(line) = self.lines.get(&id) {
+                    line.bytes(bytes.done, bytes.total);
+                }
+            }
+            Progress::Line(line) => {
+                if !mix_ui::progress_enabled() {
+                    self.detail(2, || line.text.clone());
+                }
+                if let Some(drawn) = self.lines.get(&id) {
+                    self.printed.insert(id);
+                    drawn.line(&line.text);
+                }
+            }
+            Progress::Builds(builds) => {
+                if let Some(line) = self.lines.get(&id) {
+                    line.builds(&BuildProgress {
                         builds_done: builds.builds_done,
                         builds_expected: builds.builds_expected,
                         builds_running: builds.builds_running,
@@ -175,12 +175,19 @@ impl Human {
                         downloads_running: builds.downloads_running,
                         bytes_done: builds.bytes_done,
                         bytes_expected: builds.bytes_expected,
-                    })
-                });
+                    });
+                }
             }
-            Event::Diagnostic(diagnostic) => tracing::warn!("{}", diagnostic.message),
-            _ => {}
         }
+    }
+}
+
+fn stopping_for(request: &Request) -> Option<Stopping> {
+    match request {
+        Request::Bootstrap(_) => Some(controls::BOOTSTRAP),
+        Request::Repair(_) => Some(controls::REPAIR),
+        Request::Install(_) | Request::Remove(_) => Some(controls::CHANGE),
+        Request::Doctor(_) => None,
     }
 }
 
@@ -188,71 +195,75 @@ impl Render for Human {
     fn envelope(&mut self, envelope: Envelope) {
         self.replay(envelope);
     }
-
-    fn span(&self, node: NodeId) -> Option<tracing::Span> {
-        self.spans.get(&node).cloned()
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
 
-    use mix_core::{DownloadProgress, StepObserver};
     use mix_events::v1::{Bytes, Command, Step};
-    use mix_events::{Ending, Outbox, ROOT, Start, Tree};
+    use mix_events::{Ending, Outbox, Start, Tree};
 
     use super::*;
 
     #[derive(Default)]
     struct Seen(Mutex<Vec<String>>);
 
-    impl StepObserver for Seen {
-        fn on_step_span(&self, _span: &tracing::Span) {
-            self.0.lock().unwrap().push("opened".into());
-        }
-
-        fn on_step_closed(&self, _span: &tracing::Span, failed: bool) {
-            self.0
-                .lock()
-                .unwrap()
-                .push(format!("closed failed={failed}"));
+    impl Seen {
+        fn push(&self, entry: String) {
+            self.0.lock().unwrap().push(entry);
         }
     }
 
-    impl DownloadProgress for Seen {
-        fn set_total(&self, total: u64) {
-            self.0.lock().unwrap().push(format!("total {total}"));
-        }
+    struct Recorded(Arc<Seen>, String);
 
-        fn add(&self, delta: u64) {
-            self.0.lock().unwrap().push(format!("add {delta}"));
+    struct Recording(Arc<Seen>);
+
+    impl Display for Recording {
+        fn step(&self, title: &str) -> Arc<dyn StepLine> {
+            self.0.push(format!("opened {title}"));
+            Arc::new(Recorded(Arc::clone(&self.0), title.to_string()))
         }
     }
 
-    #[test]
-    fn a_step_and_its_download_reach_the_display_as_before() {
-        let seen = Arc::new(Seen::default());
-        let outbox = Arc::new(Outbox::new("request", || {}));
-        let mut bridge = Human::new(Reporters {
-            downloads: seen.clone(),
-            steps: seen.clone(),
-            activity: Arc::new(mix_core::NoopActivity),
-        });
-        let mut tree = Tree::new(
-            outbox.clone(),
-            Arc::new(|| None),
-            Start::command("bootstrap", Command::default()),
-        );
+    impl StepLine for Recorded {
+        fn bytes(&self, done: u64, total: Option<u64>) {
+            self.0.push(format!("bytes {done}/{total:?}"));
+        }
+
+        fn line(&self, text: &str) {
+            self.0.push(format!("line {text}"));
+        }
+
+        fn builds(&self, progress: &BuildProgress) {
+            self.0.push(format!(
+                "builds {}/{}",
+                progress.builds_done, progress.builds_expected
+            ));
+        }
+
+        fn clear(&self) {
+            self.0.push("clear".into());
+        }
+
+        fn finish(&self, failed: bool) {
+            self.0.push(format!("closed {} failed={failed}", self.1));
+        }
+    }
+
+    fn rendered(seen: &Arc<Seen>, outbox: &Outbox, human: &mut Human) -> Vec<String> {
+        outbox
+            .drain()
+            .into_iter()
+            .for_each(|envelope| human.envelope(envelope));
+        seen.0.lock().unwrap().clone()
+    }
+
+    fn action_under_a_step(tree: &mut Tree, key: &'static str) -> (NodeId, NodeId) {
         let step = tree
             .start(
                 ROOT,
-                Start::new(
-                    "fetch-runtime",
-                    node_started::Kind::Step(Step {
-                        title: "fetch the runtime".into(),
-                    }),
-                ),
+                Start::new(key, node_started::Kind::Step(Step { title: key.into() })),
             )
             .unwrap();
         let action = tree
@@ -261,12 +272,26 @@ mod tests {
                 Start::new(
                     "action-1",
                     node_started::Kind::Action(mix_events::v1::Action {
-                        operation: mix_events::v1::Operation::InstallRuntime as i32,
-                        subject: "https://mirror/nix.tar.xz".into(),
+                        operation: mix_events::v1::Operation::ActivateProfile as i32,
+                        subject: "ciuser".into(),
                     }),
                 ),
             )
             .unwrap();
+        (step, action)
+    }
+
+    #[test]
+    fn a_step_and_its_download_reach_the_display() {
+        let seen = Arc::new(Seen::default());
+        let outbox = Arc::new(Outbox::new("request", || {}));
+        let mut human = Human::new(Arc::new(Recording(Arc::clone(&seen))));
+        let mut tree = Tree::new(
+            outbox.clone(),
+            Arc::new(|| None),
+            Start::command("bootstrap", Command::default()),
+        );
+        let (step, action) = action_under_a_step(&mut tree, "fetch-runtime");
         for done in [4, 10] {
             tree.progress(
                 action,
@@ -276,87 +301,35 @@ mod tests {
                 }),
             )
             .unwrap();
-            outbox
-                .drain()
-                .into_iter()
-                .for_each(|envelope| bridge.envelope(envelope));
+            rendered(&seen, &outbox, &mut human);
         }
         tree.finish(action, Ending::succeeded()).unwrap();
         tree.finish(step, Ending::succeeded()).unwrap();
-        outbox
-            .drain()
-            .into_iter()
-            .for_each(|envelope| bridge.envelope(envelope));
 
         assert_eq!(
-            *seen.0.lock().unwrap(),
+            rendered(&seen, &outbox, &mut human),
             [
-                "opened",
-                "total 10",
-                "add 4",
-                "add 6",
-                "closed failed=false"
+                "opened fetch-runtime",
+                "bytes 4/Some(10)",
+                "bytes 10/Some(10)",
+                "closed fetch-runtime failed=false"
             ]
         );
     }
 
-    #[derive(Default)]
-    struct Printed(Mutex<Vec<String>>);
-
-    impl mix_core::ActivityReporter for Printed {
-        fn line(&self, line: &str) {
-            self.0.lock().unwrap().push(format!("line {line}"));
-        }
-
-        fn progress(&self, progress: &BuildProgress) {
-            self.0.lock().unwrap().push(format!(
-                "builds {}/{}",
-                progress.builds_done, progress.builds_expected
-            ));
-        }
-
-        fn clear(&self) {
-            self.0.lock().unwrap().push("clear".into());
-        }
-    }
-
-    fn action_under_a_step(tree: &mut Tree, key: &'static str) -> NodeId {
-        let step = tree
-            .start(
-                ROOT,
-                Start::new(key, node_started::Kind::Step(Step { title: key.into() })),
-            )
-            .unwrap();
-        tree.start(
-            step,
-            Start::new(
-                "action-1",
-                node_started::Kind::Action(mix_events::v1::Action {
-                    operation: mix_events::v1::Operation::ActivateProfile as i32,
-                    subject: "ciuser".into(),
-                }),
-            ),
-        )
-        .unwrap()
-    }
-
     #[test]
     fn nix_output_and_counters_reach_the_display_and_are_cleared_after_the_action() {
-        let printed = Arc::new(Printed::default());
+        let seen = Arc::new(Seen::default());
         let outbox = Arc::new(Outbox::new("request", || {}));
-        let mut bridge = Human::new(Reporters {
-            downloads: Arc::new(Seen::default()),
-            steps: Arc::new(Seen::default()),
-            activity: printed.clone(),
-        });
+        let mut human = Human::new(Arc::new(Recording(Arc::clone(&seen))));
         let mut tree = Tree::new(
             outbox.clone(),
             Arc::new(|| None),
             Start::command("install", Command::default()),
         );
-        let quiet = action_under_a_step(&mut tree, "write-config");
+        let (_, quiet) = action_under_a_step(&mut tree, "write-config");
         tree.finish(quiet, Ending::succeeded()).unwrap();
-        let action = action_under_a_step(&mut tree, "activate");
+        let (_, action) = action_under_a_step(&mut tree, "activate");
         tree.progress(
             action,
             mix_events::output(b"building hello", mix_events::v1::Stream::Stderr),
@@ -372,14 +345,16 @@ mod tests {
         )
         .unwrap();
         tree.finish(action, Ending::succeeded()).unwrap();
-        outbox
-            .drain()
-            .into_iter()
-            .for_each(|envelope| bridge.envelope(envelope));
 
         assert_eq!(
-            *printed.0.lock().unwrap(),
-            ["line building hello", "builds 1/3", "clear"]
+            rendered(&seen, &outbox, &mut human),
+            [
+                "opened write-config",
+                "opened activate",
+                "line building hello",
+                "builds 1/3",
+                "clear"
+            ]
         );
     }
 }

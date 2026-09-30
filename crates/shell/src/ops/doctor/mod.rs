@@ -36,7 +36,6 @@ impl HealthReport {
 }
 
 pub async fn audit(ctx: &Context) -> Vec<HealthReport> {
-    tracing::info!("auditing managed environment");
     let items = mix_core::models::targets(ctx.user.as_ref(), &ctx.policy);
     let mut observer = ctx.relay();
     let mut tree = Tree::new(
@@ -52,30 +51,19 @@ pub async fn audit(ctx: &Context) -> Vec<HealthReport> {
         )
         .planned(items.iter().map(|target| target.label().into_owned())),
     );
-    let mut performer = match Files::open(Path::new("/"), "audit") {
-        Ok(files) => Some(Performer::new(files)),
-        Err(error) => {
-            tracing::debug!(%error, "cannot open the root to audit");
-            None
-        }
-    };
+    let mut performer = Files::open(Path::new("/"), "audit").map(Performer::new);
     let mut reports = Vec::with_capacity(items.len());
     for target in &items {
         let finding = match &mut performer {
-            Some(performer) => match performer.observe(&health::queries(target)).await {
+            Ok(performer) => match performer.observe(&health::queries(target)).await {
                 Ok(facts) => health::classify(target, &facts),
                 Err(failure) => Some(Finding::Unreadable {
                     kind: kind_of(&failure),
                 }),
             },
-            None => Some(Finding::Unreadable {
-                kind: std::io::ErrorKind::PermissionDenied,
-            }),
+            Err(error) => Some(Finding::Unreadable { kind: error.kind() }),
         };
         let name = target.label().into_owned();
-        if let Some(finding) = &finding {
-            tracing::debug!(artifact = %name, ?finding, "unhealthy");
-        }
         if let Ok(node) = tree.start(
             ROOT,
             Start::new(

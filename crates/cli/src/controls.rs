@@ -5,8 +5,8 @@ use mix_exec::Scope;
 use nix::sys::signal::Signal;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::task::JoinHandle;
-use tracing::Instrument;
 
+#[derive(Debug, Clone, Copy)]
 pub struct Stopping {
     pub first: &'static str,
     pub forced: &'static str,
@@ -84,14 +84,13 @@ impl Translator {
     }
 }
 
-pub fn apply(scope: &Scope, stopping: &Stopping, control: Control) {
+pub fn apply(scope: &Scope, notices: Option<&Stopping>, control: Control) {
     match control {
-        Control::Cancel(reason) => {
-            tracing::warn!("{}", stopping.first);
-            scope.cancel(reason);
-        }
+        Control::Cancel(reason) => scope.cancel(reason),
         Control::ForceStop => {
-            tracing::warn!("{}", stopping.forced);
+            if let Some(notices) = notices {
+                mix_ui::warn(notices.forced);
+            }
             scope.processes().kill();
             mix_ui::restore_terminal();
             std::process::exit(FORCED_EXIT);
@@ -115,18 +114,8 @@ fn listen(signal_number: Signal) -> tokio::signal::unix::Signal {
 }
 
 pub fn watch(
-    ctx: &mix_shell::Context,
-    stopping: Stopping,
-    client_gone: impl Future<Output = ()> + Send + 'static,
-    side: Side,
-) -> Watch {
-    watch_in(&ctx.scope, ctx.span(), stopping, client_gone, side)
-}
-
-fn watch_in(
     scope: &Scope,
-    span: tracing::Span,
-    stopping: Stopping,
+    notices: Option<Stopping>,
     client_gone: impl Future<Output = ()> + Send + 'static,
     side: Side,
 ) -> Watch {
@@ -135,33 +124,30 @@ fn watch_in(
     let mut suspend = listen(Signal::SIGTSTP);
     let mut resume = listen(Signal::SIGCONT);
     let scope = scope.clone();
-    Watch(tokio::spawn(
-        async move {
-            let mut client_gone = std::pin::pin!(client_gone);
-            let mut client_left = false;
-            let mut translator = Translator::default();
-            loop {
-                let received = tokio::select! {
-                    _ = interrupt.recv() => Received::Interrupt,
-                    _ = terminate.recv() => Received::Terminate,
-                    _ = suspend.recv() => Received::Suspend,
-                    _ = resume.recv() => Received::Continue,
-                    () = &mut client_gone, if !client_left => {
-                        client_left = true;
-                        Received::ClientGone
-                    }
-                };
-                let Some(control) = translator.translate(received) else {
-                    continue;
-                };
-                apply(&scope, &stopping, control);
-                if control == Control::Pause && side == Side::Client {
-                    let _ = nix::sys::signal::raise(Signal::SIGSTOP);
+    Watch(tokio::spawn(async move {
+        let mut client_gone = std::pin::pin!(client_gone);
+        let mut client_left = false;
+        let mut translator = Translator::default();
+        loop {
+            let received = tokio::select! {
+                _ = interrupt.recv() => Received::Interrupt,
+                _ = terminate.recv() => Received::Terminate,
+                _ = suspend.recv() => Received::Suspend,
+                _ = resume.recv() => Received::Continue,
+                () = &mut client_gone, if !client_left => {
+                    client_left = true;
+                    Received::ClientGone
                 }
+            };
+            let Some(control) = translator.translate(received) else {
+                continue;
+            };
+            apply(&scope, notices.as_ref(), control);
+            if control == Control::Pause && side == Side::Client {
+                let _ = nix::sys::signal::raise(Signal::SIGSTOP);
             }
         }
-        .instrument(span),
-    ))
+    }))
 }
 
 #[cfg(test)]
@@ -246,11 +232,15 @@ mod tests {
     fn cancelling_stops_the_scope_and_pausing_does_not() {
         let scope = mix_exec::Scope::root();
 
-        apply(&scope, &BOOTSTRAP, Control::Pause);
-        apply(&scope, &BOOTSTRAP, Control::Resume);
+        apply(&scope, Some(&BOOTSTRAP), Control::Pause);
+        apply(&scope, Some(&BOOTSTRAP), Control::Resume);
         assert!(!scope.is_stopped());
 
-        apply(&scope, &BOOTSTRAP, Control::Cancel(Reason::Terminated));
+        apply(
+            &scope,
+            Some(&BOOTSTRAP),
+            Control::Cancel(Reason::Terminated),
+        );
         assert_eq!(scope.reason(), Some(Reason::Terminated));
     }
 
@@ -264,10 +254,9 @@ mod tests {
     async fn sigint_cancels_the_request() {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
         let scope = mix_exec::Scope::root();
-        let _watch = watch_in(
+        let _watch = watch(
             &scope,
-            tracing::Span::none(),
-            BOOTSTRAP,
+            Some(BOOTSTRAP),
             std::future::pending(),
             Side::Client,
         );
@@ -281,10 +270,9 @@ mod tests {
     async fn sigterm_cancels_the_request() {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
         let scope = mix_exec::Scope::root();
-        let _watch = watch_in(
+        let _watch = watch(
             &scope,
-            tracing::Span::none(),
-            BOOTSTRAP,
+            Some(BOOTSTRAP),
             std::future::pending(),
             Side::Client,
         );
@@ -300,10 +288,9 @@ mod tests {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
         let scope = mix_exec::Scope::root();
         let (leave, left) = tokio::sync::oneshot::channel::<()>();
-        let _watch = watch_in(
+        let _watch = watch(
             &scope,
-            tracing::Span::none(),
-            BOOTSTRAP,
+            Some(BOOTSTRAP),
             async {
                 let _ = left.await;
             },
@@ -321,10 +308,9 @@ mod tests {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
         let scope = mix_exec::Scope::root();
         let (leave, left) = tokio::sync::oneshot::channel::<()>();
-        let watch = watch_in(
+        let watch = watch(
             &scope,
-            tracing::Span::none(),
-            BOOTSTRAP,
+            Some(BOOTSTRAP),
             async {
                 let _ = left.await;
             },

@@ -13,7 +13,9 @@ use mix_core::health;
 use mix_core::models::{Target, UserConfig, targets};
 use mix_core::paths::mix_state_dir;
 use mix_core::plan::{Runner, StepOutcome, Verdict};
-use mix_events::v1::{Cancellation, Command, RepairRequest, RepairResult, command, node_finished};
+use mix_events::v1::{
+    Cancellation, Code, Command, RepairRequest, RepairResult, command, node_finished,
+};
 use mix_events::{Diagnose, Ending, Fault, ROOT, Start, Stopped, Tree};
 use mix_exec::Scope;
 
@@ -107,7 +109,6 @@ async fn repaired(
     stopped: &Stopped,
     observer: &mut Relay,
 ) -> Repair {
-    tracing::info!("repairing managed environment");
     let user_config = ctx.user.as_ref();
     let scope = &ctx.scope;
     let items = targets(user_config, &ctx.policy);
@@ -129,8 +130,15 @@ async fn repaired(
     let mut performer = Performer::new(files);
     let journals = Path::new(JOURNAL_DIR);
     let recovered = recover_all(journals, &mut performer, &scope.shielded()).await;
-    for (action, failure) in &recovered.failures {
-        tracing::warn!(?action, ?failure, "could not finish an interrupted request");
+    for (_, failure) in &recovered.failures {
+        let _ = tree.warn(
+            ROOT,
+            mix_core::diagnose::warning(
+                Code::CleanupIncomplete,
+                "could not finish an interrupted request",
+                failure,
+            ),
+        );
     }
     let mut journal = match FileJournal::create(journals, request) {
         Ok(journal) => journal,
@@ -158,7 +166,14 @@ async fn repaired(
     )
     .await;
     if let Err(failure) = journal.finish() {
-        tracing::warn!(?failure, "could not remove the finished journal");
+        let _ = tree.warn(
+            ROOT,
+            mix_core::diagnose::warning(
+                Code::CleanupIncomplete,
+                "could not remove the finished journal",
+                &failure,
+            ),
+        );
     }
 
     if let Some(cfg) = user_config {
@@ -207,12 +222,8 @@ async fn put_back(
     let mut reports = Vec::new();
     for (name, outcome) in std::mem::take(&mut report.steps) {
         match outcome {
-            StepOutcome::Changed => {
-                tracing::debug!(artifact = %name, "repaired");
-                reports.push(RepairReport::repaired(name));
-            }
+            StepOutcome::Changed => reports.push(RepairReport::repaired(name)),
             StepOutcome::Failed(failure) => {
-                tracing::debug!(artifact = %name, ?failure, "failed to repair");
                 let error = error_of(failure, &name);
                 reports.push(RepairReport::failed(name, error));
             }
@@ -238,15 +249,9 @@ async fn commit_the_tracked_state(
     let state_dir = mix_state_dir(&cfg.user.home);
     let git = git::Git::resolve(&cfg.user, host.git_binary.as_deref()).await;
     match git.sync(&cfg.user, &state_dir, scope).await {
-        Ok(true) => {
-            tracing::debug!("committed drift in git-tracked state");
-            reports.push(RepairReport::repaired(NAME));
-        }
+        Ok(true) => reports.push(RepairReport::repaired(NAME)),
         Ok(false) => {}
-        Err(e) => {
-            tracing::debug!(error = %e, "failed to commit git-tracked state");
-            reports.push(RepairReport::failed(NAME, e));
-        }
+        Err(e) => reports.push(RepairReport::failed(NAME, e)),
     }
 }
 

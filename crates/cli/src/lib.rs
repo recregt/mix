@@ -37,12 +37,7 @@ pub async fn run() -> ExitCode {
         verbose: cli.verbose,
         exit: render::sinks::Exit::default(),
     };
-    mix_ui::init_tracing(
-        cli.verbose,
-        cli.draws_progress(),
-        cli.output == cli::Output::Human,
-        view.streams().then(mix_shell::logs::layer),
-    );
+    mix_ui::init(cli.draws_progress());
 
     // Which command was run is what decides how a failure should read, so the words are picked
     // before it runs: every crate below this one raises facts, and this is where they are put
@@ -113,7 +108,7 @@ fn stream_the_failure(command: &Command, error: &anyhow::Error, view: &render::s
         command::Request,
     };
 
-    let Ok(sinks) = view.sinks(render::human::Reporters::silent()) else {
+    let Ok(sinks) = view.sinks(std::sync::Arc::new(mix_ui::Silent)) else {
         return;
     };
     let (key, request) = match command {

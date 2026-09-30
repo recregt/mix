@@ -15,12 +15,9 @@ message Mirror {
 message BootstrapRequest {
   optional Mirror mirror = 1;
   bool force = 2;
-  Level log_level = 3;
 }
 
-message RepairRequest {
-  Level log_level = 1;
-}
+message RepairRequest {}
 
 message BootstrapResponse {
   Event event = 1;
@@ -35,15 +32,6 @@ message Event {
     Finished finished = 9;
     bytes envelope = 10;
   }
-}
-
-enum Level {
-  LEVEL_UNSPECIFIED = 0;
-  LEVEL_ERROR = 1;
-  LEVEL_WARN = 2;
-  LEVEL_INFO = 3;
-  LEVEL_DEBUG = 4;
-  LEVEL_TRACE = 5;
 }
 
 message Finished {

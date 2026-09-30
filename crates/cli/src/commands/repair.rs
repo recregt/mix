@@ -1,7 +1,5 @@
 use std::process::ExitCode;
 
-use tracing::Instrument;
-
 use mix_shell::ops::repair::Repair;
 
 pub async fn run(view: &crate::render::sinks::View) -> anyhow::Result<ExitCode> {
@@ -10,25 +8,18 @@ pub async fn run(view: &crate::render::sinks::View) -> anyhow::Result<ExitCode> 
         interrupted,
     } = if mix_shell::effect::accounts::is_root() {
         let _lock = super::acquire_lock()?;
-        let reporters = mix_ui::reporters();
         let ctx = mix_shell::Context::new(mix_exec::Scope::root())
             .with_user(super::enrolled_user())
-            .with_render(view.sinks(crate::render::human::Reporters {
-                downloads: reporters.downloads,
-                steps: reporters.steps,
-                activity: reporters.activity,
-            })?)
+            .with_render(view.sinks(mix_ui::display(true))?)
             .with_policy(super::policy())
             .with_host(super::host_config());
         let _watch = crate::controls::watch(
-            &ctx,
-            crate::controls::REPAIR,
+            &ctx.scope,
+            view.notices(crate::controls::REPAIR),
             std::future::pending(),
             crate::controls::Side::Client,
         );
-        mix_shell::ops::repair::repair(&ctx)
-            .instrument(ctx.span())
-            .await
+        mix_shell::ops::repair::repair(&ctx).await
     } else {
         crate::remote::client::repair(view).await?
     };

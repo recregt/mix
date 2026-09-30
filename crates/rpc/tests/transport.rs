@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use mix_rpc::{
-    BootstrapRequest, Caller, Client, Event, Events, Failure, Level, Mirror, Outcome, RepairReport,
+    BootstrapRequest, Caller, Client, Event, Events, Failure, Mirror, Outcome, RepairReport,
     RepairRequest, TargetFailure, Unfixable, Worker, serve_connection,
 };
 
@@ -75,7 +75,6 @@ fn request(force: bool) -> BootstrapRequest {
             key: None,
         }),
         force,
-        log_level: Level::Info,
     }
 }
 
@@ -155,9 +154,7 @@ async fn repair_reports_every_item_it_looked_at() {
     let (mut client, _server) = connected().await;
 
     let events: Vec<Event> = client
-        .repair(&RepairRequest {
-            log_level: Level::Warn,
-        })
+        .repair(&RepairRequest)
         .await
         .unwrap()
         .map(Result::unwrap)
@@ -289,11 +286,7 @@ async fn a_second_request_is_refused_while_the_first_is_running() {
         Some(Ok(Event::Envelope(bytes))) if bytes.is_empty()
     ));
 
-    let second = client
-        .repair(&RepairRequest {
-            log_level: Level::Warn,
-        })
-        .await;
+    let second = client.repair(&RepairRequest).await;
 
     let Err(mix_rpc::Error::Refused(reason)) = second else {
         panic!("a second request must be refused while the first is running");

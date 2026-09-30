@@ -213,3 +213,22 @@ fn the_quick_code_is_the_code_of_the_full_diagnostic() {
         assert_eq!(error.code(), error.fault().code(), "{error:?}");
     }
 }
+
+#[test]
+fn a_warning_names_what_could_not_be_done_and_keeps_why() {
+    let cause = Failure::Io {
+        path: "/var/lib/mix/journal/r1".into(),
+        kind: std::io::ErrorKind::PermissionDenied,
+    };
+
+    let warning = super::warning(
+        Code::JournalUnwritable,
+        "could not record progress in the journal",
+        &cause,
+    );
+
+    assert_eq!(warning.code(), Code::JournalUnwritable);
+    assert_eq!(warning.severity(), Severity::Warning);
+    assert_eq!(warning.causes.len(), 1);
+    assert_eq!(warning.causes[0], crate::plan::diagnostic(&cause));
+}

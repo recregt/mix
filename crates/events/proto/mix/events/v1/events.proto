@@ -12,7 +12,6 @@ message Envelope {
     NodeProgress node_progress = 11;
     NodeFinished node_finished = 12;
     NotRun not_run = 13;
-    Log log = 14;
     Diagnostic diagnostic = 15;
   }
 }
@@ -160,7 +159,27 @@ message NodeProgress {
     Bytes bytes = 2;
     Builds builds = 3;
     OutputLine line = 4;
+    CommandStarted command = 5;
+    FetchStarted fetch = 6;
+    BuildStarted build = 7;
+    Stopping stopping = 8;
   }
+}
+
+message Stopping {
+  Cancellation cause = 1;
+}
+
+message BuildStarted {
+  string derivation = 1;
+}
+
+message CommandStarted {
+  string line = 1;
+}
+
+message FetchStarted {
+  string url = 1;
 }
 
 message Bytes {
@@ -323,23 +342,6 @@ message NotRun {
   NotRunReason reason = 3;
 }
 
-enum Level {
-  LEVEL_UNSPECIFIED = 0;
-  LEVEL_ERROR = 1;
-  LEVEL_WARN = 2;
-  LEVEL_INFO = 3;
-  LEVEL_DEBUG = 4;
-  LEVEL_TRACE = 5;
-}
-
-message Log {
-  Level level = 1;
-  string target = 2;
-  string message = 3;
-  map<string, string> fields = 4;
-  fixed64 node = 5;
-}
-
 enum Severity {
   SEVERITY_UNSPECIFIED = 0;
   SEVERITY_ERROR = 1;
@@ -358,6 +360,8 @@ enum Code {
   CODE_CONFLICT = 8;
   CODE_UNIT_FAILED = 9;
   CODE_SYSTEMD_UNREACHABLE = 10;
+  CODE_JOURNAL_UNWRITABLE = 11;
+  CODE_CLEANUP_INCOMPLETE = 12;
   CODE_NETWORK = 20;
   CODE_INTEGRITY = 21;
   CODE_UNSUPPORTED_TARGET = 22;
@@ -377,6 +381,7 @@ enum Code {
   CODE_INVALID_STATE = 44;
   CODE_NEWER_STATE = 45;
   CODE_PROTECTED_PACKAGE = 46;
+  CODE_GIT_RECORD_FAILED = 47;
   CODE_UNREPAIRABLE = 60;
   CODE_PRIVILEGES_UNAVAILABLE = 70;
   CODE_WORKER_ENDED = 71;

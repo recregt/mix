@@ -1,7 +1,5 @@
 use std::process::ExitCode;
 
-use tracing::Instrument;
-
 use mix_shell::ops::remove::Error;
 
 pub async fn run(
@@ -9,26 +7,19 @@ pub async fn run(
     view: &crate::render::sinks::View,
 ) -> anyhow::Result<ExitCode> {
     let (_lock, user_config) = super::acquire_profile().map_err(Error::from)?;
-    let reporters = mix_ui::reporters();
     let ctx = mix_shell::Context::new(mix_exec::Scope::root())
         .with_user(Some(user_config))
-        .with_render(view.sinks(crate::render::human::Reporters {
-            downloads: reporters.downloads,
-            steps: reporters.passing_steps,
-            activity: reporters.activity,
-        })?)
+        .with_render(view.sinks(mix_ui::display(false))?)
         .with_policy(super::policy())
         .with_host(super::host_config());
     let _watch = crate::controls::watch(
-        &ctx,
-        crate::controls::CHANGE,
+        &ctx.scope,
+        view.notices(crate::controls::CHANGE),
         std::future::pending(),
         crate::controls::Side::Client,
     );
 
-    mix_shell::ops::remove::remove(&ctx, packages)
-        .instrument(ctx.span())
-        .await?;
+    mix_shell::ops::remove::remove(&ctx, packages).await?;
 
     Ok(ExitCode::SUCCESS)
 }

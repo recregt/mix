@@ -29,8 +29,6 @@ tar = "0.4.46"
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry"] }
 uuid = { version = "1.26.1", features = ["v7"] }
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 
