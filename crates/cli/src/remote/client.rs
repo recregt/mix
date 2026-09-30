@@ -44,6 +44,20 @@ async fn replay(
     outcome.ok_or(mix_rpc::Error::Ended)
 }
 
+fn bootstrap_request(
+    mirror: Option<&str>,
+    mirror_key: Option<&str>,
+    force: bool,
+) -> BootstrapRequest {
+    BootstrapRequest {
+        mirror: mirror.map(|url| Mirror {
+            url: url.to_string(),
+            key: mirror_key.map(str::to_string),
+        }),
+        force,
+    }
+}
+
 async fn start(view: &View) -> anyhow::Result<Client> {
     if view.output == Output::Human {
         mix_ui::note("root is required, re-running with sudo");
@@ -59,13 +73,7 @@ pub async fn bootstrap(
     view: &View,
 ) -> anyhow::Result<()> {
     let mut client = start(view).await?;
-    let request = BootstrapRequest {
-        mirror: mirror.map(|url| Mirror {
-            url: url.to_string(),
-            key: mirror_key.map(str::to_string),
-        }),
-        force,
-    };
+    let request = bootstrap_request(mirror, mirror_key, force);
     let outcome = replay(client.bootstrap(&request).await?, view).await?;
     let _ = client.wait().await;
     match outcome {
@@ -92,5 +100,27 @@ pub async fn repair(view: &View) -> anyhow::Result<Repair> {
         Outcome::Failure(Failure::Target(failure)) => Err(target_error_from(failure).into()),
         Outcome::Failure(failure) => Err(bootstrap_error_from(failure).into()),
         Outcome::BootstrapDone => Err(mix_rpc::Error::Ended.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_mirror_this_process_resolved_crosses_sudo_in_the_request() {
+        let request = bootstrap_request(Some("http://env.internal"), Some("env:KEY"), false);
+
+        assert_eq!(
+            request.mirror,
+            Some(Mirror {
+                url: "http://env.internal".into(),
+                key: Some("env:KEY".into()),
+            })
+        );
+        assert_eq!(
+            bootstrap_request(None, Some("stray:KEY"), true).mirror,
+            None
+        );
     }
 }

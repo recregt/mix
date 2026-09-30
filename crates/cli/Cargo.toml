@@ -27,6 +27,7 @@ serde_json = { workspace = true }
 [dev-dependencies]
 mix-nixgen = { path = "../nixgen" }
 divan = { workspace = true }
+tempfile = { workspace = true }
 
 [[bench]]
 name = "explain"

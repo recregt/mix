@@ -72,8 +72,14 @@ pub fn user_config_for(user: InvokingUser) -> Option<UserConfig> {
 }
 
 pub fn existing_user_config_for(user: InvokingUser) -> Option<UserConfig> {
-    let cfg = user_config_for(user)?;
-    crate::effect::accounts::group_has_member(MIX_USERS_GROUP, &cfg.user.name).then_some(cfg)
+    managed(
+        user_config_for(user)?,
+        crate::effect::accounts::group_has_member,
+    )
+}
+
+fn managed(cfg: UserConfig, member: impl Fn(&str, &str) -> bool) -> Option<UserConfig> {
+    member(MIX_USERS_GROUP, &cfg.user.name).then_some(cfg)
 }
 
 #[cfg(test)]
@@ -92,6 +98,25 @@ mod tests {
             name: "mix-user".to_string(),
             home: home.to_path_buf(),
         }
+    }
+
+    fn config(home: &Path) -> UserConfig {
+        UserConfig {
+            user: sample_user(home),
+            flake: String::new(),
+            lock: String::new(),
+            home: String::new(),
+            restored_state: None,
+        }
+    }
+
+    #[test]
+    fn only_a_member_of_mix_users_is_managed() {
+        let home = Path::new("/home/mix-user");
+        let enrolled = |group: &str, name: &str| group == MIX_USERS_GROUP && name == "mix-user";
+
+        assert!(managed(config(home), enrolled).is_some());
+        assert!(managed(config(home), |_: &str, _: &str| false).is_none());
     }
 
     #[test]

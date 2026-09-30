@@ -56,12 +56,12 @@ pub enum EventsCommand {
 pub enum Command {
     /// Initialize runtime and system dependencies
     Bootstrap {
-        /// Mirror for the Nix archive, flake inputs and binaries, used by every user
-        #[arg(long, env = "MIX_NIX_MIRROR")]
+        /// Mirror for Nix and packages, used by every user [env: MIX_NIX_MIRROR]
+        #[arg(long)]
         mirror: Option<String>,
 
-        /// Public key the mirror's binary cache is signed with, trusted machine-wide
-        #[arg(long, env = "MIX_NIX_MIRROR_KEY")]
+        /// Key the mirror signs with, trusted machine-wide [env: MIX_NIX_MIRROR_KEY]
+        #[arg(long)]
         mirror_key: Option<String>,
 
         /// Wipe any existing managed installation before bootstrapping

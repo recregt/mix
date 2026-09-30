@@ -16,16 +16,33 @@ use super::human::Human;
 use crate::cli::Output;
 use crate::controls::Stopping;
 
+#[derive(Debug, Clone, Copy, Default)]
+struct Seen {
+    started: bool,
+    exit: Option<u32>,
+}
+
 #[derive(Clone, Default)]
-pub struct Exit(Arc<Mutex<Option<u32>>>);
+pub struct Exit(Arc<Mutex<Seen>>);
 
 impl Exit {
     pub fn code(&self) -> Option<u32> {
-        *self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).exit
     }
 
-    fn record(&self, code: u32) {
-        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(code);
+    pub fn started(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .started
+    }
+
+    fn saw(&self, exit: Option<u32>) {
+        let mut seen = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        seen.started = true;
+        if exit.is_some() {
+            seen.exit = exit;
+        }
     }
 }
 
@@ -85,11 +102,19 @@ impl Render for Sinks {
     }
 
     fn envelope(&mut self, envelope: Envelope) {
-        if let Some(envelope::Event::NodeFinished(finished)) = &envelope.event
-            && finished.id == ROOT
-        {
-            self.exit.record(finished.exit_code);
-        }
+        self.exit.saw(match &envelope.event {
+            Some(envelope::Event::NodeFinished(finished)) if finished.id == ROOT => {
+                Some(finished.exit_code)
+            }
+            Some(
+                envelope::Event::NodeFinished(_)
+                | envelope::Event::NodeStarted(_)
+                | envelope::Event::NodeProgress(_)
+                | envelope::Event::NotRun(_)
+                | envelope::Event::Diagnostic(_),
+            )
+            | None => None,
+        });
         if self.json {
             json_line(&envelope);
         }
