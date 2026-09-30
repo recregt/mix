@@ -77,13 +77,15 @@ def test_a_deadline_set_by_the_caller_rolls_the_install_back(
 ):
     state_before = container.exec("cat", f"{STATE_DIR}/state", check=True).stdout
     proc = container.start_background(
-        "timeout", "-s", "TERM", "5",
+        "timeout", "-s", "TERM", "0",
         "mix", "-v", "install", INSTALL_TEST_PACKAGE,
         user=USER,
     )
     build = _pid_of(container, NIX_BUILD)
     container.exec("kill", "-STOP", build, check=True)
+    deadline = _pid_of(container, "^timeout -s TERM 0 ")
 
+    container.exec("kill", "-ALRM", deadline, check=True)
     result = proc.wait(timeout=60)
 
     assert result.returncode == 124, result.stdout
