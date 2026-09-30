@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::wildcard_enum_match_arm))]
+
 use std::io::{BufRead, Write};
 use std::time::Duration;
 

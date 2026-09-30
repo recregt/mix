@@ -1,18 +1,24 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
-use mix_events::Outbox;
 use mix_events::v1::Envelope;
+use mix_events::{Detail, Outbox};
 
 use crate::drive::Observer;
 
 pub trait Render: Send {
     fn envelope(&mut self, envelope: Envelope);
+
+    fn detail(&self) -> Detail;
 }
 
 pub struct Quiet;
 
 impl Render for Quiet {
     fn envelope(&mut self, _envelope: Envelope) {}
+
+    fn detail(&self) -> Detail {
+        Detail::Outcome
+    }
 }
 
 pub type Shared = Arc<Mutex<Box<dyn Render>>>;
@@ -33,6 +39,14 @@ impl Relay {
 }
 
 impl Observer for Relay {
+    fn wants(&self, detail: Detail) -> bool {
+        self.render
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .detail()
+            >= detail
+    }
+
     fn flush(&mut self) {
         let mut render = self.render.lock().unwrap_or_else(PoisonError::into_inner);
         for envelope in self.outbox.drain() {

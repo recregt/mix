@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::wildcard_enum_match_arm))]
+
 use std::borrow::Cow;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -120,8 +122,12 @@ impl Ending {
         let exit_code = match self.status {
             Status::Failed => exit::FAILED,
             Status::Cancelled => exit::INTERRUPTED,
-            _ if problems_remain => exit::PROBLEMS_REMAIN,
-            _ => exit::SUCCEEDED,
+            Status::Unspecified | Status::Succeeded | Status::AlreadySatisfied
+                if problems_remain =>
+            {
+                exit::PROBLEMS_REMAIN
+            }
+            Status::Unspecified | Status::Succeeded | Status::AlreadySatisfied => exit::SUCCEEDED,
         };
         self.with_exit_code(exit_code)
     }
@@ -158,7 +164,10 @@ impl Open {
             | Progress::Command(_)
             | Progress::Fetch(_)
             | Progress::Build(_)
-            | Progress::Stopping(_) => true,
+            | Progress::Stopping(_)
+            | Progress::CommandFinished(_)
+            | Progress::Observed(_)
+            | Progress::Journaled(_) => true,
             Progress::Builds(builds) => self.builds.replace(*builds) != Some(*builds),
             Progress::Bytes(bytes) => self.bytes.replace(*bytes) != Some(*bytes),
         }

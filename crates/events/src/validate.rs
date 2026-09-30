@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::wildcard_enum_match_arm))]
+
 use std::collections::{HashMap, HashSet};
 
 use crate::tree::ROOT;

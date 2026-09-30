@@ -10,6 +10,7 @@ pub trait Normalize {
 }
 
 pub mod capture;
+mod detail;
 mod events {
     pub(crate) use crate::v1;
 }
@@ -18,8 +19,10 @@ mod outbox;
 mod tree;
 mod validate;
 
+pub use detail::{Detail, detail};
 pub use fault::{Diagnose, Fault};
 pub use outbox::Outbox;
+pub use pbjson_types::Timestamp;
 pub use tree::{Ending, Misuse, Node, NodeId, ROOT, Start, Stopped, Tree, exit, output};
 pub use validate::{Entry, Outcome, Validated, Validator, Violation, validate};
 

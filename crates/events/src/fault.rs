@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::wildcard_enum_match_arm))]
+
 use crate::tree::Ending;
 use crate::v1::{Cancellation, Code, Diagnostic};
 

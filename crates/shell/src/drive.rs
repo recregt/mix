@@ -14,8 +14,8 @@ use mix_core::privilege::InvokingUser;
 use mix_core::{ActivityReporter, BuildProgress, DownloadProgress};
 use mix_events::v1::node_progress::Progress;
 use mix_events::v1::{
-    BuildStarted, Builds, Bytes, Cancellation, Code, CommandStarted, Diagnostic, FetchStarted,
-    Stream,
+    BuildStarted, Builds, Bytes, Cancellation, Code, CommandFinished, CommandStarted, Diagnostic,
+    FetchStarted, Stream,
 };
 use mix_events::{NodeId, ROOT, Stopped, Tree, output};
 use mix_exec::Scope;
@@ -90,6 +90,16 @@ impl mix_exec::Watch for Activity {
     fn started(&self, command: &str) {
         self.send(Progress::Command(CommandStarted {
             line: command.to_string(),
+        }));
+    }
+
+    fn finished(&self, command: &str, status: std::process::ExitStatus) {
+        use std::os::unix::process::ExitStatusExt;
+
+        self.send(Progress::CommandFinished(CommandFinished {
+            line: command.to_string(),
+            exit_code: status.code(),
+            signal: status.signal(),
         }));
     }
 }
@@ -492,6 +502,10 @@ impl Performer {
 
 pub trait Observer: Send {
     fn flush(&mut self);
+
+    fn wants(&self, _detail: mix_events::Detail) -> bool {
+        false
+    }
 }
 
 impl Observer for () {
@@ -509,16 +523,26 @@ impl Journal for Vec<Record> {
     }
 }
 
-fn keep(journal: &mut dyn Journal, record: &Record, tree: &mut Tree, node: NodeId) {
-    if let Err(failure) = journal.append(record) {
-        let _ = tree.warn(
-            node,
-            mix_core::diagnose::warning(
-                Code::JournalUnwritable,
-                "could not record progress in the journal",
-                &failure,
-            ),
-        );
+fn journaled(record: &Record) -> Progress {
+    Progress::Journaled(mix_core::trace::journaled(record))
+}
+
+fn keep(journal: &mut dyn Journal, record: &Record, tree: &mut Tree, node: NodeId, traced: bool) {
+    match journal.append(record) {
+        Ok(()) if traced => {
+            let _ = tree.progress(node, journaled(record));
+        }
+        Ok(()) => {}
+        Err(failure) => {
+            let _ = tree.warn(
+                node,
+                mix_core::diagnose::warning(
+                    Code::JournalUnwritable,
+                    "could not record progress in the journal",
+                    &failure,
+                ),
+            );
+        }
     }
 }
 
@@ -553,6 +577,7 @@ pub async fn drive<'r>(
     };
     let scope = &scope.watched(performer.activity.clone());
     let mut stopping = false;
+    let traced = observer.wants(mix_events::Detail::Trace);
     let mut input = None;
     let mut seq = 0;
     let mut ended = false;
@@ -565,7 +590,14 @@ pub async fn drive<'r>(
         observer.flush();
         match next {
             Next::Observe(queries) => {
-                input = Some(Input::Facts(performer.observe(&queries).await));
+                let facts = performer.observe(&queries).await;
+                if traced && let Ok(found) = &facts {
+                    let _ = tree.progress(
+                        runner.current_node().unwrap_or(ROOT),
+                        Progress::Observed(mix_core::trace::observed(&queries, found)),
+                    );
+                }
+                input = Some(Input::Facts(facts));
             }
             Next::Perform(action) => {
                 let scope = if runner.shielded() {
@@ -576,9 +608,14 @@ pub async fn drive<'r>(
                 let node = runner.current_node();
                 let reverting = runner.rolling_back();
                 let committing = action == Action::Commit;
-                if committing && let Err(failure) = journal.append(&Record::Committing) {
-                    input = Some(Input::Done(Err(failure)));
-                    continue;
+                if committing {
+                    if let Err(failure) = journal.append(&Record::Committing) {
+                        input = Some(Input::Done(Err(failure)));
+                        continue;
+                    }
+                    if traced {
+                        let _ = tree.progress(node.unwrap_or(ROOT), journaled(&Record::Committing));
+                    }
                 }
                 let this = seq;
                 let mut announced: Option<Vec<Action>> = None;
@@ -591,10 +628,15 @@ pub async fn drive<'r>(
                             return Ok(());
                         }
                         announced = Some(undo.to_vec());
-                        journal.append(&Record::Prepared {
+                        let record = Record::Prepared {
                             seq: this,
                             undo: undo.to_vec(),
-                        })
+                        };
+                        journal.append(&record)?;
+                        if traced {
+                            let _ = sender.send(Signal::Progress(journaled(&record)));
+                        }
+                        Ok(())
                     };
                     let performing = performer.perform(&action, &scope, &mut report, &mut prepared);
                     let mut performing = std::pin::pin!(performing);
@@ -619,9 +661,11 @@ pub async fn drive<'r>(
                 }
                 observer.flush();
                 match (&outcome, reverting, committing) {
-                    (Ok(_), true, _) => keep(journal, &Record::Reverted { action }, tree, acting),
+                    (Ok(_), true, _) => {
+                        keep(journal, &Record::Reverted { action }, tree, acting, traced)
+                    }
                     (Ok(_), false, true) => {
-                        keep(journal, &Record::Ended, tree, acting);
+                        keep(journal, &Record::Ended, tree, acting, traced);
                         ended = true;
                     }
                     (Ok(performed), false, false) => {
@@ -633,7 +677,7 @@ pub async fn drive<'r>(
                                 undo: performed.undo.clone(),
                             }
                         };
-                        keep(journal, &record, tree, acting);
+                        keep(journal, &record, tree, acting, traced);
                         seq += 1;
                     }
                     (Err(_), false, false) => {
@@ -649,7 +693,7 @@ pub async fn drive<'r>(
             Next::Finished(closed) => {
                 performer.listening = Some(receiver);
                 if !ended {
-                    keep(journal, &Record::Ended, tree, ROOT);
+                    keep(journal, &Record::Ended, tree, ROOT, traced);
                 }
                 return runner.report(closed);
             }
@@ -831,10 +875,29 @@ mod tests {
         found
     }
 
+    struct Everything;
+
+    impl Observer for Everything {
+        fn flush(&mut self) {}
+
+        fn wants(&self, _detail: mix_events::Detail) -> bool {
+            true
+        }
+    }
+
     async fn run(
         root: &Path,
         last: &'static str,
         stopped: Stopped,
+    ) -> (Report, Vec<mix_events::v1::Envelope>) {
+        run_for(root, last, stopped, &mut ()).await
+    }
+
+    async fn run_for(
+        root: &Path,
+        last: &'static str,
+        stopped: Stopped,
+        observer: &mut dyn Observer,
     ) -> (Report, Vec<mix_events::v1::Envelope>) {
         let outbox = Arc::new(Outbox::new("request", || {}));
         let mut tree = Tree::new(
@@ -853,7 +916,7 @@ mod tests {
             &Scope::root(),
             &stopped,
             &mut journal,
-            &mut (),
+            observer,
         )
         .await;
         assert_eq!(journal.last(), Some(&Record::Ended));
@@ -872,6 +935,43 @@ mod tests {
         assert!(root.path().join("nix/var").is_dir());
         assert!(root.path().join("nix/.mix-managed").is_file());
         assert!(validate(&stream).is_ok());
+    }
+
+    fn kinds(stream: &[mix_events::v1::Envelope]) -> (usize, usize) {
+        stream
+            .iter()
+            .fold((0, 0), |(observed, journaled), envelope| {
+                match &envelope.event {
+                    Some(mix_events::v1::envelope::Event::NodeProgress(progress)) => {
+                        match &progress.progress {
+                            Some(Progress::Observed(_)) => (observed + 1, journaled),
+                            Some(Progress::Journaled(_)) => (observed, journaled + 1),
+                            _ => (observed, journaled),
+                        }
+                    }
+                    _ => (observed, journaled),
+                }
+            })
+    }
+
+    #[tokio::test]
+    async fn what_the_engine_saw_and_journaled_is_built_only_for_someone_who_wants_it() {
+        let traced = tempfile::tempdir().unwrap();
+        let (_, stream) = run_for(
+            traced.path(),
+            "/nix/.mix-managed",
+            Arc::new(|| None),
+            &mut Everything,
+        )
+        .await;
+        assert!(validate(&stream).is_ok());
+        let (observed, journaled) = kinds(&stream);
+        assert!(observed > 0);
+        assert!(journaled > 0);
+
+        let quiet = tempfile::tempdir().unwrap();
+        let (_, stream) = run(quiet.path(), "/nix/.mix-managed", Arc::new(|| None)).await;
+        assert_eq!(kinds(&stream), (0, 0));
     }
 
     #[tokio::test]

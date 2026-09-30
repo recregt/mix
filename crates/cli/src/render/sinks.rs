@@ -1,13 +1,15 @@
+#![cfg_attr(not(test), deny(clippy::wildcard_enum_match_arm))]
+
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use mix_events::ROOT;
 use mix_events::capture::Capture;
 use mix_events::capture::v1::Header;
 use mix_events::v1::{Envelope, envelope};
+use mix_events::{Detail, ROOT};
 use mix_shell::render::Render;
 
 use super::human::Human;
@@ -66,6 +68,13 @@ pub struct Sinks {
 }
 
 impl Render for Sinks {
+    fn detail(&self) -> Detail {
+        if self.json || self.file.is_some() {
+            return Detail::Trace;
+        }
+        self.human.as_ref().map_or(Detail::Outcome, Render::detail)
+    }
+
     fn envelope(&mut self, envelope: Envelope) {
         if let Some(envelope::Event::NodeFinished(finished)) = &envelope.event
             && finished.id == ROOT

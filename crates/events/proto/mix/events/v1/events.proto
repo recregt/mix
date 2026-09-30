@@ -3,6 +3,7 @@ syntax = "proto3";
 package mix.events.v1;
 
 import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
 
 message Envelope {
   uint64 seq = 1;
@@ -163,7 +164,127 @@ message NodeProgress {
     FetchStarted fetch = 6;
     BuildStarted build = 7;
     Stopping stopping = 8;
+    CommandFinished command_finished = 9;
+    Observed observed = 10;
+    Journaled journaled = 11;
   }
+}
+
+message CommandFinished {
+  string line = 1;
+  optional int32 exit_code = 2;
+  optional int32 signal = 3;
+}
+
+message Observed {
+  repeated Observation observations = 1;
+}
+
+message Observation {
+  oneof query {
+    string path = 1;
+    string contents = 2;
+    string group = 3;
+    string user = 4;
+    string unit = 5;
+    string profile = 6;
+    string tree_owner = 7;
+  }
+  oneof fact {
+    PathFact path_fact = 10;
+    ContentsFact contents_fact = 11;
+    GroupFact group_fact = 12;
+    UserFact user_fact = 13;
+    UnitFact unit_fact = 14;
+    ProfileFact profile_fact = 15;
+    TreeOwnerFact tree_owner_fact = 16;
+  }
+}
+
+enum PathKind {
+  PATH_KIND_UNSPECIFIED = 0;
+  PATH_KIND_MISSING = 1;
+  PATH_KIND_UNREADABLE = 2;
+  PATH_KIND_DIRECTORY = 3;
+  PATH_KIND_FILE = 4;
+  PATH_KIND_SYMLINK = 5;
+  PATH_KIND_OTHER = 6;
+}
+
+message PathFact {
+  PathKind kind = 1;
+  string unreadable = 2;
+  uint32 mode = 3;
+  uint32 uid = 4;
+  uint32 gid = 5;
+  optional FileIdentity id = 6;
+  bytes digest = 7;
+  optional google.protobuf.Timestamp changed = 8;
+}
+
+message FileIdentity {
+  uint64 dev = 1;
+  uint64 ino = 2;
+  optional google.protobuf.Timestamp born = 3;
+}
+
+message ContentsFact {
+  bool present = 1;
+  uint64 length = 2;
+}
+
+message GroupFact {
+  bool exists = 1;
+  uint32 gid = 2;
+  repeated string members = 3;
+}
+
+message UserFact {
+  bool exists = 1;
+  uint32 uid = 2;
+  uint32 gid = 3;
+  string home = 4;
+  string shell = 5;
+  string comment = 6;
+}
+
+message UnitFact {
+  string load_state = 1;
+  string active_state = 2;
+  string file_state = 3;
+  bool needs_reload = 4;
+  optional google.protobuf.Timestamp active_since = 5;
+}
+
+message ProfileFact {
+  repeated uint64 generations = 1;
+  optional uint64 active = 2;
+}
+
+message TreeOwnerFact {
+  optional uint32 uid = 1;
+}
+
+message Journaled {
+  oneof record {
+    Began began = 1;
+    Sequenced prepared = 2;
+    Sequenced done = 3;
+    Sequenced settled = 4;
+    Sequenced failed = 5;
+    Action reverted = 6;
+    google.protobuf.Empty committing = 7;
+    google.protobuf.Empty ended = 8;
+  }
+}
+
+message Began {
+  string request = 1;
+}
+
+message Sequenced {
+  uint64 seq = 1;
+  repeated Action undo = 2;
 }
 
 message Stopping {

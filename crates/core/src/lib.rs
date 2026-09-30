@@ -17,6 +17,7 @@ pub mod privilege;
 pub mod progress;
 pub mod state;
 pub mod system;
+pub mod trace;
 
 pub use constants::{identity, paths};
 pub use error::{Error, Result};

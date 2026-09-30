@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::wildcard_enum_match_arm))]
+
 use std::collections::VecDeque;
 use std::sync::{Mutex, PoisonError};
 
@@ -15,15 +17,25 @@ type Slot = (u64, Gauge);
 
 fn slot(event: &Event) -> Option<Slot> {
     match event {
-        Event::NodeProgress(NodeProgress {
-            id,
-            progress: Some(Progress::Bytes(_)),
-        }) => Some((*id, Gauge::Bytes)),
-        Event::NodeProgress(NodeProgress {
-            id,
-            progress: Some(Progress::Builds(_)),
-        }) => Some((*id, Gauge::Builds)),
-        _ => None,
+        Event::NodeProgress(NodeProgress { id, progress }) => match progress {
+            Some(Progress::Bytes(_)) => Some((*id, Gauge::Bytes)),
+            Some(Progress::Builds(_)) => Some((*id, Gauge::Builds)),
+            Some(
+                Progress::Line(_)
+                | Progress::Command(_)
+                | Progress::CommandFinished(_)
+                | Progress::Fetch(_)
+                | Progress::Build(_)
+                | Progress::Stopping(_)
+                | Progress::Observed(_)
+                | Progress::Journaled(_),
+            )
+            | None => None,
+        },
+        Event::NodeStarted(_)
+        | Event::NodeFinished(_)
+        | Event::NotRun(_)
+        | Event::Diagnostic(_) => None,
     }
 }
 

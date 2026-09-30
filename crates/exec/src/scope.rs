@@ -40,6 +40,7 @@ impl Flag {
 
 pub trait Watch: Send + Sync {
     fn started(&self, command: &str);
+    fn finished(&self, command: &str, status: std::process::ExitStatus);
 }
 
 #[derive(Clone)]
@@ -105,6 +106,12 @@ impl Scope {
     pub(crate) fn started(&self, command: &str) {
         if let Some(watch) = &self.watch {
             watch.started(command);
+        }
+    }
+
+    pub(crate) fn finished(&self, command: &str, status: std::process::ExitStatus) {
+        if let Some(watch) = &self.watch {
+            watch.finished(command, status);
         }
     }
 

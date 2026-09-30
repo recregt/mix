@@ -16,6 +16,10 @@ impl Render for Forward {
     fn envelope(&mut self, envelope: Envelope) {
         let _ = self.0.send(Event::Envelope(envelope.encode_to_vec()));
     }
+
+    fn detail(&self) -> mix_events::Detail {
+        mix_events::Detail::Trace
+    }
 }
 
 fn client_gone(events: &Events) -> impl Future<Output = ()> + Send + 'static {

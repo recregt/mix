@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::wildcard_enum_match_arm))]
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -6,7 +8,7 @@ use mix_events::v1::command::Request;
 use mix_events::v1::{
     Envelope, NodeProgress, Status, envelope::Event, node_progress, node_started,
 };
-use mix_events::{NodeId, ROOT};
+use mix_events::{Detail, NodeId, ROOT};
 use mix_shell::render::Render;
 use mix_ui::{Display, StepLine};
 
@@ -84,7 +86,15 @@ impl Human {
                         self.lines.insert(node.id, line);
                     }
                 }
-                _ => {}
+                Some(
+                    node_started::Kind::Plan(_)
+                    | node_started::Kind::Process(_)
+                    | node_started::Kind::Download(_)
+                    | node_started::Kind::Inspection(_)
+                    | node_started::Kind::LockWait(_)
+                    | node_started::Kind::NixActivity(_),
+                )
+                | None => {}
             },
             Event::NodeFinished(node) if node.id == ROOT => {
                 super::results::finished(&node, self.results, self.verbosity > 0);
@@ -126,7 +136,7 @@ impl Human {
             Event::Diagnostic(diagnostic) => {
                 mix_ui::warn(crate::explain::render::warning(&diagnostic).message());
             }
-            _ => {}
+            Event::NodeProgress(NodeProgress { progress: None, .. }) | Event::NotRun(_) => {}
         }
     }
 
@@ -134,6 +144,7 @@ impl Human {
         use node_progress::Progress;
 
         match progress {
+            Progress::CommandFinished(_) | Progress::Observed(_) | Progress::Journaled(_) => {}
             Progress::Stopping(_) => {
                 if let Some(stopping) = &self.stopping
                     && !std::mem::replace(&mut self.stop_noticed, true)
@@ -194,6 +205,14 @@ fn stopping_for(request: &Request) -> Option<Stopping> {
 impl Render for Human {
     fn envelope(&mut self, envelope: Envelope) {
         self.replay(envelope);
+    }
+
+    fn detail(&self) -> Detail {
+        match self.verbosity {
+            0 => Detail::Step,
+            1 => Detail::Action,
+            _ => Detail::Trace,
+        }
     }
 }
 

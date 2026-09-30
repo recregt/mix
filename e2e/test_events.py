@@ -107,6 +107,13 @@ def test_the_commands_an_install_runs_are_typed_events_and_stderr_stays_empty(
         "command",
     )
     assert recorded == printed
+    lines = container.exec("cat", EVENTS, check=True, user=USER).stdout.splitlines()[1:]
+    assert _progress(lines, "observed"), "no observations recorded"
+    assert _progress(lines, "journaled"), "no journal records recorded"
+    assert all(
+        "exitCode" in finished or "signal" in finished
+        for finished in _progress(lines, "commandFinished")
+    )
 
 
 @pytest.mark.bootstrapped

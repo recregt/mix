@@ -186,6 +186,10 @@ mod tests {
         fn envelope(&mut self, envelope: mix_events::v1::Envelope) {
             self.0.lock().unwrap().push(envelope);
         }
+
+        fn detail(&self) -> mix_events::Detail {
+            mix_events::Detail::Trace
+        }
     }
 
     #[tokio::test]

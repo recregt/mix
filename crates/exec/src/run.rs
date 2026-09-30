@@ -259,6 +259,7 @@ impl Command {
             }
         };
 
+        scope.finished(&line, status);
         if let Some(stdin_task) = stdin_task {
             let _ = stdin_task.await;
         }
