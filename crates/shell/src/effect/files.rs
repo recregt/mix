@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
@@ -30,6 +31,14 @@ pub struct Files {
     request: String,
     pending: Vec<PathBuf>,
     next: u64,
+    seen: std::sync::Mutex<Seen>,
+}
+
+#[derive(Default)]
+struct Seen {
+    path: OsString,
+    dir: Option<OwnedFd>,
+    name: OsString,
 }
 
 struct Pinned {
@@ -122,6 +131,7 @@ impl Files {
             request: request.into(),
             pending: Vec::new(),
             next: 0,
+            seen: std::sync::Mutex::new(Seen::default()),
         })
     }
 
@@ -145,16 +155,99 @@ impl Files {
         self.place_with(path, ResolveFlags::NO_SYMLINKS | ResolveFlags::BENEATH)
     }
 
+    fn forget(&self) {
+        if let Ok(mut seen) = self.seen.lock() {
+            seen.dir = None;
+        }
+    }
+
+    fn remember(&self, path: &Path, dir: OwnedFd, name: &OsStr) {
+        if let Ok(mut seen) = self.seen.lock() {
+            seen.path.clear();
+            seen.path.push(path.as_os_str());
+            seen.name.clear();
+            seen.name.push(name);
+            seen.dir = Some(dir);
+        }
+    }
+
+    fn open_seen(&self, path: &Path) -> Option<Result<OwnedFd, Errno>> {
+        let mut seen = self.seen.lock().ok()?;
+        if seen.dir.is_none() || seen.path.as_bytes() != path.as_os_str().as_bytes() {
+            return None;
+        }
+        let dir = seen.dir.take()?;
+        Some(sys::openat(
+            &dir,
+            &seen.name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        ))
+    }
+
     fn place_for_reading(&self, path: &Path) -> Result<Place, Failure> {
         let (dir, name) = self.resolve(path, false)?;
         Ok(Place {
             path: path.to_path_buf(),
             dir,
-            name,
+            name: name.into_owned(),
         })
     }
 
-    fn resolve(&self, path: &Path, follow_last: bool) -> Result<(OwnedFd, OsString), Failure> {
+    fn resolve<'p>(
+        &self,
+        path: &'p Path,
+        follow_last: bool,
+    ) -> Result<(OwnedFd, Cow<'p, OsStr>), Failure> {
+        let bytes = path.as_os_str().as_bytes();
+        let Some(slash) = bytes.iter().rposition(|byte| *byte == b'/') else {
+            return self.resolve_owned(path, follow_last);
+        };
+        let name = &bytes[slash + 1..];
+        if matches!(name, b"" | b"." | b"..") {
+            return self.resolve_owned(path, follow_last);
+        }
+        let parent = match bytes[..slash].iter().position(|byte| *byte != b'/') {
+            Some(start) => OsStr::from_bytes(&bytes[start..slash]),
+            None => OsStr::new("."),
+        };
+        let name = OsStr::from_bytes(name);
+        let dir = match sys::openat2(
+            &self.root,
+            parent,
+            OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::NO_SYMLINKS | ResolveFlags::BENEATH,
+        ) {
+            Ok(dir) => dir,
+            Err(Errno::LOOP | Errno::XDEV | Errno::AGAIN) => {
+                return self.resolve_owned(path, follow_last);
+            }
+            Err(errno) => return Err(io(path, errno)),
+        };
+        if follow_last
+            && let Ok(stat) = sys::statx(&dir, name, AtFlags::SYMLINK_NOFOLLOW, WANTED)
+            && kind(&stat) == Kind::Symlink
+        {
+            return self.resolve_owned(path, follow_last);
+        }
+        Ok((dir, Cow::Borrowed(name)))
+    }
+
+    fn resolve_owned<'p>(
+        &self,
+        path: &Path,
+        follow_last: bool,
+    ) -> Result<(OwnedFd, Cow<'p, OsStr>), Failure> {
+        self.resolve_through_links(path, follow_last)
+            .map(|(dir, name)| (dir, Cow::Owned(name)))
+    }
+
+    fn resolve_through_links(
+        &self,
+        path: &Path,
+        follow_last: bool,
+    ) -> Result<(OwnedFd, OsString), Failure> {
         let open_dir = |parent: &OwnedFd, name: &OsStr| {
             sys::openat(
                 parent,
@@ -425,7 +518,11 @@ impl Files {
     }
 
     pub fn perform(&mut self, action: &Action, prepared: &mut Prepared<'_>) -> Option<Outcome> {
+        self.forget();
         Some(match action {
+            Action::CreateDirs { path, mode, owner } => {
+                self.create_dirs(path, *mode, *owner, prepared)
+            }
             Action::CreateDir { path, mode, owner } => {
                 self.create_dir(path, *mode, *owner, prepared)
             }
@@ -461,6 +558,65 @@ impl Files {
             Action::Commit => self.commit(),
             _ => return None,
         })
+    }
+
+    fn create_dirs(
+        &mut self,
+        path: &Path,
+        mode: u32,
+        owner: Option<Owner>,
+        prepared: &mut Prepared<'_>,
+    ) -> Outcome {
+        match self.path_facts(path).kind {
+            Kind::Missing => {}
+            Kind::Directory => return done(Vec::new()),
+            Kind::Unreadable(kind) => {
+                return Err(Failure::Io {
+                    path: path.to_path_buf(),
+                    kind,
+                });
+            }
+            _ => return Err(conflict(path, "a directory", "something else")),
+        }
+        let mut top = path;
+        while let Some(parent) = top.parent()
+            && parent != top
+            && self.path_facts(parent).kind == Kind::Missing
+        {
+            top = parent;
+        }
+        let place = self.place(top)?;
+        let staged = self.sibling(&place, "new");
+        let built = build_chain(&place.dir, &staged, top, path, mode, owner);
+        let discard = |files: &Self| {
+            let _ = files.remove_tree(&place, &staged);
+        };
+        let created = match built.and_then(|()| {
+            Self::stat(&place, &staged)?.ok_or_else(|| conflict(top, "the staged tree", "nothing"))
+        }) {
+            Ok(stat) => id(&stat),
+            Err(failure) => {
+                discard(self);
+                return Err(failure);
+            }
+        };
+        let undo = vec![Action::RemoveCreatedTree {
+            path: top.to_path_buf(),
+            expect: created,
+        }];
+        if let Err(failure) = prepared(&undo) {
+            discard(self);
+            return Err(failure);
+        }
+        if let Err(errno) = Self::rename(&place, &staged, &place.name, RenameFlags::NOREPLACE) {
+            discard(self);
+            return Err(match errno {
+                Errno::EXIST => conflict(top, "nothing", "something already there"),
+                errno => io(top, errno),
+            });
+        }
+        Self::sync(&place)?;
+        done(undo)
     }
 
     fn create_dir(
@@ -968,6 +1124,7 @@ impl Files {
         Some(match query {
             Query::Path(path) => Fact::Path(self.path_facts(path)),
             Query::Contents(path) => Fact::Contents(self.contents(path).map(Into::into)),
+            Query::TreeOwner(path) => Fact::TreeOwner(self.tree_owner(path)),
             _ => return None,
         })
     }
@@ -981,30 +1138,57 @@ impl Files {
             digest: None,
             changed: None,
         };
-        let Ok(place) = self.place_for_reading(path) else {
-            return missing;
-        };
-        match Self::stat(&place, &place.name) {
-            Ok(Some(stat)) => PathFacts {
-                kind: kind(&stat),
-                mode: mode(&stat),
-                owner: owner_of(&stat),
-                id: Some(id(&stat)),
-                digest: None,
-                changed: Some((stat.stx_mtime.tv_sec, stat.stx_mtime.tv_nsec)),
+        let unreadable = |failure: Failure| match failure {
+            Failure::Io {
+                kind: std::io::ErrorKind::NotFound,
+                ..
+            } => missing.clone(),
+            Failure::Io { kind, .. } => PathFacts {
+                kind: Kind::Unreadable(kind),
+                ..missing.clone()
             },
-            _ => missing,
+            _ => PathFacts {
+                kind: Kind::Unreadable(std::io::ErrorKind::PermissionDenied),
+                ..missing.clone()
+            },
+        };
+        let (dir, name) = match self.resolve(path, false) {
+            Ok(resolved) => resolved,
+            Err(failure) => return unreadable(failure),
+        };
+        match sys::statx(&dir, &*name, AtFlags::SYMLINK_NOFOLLOW, WANTED) {
+            Ok(stat) => {
+                let facts = PathFacts {
+                    kind: kind(&stat),
+                    mode: mode(&stat),
+                    owner: owner_of(&stat),
+                    id: Some(id(&stat)),
+                    digest: None,
+                    changed: Some((stat.stx_mtime.tv_sec, stat.stx_mtime.tv_nsec)),
+                };
+                if facts.kind != Kind::Symlink {
+                    self.remember(path, dir, &name);
+                }
+                facts
+            }
+            Err(Errno::NOENT) => missing,
+            Err(errno) => unreadable(io(path, errno)),
         }
     }
 
     fn contents(&self, path: &Path) -> Option<Vec<u8>> {
-        let (dir, name) = self.resolve(path, true).ok()?;
-        let node = sys::openat(
-            &dir,
-            &name,
-            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        )
+        let node = match self.open_seen(path) {
+            Some(node) => node,
+            None => {
+                let (dir, name) = self.resolve(path, true).ok()?;
+                sys::openat(
+                    &dir,
+                    &*name,
+                    OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )
+            }
+        }
         .ok()?;
         if kind(&statx_fd(&node).ok()?) != Kind::File {
             return None;
@@ -1013,6 +1197,51 @@ impl Files {
         std::fs::File::from(node).read_to_end(&mut contents).ok()?;
         Some(contents)
     }
+}
+
+fn build_chain(
+    parent: &OwnedFd,
+    staged: &OsStr,
+    top: &Path,
+    leaf: &Path,
+    mode: u32,
+    owner: Option<Owner>,
+) -> Result<(), Failure> {
+    let fail = |errno| io(top, errno);
+    let mut names = vec![staged.to_os_string()];
+    names.extend(
+        leaf.strip_prefix(top)
+            .map_err(|_| conflict(leaf, "a path below the created top", "another path"))?
+            .components()
+            .filter_map(|component| match component {
+                Component::Normal(part) => Some(part.to_os_string()),
+                _ => None,
+            }),
+    );
+    let mut dirs: Vec<OwnedFd> = Vec::new();
+    for name in &names {
+        let at = dirs.last().unwrap_or(parent);
+        sys::mkdirat(at, name, Mode::from_raw_mode(0o700)).map_err(fail)?;
+        let dir = sys::openat(
+            at,
+            name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(fail)?;
+        dirs.push(dir);
+    }
+    let last = dirs.len() - 1;
+    for (index, dir) in dirs.iter().enumerate().rev() {
+        if let Some(owner) = owner {
+            let (uid, gid) = ids(owner);
+            sys::fchown(dir, uid, gid).map_err(fail)?;
+        }
+        let wanted = if index == last { mode } else { 0o755 };
+        sys::fchmod(dir, Mode::from_raw_mode(wanted)).map_err(fail)?;
+        sys::fsync(dir).map_err(fail)?;
+    }
+    Ok(())
 }
 
 fn copy_tree_at(

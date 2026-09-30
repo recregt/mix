@@ -5,11 +5,16 @@
 //! The measuring itself belongs to [`crate::target`], which `mix repair` reconciles from, so the
 //! two commands cannot drift apart. The words are `mix-cli`'s.
 
-use futures_util::future::join_all;
+use std::path::Path;
+
+use mix_core::action::Failure;
+use mix_core::health;
 use mix_core::models::Category;
 
 use crate::Context;
-use crate::target::{self, Finding};
+use crate::drive::Performer;
+use crate::effect::files::Files;
+use crate::target::Finding;
 
 pub struct HealthReport {
     pub name: String,
@@ -27,22 +32,44 @@ impl HealthReport {
 pub async fn audit(ctx: &Context) -> Vec<HealthReport> {
     tracing::info!("auditing managed environment");
     let items = mix_core::models::targets(ctx.user.as_ref(), &ctx.policy);
-    let findings = join_all(items.iter().map(|item| target::inspect(item, &ctx.scope))).await;
-    items
-        .iter()
-        .zip(findings)
-        .map(|(target, finding)| {
-            let name = target.label().into_owned();
-            if let Some(finding) = &finding {
-                tracing::debug!("unhealthy: {name}: {finding:?}");
-            }
-            HealthReport {
-                name,
-                category: target.category(),
-                finding,
-            }
-        })
-        .collect()
+    let mut performer = match Files::open(Path::new("/"), "audit") {
+        Ok(files) => Some(Performer::new(files)),
+        Err(error) => {
+            tracing::debug!("cannot open the root to audit: {error}");
+            None
+        }
+    };
+    let mut reports = Vec::with_capacity(items.len());
+    for target in &items {
+        let finding = match &mut performer {
+            Some(performer) => match performer.observe(&health::queries(target)).await {
+                Ok(facts) => health::classify(target, &facts),
+                Err(failure) => Some(Finding::Unreadable {
+                    kind: kind_of(&failure),
+                }),
+            },
+            None => Some(Finding::Unreadable {
+                kind: std::io::ErrorKind::PermissionDenied,
+            }),
+        };
+        let name = target.label().into_owned();
+        if let Some(finding) = &finding {
+            tracing::debug!("unhealthy: {name}: {finding:?}");
+        }
+        reports.push(HealthReport {
+            name,
+            category: target.category(),
+            finding,
+        });
+    }
+    reports
+}
+
+fn kind_of(failure: &Failure) -> std::io::ErrorKind {
+    match failure {
+        Failure::Io { kind, .. } | Failure::SpawnFailed { kind, .. } => *kind,
+        _ => std::io::ErrorKind::Other,
+    }
 }
 
 #[cfg(test)]

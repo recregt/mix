@@ -31,6 +31,7 @@ pub enum Reply {
 pub fn path_of(action: &Action) -> Option<&Path> {
     match action {
         Action::CreateDir { path, .. }
+        | Action::CreateDirs { path, .. }
         | Action::PutFile { path, .. }
         | Action::SetMode { path, .. }
         | Action::SetOwner { path, .. }

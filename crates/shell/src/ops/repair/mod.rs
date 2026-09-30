@@ -5,13 +5,25 @@
 //! `mix repair` decides the order it walks the environment in, what a change means for the
 //! nix-daemon and for the git-tracked state, and what it hands the caller to print.
 
+use std::path::Path;
+use std::sync::Arc;
+
+use mix_core::action::Failure;
+use mix_core::health;
 use mix_core::models::{Target, UserConfig, targets};
-use mix_core::paths::{NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT, mix_state_dir};
+use mix_core::paths::mix_state_dir;
+use mix_core::plan::{Runner, StepOutcome, Verdict, diagnostic};
+use mix_events::v1::{Command, RepairRequest, command};
+use mix_events::{Ending, Outbox, ROOT, Start, Tree};
 use mix_exec::Scope;
 
+use crate::drive::{Journal, Performer, drive, stopped_by};
+use crate::effect::files::Files;
 use crate::effect::git;
-use crate::effect::systemd;
-use crate::target::{self, Error};
+use crate::effect::home::core_error;
+use crate::effect::journal::{FileJournal, JOURNAL_DIR, recover_all};
+use crate::ops::bootstrap::request_id;
+use crate::target::Error;
 use crate::{Context, HostConfig};
 
 pub struct RepairReport {
@@ -49,16 +61,49 @@ pub async fn repair(ctx: &Context) -> Repair {
     tracing::info!("repairing managed environment");
     let user_config = ctx.user.as_ref();
     let scope = &ctx.scope;
+    let request = request_id();
     let items = targets(user_config, &ctx.policy);
-    let (mut reports, interrupted) = put_back(&items, scope).await;
-
-    let shielded = scope.shielded();
-    if rewrote_nix_conf(&reports) {
-        restart_the_daemon(&shielded, &mut reports).await;
+    let files = match Files::open(Path::new("/"), &request) {
+        Ok(files) => files,
+        Err(source) => {
+            return Repair {
+                reports: vec![RepairReport::failed(
+                    "/",
+                    Error::Core(mix_core::Error::Io {
+                        path: "/".into(),
+                        source,
+                    }),
+                )],
+                interrupted: false,
+            };
+        }
+    };
+    let mut performer = Performer::new(files);
+    let journals = Path::new(JOURNAL_DIR);
+    let recovered = recover_all(journals, &mut performer, &scope.shielded()).await;
+    for (action, failure) in &recovered.failures {
+        tracing::warn!("could not finish an interrupted request ({action:?}): {failure:?}");
+    }
+    let mut journal = match FileJournal::create(journals, &request) {
+        Ok(journal) => journal,
+        Err(failure) => {
+            return Repair {
+                reports: vec![RepairReport::failed(
+                    JOURNAL_DIR,
+                    error_of(failure, JOURNAL_DIR),
+                )],
+                interrupted: false,
+            };
+        }
+    };
+    let (mut reports, interrupted) =
+        put_back(items, &request, &mut performer, &mut journal, scope).await;
+    if let Err(failure) = journal.finish() {
+        tracing::warn!("could not remove the finished journal: {failure:?}");
     }
 
     if let Some(cfg) = user_config {
-        commit_the_tracked_state(cfg, &ctx.host, &shielded, &mut reports).await;
+        commit_the_tracked_state(cfg, &ctx.host, &scope.shielded(), &mut reports).await;
     }
 
     Repair {
@@ -67,61 +112,74 @@ pub async fn repair(ctx: &Context) -> Repair {
     }
 }
 
-async fn put_back(items: &[Target<'_>], scope: &Scope) -> (Vec<RepairReport>, bool) {
-    let shielded = scope.shielded();
+fn error_of(failure: Failure, name: &str) -> Error {
+    match failure {
+        Failure::Unrepairable { artifact, reason } => Error::Unrepairable { artifact, reason },
+        other => Error::Core(core_error(other, Path::new(name))),
+    }
+}
 
-    // Measuring does not change anything, so every target is measured at once; putting them back
-    // is done in the order they are declared in, because a target can be what the next one needs.
-    let findings =
-        futures_util::future::join_all(items.iter().map(|item| target::inspect(item, scope))).await;
+async fn put_back(
+    items: Vec<Target<'_>>,
+    request: &str,
+    performer: &mut Performer,
+    journal: &mut dyn Journal,
+    scope: &Scope,
+) -> (Vec<RepairReport>, bool) {
+    let outbox = Arc::new(Outbox::new(request.to_string(), || {}));
+    let stopped = stopped_by(scope);
+    let mut tree = Tree::new(
+        Arc::clone(&outbox),
+        Arc::clone(&stopped),
+        Start::command(
+            "repair",
+            Command {
+                mix_version: env!("CARGO_PKG_VERSION").to_string(),
+                schema_minor: mix_events::SCHEMA_MINOR,
+                request: Some(command::Request::Repair(RepairRequest {})),
+            },
+        ),
+    );
+    let mut runner = Runner::new(ROOT, health::repair_steps(items, request)).independent();
+    let report = drive(
+        &mut runner,
+        &mut tree,
+        performer,
+        scope,
+        &stopped,
+        journal,
+        &mut (),
+    )
+    .await;
+    let ending = match &report.verdict {
+        Verdict::Succeeded => Ending::succeeded(),
+        Verdict::Failed { failure, .. } => Ending::failed(diagnostic(failure)),
+        Verdict::Cancelled(cause) => Ending::cancelled(*cause),
+    };
+    let _ = tree.finish(ROOT, ending);
+    drop(tree);
+    outbox.drain();
 
     let mut reports = Vec::new();
-    for (item, finding) in items.iter().zip(findings) {
-        let Some(finding) = finding else { continue };
-        let name = item.label();
-        if scope.is_stopped() {
-            tracing::info!("stopped before repairing {name}");
-            return (reports, true);
-        }
-        tracing::debug!("drifted: {name}: {finding:?}");
-
-        if let Some(reason) = finding.unfixable() {
-            let artifact = name.into_owned();
-            reports.push(RepairReport::failed(
-                artifact.clone(),
-                Error::Unrepairable { artifact, reason },
-            ));
-            continue;
-        }
-
-        match target::reconcile(item, finding, &shielded).await {
-            Ok(()) => {
+    for (name, outcome) in std::mem::take(&mut report.steps) {
+        match outcome {
+            StepOutcome::Changed => {
                 tracing::debug!("repaired: {name}");
-                reports.push(RepairReport::repaired(name.into_owned()));
+                reports.push(RepairReport::repaired(name));
             }
-            Err(e) => {
-                tracing::debug!("failed to repair {name}: {e}");
-                reports.push(RepairReport::failed(name.into_owned(), e));
+            StepOutcome::Failed(failure) => {
+                tracing::debug!("failed to repair {name}: {failure:?}");
+                let error = error_of(failure, &name);
+                reports.push(RepairReport::failed(name, error));
             }
+            StepOutcome::Satisfied | StepOutcome::Cancelled(_) => {}
         }
     }
-
-    (reports, false)
-}
-
-/// A rewritten nix.conf only reaches a running nix-daemon when it restarts.
-fn rewrote_nix_conf(reports: &[RepairReport]) -> bool {
-    reports
-        .iter()
-        .any(|report| report.fixed && report.name == NIX_CONF_DEST)
-}
-
-async fn restart_the_daemon(scope: &Scope, reports: &mut Vec<RepairReport>) {
-    match systemd::restart_if_active(NIX_DAEMON_SERVICE_UNIT, scope).await {
-        Ok(false) => {}
-        Ok(true) => reports.push(RepairReport::repaired(NIX_DAEMON_SERVICE_UNIT)),
-        Err(e) => reports.push(RepairReport::failed(NIX_DAEMON_SERVICE_UNIT, e)),
+    for (name, failure) in std::mem::take(&mut report.rollback_failures) {
+        let error = error_of(failure, &name);
+        reports.push(RepairReport::failed(name, error));
     }
+    (reports, matches!(report.verdict, Verdict::Cancelled(_)))
 }
 
 /// Configuration mix rewrote is drift the user should be able to see in git.
@@ -150,27 +208,9 @@ async fn commit_the_tracked_state(
 
 #[cfg(test)]
 mod tests {
+    use mix_core::journal::Record;
+
     use super::*;
-
-    fn report(name: &str, fixed: bool) -> RepairReport {
-        RepairReport {
-            name: name.to_string(),
-            fixed,
-            error: None,
-        }
-    }
-
-    #[test]
-    fn a_repaired_nix_conf_asks_for_a_daemon_restart() {
-        assert!(rewrote_nix_conf(&[report(NIX_CONF_DEST, true)]));
-    }
-
-    #[test]
-    fn a_healthy_nix_conf_leaves_the_daemon_alone() {
-        assert!(!rewrote_nix_conf(&[report("/nix", true)]));
-        assert!(!rewrote_nix_conf(&[report(NIX_CONF_DEST, false)]));
-        assert!(!rewrote_nix_conf(&[]));
-    }
 
     #[test]
     fn a_report_carries_either_a_repair_or_the_reason_there_was_none() {
@@ -202,16 +242,26 @@ mod tests {
             .collect()
     }
 
+    async fn repair_in(targets: Vec<Target<'_>>, scope: &Scope) -> (Vec<RepairReport>, bool) {
+        let mut performer = Performer::new(Files::open(Path::new("/"), "r1").unwrap());
+        let mut journal: Vec<Record> = Vec::new();
+        put_back(targets, "r1", &mut performer, &mut journal, scope).await
+    }
+
     #[tokio::test]
     async fn every_drifted_target_is_put_back_when_nothing_stops_it() {
         let dir = tempfile::tempdir().unwrap();
 
         let (reports, interrupted) =
-            put_back(&drifted_files(dir.path()), &mix_exec::Scope::root()).await;
+            repair_in(drifted_files(dir.path()), &mix_exec::Scope::root()).await;
 
         assert!(!interrupted);
-        assert_eq!(reports.len(), 2);
-        assert!(reports.iter().all(|report| report.fixed));
+        let fixed: Vec<&str> = reports
+            .iter()
+            .filter(|report| report.fixed)
+            .map(|report| report.name.as_str())
+            .collect();
+        assert_eq!(fixed.len(), 2, "{fixed:?}");
         assert_eq!(
             std::fs::read_to_string(dir.path().join("two")).unwrap(),
             "expected"
@@ -224,7 +274,7 @@ mod tests {
         let scope = mix_exec::Scope::root();
         scope.cancel(mix_exec::Reason::Interrupted);
 
-        let (reports, interrupted) = put_back(&drifted_files(dir.path()), &scope).await;
+        let (reports, interrupted) = repair_in(drifted_files(dir.path()), &scope).await;
 
         assert!(interrupted);
         assert!(reports.is_empty());
@@ -235,20 +285,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_stop_with_nothing_left_to_repair_is_not_an_interruption() {
+    async fn one_target_that_cannot_be_repaired_does_not_stop_the_others() {
         let dir = tempfile::tempdir().unwrap();
-        let scope = mix_exec::Scope::root();
-        scope.cancel(mix_exec::Reason::Interrupted);
-        let healthy = Target::File {
-            path: dir.path().join("healthy").into(),
-            expected: Some("expected".to_string().into()),
+        let blocked = dir.path().join("blocked");
+        std::fs::write(&blocked, "a file where a directory belongs").unwrap();
+        let mut targets = vec![Target::Directory {
+            path: blocked.clone().into(),
+            mode: 0o755,
             owner: None,
-        };
-        std::fs::write(dir.path().join("healthy"), "expected").unwrap();
+        }];
+        targets.extend(drifted_files(dir.path()));
 
-        let (reports, interrupted) = put_back(&[healthy], &scope).await;
+        let (reports, _) = repair_in(targets, &mix_exec::Scope::root()).await;
 
-        assert!(!interrupted);
-        assert!(reports.is_empty());
+        assert!(
+            reports
+                .iter()
+                .any(|report| report.name == blocked.to_string_lossy()
+                    && matches!(report.error, Some(Error::Unrepairable { .. })))
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("one")).unwrap(),
+            "expected"
+        );
     }
 }

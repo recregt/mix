@@ -97,6 +97,46 @@ pub enum Target<'a> {
 }
 
 impl Target<'_> {
+    pub fn into_owned(self) -> Target<'static> {
+        let own_path = |path: Cow<'_, Path>| Cow::Owned(path.into_owned());
+        match self {
+            Target::Directory { path, mode, owner } => Target::Directory {
+                path: own_path(path),
+                mode,
+                owner,
+            },
+            Target::File {
+                path,
+                expected,
+                owner,
+            } => Target::File {
+                path: own_path(path),
+                expected: expected.map(|expected| Cow::Owned(expected.into_owned())),
+                owner,
+            },
+            Target::SeededFile { path, seed, owner } => Target::SeededFile {
+                path: own_path(path),
+                seed: Cow::Owned(seed.into_owned()),
+                owner,
+            },
+            Target::Group { name, gid } => Target::Group { name, gid },
+            Target::GroupMember { group, user } => Target::GroupMember { group, user },
+            Target::User { n, uid, gid } => Target::User { n, uid, gid },
+            Target::SystemdUnit {
+                name,
+                src,
+                dest,
+                must_be_active,
+            } => Target::SystemdUnit {
+                name,
+                src,
+                dest,
+                must_be_active,
+            },
+            Target::PathExists { name, path } => Target::PathExists { name, path },
+        }
+    }
+
     pub fn label(&self) -> Cow<'_, str> {
         match self {
             Target::Directory { path, .. } => path.to_string_lossy(),

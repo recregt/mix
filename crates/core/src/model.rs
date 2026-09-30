@@ -365,6 +365,40 @@ impl World {
                     expect: id,
                 }])
             }
+            Action::CreateDirs { path, mode, owner } => {
+                let mut missing: Vec<PathBuf> = path
+                    .ancestors()
+                    .take_while(|dir| !self.files.contains_key(*dir))
+                    .map(Path::to_path_buf)
+                    .collect();
+                missing.reverse();
+                let Some(top) = missing.first().cloned() else {
+                    return match self.files.get(path).map(|entry| &entry.content) {
+                        Some(Content::Directory) => done(Vec::new()),
+                        _ => Err(conflict(path, "a directory", "something else")),
+                    };
+                };
+                self.parent_is_dir(&top)?;
+                let mut top_id = None;
+                for dir in missing {
+                    let id = self.fresh();
+                    top_id.get_or_insert(id);
+                    self.files.insert(
+                        dir.clone(),
+                        Entry {
+                            content: Content::Directory,
+                            mode: if dir == *path { *mode } else { 0o755 },
+                            owner: owner.unwrap_or(ROOT),
+                            id,
+                            changed: id.ino,
+                        },
+                    );
+                }
+                done(vec![Action::RemoveCreatedTree {
+                    path: top,
+                    expect: top_id.expect("at least the top was created"),
+                }])
+            }
             Action::PutFile {
                 path,
                 contents,
@@ -1037,6 +1071,22 @@ impl World {
             ),
         ];
         let mut created = Vec::new();
+        let store = Path::new(crate::paths::NIX_STORE);
+        if !self.files.contains_key(store) {
+            self.parent_is_dir(store)?;
+            let id = self.fresh();
+            self.files.insert(
+                store.to_path_buf(),
+                Entry {
+                    content: Content::Directory,
+                    mode: 0o1775,
+                    owner: ROOT,
+                    id,
+                    changed: id.ino,
+                },
+            );
+            created.push(store.to_path_buf());
+        }
         for (file, contents) in files {
             let file = Path::new(file);
             let mut missing: Vec<&Path> = file
@@ -1096,6 +1146,16 @@ impl World {
             Query::Contents(path) => Fact::Contents(self.contents(path).map(Arc::from)),
             Query::Group(name) => Fact::Group(self.groups.get(name).cloned()),
             Query::User(name) => Fact::User(self.users.get(name).cloned()),
+            Query::TreeOwner(path) => Fact::TreeOwner(
+                path.ancestors()
+                    .skip(1)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .filter_map(|ancestor| self.files.get(ancestor))
+                    .map(|entry| entry.owner.0)
+                    .find(|uid| *uid != 0),
+            ),
             Query::Profile(user) => Fact::Profile(
                 self.profiles
                     .get(&user.uid)

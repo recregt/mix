@@ -3,6 +3,7 @@ pub mod bootstrap;
 pub mod build_graph;
 pub mod constants;
 pub mod error;
+pub mod health;
 pub mod journal;
 #[cfg(any(test, feature = "model"))]
 pub mod model;

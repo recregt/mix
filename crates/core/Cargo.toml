@@ -15,10 +15,12 @@ serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+generativity = "1.2.1"
 
 [dev-dependencies]
 proptest = { workspace = true }
 divan = { workspace = true }
+trybuild = "1.0.121"
 
 [[bench]]
 name = "nix_log"

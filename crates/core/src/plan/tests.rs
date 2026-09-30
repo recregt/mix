@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::borrow::Cow;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mix_events::v1::{Command, Envelope, NotRunReason, Status};
@@ -16,12 +17,12 @@ struct EnsureDir {
 }
 
 impl StepSpec for EnsureDir {
-    fn key(&self) -> &'static str {
-        self.key
+    fn key(&self) -> Cow<'static, str> {
+        self.key.into()
     }
 
-    fn title(&self) -> &'static str {
-        "ensure a directory"
+    fn title(&self) -> Cow<'static, str> {
+        "ensure a directory".into()
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -58,12 +59,12 @@ struct EnsureFile {
 }
 
 impl StepSpec for EnsureFile {
-    fn key(&self) -> &'static str {
-        self.key
+    fn key(&self) -> Cow<'static, str> {
+        self.key.into()
     }
 
-    fn title(&self) -> &'static str {
-        "ensure a file"
+    fn title(&self) -> Cow<'static, str> {
+        "ensure a file".into()
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -103,12 +104,12 @@ struct EnsureGroup {
 }
 
 impl StepSpec for EnsureGroup {
-    fn key(&self) -> &'static str {
-        self.key
+    fn key(&self) -> Cow<'static, str> {
+        self.key.into()
     }
 
-    fn title(&self) -> &'static str {
-        "ensure a group"
+    fn title(&self) -> Cow<'static, str> {
+        "ensure a group".into()
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -179,13 +180,18 @@ struct Run {
 }
 
 fn drive(world: &mut World, steps: Vec<Box<dyn StepSpec>>, script: Script) -> Run {
+    drive_runner(world, Runner::new(ROOT, steps), script)
+}
+
+fn drive_runner(world: &mut World, mut runner: Runner, script: Script) -> Run {
+    make_guard!(guard);
+    let mut runner = runner.brand(guard);
     let outbox = Arc::new(Outbox::new("request", || {}));
     let mut tree = Tree::new(
         outbox.clone(),
         Arc::new(|| None),
         Start::command("bootstrap", Command::default()),
     );
-    let mut runner = Runner::new(ROOT, steps);
     let mut input = None;
     let mut performed = Vec::new();
     let mut forward = 0;
@@ -232,7 +238,7 @@ fn drive(world: &mut World, steps: Vec<Box<dyn StepSpec>>, script: Script) -> Ru
                 };
                 input = Some(Input::Done(outcome));
             }
-            Next::Finished(report) => break report,
+            Next::Finished(closed) => break runner.report(closed).clone(),
         }
     };
     let ending = match &report.verdict {
@@ -336,6 +342,71 @@ fn every_action_and_every_undo_is_a_node_under_what_ran_it() {
             "{path}"
         );
     }
+}
+
+#[test]
+fn an_independent_step_that_fails_is_undone_alone_and_the_others_still_run() {
+    let mut world = World::default();
+
+    let run = drive_runner(
+        &mut world,
+        Runner::new(ROOT, bootstrap_like()).independent(),
+        Script {
+            fail_at: Some(1),
+            ..Script::default()
+        },
+    );
+
+    assert!(
+        matches!(&run.report.verdict, Verdict::Failed { step, .. } if step == "create-nix-var"),
+        "{:?}",
+        run.report.verdict
+    );
+    let outcomes: Vec<(&str, bool)> = run
+        .report
+        .steps
+        .iter()
+        .map(|(step, outcome)| (step.as_ref(), matches!(outcome, StepOutcome::Changed)))
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            ("create-nix-dir", true),
+            ("create-nix-var", false),
+            ("create-groups", true),
+            ("write-marker", true),
+            ("write-nix-conf", true),
+        ]
+    );
+    assert!(world.files.contains_key(Path::new("/nix")));
+    assert!(!world.files.contains_key(Path::new("/nix/var")));
+    assert!(world.pending().is_empty());
+    assert!(validate(&run.stream).is_ok());
+}
+
+#[test]
+fn an_independent_run_that_is_stopped_undoes_the_step_in_progress_and_keeps_the_rest() {
+    let mut world = World::default();
+
+    let run = drive_runner(
+        &mut world,
+        Runner::new(ROOT, bootstrap_like()).independent(),
+        Script {
+            stop_after: Some(1),
+            ..Script::default()
+        },
+    );
+
+    assert!(matches!(run.report.verdict, Verdict::Cancelled(_)));
+    assert!(world.files.contains_key(Path::new("/nix")));
+    assert!(!world.files.contains_key(Path::new("/nix/var")));
+    assert!(!world.groups.contains_key("nixbld"));
+    assert!(world.pending().is_empty());
+    assert_eq!(
+        outcome(&run, "bootstrap/plan/create-groups"),
+        Some(EventOutcome::NotRun(NotRunReason::NotReached))
+    );
+    assert!(validate(&run.stream).is_ok());
 }
 
 #[test]
@@ -443,7 +514,7 @@ fn a_failed_undo_is_reported_the_others_still_run_and_nothing_foreign_is_removed
         .report
         .rollback_failures
         .iter()
-        .map(|(step, _)| *step)
+        .map(|(step, _)| step.as_ref())
         .collect();
     assert_eq!(failed, ["write-marker", "create-nix-dir"]);
     assert!(matches!(
@@ -482,6 +553,8 @@ fn a_commit_that_fails_still_succeeds_and_warns() {
         Start::command("bootstrap", Command::default()),
     );
     let mut runner = Runner::new(ROOT, bootstrap_like());
+    make_guard!(guard);
+    let mut runner = runner.brand(guard);
     let mut input = None;
     let report = loop {
         match runner.step(&mut tree, input.take()) {
@@ -498,7 +571,7 @@ fn a_commit_that_fails_still_succeeds_and_warns() {
                 })));
             }
             Next::Perform(action) => input = Some(Input::Done(world.apply(&action))),
-            Next::Finished(report) => break report,
+            Next::Finished(closed) => break runner.report(closed).clone(),
         }
     };
     tree.finish(ROOT, Ending::succeeded()).unwrap();
@@ -631,11 +704,13 @@ proptest! {
 }
 
 fn answer(
-    runner: &mut Runner,
+    mut runner: Runner,
     world: &mut World,
     observe: impl Fn(&World, &[Query]) -> Result<Vec<Fact>, Failure>,
     mut fail: impl FnMut(&Action) -> bool,
 ) -> (Report, Vec<(Action, bool)>) {
+    make_guard!(guard);
+    let mut runner = runner.brand(guard);
     let outbox = Arc::new(Outbox::new("request", || {}));
     let mut tree = Tree::new(
         outbox,
@@ -659,7 +734,7 @@ fn answer(
                 };
                 input = Some(Input::Done(outcome));
             }
-            Next::Finished(report) => return (report, performed),
+            Next::Finished(closed) => return (runner.report(closed).clone(), performed),
         }
     }
 }
@@ -668,10 +743,10 @@ fn answer(
 fn a_step_that_cannot_be_observed_fails_and_rolls_back_what_came_before() {
     let base = World::default();
     let mut world = base.clone();
-    let mut runner = Runner::new(ROOT, bootstrap_like());
+    let runner = Runner::new(ROOT, bootstrap_like());
 
     let (report, _) = answer(
-        &mut runner,
+        runner,
         &mut world,
         |world, queries| {
             if matches!(queries.first(), Some(Query::Group(_))) {
@@ -686,7 +761,7 @@ fn a_step_that_cannot_be_observed_fails_and_rolls_back_what_came_before() {
     assert_eq!(
         report.verdict,
         Verdict::Failed {
-            step: "create-groups",
+            step: "create-groups".into(),
             failure: Failure::SystemdUnreachable
         }
     );
@@ -696,10 +771,10 @@ fn a_step_that_cannot_be_observed_fails_and_rolls_back_what_came_before() {
 #[test]
 fn every_undo_is_performed_shielded_and_no_forward_action_is() {
     let mut world = World::default();
-    let mut runner = Runner::new(ROOT, bootstrap_like());
+    let runner = Runner::new(ROOT, bootstrap_like());
 
     let (_, performed) = answer(
-        &mut runner,
+        runner,
         &mut world,
         |world, queries| Ok(queries.iter().map(|query| world.observe(query)).collect()),
         |action| matches!(action, Action::PutFile { path, .. } if path.ends_with("nix.conf")),
@@ -735,6 +810,8 @@ fn crashing_run(
         Start::command("bootstrap", Command::default()),
     );
     let mut runner = Runner::new(ROOT, bootstrap_like());
+    make_guard!(guard);
+    let mut runner = runner.brand(guard);
     let mut records = vec![Record::Began {
         request: "r".into(),
     }];
@@ -835,6 +912,8 @@ fn an_action_that_failed_after_taking_effect_is_undone_as_one_in_doubt() {
             Start::command("bootstrap", Command::default()),
         );
         let mut runner = Runner::new(ROOT, bootstrap_like());
+        make_guard!(guard);
+        let mut runner = runner.brand(guard);
         let mut input = None;
         let mut forward = 0;
         let report = loop {
@@ -858,7 +937,7 @@ fn an_action_that_failed_after_taking_effect_is_undone_as_one_in_doubt() {
                         forward += 1;
                     }
                 }
-                Next::Finished(report) => break report,
+                Next::Finished(closed) => break runner.report(closed).clone(),
             }
         };
 
@@ -870,4 +949,47 @@ fn an_action_that_failed_after_taking_effect_is_undone_as_one_in_doubt() {
         );
         assert_eq!(world, base, "failing at {failing}");
     }
+}
+
+#[test]
+fn a_finished_plan_stepped_again_stays_finished() {
+    let mut world = World::default();
+    let outbox = Arc::new(Outbox::new("plan", || {}));
+    let mut tree = Tree::new(
+        outbox.clone(),
+        Arc::new(|| None),
+        Start::command("bootstrap", Command::default()),
+    );
+    let mut plan = Runner::new(ROOT, bootstrap_like());
+    make_guard!(guard);
+    let mut runner = plan.brand(guard);
+    let mut input = None;
+    let closed = loop {
+        match runner.step(&mut tree, input.take()) {
+            Next::Observe(queries) => {
+                input = Some(Input::Facts(Ok(queries
+                    .iter()
+                    .map(|query| world.observe(query))
+                    .collect())));
+            }
+            Next::Perform(action) => input = Some(Input::Done(world.apply(&action))),
+            Next::Finished(closed) => break closed,
+        }
+    };
+    let events = outbox.drain().len();
+
+    let Next::Finished(_) = runner.step(&mut tree, None) else {
+        panic!("a finished plan stays finished");
+    };
+    let first = runner.report(closed).clone();
+    make_guard!(later);
+    let mut runner = plan.brand(later);
+    let Next::Finished(again) = runner.step(&mut tree, None) else {
+        panic!("a finished plan stays finished");
+    };
+
+    assert_eq!(outbox.drain().len(), 0);
+    assert!(events > 0);
+    assert_eq!(first.verdict, Verdict::Succeeded);
+    assert_eq!(runner.report(again), &first);
 }

@@ -1,0 +1,9 @@
+error[E0499]: cannot borrow `runner` as mutable more than once at a time
+  --> tests/ui/two_sessions.rs:10:18
+   |
+ 9 |     let mut first = runner.brand(a);
+   |                     ------ first mutable borrow occurs here
+10 |     let second = runner.brand(b);
+   |                  ^^^^^^ second mutable borrow occurs here
+11 |     first.stop(Cancellation::Interrupted);
+   |     ----- first borrow later used here

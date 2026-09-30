@@ -1,7 +1,8 @@
+use std::borrow::Cow;
 use std::sync::{Arc, LazyLock};
 
 use mix_core::action::{Action, Fact, Failure, Performed, Query};
-use mix_core::plan::{Input, Next, Runner, StepSpec, Verdict};
+use mix_core::plan::{Closed, Input, Next, Runner, Session, StepSpec, Verdict, make_guard};
 use mix_events::v1::Command;
 use mix_events::{Outbox, ROOT, Start, Tree};
 
@@ -21,12 +22,12 @@ struct Noop {
 }
 
 impl StepSpec for Noop {
-    fn key(&self) -> &'static str {
-        self.key
+    fn key(&self) -> Cow<'static, str> {
+        self.key.into()
     }
 
-    fn title(&self) -> &'static str {
-        "do nothing"
+    fn title(&self) -> Cow<'static, str> {
+        "do nothing".into()
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -60,7 +61,12 @@ fn runner(steps: usize, acts: bool) -> (Runner, Tree, Arc<Outbox>) {
     (Runner::new(ROOT, steps), tree, outbox)
 }
 
-fn drive(runner: &mut Runner, tree: &mut Tree, outbox: &Outbox, fail_at: Option<usize>) -> Verdict {
+fn drive<'id>(
+    runner: &mut Session<'id, '_>,
+    tree: &mut Tree,
+    outbox: &Outbox,
+    fail_at: Option<usize>,
+) -> Closed<'id> {
     let mut input = None;
     let mut performed = 0;
     loop {
@@ -83,7 +89,7 @@ fn drive(runner: &mut Runner, tree: &mut Tree, outbox: &Outbox, fail_at: Option<
                 performed += 1;
                 input = Some(Input::Done(outcome));
             }
-            Next::Finished(report) => return report.verdict,
+            Next::Finished(closed) => return closed,
         }
     }
 }
@@ -93,10 +99,10 @@ fn satisfied_steps(bencher: divan::Bencher, steps: usize) {
     bencher
         .with_inputs(|| runner(steps, false))
         .bench_local_values(|(mut runner, mut tree, outbox)| {
-            assert_eq!(
-                drive(&mut runner, &mut tree, &outbox, None),
-                Verdict::Succeeded
-            );
+            make_guard!(guard);
+            let mut runner = runner.brand(guard);
+            let closed = drive(&mut runner, &mut tree, &outbox, None);
+            assert_eq!(runner.report(closed).verdict, Verdict::Succeeded);
         });
 }
 
@@ -105,10 +111,10 @@ fn performed_steps(bencher: divan::Bencher, steps: usize) {
     bencher
         .with_inputs(|| runner(steps, true))
         .bench_local_values(|(mut runner, mut tree, outbox)| {
-            assert_eq!(
-                drive(&mut runner, &mut tree, &outbox, None),
-                Verdict::Succeeded
-            );
+            make_guard!(guard);
+            let mut runner = runner.brand(guard);
+            let closed = drive(&mut runner, &mut tree, &outbox, None);
+            assert_eq!(runner.report(closed).verdict, Verdict::Succeeded);
         });
 }
 
@@ -117,8 +123,11 @@ fn rollback_after_the_last_step_fails(bencher: divan::Bencher, steps: usize) {
     bencher
         .with_inputs(|| runner(steps, true))
         .bench_local_values(|(mut runner, mut tree, outbox)| {
+            make_guard!(guard);
+            let mut runner = runner.brand(guard);
+            let closed = drive(&mut runner, &mut tree, &outbox, Some(steps - 1));
             assert!(matches!(
-                drive(&mut runner, &mut tree, &outbox, Some(steps - 1)),
+                runner.report(closed).verdict,
                 Verdict::Failed { .. }
             ));
         });

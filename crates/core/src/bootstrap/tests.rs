@@ -6,7 +6,7 @@ use mix_events::{Ending, Outbox, Outcome as EventOutcome, ROOT, Start, Tree, val
 
 use super::*;
 use crate::model::World;
-use crate::plan::{Input, Next, Report, Runner, Verdict, diagnostic};
+use crate::plan::{Input, Next, Report, Runner, Verdict, diagnostic, make_guard};
 use crate::privilege::InvokingUser;
 
 fn settings(user: Option<UserConfig>, force: bool) -> Settings {
@@ -66,6 +66,8 @@ fn run(world: &mut World, settings: &Settings, script: Script) -> Run {
         Start::command("bootstrap", Command::default()),
     );
     let mut runner = Runner::new(ROOT, steps(settings));
+    make_guard!(guard);
+    let mut runner = runner.brand(guard);
     let mut input = None;
     let mut changes = 0;
     let mut undos = 0;
@@ -101,7 +103,7 @@ fn run(world: &mut World, settings: &Settings, script: Script) -> Run {
                 }
                 input = Some(Input::Done(outcome));
             }
-            Next::Finished(report) => break report,
+            Next::Finished(closed) => break runner.report(closed).clone(),
         }
     };
     let ending = match &report.verdict {
@@ -440,11 +442,11 @@ fn a_file_where_nix_belongs_is_refused_and_nothing_is_touched() {
     let run = run(&mut world, &settings(None, false), Script::default());
 
     assert!(matches!(
-        run.report.verdict,
+        &run.report.verdict,
         Verdict::Failed {
-            step: "create-nix-dir",
+            step,
             failure: Failure::Conflict { .. }
-        }
+        } if step == "create-nix-dir"
     ));
     assert_eq!(world, before);
     assert_eq!(

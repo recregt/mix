@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -205,12 +206,12 @@ const UNIT_FILES: [&str; 2] = [NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SOCKET_DEST];
 const SET_ASIDE: [&str; 4] = [NIX_CONF_DEST, PROFILE_SNIPPET_DEST, POLICY_FILE, "/nix"];
 
 impl StepSpec for RemoveExistingInstallation {
-    fn key(&self) -> &'static str {
-        "remove-existing-installation"
+    fn key(&self) -> Cow<'static, str> {
+        "remove-existing-installation".into()
     }
 
-    fn title(&self) -> &'static str {
-        "remove the existing installation"
+    fn title(&self) -> Cow<'static, str> {
+        "remove the existing installation".into()
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -285,12 +286,12 @@ impl StepSpec for RemoveExistingInstallation {
 struct CreateNixDir;
 
 impl StepSpec for CreateNixDir {
-    fn key(&self) -> &'static str {
-        "create-nix-dir"
+    fn key(&self) -> Cow<'static, str> {
+        "create-nix-dir".into()
     }
 
-    fn title(&self) -> &'static str {
-        "create /nix"
+    fn title(&self) -> Cow<'static, str> {
+        "create /nix".into()
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -319,12 +320,12 @@ impl StepSpec for CreateNixDir {
 struct CreateNixTree;
 
 impl StepSpec for CreateNixTree {
-    fn key(&self) -> &'static str {
-        "create-nix-tree"
+    fn key(&self) -> Cow<'static, str> {
+        "create-nix-tree".into()
     }
 
-    fn title(&self) -> &'static str {
-        "create managed runtime directory tree"
+    fn title(&self) -> Cow<'static, str> {
+        "create managed runtime directory tree".into()
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -354,12 +355,12 @@ struct CreateUsersAndGroups {
 }
 
 impl StepSpec for CreateUsersAndGroups {
-    fn key(&self) -> &'static str {
-        "create-users-and-groups"
+    fn key(&self) -> Cow<'static, str> {
+        "create-users-and-groups".into()
     }
 
-    fn title(&self) -> &'static str {
-        "create the managed groups and build users"
+    fn title(&self) -> Cow<'static, str> {
+        "create the managed groups and build users".into()
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -427,12 +428,12 @@ impl StepSpec for CreateUsersAndGroups {
 struct FetchRuntime(Runtime);
 
 impl StepSpec for FetchRuntime {
-    fn key(&self) -> &'static str {
-        "fetch-runtime"
+    fn key(&self) -> Cow<'static, str> {
+        "fetch-runtime".into()
     }
 
-    fn title(&self) -> &'static str {
-        "fetch and activate the managed runtime"
+    fn title(&self) -> Cow<'static, str> {
+        "fetch and activate the managed runtime".into()
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -464,12 +465,12 @@ impl ConfigureNixConf {
 }
 
 impl StepSpec for ConfigureNixConf {
-    fn key(&self) -> &'static str {
-        "write-nix-conf"
+    fn key(&self) -> Cow<'static, str> {
+        "write-nix-conf".into()
     }
 
-    fn title(&self) -> &'static str {
-        "write runtime configuration"
+    fn title(&self) -> Cow<'static, str> {
+        "write runtime configuration".into()
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -519,12 +520,12 @@ const UNITS: [(&str, &str, &str); 2] = [
 ];
 
 impl StepSpec for ConfigureDaemon {
-    fn key(&self) -> &'static str {
-        "configure-daemon"
+    fn key(&self) -> Cow<'static, str> {
+        "configure-daemon".into()
     }
 
-    fn title(&self) -> &'static str {
-        "configure the managed background service"
+    fn title(&self) -> Cow<'static, str> {
+        "configure the managed background service".into()
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -579,18 +580,20 @@ impl StepSpec for ConfigureDaemon {
                 unit: NIX_DAEMON_SOCKET_UNIT.to_string(),
             });
         }
-        let service = facts.unit(7);
-        let configured = facts.path(8).changed;
-        if service.active_state == "active"
-            && let (Some(since), Some(configured)) = (service.active_since, configured)
-            && configured > since
-        {
-            actions.push(Action::RestartUnit {
-                unit: NIX_DAEMON_SERVICE_UNIT.to_string(),
-            });
-        }
+        actions.extend(stale_restart(facts.unit(7), facts.path(8).changed));
         Ok(actions)
     }
+}
+
+pub fn stale_restart(service: &UnitFacts, configured: Option<(i64, u32)>) -> Option<Action> {
+    (service.active_state == "active"
+        && matches!(
+            (service.active_since, configured),
+            (Some(since), Some(configured)) if configured > since
+        ))
+    .then(|| Action::RestartUnit {
+        unit: NIX_DAEMON_SERVICE_UNIT.to_string(),
+    })
 }
 
 struct WriteHomeConfig(UserConfig);
@@ -620,12 +623,12 @@ impl WriteHomeConfig {
 }
 
 impl StepSpec for WriteHomeConfig {
-    fn key(&self) -> &'static str {
-        "write-home-config"
+    fn key(&self) -> Cow<'static, str> {
+        "write-home-config".into()
     }
 
-    fn title(&self) -> &'static str {
-        "write home-manager config"
+    fn title(&self) -> Cow<'static, str> {
+        "write home-manager config".into()
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -710,12 +713,12 @@ impl StepSpec for WriteHomeConfig {
 struct ActivateHome(UserConfig);
 
 impl StepSpec for ActivateHome {
-    fn key(&self) -> &'static str {
-        "activate-home"
+    fn key(&self) -> Cow<'static, str> {
+        "activate-home".into()
     }
 
-    fn title(&self) -> &'static str {
-        "activate home-manager config"
+    fn title(&self) -> Cow<'static, str> {
+        "activate home-manager config".into()
     }
 
     fn queries(&self) -> Vec<Query> {
