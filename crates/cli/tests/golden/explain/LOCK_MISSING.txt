@@ -1,0 +1,4 @@
+`mix` isn't set up yet
+run `mix bootstrap` first
+
+The lock file `mix` uses to keep commands apart does not exist, so `mix` has not been set up on this machine. Run `mix bootstrap` first.

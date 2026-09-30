@@ -1,144 +1,67 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use futures_util::{Stream, StreamExt};
-use mix_core::{ActivityReporter, DownloadProgress, StepObserver};
-use mix_rpc::{BootstrapRequest, Client, Event, Failure, Level, Mirror, Outcome, RepairRequest};
+use mix_events::Normalize;
+use mix_events::v1::Envelope;
+use mix_rpc::{
+    BootstrapRequest, Client, Event, Failure, Malformed, Mirror, Outcome, RepairRequest,
+};
 use mix_shell::ops::repair::Repair;
+use mix_shell::render::Render;
 use mix_shell::target::Error as TargetError;
+use prost::Message;
 
 use super::convert::{bootstrap_error_from, report_from_wire, target_error_from};
+use crate::cli::Output;
+use crate::render::sinks::{Sinks, View};
 
 const LAUNCHER: &str = "sudo";
 const WORKER: &str = "worker";
 
-pub fn level_for(verbosity: u8) -> Level {
-    match verbosity {
-        0 => Level::Warn,
-        1 => Level::Info,
-        2 => Level::Debug,
-        _ => Level::Trace,
-    }
-}
-
-struct Replay {
-    spans: HashMap<u64, tracing::Span>,
-    open: Vec<u64>,
-    steps: Arc<dyn StepObserver>,
-    downloads: Arc<dyn DownloadProgress>,
-    activity: Arc<dyn ActivityReporter>,
-}
-
-impl Replay {
-    fn new() -> Self {
-        let mix_ui::Reporters {
-            activity,
-            steps,
-            downloads,
-            ..
-        } = mix_ui::reporters();
-        Self {
-            spans: HashMap::new(),
-            open: Vec::new(),
-            steps,
-            downloads,
-            activity,
-        }
-    }
-
-    fn in_current(&self, f: impl FnOnce()) {
-        match self.open.last().and_then(|id| self.spans.get(id)) {
-            Some(span) => span.in_scope(f),
-            None => f(),
-        }
-    }
-
-    fn apply(&mut self, event: Event) -> Option<Outcome> {
-        match event {
-            Event::SpanOpened {
-                id,
-                parent,
-                name,
-                fields,
-            } => {
-                let parent = parent.and_then(|parent| self.spans.get(&parent)?.id());
-                let label = fields
-                    .iter()
-                    .find(|(field, _)| field == "name")
-                    .map_or("", |(_, value)| value.as_str());
-                let span = if name == "rollback" {
-                    tracing::info_span!(parent: parent, "rollback", name = label)
-                } else {
-                    tracing::info_span!(parent: parent, "step", name = label)
-                };
-                self.steps.on_step_span(&span);
-                self.spans.insert(id, span);
-                self.open.push(id);
-            }
-            Event::SpanClosed { id, failed } => {
-                if let Some(span) = self.spans.remove(&id) {
-                    self.steps.on_step_closed(&span, failed);
-                }
-                self.open.retain(|open| *open != id);
-            }
-            Event::Log {
-                level,
-                span,
-                message,
-            } => {
-                let parent = span.and_then(|span| self.spans.get(&span)?.id());
-                match level {
-                    Level::Error => tracing::error!(parent: parent, "{message}"),
-                    Level::Warn => tracing::warn!(parent: parent, "{message}"),
-                    Level::Info => tracing::info!(parent: parent, "{message}"),
-                    Level::Debug => tracing::debug!(parent: parent, "{message}"),
-                    Level::Trace => tracing::trace!(parent: parent, "{message}"),
-                }
-            }
-            Event::DownloadStarted { total } => {
-                let downloads = Arc::clone(&self.downloads);
-                self.in_current(|| downloads.set_total(total));
-            }
-            Event::DownloadAdvanced { delta } => {
-                let downloads = Arc::clone(&self.downloads);
-                self.in_current(|| downloads.add(delta));
-            }
-            Event::ActivityLine(line) => {
-                let activity = Arc::clone(&self.activity);
-                self.in_current(|| activity.line(&line));
-            }
-            Event::ActivityProgress(progress) => {
-                let activity = Arc::clone(&self.activity);
-                self.in_current(|| activity.progress(&progress));
-            }
-            Event::ActivityCleared => {
-                let activity = Arc::clone(&self.activity);
-                self.in_current(|| activity.clear());
-            }
-            Event::Finished(outcome) => return Some(outcome),
-        }
-        None
-    }
+fn envelope(bytes: &[u8]) -> Result<Envelope, mix_rpc::Error> {
+    let mut envelope = Envelope::decode(bytes).map_err(|error| {
+        mix_rpc::Error::Malformed(Malformed(format!("an event envelope: {error}")))
+    })?;
+    envelope.normalize();
+    Ok(envelope)
 }
 
 async fn replay(
     events: impl Stream<Item = Result<Event, mix_rpc::Error>>,
+    view: &View,
 ) -> Result<Outcome, mix_rpc::Error> {
     let interrupts = tokio::spawn(async { while tokio::signal::ctrl_c().await.is_ok() {} });
-    let mut replay = Replay::new();
+    let mut sinks: Sinks = view
+        .sinks(mix_ui::display())
+        .map_err(mix_rpc::Error::Spawn)?;
     let mut events = std::pin::pin!(events);
     let mut outcome = None;
     while let Some(event) = events.next().await {
-        if let Some(finished) = replay.apply(event?) {
-            outcome = Some(finished);
+        match event? {
+            Event::Envelope(bytes) => sinks.envelope(envelope(&bytes)?),
+            Event::Finished(finished) => outcome = Some(finished),
         }
     }
     interrupts.abort();
     outcome.ok_or(mix_rpc::Error::Ended)
 }
 
-async fn start() -> anyhow::Result<Client> {
-    mix_ui::info("Root required. Re-running with sudo...");
+fn bootstrap_request(
+    mirror: Option<&str>,
+    mirror_key: Option<&str>,
+    force: bool,
+) -> BootstrapRequest {
+    BootstrapRequest {
+        mirror: mirror.map(|url| Mirror {
+            url: url.to_string(),
+            key: mirror_key.map(str::to_string),
+        }),
+        force,
+    }
+}
+
+async fn start(view: &View) -> anyhow::Result<Client> {
+    if view.output == Output::Human {
+        mix_ui::note("root is required, re-running with sudo");
+    }
     let program = std::env::current_exe()?;
     Ok(Client::start(&program, &[WORKER], Some(LAUNCHER)).await?)
 }
@@ -147,18 +70,11 @@ pub async fn bootstrap(
     mirror: Option<&str>,
     mirror_key: Option<&str>,
     force: bool,
-    verbosity: u8,
+    view: &View,
 ) -> anyhow::Result<()> {
-    let mut client = start().await?;
-    let request = BootstrapRequest {
-        mirror: mirror.map(|url| Mirror {
-            url: url.to_string(),
-            key: mirror_key.map(str::to_string),
-        }),
-        force,
-        log_level: level_for(verbosity),
-    };
-    let outcome = replay(client.bootstrap(&request).await?).await?;
+    let mut client = start(view).await?;
+    let request = bootstrap_request(mirror, mirror_key, force);
+    let outcome = replay(client.bootstrap(&request).await?, view).await?;
     let _ = client.wait().await;
     match outcome {
         Outcome::BootstrapDone => Ok(()),
@@ -167,12 +83,10 @@ pub async fn bootstrap(
     }
 }
 
-pub async fn repair(verbosity: u8) -> anyhow::Result<Repair> {
-    let mut client = start().await?;
-    let request = RepairRequest {
-        log_level: level_for(verbosity),
-    };
-    let outcome = replay(client.repair(&request).await?).await?;
+pub async fn repair(view: &View) -> anyhow::Result<Repair> {
+    let mut client = start(view).await?;
+    let request = RepairRequest;
+    let outcome = replay(client.repair(&request).await?, view).await?;
     let _ = client.wait().await;
     match outcome {
         Outcome::RepairDone {
@@ -186,5 +100,27 @@ pub async fn repair(verbosity: u8) -> anyhow::Result<Repair> {
         Outcome::Failure(Failure::Target(failure)) => Err(target_error_from(failure).into()),
         Outcome::Failure(failure) => Err(bootstrap_error_from(failure).into()),
         Outcome::BootstrapDone => Err(mix_rpc::Error::Ended.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_mirror_this_process_resolved_crosses_sudo_in_the_request() {
+        let request = bootstrap_request(Some("http://env.internal"), Some("env:KEY"), false);
+
+        assert_eq!(
+            request.mirror,
+            Some(Mirror {
+                url: "http://env.internal".into(),
+                key: Some("env:KEY".into()),
+            })
+        );
+        assert_eq!(
+            bootstrap_request(None, Some("stray:KEY"), true).mirror,
+            None
+        );
     }
 }

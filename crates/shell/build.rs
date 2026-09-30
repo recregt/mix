@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_macros)]
+
 use std::fmt::Write as _;
 
 use mix_pins::pin_for;

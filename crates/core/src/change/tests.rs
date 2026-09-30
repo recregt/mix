@@ -330,18 +330,15 @@ fn rendering_rejects_an_invalid_package_name() {
 }
 
 #[test]
-fn a_label_names_a_short_list_of_packages() {
-    assert_eq!(
-        label("Installing", &names(&["git", "fd"])),
-        "Installing git, fd"
-    );
+fn a_subject_names_a_short_list_of_packages() {
+    assert_eq!(subject(&names(&["git", "fd"])), "git, fd");
 }
 
 #[test]
-fn a_label_counts_a_long_list_of_packages() {
+fn a_subject_counts_a_long_list_of_packages() {
     let packages: Vec<String> = (0..12).map(|i| format!("package-{i}")).collect();
 
-    assert_eq!(label("Removing", &packages), "Removing 12 packages");
+    assert_eq!(subject(&packages), "12 packages");
 }
 
 fn config() -> UserConfig {
@@ -448,7 +445,10 @@ fn an_install_writes_the_list_activates_it_and_records_it() {
 
     let report = drive(
         &mut world,
-        Runner::new(ROOT, steps(&user(), &change, "Installing").unwrap()),
+        Runner::new(
+            ROOT,
+            steps(&user(), &change, mix_events::v1::Verb::Installing).unwrap(),
+        ),
         |_| false,
     );
 
@@ -480,7 +480,10 @@ fn a_failed_activation_puts_both_files_back() {
 
     let report = drive(
         &mut world,
-        Runner::new(ROOT, steps(&user(), &change, "Installing").unwrap()),
+        Runner::new(
+            ROOT,
+            steps(&user(), &change, mix_events::v1::Verb::Installing).unwrap(),
+        ),
         |action| matches!(action, Action::ActivateProfile { .. }),
     );
 
@@ -505,7 +508,7 @@ fn a_list_restored_from_the_profile_is_written_without_activating() {
     let generation = manifest(&["git"]).render();
     let requested = names(&["git"]);
     let change = install(&requested, settle(Some("{broken"), Some(&generation))).unwrap();
-    let steps = steps(&user(), &change, "Installing").unwrap();
+    let steps = steps(&user(), &change, mix_events::v1::Verb::Installing).unwrap();
 
     assert_eq!(steps.len(), 1);
     let report = drive(&mut world, Runner::new(ROOT, steps), |_| false);
@@ -523,7 +526,11 @@ fn nothing_to_change_makes_no_plan() {
     let requested = names(&["git"]);
     let change = install(&requested, current(manifest(&["git"]), Source::File)).unwrap();
 
-    assert!(steps(&user(), &change, "Installing").unwrap().is_empty());
+    assert!(
+        steps(&user(), &change, mix_events::v1::Verb::Installing)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 fn settled_with_profile(world: &World) -> Settled {
@@ -549,7 +556,7 @@ fn removing(requested: &[String], settled: Settled) -> Change {
 
 fn command(world: &mut World, decide: Decide, requested: &[String]) {
     let change = decide(requested, settled_with_profile(world));
-    let steps = steps(&user(), &change, "Changing").unwrap();
+    let steps = steps(&user(), &change, mix_events::v1::Verb::Installing).unwrap();
     let report = drive(world, Runner::new(ROOT, steps), |_| false);
     assert_eq!(report.verdict, Verdict::Succeeded);
 }
@@ -562,7 +569,10 @@ fn crashing_command(
     after_change: bool,
 ) -> Option<Vec<Record>> {
     let change = decide(requested, settled_with_profile(world));
-    let mut runner = Runner::new(ROOT, steps(&user(), &change, "Changing").unwrap());
+    let mut runner = Runner::new(
+        ROOT,
+        steps(&user(), &change, mix_events::v1::Verb::Installing).unwrap(),
+    );
     make_guard!(guard);
     let mut runner = runner.brand(guard);
     let mut tree = Tree::new(
@@ -745,7 +755,10 @@ fn performed(
     change: &Change,
     stop_before: Option<usize>,
 ) -> (Report, Vec<Action>) {
-    let mut runner = Runner::new(ROOT, steps(&user(), change, "Installing").unwrap());
+    let mut runner = Runner::new(
+        ROOT,
+        steps(&user(), change, mix_events::v1::Verb::Installing).unwrap(),
+    );
     make_guard!(guard);
     let mut runner = runner.brand(guard);
     let mut tree = Tree::new(
@@ -827,7 +840,11 @@ fn removing_a_package_that_is_not_installed_makes_no_plan() {
     let change = remove(&requested, current(manifest(&["git"]), Source::File)).unwrap();
 
     assert_eq!(change.skipped, names(&["ripgrep"]));
-    assert!(steps(&user(), &change, "Removing").unwrap().is_empty());
+    assert!(
+        steps(&user(), &change, mix_events::v1::Verb::Removing)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -852,7 +869,7 @@ fn an_invalid_package_name_is_refused_before_any_action() {
     let change = install(&requested, current(manifest(&["git"]), Source::File)).unwrap();
 
     assert!(matches!(
-        steps(&user(), &change, "Installing"),
+        steps(&user(), &change, mix_events::v1::Verb::Installing),
         Err(Unrenderable::Package(_))
     ));
 }

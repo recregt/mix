@@ -1,0 +1,4 @@
+/nix: exists but is not a directory
+remove it, then run `mix repair` again
+
+`mix repair` found something it will not change on its own: something in the way it would have to delete, a user that no longer exists, or a missing Nix runtime. The message says what to do about it.

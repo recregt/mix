@@ -1,0 +1,4 @@
+couldn't install ripgrep
+run it again with `-v` to see what went wrong
+
+A program `mix` ran, such as `nix` or `git`, exited with an error. Run the command again with `-v` to see that program's own output.

@@ -2,8 +2,8 @@ use std::io::ErrorKind;
 
 use crate::proto;
 use crate::types::{
-    BootstrapRequest, BuildProgress, Event, Failure, Host, Level, Mirror, Outcome, RepairReport,
-    RepairRequest, TargetFailure, Unfixable,
+    BootstrapRequest, Event, Failure, Host, Mirror, Outcome, RepairReport, RepairRequest,
+    TargetFailure, Unfixable,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -14,28 +14,6 @@ fn missing(what: &str) -> Malformed {
     Malformed(format!("{what} is missing"))
 }
 
-fn level_to_wire(level: Level) -> i32 {
-    match level {
-        Level::Error => proto::Level::Error,
-        Level::Warn => proto::Level::Warn,
-        Level::Info => proto::Level::Info,
-        Level::Debug => proto::Level::Debug,
-        Level::Trace => proto::Level::Trace,
-    }
-    .into()
-}
-
-fn level_from_wire(value: i32) -> Result<Level, Malformed> {
-    match proto::Level::try_from(value) {
-        Ok(proto::Level::Error) => Ok(Level::Error),
-        Ok(proto::Level::Warn) => Ok(Level::Warn),
-        Ok(proto::Level::Info) => Ok(Level::Info),
-        Ok(proto::Level::Debug) => Ok(Level::Debug),
-        Ok(proto::Level::Trace) => Ok(Level::Trace),
-        Ok(proto::Level::Unspecified) | Err(_) => Err(Malformed(format!("log level {value}"))),
-    }
-}
-
 pub fn bootstrap_request_to_wire(request: &BootstrapRequest) -> proto::BootstrapRequest {
     proto::BootstrapRequest {
         mirror: request.mirror.as_ref().map(|mirror| proto::Mirror {
@@ -43,7 +21,6 @@ pub fn bootstrap_request_to_wire(request: &BootstrapRequest) -> proto::Bootstrap
             key: mirror.key.clone(),
         }),
         force: request.force,
-        log_level: level_to_wire(request.log_level),
     }
 }
 
@@ -56,54 +33,24 @@ pub fn bootstrap_request_from_wire(
             key: mirror.key,
         }),
         force: request.force,
-        log_level: level_from_wire(request.log_level)?,
     })
 }
 
-pub fn repair_request_to_wire(request: &RepairRequest) -> proto::RepairRequest {
-    proto::RepairRequest {
-        log_level: level_to_wire(request.log_level),
-    }
+pub fn repair_request_to_wire(_request: &RepairRequest) -> proto::RepairRequest {
+    proto::RepairRequest {}
 }
 
-pub fn repair_request_from_wire(request: proto::RepairRequest) -> Result<RepairRequest, Malformed> {
-    Ok(RepairRequest {
-        log_level: level_from_wire(request.log_level)?,
-    })
+pub fn repair_request_from_wire(
+    _request: proto::RepairRequest,
+) -> Result<RepairRequest, Malformed> {
+    Ok(RepairRequest)
 }
 
 pub fn event_to_wire(event: Event) -> proto::Event {
     use proto::event::Kind;
 
     let kind = match event {
-        Event::SpanOpened {
-            id,
-            parent,
-            name,
-            fields,
-        } => Kind::SpanOpened(proto::SpanOpened {
-            id,
-            parent,
-            name,
-            fields: fields.into_iter().collect(),
-        }),
-        Event::SpanClosed { id, failed } => Kind::SpanClosed(proto::SpanClosed { id, failed }),
-        Event::Log {
-            level,
-            span,
-            message,
-        } => Kind::Log(proto::Log {
-            level: level_to_wire(level),
-            span,
-            message,
-        }),
-        Event::DownloadStarted { total } => Kind::DownloadStarted(proto::DownloadStarted { total }),
-        Event::DownloadAdvanced { delta } => {
-            Kind::DownloadAdvanced(proto::DownloadAdvanced { delta })
-        }
-        Event::ActivityLine(line) => Kind::ActivityLine(proto::ActivityLine { line }),
-        Event::ActivityProgress(progress) => Kind::ActivityProgress(progress_to_wire(progress)),
-        Event::ActivityCleared => Kind::ActivityCleared(proto::ActivityCleared {}),
+        Event::Envelope(bytes) => Kind::Envelope(bytes),
         Event::Finished(outcome) => Kind::Finished(outcome_to_wire(outcome)),
     };
     proto::Event { kind: Some(kind) }
@@ -136,65 +83,10 @@ pub fn event_from_wire(event: proto::Event) -> Result<Event, Malformed> {
 
     Ok(
         match event.kind.ok_or_else(|| missing("an event's kind"))? {
-            Kind::SpanOpened(opened) => {
-                let mut fields: Vec<(String, String)> = opened.fields.into_iter().collect();
-                fields.sort_unstable();
-                Event::SpanOpened {
-                    id: opened.id,
-                    parent: opened.parent,
-                    name: opened.name,
-                    fields,
-                }
-            }
-            Kind::SpanClosed(closed) => Event::SpanClosed {
-                id: closed.id,
-                failed: closed.failed,
-            },
-            Kind::Log(log) => Event::Log {
-                level: level_from_wire(log.level)?,
-                span: log.span,
-                message: log.message,
-            },
-            Kind::DownloadStarted(started) => Event::DownloadStarted {
-                total: started.total,
-            },
-            Kind::DownloadAdvanced(advanced) => Event::DownloadAdvanced {
-                delta: advanced.delta,
-            },
-            Kind::ActivityLine(line) => Event::ActivityLine(line.line),
-            Kind::ActivityProgress(progress) => {
-                Event::ActivityProgress(progress_from_wire(progress))
-            }
-            Kind::ActivityCleared(_) => Event::ActivityCleared,
+            Kind::Envelope(bytes) => Event::Envelope(bytes),
             Kind::Finished(finished) => Event::Finished(outcome_from_wire(finished)?),
         },
     )
-}
-
-fn progress_to_wire(progress: BuildProgress) -> proto::ActivityProgress {
-    proto::ActivityProgress {
-        builds_done: progress.builds_done,
-        builds_expected: progress.builds_expected,
-        builds_running: progress.builds_running,
-        downloads_done: progress.downloads_done,
-        downloads_expected: progress.downloads_expected,
-        downloads_running: progress.downloads_running,
-        bytes_done: progress.bytes_done,
-        bytes_expected: progress.bytes_expected,
-    }
-}
-
-fn progress_from_wire(progress: proto::ActivityProgress) -> BuildProgress {
-    BuildProgress {
-        builds_done: progress.builds_done,
-        builds_expected: progress.builds_expected,
-        builds_running: progress.builds_running,
-        downloads_done: progress.downloads_done,
-        downloads_expected: progress.downloads_expected,
-        downloads_running: progress.downloads_running,
-        bytes_done: progress.bytes_done,
-        bytes_expected: progress.bytes_expected,
-    }
 }
 
 fn outcome_to_wire(outcome: Outcome) -> proto::Finished {
@@ -681,46 +573,8 @@ mod tests {
     #[test]
     fn every_event_survives_the_wire() {
         let events = vec![
-            Event::SpanOpened {
-                id: 7,
-                parent: Some(3),
-                name: "step".into(),
-                fields: vec![("name".into(), "create nix dir".into())],
-            },
-            Event::SpanOpened {
-                id: 3,
-                parent: None,
-                name: "rollback".into(),
-                fields: Vec::new(),
-            },
-            Event::SpanClosed {
-                id: 7,
-                failed: true,
-            },
-            Event::Log {
-                level: Level::Warn,
-                span: Some(7),
-                message: "Cancelling... (cleaning up)".into(),
-            },
-            Event::Log {
-                level: Level::Trace,
-                span: None,
-                message: "line with \"quotes\"\nand a newline\0".into(),
-            },
-            Event::DownloadStarted { total: u64::MAX },
-            Event::DownloadAdvanced { delta: 1 },
-            Event::ActivityLine("building '/nix/store/x.drv'".into()),
-            Event::ActivityProgress(BuildProgress {
-                builds_done: 1,
-                builds_expected: 2,
-                builds_running: 3,
-                downloads_done: 4,
-                downloads_expected: 5,
-                downloads_running: 6,
-                bytes_done: 7,
-                bytes_expected: 8,
-            }),
-            Event::ActivityCleared,
+            Event::Envelope(vec![0, 1, 2, 255]),
+            Event::Envelope(Vec::new()),
             Event::Finished(Outcome::BootstrapDone),
             Event::Finished(Outcome::RepairDone {
                 interrupted: true,
@@ -753,16 +607,13 @@ mod tests {
                 key: Some("mix-mirror-1:AAAA".into()),
             }),
             force: true,
-            log_level: Level::Debug,
         };
         let bytes = bootstrap_request_to_wire(&request).encode_to_vec();
         let decoded =
             bootstrap_request_from_wire(proto::BootstrapRequest::decode(bytes.as_slice()).unwrap());
         assert_eq!(decoded, Ok(request));
 
-        let repair = RepairRequest {
-            log_level: Level::Warn,
-        };
+        let repair = RepairRequest;
         let bytes = repair_request_to_wire(&repair).encode_to_vec();
         let decoded =
             repair_request_from_wire(proto::RepairRequest::decode(bytes.as_slice()).unwrap());
@@ -777,24 +628,15 @@ mod tests {
                 key: Some("k".into()),
             }),
             force: true,
-            log_level: Level::Info,
         };
 
         assert_eq!(
             bootstrap_request_to_wire(&request).encode_to_vec(),
             [
                 0x0a, 0x0d, 0x0a, 0x08, b'h', b't', b't', b'p', b':', b'/', b'/', b'm', 0x12, 0x01,
-                b'k', 0x10, 0x01, 0x18, 0x03
+                b'k', 0x10, 0x01
             ]
         );
-    }
-
-    #[test]
-    fn an_unspecified_or_unknown_level_is_refused() {
-        for level in [0, 99] {
-            let request = proto::RepairRequest { log_level: level };
-            assert!(repair_request_from_wire(request).is_err(), "{level}");
-        }
     }
 
     #[test]

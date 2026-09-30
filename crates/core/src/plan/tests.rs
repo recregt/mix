@@ -21,8 +21,8 @@ impl StepSpec for EnsureDir {
         self.key.into()
     }
 
-    fn title(&self) -> Cow<'static, str> {
-        "ensure a directory".into()
+    fn title(&self) -> crate::plan::Title {
+        crate::plan::Title::new(mix_events::v1::Verb::Creating, "ensure a directory")
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -63,8 +63,8 @@ impl StepSpec for EnsureFile {
         self.key.into()
     }
 
-    fn title(&self) -> Cow<'static, str> {
-        "ensure a file".into()
+    fn title(&self) -> crate::plan::Title {
+        crate::plan::Title::new(mix_events::v1::Verb::Creating, "ensure a file")
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -108,8 +108,8 @@ impl StepSpec for EnsureGroup {
         self.key.into()
     }
 
-    fn title(&self) -> Cow<'static, str> {
-        "ensure a group".into()
+    fn title(&self) -> crate::plan::Title {
+        crate::plan::Title::new(mix_events::v1::Verb::Creating, "ensure a group")
     }
 
     fn queries(&self) -> Vec<Query> {

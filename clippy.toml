@@ -1,4 +1,13 @@
+disallowed-macros = [
+    { path = "std::println", reason = "print through mix_ui, the one writer to the terminal" },
+    { path = "std::print", reason = "print through mix_ui, the one writer to the terminal" },
+    { path = "std::eprintln", reason = "print through mix_ui, the one writer to the terminal" },
+    { path = "std::eprint", reason = "print through mix_ui, the one writer to the terminal" },
+    { path = "std::dbg", reason = "print through mix_ui, the one writer to the terminal" },
+]
 disallowed-methods = [
+    { path = "std::io::stdout", reason = "write through mix_ui, or allow it where stdout is a protocol" },
+    { path = "std::io::stderr", reason = "write through mix_ui, the one writer to the terminal" },
     { path = "tokio_util::sync::CancellationToken::new", reason = "run in the request's mix_exec::Scope, or its shielded() scope for work that must finish" },
     { path = "std::process::Command::new", reason = "spawn through mix_exec so the child is stoppable" },
     { path = "tokio::process::Command::new", reason = "spawn through mix_exec so the child is stoppable" },

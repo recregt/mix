@@ -7,7 +7,8 @@ use crate::bootstrap::stale_restart;
 use crate::identity;
 use crate::models::Target;
 use crate::paths::{NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT};
-use crate::plan::StepSpec;
+use crate::plan::{StepSpec, Title};
+use mix_events::v1::Verb;
 
 const FILE_MODE: u32 = 0o644;
 
@@ -463,8 +464,8 @@ impl StepSpec for TargetStep {
         Cow::Owned(self.label.clone())
     }
 
-    fn title(&self) -> Cow<'static, str> {
-        Cow::Owned(self.label.clone())
+    fn title(&self) -> Title {
+        Title::new(Verb::Repairing, self.label.clone())
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -489,8 +490,8 @@ impl StepSpec for RestartIfStale {
         "restart-nix-daemon".into()
     }
 
-    fn title(&self) -> Cow<'static, str> {
-        "restart the nix daemon if its configuration changed".into()
+    fn title(&self) -> Title {
+        Title::new(Verb::Restarting, "Nix daemon")
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -528,6 +529,116 @@ pub fn target_steps(targets: Vec<Target<'_>>, request: &str) -> Vec<Box<dyn Step
             }) as Box<dyn StepSpec>
         })
         .collect()
+}
+
+pub mod wire {
+    use mix_events::v1::finding::Kind;
+    use mix_events::v1::{
+        Category as WireCategory, Finding as WireFinding, Gid, Ids, Mode, NotAMember, Unreadable,
+    };
+
+    use super::Finding;
+    use crate::identity::MIX_USERS_GROUP;
+    use crate::models::Category;
+
+    const GROUPS: [&str; 1] = [MIX_USERS_GROUP];
+
+    pub fn category(category: Category) -> WireCategory {
+        match category {
+            Category::Filesystem => WireCategory::Filesystem,
+            Category::Identity => WireCategory::Identity,
+            Category::Services => WireCategory::Services,
+            Category::Configuration => WireCategory::Configuration,
+        }
+    }
+
+    pub fn category_from(category: WireCategory) -> Option<Category> {
+        match category {
+            WireCategory::Filesystem => Some(Category::Filesystem),
+            WireCategory::Identity => Some(Category::Identity),
+            WireCategory::Services => Some(Category::Services),
+            WireCategory::Configuration => Some(Category::Configuration),
+            WireCategory::Unspecified => None,
+        }
+    }
+
+    fn ids((actual_uid, actual_gid): (u32, u32), (expected_uid, expected_gid): (u32, u32)) -> Ids {
+        Ids {
+            actual_uid,
+            actual_gid,
+            expected_uid,
+            expected_gid,
+        }
+    }
+
+    pub fn finding(finding: Finding) -> WireFinding {
+        let kind = match finding {
+            Finding::Missing => Kind::Missing(Default::default()),
+            Finding::Unreadable { kind } => Kind::Unreadable(Unreadable {
+                kind: format!("{kind:?}"),
+            }),
+            Finding::NotADirectory => Kind::NotADirectory(Default::default()),
+            Finding::Mode { actual, expected } => Kind::Mode(Mode { actual, expected }),
+            Finding::Owner { actual, expected } => Kind::Owner(ids(actual, expected)),
+            Finding::ContentDrift => Kind::ContentDrift(Default::default()),
+            Finding::GroupMissing => Kind::GroupMissing(Default::default()),
+            Finding::GroupGid { actual, expected } => Kind::GroupGid(Gid { actual, expected }),
+            Finding::NotAMember { group } => Kind::NotAMember(NotAMember {
+                group: group.to_string(),
+            }),
+            Finding::NoSuchUser => Kind::NoSuchUser(Default::default()),
+            Finding::UserMissing => Kind::UserMissing(Default::default()),
+            Finding::UserIds { actual, expected } => Kind::UserIds(ids(actual, expected)),
+            Finding::UnitMissing => Kind::UnitMissing(Default::default()),
+            Finding::UnitDrift => Kind::UnitDrift(Default::default()),
+            Finding::UnitInactive => Kind::UnitInactive(Default::default()),
+            Finding::RuntimeMissing => Kind::RuntimeMissing(Default::default()),
+        };
+        WireFinding { kind: Some(kind) }
+    }
+
+    pub fn finding_from(finding: &WireFinding) -> Option<Finding> {
+        let pair = |ids: &Ids| {
+            (
+                (ids.actual_uid, ids.actual_gid),
+                (ids.expected_uid, ids.expected_gid),
+            )
+        };
+        Some(match finding.kind.as_ref()? {
+            Kind::Missing(_) => Finding::Missing,
+            Kind::Unreadable(unreadable) => Finding::Unreadable {
+                kind: crate::action::error_kind::named(&unreadable.kind),
+            },
+            Kind::NotADirectory(_) => Finding::NotADirectory,
+            Kind::Mode(mode) => Finding::Mode {
+                actual: mode.actual,
+                expected: mode.expected,
+            },
+            Kind::Owner(owner) => {
+                let (actual, expected) = pair(owner);
+                Finding::Owner { actual, expected }
+            }
+            Kind::ContentDrift(_) => Finding::ContentDrift,
+            Kind::GroupMissing(_) => Finding::GroupMissing,
+            Kind::GroupGid(gid) => Finding::GroupGid {
+                actual: gid.actual,
+                expected: gid.expected,
+            },
+            Kind::NotAMember(member) => Finding::NotAMember {
+                group: GROUPS.into_iter().find(|group| *group == member.group)?,
+            },
+            Kind::NoSuchUser(_) => Finding::NoSuchUser,
+            Kind::UserMissing(_) => Finding::UserMissing,
+            Kind::UserIds(ids) => {
+                let (actual, expected) = pair(ids);
+                Finding::UserIds { actual, expected }
+            }
+            Kind::UnitMissing(_) => Finding::UnitMissing,
+            Kind::UnitDrift(_) => Finding::UnitDrift,
+            Kind::UnitInactive(_) => Finding::UnitInactive,
+            Kind::RuntimeMissing(_) => Finding::RuntimeMissing,
+        })
+    }
 }
 
 #[cfg(test)]

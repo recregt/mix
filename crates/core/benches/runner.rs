@@ -26,8 +26,8 @@ impl StepSpec for Noop {
         self.key.into()
     }
 
-    fn title(&self) -> Cow<'static, str> {
-        "do nothing".into()
+    fn title(&self) -> mix_core::plan::Title {
+        mix_core::plan::Title::new(mix_events::v1::Verb::Creating, "do nothing")
     }
 
     fn queries(&self) -> Vec<Query> {

@@ -6,24 +6,25 @@ use nix::sys::signal::Signal;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::task::JoinHandle;
 
+#[derive(Debug, Clone, Copy)]
 pub struct Stopping {
     pub first: &'static str,
     pub forced: &'static str,
 }
 
 pub const BOOTSTRAP: Stopping = Stopping {
-    first: "Cancelling... (cleaning up). Press Ctrl-C again to stop now.",
-    forced: "Stopped before the cleanup finished. Run `mix bootstrap` again to finish it.",
+    first: "cancelling and cleaning up; press Ctrl-C again to stop now",
+    forced: "stopped before the cleanup finished; run `mix bootstrap` again to finish it",
 };
 
 pub const REPAIR: Stopping = Stopping {
-    first: "Stopping after the current repair... Press Ctrl-C again to stop now.",
-    forced: "Stopped in the middle of a repair. Run `mix repair` again to finish it.",
+    first: "stopping after the current repair; press Ctrl-C again to stop now",
+    forced: "stopped in the middle of a repair; run `mix repair` again to finish it",
 };
 
 pub const CHANGE: Stopping = Stopping {
-    first: "Cancelling... (putting the package list back). Press Ctrl-C again to stop now.",
-    forced: "Stopped before the package list was put back. The next mix command puts it back.",
+    first: "cancelling and putting the package list back; press Ctrl-C again to stop now",
+    forced: "stopped before the package list was put back; the next `mix` command puts it back",
 };
 
 const FORCED_EXIT: i32 = 130;
@@ -83,14 +84,13 @@ impl Translator {
     }
 }
 
-pub fn apply(scope: &Scope, stopping: &Stopping, control: Control) {
+pub fn apply(scope: &Scope, notices: Option<&Stopping>, control: Control) {
     match control {
-        Control::Cancel(reason) => {
-            tracing::warn!("{}", stopping.first);
-            scope.cancel(reason);
-        }
+        Control::Cancel(reason) => scope.cancel(reason),
         Control::ForceStop => {
-            tracing::warn!("{}", stopping.forced);
+            if let Some(notices) = notices {
+                mix_ui::note(notices.forced);
+            }
             scope.processes().kill();
             mix_ui::restore_terminal();
             std::process::exit(FORCED_EXIT);
@@ -115,7 +115,7 @@ fn listen(signal_number: Signal) -> tokio::signal::unix::Signal {
 
 pub fn watch(
     scope: &Scope,
-    stopping: Stopping,
+    notices: Option<Stopping>,
     client_gone: impl Future<Output = ()> + Send + 'static,
     side: Side,
 ) -> Watch {
@@ -142,7 +142,7 @@ pub fn watch(
             let Some(control) = translator.translate(received) else {
                 continue;
             };
-            apply(&scope, &stopping, control);
+            apply(&scope, notices.as_ref(), control);
             if control == Control::Pause && side == Side::Client {
                 let _ = nix::sys::signal::raise(Signal::SIGSTOP);
             }
@@ -232,11 +232,15 @@ mod tests {
     fn cancelling_stops_the_scope_and_pausing_does_not() {
         let scope = mix_exec::Scope::root();
 
-        apply(&scope, &BOOTSTRAP, Control::Pause);
-        apply(&scope, &BOOTSTRAP, Control::Resume);
+        apply(&scope, Some(&BOOTSTRAP), Control::Pause);
+        apply(&scope, Some(&BOOTSTRAP), Control::Resume);
         assert!(!scope.is_stopped());
 
-        apply(&scope, &BOOTSTRAP, Control::Cancel(Reason::Terminated));
+        apply(
+            &scope,
+            Some(&BOOTSTRAP),
+            Control::Cancel(Reason::Terminated),
+        );
         assert_eq!(scope.reason(), Some(Reason::Terminated));
     }
 
@@ -250,7 +254,12 @@ mod tests {
     async fn sigint_cancels_the_request() {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
         let scope = mix_exec::Scope::root();
-        let _watch = watch(&scope, BOOTSTRAP, std::future::pending(), Side::Client);
+        let _watch = watch(
+            &scope,
+            Some(BOOTSTRAP),
+            std::future::pending(),
+            Side::Client,
+        );
 
         signal::raise(Signal::SIGINT).unwrap();
 
@@ -261,7 +270,12 @@ mod tests {
     async fn sigterm_cancels_the_request() {
         let _alone = ONE_WATCH_AT_A_TIME.lock().await;
         let scope = mix_exec::Scope::root();
-        let _watch = watch(&scope, BOOTSTRAP, std::future::pending(), Side::Client);
+        let _watch = watch(
+            &scope,
+            Some(BOOTSTRAP),
+            std::future::pending(),
+            Side::Client,
+        );
 
         signal::raise(Signal::SIGTERM).unwrap();
 
@@ -276,7 +290,7 @@ mod tests {
         let (leave, left) = tokio::sync::oneshot::channel::<()>();
         let _watch = watch(
             &scope,
-            BOOTSTRAP,
+            Some(BOOTSTRAP),
             async {
                 let _ = left.await;
             },
@@ -296,7 +310,7 @@ mod tests {
         let (leave, left) = tokio::sync::oneshot::channel::<()>();
         let watch = watch(
             &scope,
-            BOOTSTRAP,
+            Some(BOOTSTRAP),
             async {
                 let _ = left.await;
             },

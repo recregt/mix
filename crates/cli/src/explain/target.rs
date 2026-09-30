@@ -4,18 +4,13 @@
 //! from it, and `mix bootstrap` declares the per-user configuration through it — so what a
 //! finding and a reason read like is written once, here.
 
-use mix_shell::target::{Error, Unfixable};
+use mix_shell::target::Error;
 
-use super::{Diagnostic, core_error};
+pub(crate) use super::render::unfixable;
+use super::{Context, Diagnostic};
 
 pub(crate) fn describe(error: &Error, command: &str, action: &dyn std::fmt::Display) -> Diagnostic {
-    match error {
-        Error::Core(e) => core_error(e, command, action),
-        Error::Unrepairable { artifact, reason } => Diagnostic::hinting(
-            format!("{artifact}: {reason}"),
-            unfixable(*reason).to_string(),
-        ),
-    }
+    super::render::render_error(error, &Context { command, action })
 }
 
 /// What went wrong with one artifact, for printing under its own name.
@@ -30,20 +25,10 @@ pub fn report(error: &Error) -> String {
     }
 }
 
-/// What to do about an artifact repair will not touch.
-///
-/// Written once and read by both commands: `mix doctor` says the same thing about a finding
-/// repair cannot reconcile as `mix repair` says when it meets it.
-pub(crate) fn unfixable(reason: Unfixable) -> &'static str {
-    match reason {
-        Unfixable::NotADirectory => "Remove it, then run `mix repair` again",
-        Unfixable::MissingUser => "Recreate the user, or ignore this if it was removed on purpose",
-        Unfixable::MissingRuntime => "Run `mix bootstrap` to reinstall it",
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use mix_shell::target::Unfixable;
+
     use super::*;
 
     #[test]
@@ -72,7 +57,7 @@ mod tests {
         .message();
 
         assert!(message.contains("/nix: exists but is not a directory"));
-        assert!(message.contains("Remove it, then run `mix repair` again"));
+        assert!(message.contains("remove it, then run `mix repair` again"));
     }
 
     #[test]

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use mix_rpc::{
-    BootstrapRequest, Caller, Client, Event, Events, Failure, Level, Mirror, Outcome, RepairReport,
+    BootstrapRequest, Caller, Client, Event, Events, Failure, Mirror, Outcome, RepairReport,
     RepairRequest, TargetFailure, Unfixable, Worker, serve_connection,
 };
 
@@ -18,26 +18,16 @@ impl Worker for Scripted {
         request: BootstrapRequest,
         events: Events,
     ) -> Outcome {
-        let _ = events.send(Event::SpanOpened {
-            id: 1,
-            parent: None,
-            name: "step".into(),
-            fields: vec![("name".into(), "create nix dir".into())],
-        });
-        let _ = events.send(Event::Log {
-            level: Level::Info,
-            span: Some(1),
-            message: format!(
+        let _ = events.send(Event::Envelope(vec![8, 1]));
+        let _ = events.send(Event::Envelope(
+            format!(
                 "caller {} mirror {:?} force {}",
                 caller.uid,
                 request.mirror.map(|mirror| mirror.url),
                 request.force
-            ),
-        });
-        let _ = events.send(Event::SpanClosed {
-            id: 1,
-            failed: false,
-        });
+            )
+            .into_bytes(),
+        ));
         if request.force {
             Outcome::Failure(Failure::Rollback {
                 cause: Box::new(Failure::Interrupted),
@@ -85,7 +75,6 @@ fn request(force: bool) -> BootstrapRequest {
             key: None,
         }),
         force,
-        log_level: Level::Info,
     }
 }
 
@@ -101,17 +90,11 @@ async fn a_request_streams_its_events_in_order_and_ends_with_one_outcome() {
         .collect()
         .await;
 
-    assert_eq!(events.len(), 4, "{events:?}");
-    assert!(matches!(&events[0], Event::SpanOpened { id: 1, name, .. } if name == "step"));
+    assert_eq!(events.len(), 3, "{events:?}");
+    assert!(matches!(&events[0], Event::Envelope(bytes) if bytes == &[8, 1]));
+    assert!(matches!(&events[1], Event::Envelope(bytes) if bytes.starts_with(b"caller ")));
     assert!(matches!(
         &events[2],
-        Event::SpanClosed {
-            id: 1,
-            failed: false
-        }
-    ));
-    assert!(matches!(
-        &events[3],
         Event::Finished(Outcome::BootstrapDone)
     ));
 }
@@ -128,12 +111,12 @@ async fn the_worker_learns_who_called_from_the_kernel_not_the_request() {
         .collect()
         .await;
 
-    let Event::Log { message, .. } = &events[1] else {
-        panic!("expected a log, got {:?}", events[1]);
+    let Event::Envelope(bytes) = &events[1] else {
+        panic!("expected an envelope, got {:?}", events[1]);
     };
     assert_eq!(
-        message,
-        &format!(
+        String::from_utf8_lossy(bytes),
+        format!(
             "caller {} mirror Some(\"http://mirror.internal\") force false",
             current_uid()
         )
@@ -171,9 +154,7 @@ async fn repair_reports_every_item_it_looked_at() {
     let (mut client, _server) = connected().await;
 
     let events: Vec<Event> = client
-        .repair(&RepairRequest {
-            log_level: Level::Warn,
-        })
+        .repair(&RepairRequest)
         .await
         .unwrap()
         .map(Result::unwrap)
@@ -218,7 +199,7 @@ impl Worker for CleansUpWhenAbandoned {
         _request: BootstrapRequest,
         events: Events,
     ) -> Outcome {
-        let _ = events.send(Event::ActivityLine("started".into()));
+        let _ = events.send(Event::Envelope(Vec::new()));
         events.closed().await;
         tokio::time::sleep(Duration::from_millis(200)).await;
         self.cleaned_up.store(true, Ordering::SeqCst);
@@ -247,7 +228,7 @@ async fn the_worker_waits_for_a_request_its_client_left() {
     let mut events = client.bootstrap(&request(false)).await.unwrap();
     assert!(matches!(
         events.next().await,
-        Some(Ok(Event::ActivityLine(line))) if line == "started"
+        Some(Ok(Event::Envelope(bytes))) if bytes.is_empty()
     ));
 
     drop(events);
@@ -275,7 +256,7 @@ impl Worker for WaitsForRelease {
         _request: BootstrapRequest,
         events: Events,
     ) -> Outcome {
-        let _ = events.send(Event::ActivityLine("started".into()));
+        let _ = events.send(Event::Envelope(Vec::new()));
         self.release.notified().await;
         Outcome::BootstrapDone
     }
@@ -302,14 +283,10 @@ async fn a_second_request_is_refused_while_the_first_is_running() {
     let mut first = client.bootstrap(&request(false)).await.unwrap();
     assert!(matches!(
         first.next().await,
-        Some(Ok(Event::ActivityLine(line))) if line == "started"
+        Some(Ok(Event::Envelope(bytes))) if bytes.is_empty()
     ));
 
-    let second = client
-        .repair(&RepairRequest {
-            log_level: Level::Warn,
-        })
-        .await;
+    let second = client.repair(&RepairRequest).await;
 
     let Err(mix_rpc::Error::Refused(reason)) = second else {
         panic!("a second request must be refused while the first is running");
@@ -340,10 +317,7 @@ async fn a_worker_that_dies_mid_request_reads_as_ended_not_refused() {
         .await
         .unwrap();
     let mut events = client.bootstrap(&request(false)).await.unwrap();
-    assert!(matches!(
-        events.next().await,
-        Some(Ok(Event::ActivityLine(_)))
-    ));
+    assert!(matches!(events.next().await, Some(Ok(Event::Envelope(_)))));
 
     worker_process.shutdown_background();
 

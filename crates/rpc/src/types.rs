@@ -1,16 +1,5 @@
 use std::path::PathBuf;
 
-pub use mix_core::BuildProgress;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Level {
-    Error,
-    Warn,
-    Info,
-    Debug,
-    Trace,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mirror {
     pub url: String,
@@ -21,13 +10,10 @@ pub struct Mirror {
 pub struct BootstrapRequest {
     pub mirror: Option<Mirror>,
     pub force: bool,
-    pub log_level: Level,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RepairRequest {
-    pub log_level: Level,
-}
+pub struct RepairRequest;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Caller {
@@ -37,30 +23,7 @@ pub struct Caller {
 
 #[derive(Debug)]
 pub enum Event {
-    SpanOpened {
-        id: u64,
-        parent: Option<u64>,
-        name: String,
-        fields: Vec<(String, String)>,
-    },
-    SpanClosed {
-        id: u64,
-        failed: bool,
-    },
-    Log {
-        level: Level,
-        span: Option<u64>,
-        message: String,
-    },
-    DownloadStarted {
-        total: u64,
-    },
-    DownloadAdvanced {
-        delta: u64,
-    },
-    ActivityLine(String),
-    ActivityProgress(BuildProgress),
-    ActivityCleared,
+    Envelope(Vec<u8>),
     Finished(Outcome),
 }
 

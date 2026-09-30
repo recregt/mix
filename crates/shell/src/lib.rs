@@ -7,15 +7,16 @@
 
 mod context;
 
-pub mod bridge;
+pub mod diagnose;
 pub mod drive;
 
 pub mod effect;
 pub mod ops;
 pub mod profile;
+pub mod render;
 pub mod target;
 
-pub use context::{Context, HostConfig, Reporters};
+pub use context::{Context, HostConfig, Request, request_id};
 
 #[doc(hidden)]
 pub use effect::exec::output;

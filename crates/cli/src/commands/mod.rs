@@ -40,10 +40,39 @@ pub fn acquire_lock() -> anyhow::Result<LockGuard> {
     Ok(exclusive_lock()?)
 }
 
-pub fn acquire_profile() -> Result<(LockGuard, UserConfig), Error> {
-    if mix_shell::effect::accounts::is_root() {
-        return Err(Error::NotRoot);
+pub const MIRROR_VAR: &str = "MIX_NIX_MIRROR";
+pub const MIRROR_KEY_VAR: &str = "MIX_NIX_MIRROR_KEY";
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct MirrorSetting {
+    pub url: Option<String>,
+    pub key: Option<String>,
+}
+
+pub fn mirror_setting(
+    url: Option<&str>,
+    key: Option<&str>,
+    environment: impl Fn(&str) -> Option<String>,
+) -> MirrorSetting {
+    let key = key.map(str::to_string);
+    match url {
+        Some(url) => MirrorSetting {
+            url: Some(url.to_string()),
+            key,
+        },
+        None => MirrorSetting {
+            url: environment(MIRROR_VAR),
+            key: key.or_else(|| environment(MIRROR_KEY_VAR)),
+        },
     }
+}
+
+fn refuse_root(root: bool) -> Result<(), Error> {
+    if root { Err(Error::NotRoot) } else { Ok(()) }
+}
+
+pub fn acquire_profile() -> Result<(LockGuard, UserConfig), Error> {
+    refuse_root(mix_shell::effect::accounts::is_root())?;
     let lock = exclusive_lock()?;
 
     let Some(user_config) = enrolled_user() else {
@@ -51,4 +80,70 @@ pub fn acquire_profile() -> Result<(LockGuard, UserConfig), Error> {
     };
 
     Ok((lock, user_config))
+}
+
+#[cfg(test)]
+mod tests {
+    use mix_events::Diagnose;
+    use mix_events::v1::Code;
+
+    use super::*;
+
+    fn environment(
+        url: Option<&'static str>,
+        key: Option<&'static str>,
+    ) -> impl Fn(&str) -> Option<String> {
+        move |name| match name {
+            MIRROR_VAR => url.map(str::to_string),
+            MIRROR_KEY_VAR => key.map(str::to_string),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_mirror_on_the_command_line_wins_over_the_environment_with_its_own_key() {
+        let setting = mirror_setting(
+            Some("http://flag.internal"),
+            None,
+            environment(Some("http://env.internal"), Some("env:KEY")),
+        );
+
+        assert_eq!(
+            setting,
+            MirrorSetting {
+                url: Some("http://flag.internal".into()),
+                key: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_mirror_set_only_in_the_environment_is_used_with_the_environments_key() {
+        let setting = mirror_setting(
+            None,
+            None,
+            environment(Some("http://env.internal"), Some("env:KEY")),
+        );
+
+        assert_eq!(
+            setting,
+            MirrorSetting {
+                url: Some("http://env.internal".into()),
+                key: Some("env:KEY".into()),
+            }
+        );
+        assert_eq!(
+            mirror_setting(None, None, environment(None, None)),
+            MirrorSetting::default()
+        );
+    }
+
+    #[test]
+    fn root_is_refused_before_anything_is_locked_or_read() {
+        let refused = refuse_root(true).unwrap_err();
+
+        assert!(matches!(refused, Error::NotRoot));
+        assert_eq!(refused.code(), Some(Code::RootNotAllowed));
+        assert!(refuse_root(false).is_ok());
+    }
 }

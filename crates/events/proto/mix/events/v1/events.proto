@@ -3,6 +3,7 @@ syntax = "proto3";
 package mix.events.v1;
 
 import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
 
 message Envelope {
   uint64 seq = 1;
@@ -12,8 +13,7 @@ message Envelope {
     NodeProgress node_progress = 11;
     NodeFinished node_finished = 12;
     NotRun not_run = 13;
-    Log log = 14;
-    Diagnostic diagnostic = 15;
+    Diagnostic diagnostic = 14;
   }
 }
 
@@ -71,7 +71,22 @@ message Plan {
 }
 
 message Step {
-  string title = 1;
+  Verb verb = 1;
+  string subject = 2;
+}
+
+enum Verb {
+  VERB_UNSPECIFIED = 0;
+  VERB_CREATING = 1;
+  VERB_REMOVING = 2;
+  VERB_INSTALLING = 3;
+  VERB_WRITING = 4;
+  VERB_CONFIGURING = 5;
+  VERB_ACTIVATING = 6;
+  VERB_RECORDING = 7;
+  VERB_RESTARTING = 8;
+  VERB_REPAIRING = 9;
+  VERB_RECOVERING = 10;
 }
 
 message Rollback {
@@ -160,7 +175,147 @@ message NodeProgress {
     Bytes bytes = 2;
     Builds builds = 3;
     OutputLine line = 4;
+    CommandStarted command = 5;
+    FetchStarted fetch = 6;
+    BuildStarted build = 7;
+    Stopping stopping = 8;
+    CommandFinished command_finished = 9;
+    Observed observed = 10;
+    Journaled journaled = 11;
   }
+}
+
+message CommandFinished {
+  string line = 1;
+  optional int32 exit_code = 2;
+  optional int32 signal = 3;
+}
+
+message Observed {
+  repeated Observation observations = 1;
+}
+
+message Observation {
+  oneof query {
+    string path = 1;
+    string contents = 2;
+    string group = 3;
+    string user = 4;
+    string unit = 5;
+    string profile = 6;
+    string tree_owner = 7;
+  }
+  oneof fact {
+    PathFact path_fact = 10;
+    ContentsFact contents_fact = 11;
+    GroupFact group_fact = 12;
+    UserFact user_fact = 13;
+    UnitFact unit_fact = 14;
+    ProfileFact profile_fact = 15;
+    TreeOwnerFact tree_owner_fact = 16;
+  }
+}
+
+enum PathKind {
+  PATH_KIND_UNSPECIFIED = 0;
+  PATH_KIND_MISSING = 1;
+  PATH_KIND_UNREADABLE = 2;
+  PATH_KIND_DIRECTORY = 3;
+  PATH_KIND_FILE = 4;
+  PATH_KIND_SYMLINK = 5;
+  PATH_KIND_OTHER = 6;
+}
+
+message PathFact {
+  PathKind kind = 1;
+  string unreadable = 2;
+  uint32 mode = 3;
+  uint32 uid = 4;
+  uint32 gid = 5;
+  optional FileIdentity id = 6;
+  bytes digest = 7;
+  optional google.protobuf.Timestamp changed = 8;
+}
+
+message FileIdentity {
+  uint64 dev = 1;
+  uint64 ino = 2;
+  optional google.protobuf.Timestamp born = 3;
+}
+
+message ContentsFact {
+  bool present = 1;
+  uint64 length = 2;
+}
+
+message GroupFact {
+  bool exists = 1;
+  uint32 gid = 2;
+  repeated string members = 3;
+}
+
+message UserFact {
+  bool exists = 1;
+  uint32 uid = 2;
+  uint32 gid = 3;
+  string home = 4;
+  string shell = 5;
+  string comment = 6;
+}
+
+message UnitFact {
+  string load_state = 1;
+  string active_state = 2;
+  string file_state = 3;
+  bool needs_reload = 4;
+  optional google.protobuf.Timestamp active_since = 5;
+}
+
+message ProfileFact {
+  repeated uint64 generations = 1;
+  optional uint64 active = 2;
+}
+
+message TreeOwnerFact {
+  optional uint32 uid = 1;
+}
+
+message Journaled {
+  oneof record {
+    Began began = 1;
+    Sequenced prepared = 2;
+    Sequenced done = 3;
+    Sequenced settled = 4;
+    Sequenced failed = 5;
+    Action reverted = 6;
+    google.protobuf.Empty committing = 7;
+    google.protobuf.Empty ended = 8;
+  }
+}
+
+message Began {
+  string request = 1;
+}
+
+message Sequenced {
+  uint64 seq = 1;
+  repeated Action undo = 2;
+}
+
+message Stopping {
+  Cancellation cause = 1;
+}
+
+message BuildStarted {
+  string derivation = 1;
+}
+
+message CommandStarted {
+  string line = 1;
+}
+
+message FetchStarted {
+  string url = 1;
 }
 
 message Bytes {
@@ -323,23 +478,6 @@ message NotRun {
   NotRunReason reason = 3;
 }
 
-enum Level {
-  LEVEL_UNSPECIFIED = 0;
-  LEVEL_ERROR = 1;
-  LEVEL_WARN = 2;
-  LEVEL_INFO = 3;
-  LEVEL_DEBUG = 4;
-  LEVEL_TRACE = 5;
-}
-
-message Log {
-  Level level = 1;
-  string target = 2;
-  string message = 3;
-  map<string, string> fields = 4;
-  fixed64 node = 5;
-}
-
 enum Severity {
   SEVERITY_UNSPECIFIED = 0;
   SEVERITY_ERROR = 1;
@@ -358,6 +496,8 @@ enum Code {
   CODE_CONFLICT = 8;
   CODE_UNIT_FAILED = 9;
   CODE_SYSTEMD_UNREACHABLE = 10;
+  CODE_JOURNAL_UNWRITABLE = 11;
+  CODE_CLEANUP_INCOMPLETE = 12;
   CODE_NETWORK = 20;
   CODE_INTEGRITY = 21;
   CODE_UNSUPPORTED_TARGET = 22;
@@ -370,12 +510,16 @@ enum Code {
   CODE_ALREADY_MANAGED = 29;
   CODE_CROSS_DEVICE_STORE = 30;
   CODE_ROLLBACK_INCOMPLETE = 31;
+  CODE_INVALID_MIRROR = 32;
   CODE_NOT_BOOTSTRAPPED = 41;
   CODE_ROOT_NOT_ALLOWED = 42;
   CODE_INVALID_PACKAGE = 43;
   CODE_INVALID_STATE = 44;
   CODE_NEWER_STATE = 45;
   CODE_PROTECTED_PACKAGE = 46;
+  CODE_GIT_RECORD_FAILED = 47;
+  CODE_UNKNOWN_PACKAGE = 48;
+  CODE_BUILD_FAILED = 49;
   CODE_UNREPAIRABLE = 60;
   CODE_PRIVILEGES_UNAVAILABLE = 70;
   CODE_WORKER_ENDED = 71;
@@ -414,6 +558,8 @@ message Diagnostic {
     UnrepairableDetail unrepairable = 19;
     LockDetail lock = 20;
     StepsDetail steps = 21;
+    ConflictDetail conflict = 22;
+    UnitDetail unit = 23;
   }
 }
 
@@ -472,4 +618,16 @@ message LockDetail {
 
 message StepsDetail {
   repeated string steps = 1;
+}
+
+message ConflictDetail {
+  string subject = 1;
+  string expected = 2;
+  string found = 3;
+}
+
+message UnitDetail {
+  string operation = 1;
+  string unit = 2;
+  optional string invocation = 3;
 }

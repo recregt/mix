@@ -12,9 +12,9 @@ use mix_shell::target::Finding;
 use super::{Diagnostic, failed};
 
 /// How the command is spelled when the reader is told to run it again.
-const COMMAND: &str = "mix doctor";
+pub(crate) const COMMAND: &str = "mix doctor";
 
-const ACTION: &str = "finish the health check";
+pub(crate) const ACTION: &str = "finish the health check";
 
 pub fn explain(error: &anyhow::Error) -> Diagnostic {
     match error.downcast_ref::<mix_core::Error>() {
@@ -60,23 +60,6 @@ pub fn finding(finding: Finding) -> Cow<'static, str> {
     }
 }
 
-/// One line per check: the artifact, and what was measured about it.
-///
-/// Only the name keeps its own spelling; nothing is added to it.
-fn measured(report: &HealthReport) -> String {
-    match report.finding {
-        Some(found) => {
-            let words = finding(found);
-            let mut line = String::with_capacity(report.name.len() + words.len() + 2);
-            line.push_str(&report.name);
-            line.push_str(": ");
-            line.push_str(&words);
-            line
-        }
-        None => format!("{}: unhealthy", report.name),
-    }
-}
-
 /// What `mix doctor` says about a failed check, for printing under the artifact's own name.
 ///
 /// A check `mix repair` will reconcile is one line; one it will not is that line with the way
@@ -105,7 +88,7 @@ pub fn unhealthy(reports: &[HealthReport]) -> Diagnostic {
         match report.finding.and_then(Finding::unfixable) {
             Some(reason) => unfixable = unfixable.or(Some(reason)),
             None => {
-                return Diagnostic::hinting("some checks failed", "Run `mix repair` to fix them");
+                return Diagnostic::hinting("some checks failed", "run `mix repair` to fix them");
             }
         }
     }
@@ -113,19 +96,6 @@ pub fn unhealthy(reports: &[HealthReport]) -> Diagnostic {
     match unfixable {
         Some(reason) => Diagnostic::hinting("some checks failed", super::target::unfixable(reason)),
         None => Diagnostic::new("some checks failed"),
-    }
-}
-
-/// The verdict when another command refuses to run on an unhealthy system.
-///
-/// The reader did not ask for an audit, so the check that failed is named where `mix doctor`
-/// would have printed it, and they are told where to look — unless the finding has a way out of
-/// its own, which is more use than being sent to a command that cannot fix it.
-pub fn blocked(report: &HealthReport) -> Diagnostic {
-    let summary = format!("`mix` found a problem: {}", measured(report));
-    match report.finding.and_then(Finding::unfixable) {
-        Some(reason) => Diagnostic::hinting(summary, super::target::unfixable(reason)),
-        None => Diagnostic::hinting(summary, "Run `mix repair` to fix it"),
     }
 }
 
@@ -140,6 +110,70 @@ mod tests {
             name: name.to_string(),
             category: Category::Filesystem,
             finding,
+        }
+    }
+
+    #[test]
+    fn every_finding_reads_in_the_house_style() {
+        let findings = [
+            Finding::Missing,
+            Finding::Unreadable {
+                kind: std::io::ErrorKind::PermissionDenied,
+            },
+            Finding::NotADirectory,
+            Finding::Mode {
+                actual: 0o700,
+                expected: 0o755,
+            },
+            Finding::Owner {
+                actual: (1, 1),
+                expected: (0, 0),
+            },
+            Finding::ContentDrift,
+            Finding::GroupMissing,
+            Finding::GroupGid {
+                actual: 1,
+                expected: 30000,
+            },
+            Finding::NotAMember { group: "nixbld" },
+            Finding::NoSuchUser,
+            Finding::UserMissing,
+            Finding::UserIds {
+                actual: (1, 1),
+                expected: (0, 0),
+            },
+            Finding::UnitMissing,
+            Finding::UnitDrift,
+            Finding::UnitInactive,
+            Finding::RuntimeMissing,
+        ];
+        for finding in findings {
+            match finding {
+                Finding::Missing
+                | Finding::Unreadable { .. }
+                | Finding::NotADirectory
+                | Finding::Mode { .. }
+                | Finding::Owner { .. }
+                | Finding::ContentDrift
+                | Finding::GroupMissing
+                | Finding::GroupGid { .. }
+                | Finding::NotAMember { .. }
+                | Finding::NoSuchUser
+                | Finding::UserMissing
+                | Finding::UserIds { .. }
+                | Finding::UnitMissing
+                | Finding::UnitDrift
+                | Finding::UnitInactive
+                | Finding::RuntimeMissing => {}
+            }
+            let reports = [report("/nix", Some(finding))];
+            for line in check(&reports[0]).lines() {
+                assert!(mix_ui::house_style(line), "{finding:?}: {line:?}");
+            }
+            let verdict = unhealthy(&reports);
+            let (summary, hint) = verdict.parts();
+            assert!(mix_ui::house_style(summary), "{summary:?}");
+            assert!(hint.is_none_or(mix_ui::house_style), "{hint:?}");
         }
     }
 
@@ -184,7 +218,7 @@ mod tests {
 
         assert_eq!(
             line,
-            "exists but is not a directory\nRemove it, then run `mix repair` again"
+            "exists but is not a directory\nremove it, then run `mix repair` again"
         );
     }
 
@@ -193,30 +227,6 @@ mod tests {
         let line = check(&report("/nix", Some(Finding::ContentDrift)));
 
         assert!(!line.contains('\n'));
-    }
-
-    #[test]
-    fn a_blocked_command_names_the_check_and_where_to_look() {
-        let message = blocked(&report(
-            "/nix",
-            Some(Finding::Mode {
-                actual: 0o700,
-                expected: 0o755,
-            }),
-        ))
-        .message();
-
-        assert!(message.contains("/nix: mode is 700, expected 755"));
-        assert!(message.starts_with("`mix` found a problem"));
-        assert!(message.contains("mix repair"));
-    }
-
-    #[test]
-    fn a_blocked_command_sends_a_missing_runtime_to_bootstrap_instead() {
-        let message = blocked(&report("default profile", Some(Finding::RuntimeMissing))).message();
-
-        assert!(message.contains("default profile: missing"));
-        assert!(message.contains("mix bootstrap"));
     }
 
     #[test]

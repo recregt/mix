@@ -1,0 +1,5 @@
+`mix` needs WSL 2, and this is WSL 1
+upgrade it from Windows PowerShell:
+  wsl --set-version <distro> 2
+
+Nix builds packages in a sandbox that needs a real Linux kernel. WSL 1 translates system calls instead of running one, so it cannot host Nix. Convert the distro to WSL 2 with `wsl --set-version <distro> 2`.

@@ -33,7 +33,7 @@ def _pin(target: str) -> tuple[str, str]:
     block_match = re.search(
         rf'target:\s*"{re.escape(target)}"\s*,(.*?)\n\s*\}},',
         pins_src,
-        re.S,
+        re.DOTALL,
     )
     if not block_match:
         raise RuntimeError(f"no pin found for {target} in crates/pins")
@@ -71,6 +71,7 @@ def nix_conf_content(mirror: str | None = None, key: str | None = None) -> str:
             conf += f"trusted-public-keys = {CACHE_NIXOS_ORG_KEY} {key}\n"
     return conf
 
+
 NIX_URL, NIX_SHA256 = _pin("x86_64-linux")
 NIX_FILENAME = NIX_URL.rsplit("/", 1)[-1]
 NIXPKGS_REV = _source_rev("NIXPKGS_REV")
@@ -102,7 +103,9 @@ def nix_tarball():
             _require_network("the pinned nix installer tarball", dest)
             subprocess.run(["curl", "-fsSL", "-o", str(dest), NIX_URL], check=True)
         digest = hashlib.sha256(dest.read_bytes()).hexdigest()
-        assert digest == NIX_SHA256, f"cached tarball does not match the pin in pins.rs: got {digest}"
+        assert digest == NIX_SHA256, (
+            f"cached tarball does not match the pin in pins.rs: got {digest}"
+        )
 
     return dest
 
@@ -172,8 +175,12 @@ def rendered_state(packages: list[str]) -> str:
 def mirror_cache(mirror_sources):
     cache_dir = CACHE_DIR / "cache"
     users = "-".join(MIRROR_TEST_USERS)
-    template = hashlib.sha256((_MIRROR_FLAKE_NIX + _MIRROR_HOME_NIX).encode()).hexdigest()[:12]
-    marker = CACHE_DIR / f"cache-{NIXPKGS_REV}-{HOME_MANAGER_REV}-{users}-{template}.built"
+    template = hashlib.sha256(
+        (_MIRROR_FLAKE_NIX + _MIRROR_HOME_NIX).encode()
+    ).hexdigest()[:12]
+    marker = (
+        CACHE_DIR / f"cache-{NIXPKGS_REV}-{HOME_MANAGER_REV}-{users}-{template}.built"
+    )
 
     with open(CACHE_DIR / "mirror-cache.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -234,7 +241,9 @@ def _seed_activation_package(
             "__EXTRA_PACKAGES__", extra
         )
         (tmp_path / "home.nix").write_text(home_nix)
-        (tmp_path / "state").write_text(rendered_state(["git", *(extra_packages or [])]))
+        (tmp_path / "state").write_text(
+            rendered_state(["git", *(extra_packages or [])])
+        )
 
         store_path = subprocess.run(
             [
@@ -312,7 +321,9 @@ def start_mirror_server() -> http.server.ThreadingHTTPServer:
     server = http.server.ThreadingHTTPServer(("0.0.0.0", 0), _MirrorHandler)
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    os.environ[MIRROR_URL_ENV] = f"http://host.containers.internal:{server.server_address[1]}"
+    os.environ[MIRROR_URL_ENV] = (
+        f"http://host.containers.internal:{server.server_address[1]}"
+    )
     return server
 
 
@@ -348,7 +359,12 @@ def mirror_key(mirror_cache) -> str:
 
 
 def mirror_args(mock_nix_server, mirror_cache):
-    return ["--mirror", mock_nix_server["url"], "--mirror-key", mirror_key(mirror_cache)]
+    return [
+        "--mirror",
+        mock_nix_server["url"],
+        "--mirror-key",
+        mirror_key(mirror_cache),
+    ]
 
 
 @contextlib.contextmanager
@@ -358,30 +374,33 @@ def policy_mirror(container, url: str):
     policy = json.loads(before)
     policy["mirror"]["url"] = url
     container.exec(
-        "bash", "-c", f"printf '%s' {shlex.quote(json.dumps(policy))} > {POLICY_FILE}", check=True
+        "bash",
+        "-c",
+        f"printf '%s' {shlex.quote(json.dumps(policy))} > {POLICY_FILE}",
+        check=True,
     )
     try:
         yield
     finally:
         container.exec(
-            "bash", "-c", f"printf '%s' {shlex.quote(before)} > {POLICY_FILE}", check=True
+            "bash",
+            "-c",
+            f"printf '%s' {shlex.quote(before)} > {POLICY_FILE}",
+            check=True,
         )
 
 
 def bootstrap_root(container, mock_nix_server):
     """Bootstraps as bare root: the base runtime only, no per-user profile."""
-    result = container.exec("mix", "bootstrap", "--mirror", mock_nix_server["url"])
-    assert result.returncode == 0, result.stderr
-    return result
+    run = container.mix("bootstrap", "--mirror", mock_nix_server["url"])
+    assert run.succeeded(), run
+    return run
 
 
 def bootstrap_as(container, user: str, mock_nix_server, mirror_cache):
     """Bootstraps as an already-created sudo user, enrolling their home-manager profile."""
-    result = container.exec(
-        "mix",
-        "bootstrap",
-        *mirror_args(mock_nix_server, mirror_cache),
-        user=user,
+    run = container.mix(
+        "bootstrap", *mirror_args(mock_nix_server, mirror_cache), user=user
     )
-    assert result.returncode == 0, result.stderr
-    return result
+    assert run.succeeded(), run
+    return run

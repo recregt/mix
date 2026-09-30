@@ -78,7 +78,6 @@ fn provision(tarball_bytes: &[u8], installed: &mut Installed, scope: &Scope) -> 
     };
 
     let unpacked_root = find_single_child(&scratch_root, |name| name.starts_with("nix-"))?;
-    tracing::debug!("moving Nix store into place");
     installed.store_dir_created = !Path::new(NIX_STORE).exists();
     move_store_into_place(&unpacked_root, &mut installed.store_paths, scope)?;
 
@@ -93,7 +92,6 @@ fn provision(tarball_bytes: &[u8], installed: &mut Installed, scope: &Scope) -> 
     if scope.is_stopped() {
         return Ok(());
     }
-    tracing::debug!("loading Nix database");
     load_db(&nix_pkg, &unpacked_root.join(".reginfo"), scope)?;
     forget_vanished_paths(&nix_pkg, scope)?;
 
@@ -101,7 +99,6 @@ fn provision(tarball_bytes: &[u8], installed: &mut Installed, scope: &Scope) -> 
         return Ok(());
     }
     installed.profile_created = !Path::new(DEFAULT_PROFILE).exists();
-    tracing::debug!("activating default profile");
     activate_default_profile(&nix_pkg, &nss_cacert_pkg, scope)?;
 
     remove_manifest();
@@ -177,7 +174,6 @@ fn remove_manifest_at(manifest_path: &Path) {
 fn recover_scratch_at(manifest_path: &Path) -> Option<PathBuf> {
     let path = read_manifest_at(manifest_path)?;
     if find_single_child(&path, |name| name.starts_with("nix-")).is_ok() {
-        tracing::info!("resuming interrupted provisioning from {}", path.display());
         Some(path)
     } else {
         remove_manifest_at(manifest_path);

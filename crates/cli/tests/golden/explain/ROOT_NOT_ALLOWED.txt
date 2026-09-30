@@ -1,0 +1,4 @@
+`mix install` can't be run as root
+run it again without sudo
+
+Installing and removing packages changes your own profile, so it runs as you, not as root. Run the command again without sudo.

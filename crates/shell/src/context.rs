@@ -3,49 +3,51 @@ use std::sync::Arc;
 
 use mix_core::models::UserConfig;
 use mix_core::policy::{Mirror, Policy};
-use mix_core::{
-    ActivityReporter, DownloadProgress, NoopActivity, NoopProgress, NoopSteps, StepObserver,
-};
+use mix_events::Outbox;
 use mix_exec::Scope;
-
-#[derive(Clone)]
-pub struct Reporters {
-    pub downloads: Arc<dyn DownloadProgress>,
-    pub steps: Arc<dyn StepObserver>,
-    pub activity: Arc<dyn ActivityReporter>,
-}
-
-impl Reporters {
-    pub fn silent() -> Self {
-        Self {
-            downloads: Arc::new(NoopProgress),
-            steps: Arc::new(NoopSteps),
-            activity: Arc::new(NoopActivity),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Default)]
 pub struct HostConfig {
     pub git_binary: Option<PathBuf>,
 }
 
+pub fn request_id() -> String {
+    uuid::Uuid::now_v7().to_string()
+}
+
+pub struct Request {
+    pub id: String,
+    pub outbox: Arc<Outbox>,
+}
+
+impl Request {
+    fn new() -> Self {
+        let id = request_id();
+        Self {
+            outbox: Arc::new(Outbox::new(id.clone(), || {})),
+            id,
+        }
+    }
+}
+
 pub struct Context {
+    pub request: Request,
     pub user: Option<UserConfig>,
     pub scope: Scope,
-    pub reporters: Reporters,
     pub policy: Policy,
     pub host: HostConfig,
+    pub render: crate::render::Shared,
 }
 
 impl Context {
     pub fn new(scope: Scope) -> Self {
         Self {
+            request: Request::new(),
             user: None,
             scope,
-            reporters: Reporters::silent(),
             policy: Policy::default(),
             host: HostConfig::default(),
+            render: crate::render::shared(crate::render::Quiet),
         }
     }
 
@@ -54,8 +56,8 @@ impl Context {
         self
     }
 
-    pub fn with_reporters(mut self, reporters: Reporters) -> Self {
-        self.reporters = reporters;
+    pub fn with_render(mut self, render: impl crate::render::Render + 'static) -> Self {
+        self.render = crate::render::shared(render);
         self
     }
 
@@ -67,6 +69,10 @@ impl Context {
     pub fn with_host(mut self, host: HostConfig) -> Self {
         self.host = host;
         self
+    }
+
+    pub(crate) fn relay(&self) -> crate::render::Relay {
+        crate::render::Relay::new(Arc::clone(&self.request.outbox), Arc::clone(&self.render))
     }
 
     pub(crate) fn mirror(&self) -> Option<&str> {

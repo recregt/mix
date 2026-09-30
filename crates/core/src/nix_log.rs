@@ -404,6 +404,74 @@ impl<'de: 'a, 'a> Deserialize<'de> for Field<'a> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NixFailure {
+    Build { package: String },
+    UnknownPackage { name: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NixError {
+    pub message: String,
+    pub failure: Option<NixFailure>,
+}
+
+fn without_escapes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        if chars.next() == Some('[') {
+            for c in chars.by_ref() {
+                if matches!(c, '@'..='~') {
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
+fn quoted_after<'a>(text: &'a str, opening: &str) -> Option<&'a str> {
+    let start = text.find(opening)? + opening.len();
+    let length = text[start..].find('\'')?;
+    Some(&text[start..start + length])
+}
+
+fn package_of(derivation: &str) -> String {
+    let name = derivation.rsplit('/').next().unwrap_or(derivation);
+    let name = name.strip_suffix(".drv").unwrap_or(name);
+    match name.split_once('-') {
+        Some((hash, rest)) if hash.len() == 32 => rest.to_string(),
+        _ => name.to_string(),
+    }
+}
+
+pub fn nix_error(tail: &str) -> Option<NixError> {
+    let clean = without_escapes(tail);
+    let start = clean
+        .match_indices("error:")
+        .map(|(at, _)| at)
+        .filter(|at| *at == 0 || clean[..*at].ends_with(char::is_whitespace))
+        .last()?;
+    let message = clean[start..].trim_end().to_string();
+    let failure = if let Some(derivation) = quoted_after(&message, "Cannot build '") {
+        Some(NixFailure::Build {
+            package: package_of(derivation),
+        })
+    } else {
+        quoted_after(&message, "attribute '")
+            .filter(|_| message.contains("' missing"))
+            .map(|name| NixFailure::UnknownPackage {
+                name: name.to_string(),
+            })
+    };
+    Some(NixError { message, failure })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -511,6 +579,42 @@ mod tests {
         );
 
         assert!(!matches!(event, Event::Building(_)));
+    }
+
+    fn decoded(log: &str) -> String {
+        let mut parser = NixLog::new();
+        let mut tail = String::new();
+        for line in log.lines() {
+            if let Event::Message(message) = parser.observe(line) {
+                tail.push_str(&message);
+                tail.push('\n');
+            }
+        }
+        tail
+    }
+
+    #[test]
+    fn nixs_own_logs_are_read_as_the_failures_they_are() {
+        let build = nix_error(&decoded(include_str!("../fixtures/nix/build-log.txt"))).unwrap();
+        let missing = nix_error(&decoded(include_str!("../fixtures/nix/missing-log.txt"))).unwrap();
+
+        assert_eq!(
+            build.failure,
+            Some(NixFailure::Build {
+                package: "failing-5.0".into()
+            })
+        );
+        assert_eq!(
+            missing.failure,
+            Some(NixFailure::UnknownPackage {
+                name: "ripgrep2".into()
+            })
+        );
+        assert!(
+            missing
+                .message
+                .starts_with("error: attribute 'ripgrep2' missing")
+        );
     }
 
     #[test]
@@ -706,5 +810,51 @@ mod tests {
         assert_eq!(snapshot.downloads_done, 1);
         assert_eq!(snapshot.bytes_done, 2_048);
         assert!(log.live.is_empty(), "every activity stopped");
+    }
+
+    #[test]
+    fn a_failed_build_is_named_by_its_package_and_keeps_nixs_words() {
+        let tail = "this derivation will be built:\n  /nix/store/x.drv\n\u{1b}[31;1merror:\u{1b}[0m Cannot build '\u{1b}[35;1m/nix/store/bbx79xgf89bvd25i1sivdcykhy39bz14-failing-5.0.drv\u{1b}[0m'.\n       Reason: \u{1b}[31;1mbuilder failed with exit code 1\u{1b}[0m.";
+
+        let error = nix_error(tail).unwrap();
+
+        assert_eq!(
+            error.failure,
+            Some(NixFailure::Build {
+                package: "failing-5.0".into()
+            })
+        );
+        assert!(
+            error
+                .message
+                .starts_with("error: Cannot build '/nix/store/")
+        );
+        assert!(
+            error
+                .message
+                .ends_with("Reason: builder failed with exit code 1.")
+        );
+    }
+
+    #[test]
+    fn a_missing_attribute_is_an_unknown_package() {
+        let tail = "\u{1b}[31;1merror:\u{1b}[0m attribute '\u{1b}[35;1mripgrep2\u{1b}[0m' missing\n       at /tmp/plan.nix:9:47:";
+
+        assert_eq!(
+            nix_error(tail).unwrap().failure,
+            Some(NixFailure::UnknownPackage {
+                name: "ripgrep2".into()
+            })
+        );
+    }
+
+    #[test]
+    fn an_error_nix_does_not_classify_keeps_its_words_and_no_output_is_no_error() {
+        let error =
+            nix_error("warning: slow\nerror: getting status of '/x': No such file").unwrap();
+
+        assert_eq!(error.failure, None);
+        assert_eq!(error.message, "error: getting status of '/x': No such file");
+        assert_eq!(nix_error("fatal: not a git repository"), None);
     }
 }

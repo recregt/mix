@@ -18,9 +18,10 @@ use crate::paths::{
     NIX_PROFILES_DIR_MODE, NIX_TREE_MODE, NIX_TREE_PATHS, POLICY_FILE, PROFILE_SNIPPET_DEST,
     STATE_FILE, mix_state_dir, nix_profiles_dir,
 };
-use crate::plan::StepSpec;
+use crate::plan::{StepSpec, Title};
 use crate::policy::Policy;
 use crate::state::StateManifest;
+use mix_events::v1::Verb;
 
 const DIR_MODE: u32 = 0o755;
 pub(crate) const FILE_MODE: u32 = 0o644;
@@ -210,8 +211,8 @@ impl StepSpec for RemoveExistingInstallation {
         "remove-existing-installation".into()
     }
 
-    fn title(&self) -> Cow<'static, str> {
-        "remove the existing installation".into()
+    fn title(&self) -> Title {
+        Title::new(Verb::Removing, "existing installation")
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -290,8 +291,8 @@ impl StepSpec for CreateNixDir {
         "create-nix-dir".into()
     }
 
-    fn title(&self) -> Cow<'static, str> {
-        "create /nix".into()
+    fn title(&self) -> Title {
+        Title::new(Verb::Creating, "Nix directory")
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -324,8 +325,8 @@ impl StepSpec for CreateNixTree {
         "create-nix-tree".into()
     }
 
-    fn title(&self) -> Cow<'static, str> {
-        "create managed runtime directory tree".into()
+    fn title(&self) -> Title {
+        Title::new(Verb::Creating, "runtime directories")
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -359,8 +360,8 @@ impl StepSpec for CreateUsersAndGroups {
         "create-users-and-groups".into()
     }
 
-    fn title(&self) -> Cow<'static, str> {
-        "create the managed groups and build users".into()
+    fn title(&self) -> Title {
+        Title::new(Verb::Creating, "build users and groups")
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -432,8 +433,8 @@ impl StepSpec for FetchRuntime {
         "fetch-runtime".into()
     }
 
-    fn title(&self) -> Cow<'static, str> {
-        "fetch and activate the managed runtime".into()
+    fn title(&self) -> Title {
+        Title::new(Verb::Installing, "Nix runtime")
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -469,8 +470,8 @@ impl StepSpec for ConfigureNixConf {
         "write-nix-conf".into()
     }
 
-    fn title(&self) -> Cow<'static, str> {
-        "write runtime configuration".into()
+    fn title(&self) -> Title {
+        Title::new(Verb::Writing, "runtime configuration")
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -524,8 +525,8 @@ impl StepSpec for ConfigureDaemon {
         "configure-daemon".into()
     }
 
-    fn title(&self) -> Cow<'static, str> {
-        "configure the managed background service".into()
+    fn title(&self) -> Title {
+        Title::new(Verb::Configuring, "Nix daemon service")
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -627,8 +628,8 @@ impl StepSpec for WriteHomeConfig {
         "write-home-config".into()
     }
 
-    fn title(&self) -> Cow<'static, str> {
-        "write home-manager config".into()
+    fn title(&self) -> Title {
+        Title::new(Verb::Writing, "profile configuration")
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -717,8 +718,8 @@ impl StepSpec for ActivateHome {
         "activate-home".into()
     }
 
-    fn title(&self) -> Cow<'static, str> {
-        "activate home-manager config".into()
+    fn title(&self) -> Title {
+        Title::new(Verb::Activating, "profile")
     }
 
     fn queries(&self) -> Vec<Query> {

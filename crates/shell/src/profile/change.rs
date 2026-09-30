@@ -5,16 +5,14 @@ use mix_core::action::Failure;
 use mix_core::change::{Change, NewerList, Unrenderable};
 use mix_core::models::UserConfig;
 use mix_core::plan::{Runner, Verdict, diagnostic};
-use mix_events::v1::{Command, command};
-use mix_events::{Ending, Outbox, ROOT, Start, Tree};
+use mix_events::v1::{Command, InstallResult, RemoveResult, command, node_finished};
+use mix_events::{Ending, ROOT, Start, Tree};
 
 use crate::Context;
-use crate::bridge::Bridge;
 use crate::drive::{Journal, Observer, Performer, drive, stopped_by};
 use crate::effect::files::Files;
 use crate::effect::generations::ProfileContext;
-use crate::ops::bootstrap::request_id;
-use crate::profile::state::{self, Invalid, Settled};
+use crate::profile::state::{self, Invalid, Settled, Source};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -64,10 +62,10 @@ pub enum Verb {
 }
 
 impl Verb {
-    fn label(&self) -> &'static str {
+    fn doing(&self) -> mix_events::v1::Verb {
         match self {
-            Verb::Install => "Installing",
-            Verb::Remove => "Removing",
+            Verb::Install => mix_events::v1::Verb::Installing,
+            Verb::Remove => mix_events::v1::Verb::Removing,
         }
     }
 
@@ -76,6 +74,22 @@ impl Verb {
         match self {
             Verb::Install => command::Request::Install(mix_events::v1::InstallRequest { packages }),
             Verb::Remove => command::Request::Remove(mix_events::v1::RemoveRequest { packages }),
+        }
+    }
+
+    fn result(&self, change: &Change) -> node_finished::Result {
+        let reset = change.source == Source::Fresh;
+        match self {
+            Verb::Install => node_finished::Result::Install(InstallResult {
+                added: change.changed.clone(),
+                skipped: change.skipped.clone(),
+                restored: reset,
+            }),
+            Verb::Remove => node_finished::Result::Remove(RemoveResult {
+                removed: change.changed.clone(),
+                skipped: change.skipped.clone(),
+                restored: reset,
+            }),
         }
     }
 
@@ -95,26 +109,13 @@ pub async fn run(
     change: &Change,
     journal: &mut dyn Journal,
 ) -> Result<()> {
-    let steps = mix_core::change::steps(&cfg.user, change, verb.label())?;
-    if steps.is_empty() {
-        return Ok(());
-    }
+    let steps = mix_core::change::steps(&cfg.user, change, verb.doing())?;
     let scope = &ctx.scope;
-    let request = request_id();
-    let files = Files::open(Path::new("/"), &request).map_err(|source| mix_core::Error::Io {
-        path: "/".into(),
-        source,
-    })?;
-    let mut performer = Performer::new(files).with_profile(ProfileContext {
-        mirror: ctx.mirror().map(str::to_string),
-        activity: Arc::clone(&ctx.reporters.activity),
-        host: ctx.host.clone(),
-    });
-    let outbox = Arc::new(Outbox::new(request, || {}));
-    let mut bridge = Bridge::new(Arc::clone(&outbox), ctx.reporters.clone());
+    let request = ctx.request.id.clone();
+    let mut observer = ctx.relay();
     let stopped = stopped_by(scope);
     let mut tree = Tree::new(
-        outbox,
+        Arc::clone(&ctx.request.outbox),
         Arc::clone(&stopped),
         Start::command(
             verb.key(),
@@ -125,33 +126,47 @@ pub async fn run(
             },
         ),
     );
-    let mut runner = Runner::new(ROOT, steps);
-    let report = drive(
-        &mut runner,
-        &mut tree,
-        &mut performer,
-        scope,
-        &stopped,
-        journal,
-        &mut bridge,
-    )
-    .await;
-    let (ending, outcome) = match &report.verdict {
-        Verdict::Succeeded => (Ending::succeeded(), Ok(())),
-        Verdict::Failed { failure, .. } => (
-            Ending::failed(diagnostic(failure)),
-            Err(error_of(failure.clone())),
-        ),
+    let verdict = if steps.is_empty() {
+        Verdict::Succeeded
+    } else {
+        let files =
+            Files::open(Path::new("/"), &request).map_err(|source| mix_core::Error::Io {
+                path: "/".into(),
+                source,
+            })?;
+        let mut performer = Performer::new(files).with_profile(ProfileContext {
+            mirror: ctx.mirror().map(str::to_string),
+            host: ctx.host.clone(),
+        });
+        let mut runner = Runner::new(ROOT, steps);
+        drive(
+            &mut runner,
+            &mut tree,
+            &mut performer,
+            scope,
+            &stopped,
+            journal,
+            &mut observer,
+        )
+        .await
+        .verdict
+        .clone()
+    };
+    let (ending, outcome) = match verdict {
+        Verdict::Succeeded => (Ending::succeeded().with_result(verb.result(change)), Ok(())),
+        Verdict::Failed { failure, .. } => {
+            (Ending::failed(diagnostic(&failure)), Err(error_of(failure)))
+        }
         Verdict::Cancelled(cause) => (
-            Ending::cancelled(*cause),
+            Ending::cancelled(cause),
             Err(Error::Core(mix_core::Error::Cancelled {
                 command: format!("mix {}", verb.key()),
             })),
         ),
     };
-    let _ = tree.finish(ROOT, ending);
+    let _ = tree.finish(ROOT, ending.for_root(false));
     drop(tree);
-    bridge.flush();
+    observer.flush();
     outcome
 }
 

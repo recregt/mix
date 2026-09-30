@@ -38,11 +38,28 @@ impl Flag {
     }
 }
 
-#[derive(Debug, Clone)]
+pub trait Watch: Send + Sync {
+    fn started(&self, command: &str);
+    fn finished(&self, command: &str, status: std::process::ExitStatus);
+}
+
+#[derive(Clone)]
 pub struct Scope {
     token: CancellationToken,
     flag: Arc<Flag>,
     processes: ProcessSet,
+    watch: Option<Arc<dyn Watch>>,
+}
+
+impl std::fmt::Debug for Scope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Scope")
+            .field("token", &self.token)
+            .field("flag", &self.flag)
+            .field("processes", &self.processes)
+            .field("watched", &self.watch.is_some())
+            .finish()
+    }
 }
 
 impl Scope {
@@ -52,6 +69,7 @@ impl Scope {
             token: CancellationToken::new(),
             flag: Arc::default(),
             processes,
+            watch: None,
         }
     }
 
@@ -67,11 +85,34 @@ impl Scope {
                 parent: Some(Arc::clone(&self.flag)),
             }),
             processes: self.processes.clone(),
+            watch: self.watch.clone(),
         }
     }
 
     pub fn shielded(&self) -> Self {
-        Self::with_processes(self.processes.clone())
+        Self {
+            watch: self.watch.clone(),
+            ..Self::with_processes(self.processes.clone())
+        }
+    }
+
+    pub fn watched(&self, watch: Arc<dyn Watch>) -> Self {
+        Self {
+            watch: Some(watch),
+            ..self.clone()
+        }
+    }
+
+    pub(crate) fn started(&self, command: &str) {
+        if let Some(watch) = &self.watch {
+            watch.started(command);
+        }
+    }
+
+    pub(crate) fn finished(&self, command: &str, status: std::process::ExitStatus) {
+        if let Some(watch) = &self.watch {
+            watch.finished(command, status);
+        }
     }
 
     pub fn cancel(&self, reason: Reason) {

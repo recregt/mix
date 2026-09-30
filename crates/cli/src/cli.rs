@@ -1,11 +1,17 @@
-use clap::{ArgAction, Parser, Subcommand};
+use std::path::PathBuf;
+
+use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(name = "mix", version, about = "Reproducible systems, made effortless")]
 pub struct Cli {
-    /// Verbosity: -v steps, -vv commands, -vvv output
-    #[arg(short, long, action = ArgAction::Count, global = true)]
+    /// Verbosity: -v commands and actions, -vv each program's output
+    #[arg(short, long, action = ArgAction::Count, global = true, conflicts_with = "quiet")]
     pub verbose: u8,
+
+    /// Print only results and errors
+    #[arg(short, long, global = true)]
+    pub quiet: bool,
 
     /// Never draw progress in place, even on a terminal
     #[arg(
@@ -19,20 +25,53 @@ pub struct Cli {
     )]
     pub no_progress: bool,
 
+    /// How to report what happens: `human` for people, `json` for one event per line
+    #[arg(long, global = true, value_enum, default_value_t = Output::Human)]
+    pub output: Output,
+
+    /// Also record every event to this file
+    #[arg(long, global = true, value_name = "PATH")]
+    pub events_file: Option<PathBuf>,
+
     #[command(subcommand)]
     pub command: Command,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Output {
+    Human,
+    Json,
+}
+
+#[derive(Subcommand)]
+pub enum EventsCommand {
+    /// Check that a recorded events file is complete and well formed
+    Check {
+        /// The file `--events-file` wrote
+        file: PathBuf,
+    },
+
+    /// Show a recorded events file the way the run looked, at any verbosity
+    Show {
+        /// The file `--events-file` wrote
+        file: PathBuf,
+
+        /// Only this node and what ran inside it, such as `install/activate`
+        #[arg(long)]
+        node: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
 pub enum Command {
     /// Initialize runtime and system dependencies
     Bootstrap {
-        /// Mirror for the Nix archive, flake inputs and binaries, used by every user
-        #[arg(long, env = "MIX_NIX_MIRROR")]
+        /// Mirror for Nix and packages, used by every user [env: MIX_NIX_MIRROR]
+        #[arg(long)]
         mirror: Option<String>,
 
-        /// Public key the mirror's binary cache is signed with, trusted machine-wide
-        #[arg(long, env = "MIX_NIX_MIRROR_KEY")]
+        /// Key the mirror signs with, trusted machine-wide [env: MIX_NIX_MIRROR_KEY]
+        #[arg(long)]
         mirror_key: Option<String>,
 
         /// Wipe any existing managed installation before bootstrapping
@@ -40,26 +79,18 @@ pub enum Command {
         force: bool,
     },
 
-    /// Add packages to your home-manager profile
+    /// Add packages to your profile
     Install {
         /// Packages to add
         #[arg(required = true)]
         packages: Vec<String>,
-
-        /// Report the result as JSON on stdout, for scripts
-        #[arg(long)]
-        json: bool,
     },
 
-    /// Remove packages from your home-manager profile
+    /// Remove packages from your profile
     Remove {
         /// Packages to remove
         #[arg(required = true)]
         packages: Vec<String>,
-
-        /// Report the result as JSON on stdout, for scripts
-        #[arg(long)]
-        json: bool,
     },
 
     /// Inspect system health
@@ -67,6 +98,18 @@ pub enum Command {
 
     /// Repair configuration drift
     Repair,
+
+    /// Work with recorded events
+    Events {
+        #[command(subcommand)]
+        command: EventsCommand,
+    },
+
+    /// Describe a failure code, such as LOCKED
+    Explain {
+        /// The code, as a failure prints it
+        code: String,
+    },
 
     #[command(
         hide = true,
@@ -85,14 +128,11 @@ pub enum Command {
 impl Cli {
     /// Whether output may be drawn in place.
     ///
-    /// `--no-progress` and `--json` are explicit requests for plain output; `CI` is honoured
-    /// because build systems set it and nobody is watching a CI log live.
+    /// `--no-progress` and `--output json` are explicit requests for plain output; `CI` is
+    /// honoured because build systems set it and nobody is watching a CI log live.
     pub fn draws_progress(&self) -> bool {
         !self.no_progress
-            && !matches!(
-                self.command,
-                Command::Install { json: true, .. } | Command::Remove { json: true, .. }
-            )
+            && self.output == Output::Human
             && !ci_asks_for_plain_output(std::env::var("CI").ok().as_deref())
     }
 }
@@ -169,20 +209,64 @@ mod tests {
     }
 
     #[test]
-    fn json_is_off_unless_it_is_asked_for() {
-        let cli = parse(&["mix", "install", "ripgrep"]);
-        assert!(matches!(cli.command, Command::Install { json: false, .. }));
-    }
-
-    #[test]
-    fn json_can_be_asked_for() {
-        let cli = parse(&["mix", "install", "--json", "ripgrep"]);
-        assert!(matches!(cli.command, Command::Install { json: true, .. }));
+    fn output_is_for_people_unless_json_is_asked_for() {
+        assert_eq!(parse(&["mix", "install", "ripgrep"]).output, Output::Human);
+        assert_eq!(
+            parse(&["mix", "--output", "json", "install", "ripgrep"]).output,
+            Output::Json
+        );
+        assert_eq!(
+            parse(&["mix", "install", "--output", "json", "ripgrep"]).output,
+            Output::Json
+        );
     }
 
     #[test]
     fn json_output_implies_plain_output() {
-        assert!(!parse(&["mix", "install", "--json", "ripgrep"]).draws_progress());
+        assert!(!parse(&["mix", "--output", "json", "install", "ripgrep"]).draws_progress());
+    }
+
+    #[test]
+    fn events_can_be_recorded_by_any_command() {
+        let cli = parse(&["mix", "doctor", "--events-file", "/tmp/events.ndjson"]);
+        assert_eq!(cli.events_file, Some(PathBuf::from("/tmp/events.ndjson")));
+    }
+
+    #[test]
+    fn a_recorded_file_is_checked_by_its_own_command() {
+        assert!(matches!(
+            parse(&["mix", "events", "check", "/tmp/events.ndjson"]).command,
+            Command::Events {
+                command: EventsCommand::Check { ref file }
+            } if file == &PathBuf::from("/tmp/events.ndjson")
+        ));
+    }
+
+    #[test]
+    fn a_recorded_run_is_shown_at_any_verbosity_and_for_one_node() {
+        let cli = parse(&[
+            "mix",
+            "-vv",
+            "events",
+            "show",
+            "/tmp/events.ndjson",
+            "--node",
+            "install/plan/activate",
+        ]);
+
+        assert_eq!(cli.verbose, 2);
+        assert!(matches!(
+            cli.command,
+            Command::Events {
+                command: EventsCommand::Show { ref file, node: Some(ref node) }
+            } if file == &PathBuf::from("/tmp/events.ndjson") && node == "install/plan/activate"
+        ));
+    }
+
+    #[test]
+    fn the_old_json_flag_is_gone() {
+        assert!(Cli::try_parse_from(["mix", "install", "--json", "ripgrep"]).is_err());
+        assert!(Cli::try_parse_from(["mix", "remove", "--json", "ripgrep"]).is_err());
     }
 
     #[test]
@@ -191,25 +275,13 @@ mod tests {
 
         assert!(matches!(
             cli.command,
-            Command::Remove { ref packages, json: false, .. } if packages == &["ripgrep", "fd"]
+            Command::Remove { ref packages } if packages == &["ripgrep", "fd"]
         ));
     }
 
     #[test]
     fn remove_needs_at_least_one_package() {
         assert!(Cli::try_parse_from(["mix", "remove"]).is_err());
-    }
-
-    #[test]
-    fn remove_json_can_be_asked_for() {
-        let cli = parse(&["mix", "remove", "--json", "ripgrep"]);
-
-        assert!(matches!(cli.command, Command::Remove { json: true, .. }));
-    }
-
-    #[test]
-    fn remove_json_output_implies_plain_output() {
-        assert!(!parse(&["mix", "remove", "--json", "ripgrep"]).draws_progress());
     }
 
     #[test]
@@ -237,5 +309,28 @@ mod tests {
                 "CI={value:?} should force plain output"
             );
         }
+    }
+
+    #[test]
+    fn no_help_text_names_nix_mechanics() {
+        fn visit(command: &clap::Command, found: &mut Vec<String>) {
+            let texts = command
+                .get_about()
+                .into_iter()
+                .chain(command.get_arguments().filter_map(|arg| arg.get_help()))
+                .map(ToString::to_string);
+            for text in texts {
+                if !mix_core::vocabulary::nix_mechanics_in(&text).is_empty() {
+                    found.push(format!("{}: {text}", command.get_name()));
+                }
+            }
+            for sub in command.get_subcommands() {
+                visit(sub, found);
+            }
+        }
+
+        let mut found = Vec::new();
+        visit(&<Cli as clap::CommandFactory>::command(), &mut found);
+        assert_eq!(found, Vec::<String>::new());
     }
 }

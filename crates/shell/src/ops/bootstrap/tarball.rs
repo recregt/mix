@@ -69,22 +69,13 @@ pub(crate) async fn fetch_and_verify(
     progress: &dyn DownloadProgress,
     scope: &Scope,
 ) -> Result<Vec<u8>> {
-    tracing::info!(
-        "fetching runtime archive: {url} (nix {})",
-        mix_pins::NIX_VERSION
-    );
+    progress.fetching(url);
     scope
         .guard(download(url, expected_sha256, size, progress))
         .await
         .map_err(|_| Error::Interrupted)?
 }
 
-#[tracing::instrument(
-    level = "info",
-    name = "download",
-    skip_all,
-    fields(name = "fetch the Nix runtime archive")
-)]
 async fn download(
     url: &str,
     expected_sha256: &str,
@@ -272,7 +263,6 @@ fn unpack_entries(archive: &mut tar::Archive<XzSource<'_>>, dest: &Path) -> std:
 }
 
 pub fn unpack(tarball: &[u8], dest: &Path) -> Result<()> {
-    tracing::debug!("unpacking archive into {}", dest.display());
     let mut archive = tar::Archive::new(XzSource::new(tarball));
     archive.set_preserve_permissions(true);
     archive.set_preserve_mtime(true);

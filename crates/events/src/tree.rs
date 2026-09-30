@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::wildcard_enum_match_arm))]
+
 use std::borrow::Cow;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -115,6 +117,28 @@ impl Ending {
         self.exit_code = exit_code;
         self
     }
+
+    pub fn for_root(self, problems_remain: bool) -> Self {
+        let exit_code = match self.status {
+            Status::Failed => exit::FAILED,
+            Status::Cancelled => exit::INTERRUPTED,
+            Status::Unspecified | Status::Succeeded | Status::AlreadySatisfied
+                if problems_remain =>
+            {
+                exit::PROBLEMS_REMAIN
+            }
+            Status::Unspecified | Status::Succeeded | Status::AlreadySatisfied => exit::SUCCEEDED,
+        };
+        self.with_exit_code(exit_code)
+    }
+}
+
+pub mod exit {
+    pub const SUCCEEDED: u32 = 0;
+    pub const FAILED: u32 = 1;
+    pub const USAGE: u32 = 2;
+    pub const PROBLEMS_REMAIN: u32 = 3;
+    pub const INTERRUPTED: u32 = 130;
 }
 
 pub fn output(bytes: &[u8], stream: Stream) -> Progress {
@@ -136,7 +160,14 @@ struct Open {
 impl Open {
     fn changed(&mut self, progress: &Progress) -> bool {
         match progress {
-            Progress::Line(_) => true,
+            Progress::Line(_)
+            | Progress::Command(_)
+            | Progress::Fetch(_)
+            | Progress::Build(_)
+            | Progress::Stopping(_)
+            | Progress::CommandFinished(_)
+            | Progress::Observed(_)
+            | Progress::Journaled(_) => true,
             Progress::Builds(builds) => self.builds.replace(*builds) != Some(*builds),
             Progress::Bytes(bytes) => self.bytes.replace(*bytes) != Some(*bytes),
         }
@@ -238,7 +269,7 @@ impl Tree {
         self.outbox.push(Event::NodeFinished(NodeFinished {
             id,
             status: ending.status as i32,
-            diagnostic: ending.diagnostic,
+            diagnostic: ending.diagnostic.map(Box::new),
             exit_code: ending.exit_code,
             cancellation: ending.cancellation as i32,
             result: ending.result,

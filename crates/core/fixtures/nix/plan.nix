@@ -5,4 +5,5 @@
     builder = "/bin/sh";
     args = [ "-c" "exit 1" ];
   };
+  missing = let collection = { hello = 1; }; in collection.ripgrep2;
 }

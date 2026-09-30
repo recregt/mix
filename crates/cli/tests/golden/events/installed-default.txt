@@ -1,0 +1,8 @@
+     Writing package list
+  Installing hello
+warning: the change was made but not recorded in git
+
+Caused by:
+  fatal: not a git repository
+  help: `mix repair` records it
+   Installed hello in 29.00s

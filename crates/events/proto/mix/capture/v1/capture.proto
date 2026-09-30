@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package mix.capture.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "mix/events/v1/events.proto";
+
+message Header {
+  string format = 1;
+  string mix_version = 2;
+  string request = 3;
+  google.protobuf.Timestamp started = 4;
+}
+
+message Record {
+  google.protobuf.Duration offset = 1;
+  mix.events.v1.Envelope envelope = 2;
+}
+
+message Line {
+  oneof entry {
+    Header header = 1;
+    Record record = 2;
+  }
+}

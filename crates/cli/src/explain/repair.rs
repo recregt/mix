@@ -5,9 +5,9 @@ use mix_shell::target::Error;
 use super::{Diagnostic, failed};
 
 /// How the command is spelled when the reader is told to run it again.
-const COMMAND: &str = "mix repair";
+pub(crate) const COMMAND: &str = "mix repair";
 
-const ACTION: &str = "finish the repair";
+pub(crate) const ACTION: &str = "finish the repair";
 
 pub fn explain(error: &anyhow::Error) -> Diagnostic {
     if let Some(error) = error.downcast_ref::<mix_rpc::Error>() {
@@ -35,7 +35,7 @@ mod tests {
         let message = explain(&error).message();
 
         assert!(message.contains("/nix: exists but is not a directory"));
-        assert!(message.contains("Remove it, then run `mix repair` again"));
+        assert!(message.contains("remove it, then run `mix repair` again"));
     }
 
     #[test]
@@ -44,7 +44,7 @@ mod tests {
 
         assert_eq!(
             explain(&error).message(),
-            "couldn't finish the repair\nRun it again with `-v` to see what went wrong"
+            "couldn't finish the repair\nrun it again with `-v` to see what went wrong"
         );
     }
 }

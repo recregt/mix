@@ -1,0 +1,4 @@
+`mix` couldn't reach systemd
+check that the system bus is running with `systemctl status dbus`, then run `mix install` again
+
+`mix` talks to systemd over the system bus, and nothing answered there. Check that D-Bus is running with `systemctl status dbus`.

@@ -1,0 +1,4 @@
+the change was made but not recorded in git
+`mix repair` records it
+
+`mix` keeps your package list in a git repository so every change can be seen and undone. The change itself was made, but committing it failed, often because `git` is missing or the repository belongs to another user. `mix repair` commits what is there.

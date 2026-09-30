@@ -7,7 +7,7 @@ use crate::privilege::InvokingUser;
 
 pub type Owner = (u32, u32);
 
-mod error_kind {
+pub(crate) mod error_kind {
     use std::io::ErrorKind;
 
     use serde::{Deserialize, Deserializer, Serializer};
@@ -60,11 +60,15 @@ mod error_kind {
 
     pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<ErrorKind, D::Error> {
         let name = String::deserialize(deserializer)?;
-        Ok(KINDS
+        Ok(named(&name))
+    }
+
+    pub fn named(name: &str) -> ErrorKind {
+        KINDS
             .iter()
             .copied()
             .find(|kind| format!("{kind:?}") == name)
-            .unwrap_or(ErrorKind::Other))
+            .unwrap_or(ErrorKind::Other)
     }
 }
 

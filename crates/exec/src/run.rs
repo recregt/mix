@@ -4,7 +4,6 @@ use std::os::fd::OwnedFd;
 use std::process::{ExitStatus, Output, Stdio};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tracing::Instrument;
 
 use crate::group;
 use crate::{Error, Scope, Stop};
@@ -155,7 +154,6 @@ impl Command {
 
     pub fn spawn_foreground(self, stdin: OwnedFd) -> Result<Foreground, Error> {
         let line = self.line();
-        tracing::debug!("starting in the foreground: {line}");
         self.process()
             .stdin(Stdio::from(stdin))
             .spawn()
@@ -175,7 +173,7 @@ impl Command {
         Error,
     > {
         let line = self.line();
-        tracing::debug!("starting a session: {line}");
+        scope.started(&line);
         let mut process = self.process();
         process
             .stdin(Stdio::piped())
@@ -219,7 +217,7 @@ impl Command {
 
     pub async fn output(self, scope: &Scope) -> Result<Output, Error> {
         let line = self.line();
-        tracing::debug!("running command: {line}");
+        scope.started(&line);
 
         let mut process = self.process();
         process
@@ -243,15 +241,10 @@ impl Command {
         let stdout_pipe = child.stdout.take().expect("stdout was piped");
         let stderr_pipe = child.stderr.take().expect("stderr was piped");
         let stdout_task = tokio::spawn(drain(stdout_pipe, Box::new(Vec::new())));
-        // Progress goes to stderr, so that is the pipe worth watching live. The reader keeps the
-        // caller's span so the reporter can draw on the line the step already owns.
-        let stderr_task = tokio::spawn(
-            drain(
-                stderr_pipe,
-                self.stderr.unwrap_or_else(|| Box::new(Vec::new())),
-            )
-            .in_current_span(),
-        );
+        let stderr_task = tokio::spawn(drain(
+            stderr_pipe,
+            self.stderr.unwrap_or_else(|| Box::new(Vec::new())),
+        ));
 
         let status = tokio::select! {
             status = child.wait() => status.map_err(|source| Error::spawn(line.clone(), source))?,
@@ -266,17 +259,12 @@ impl Command {
             }
         };
 
+        scope.finished(&line, status);
         if let Some(stdin_task) = stdin_task {
             let _ = stdin_task.await;
         }
         let stdout = stdout_task.await.unwrap_or_default();
         let stderr = stderr_task.await.unwrap_or_default();
-
-        tracing::trace!(
-            "command output: {line}\nstdout: {}\nstderr: {}",
-            String::from_utf8_lossy(&stdout),
-            String::from_utf8_lossy(&stderr)
-        );
 
         Ok(Output {
             status,

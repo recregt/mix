@@ -23,4 +23,3 @@ serde_json = { version = "1.0.145", features = ["raw_value"] }
 tempfile = "3.27.0"
 thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "process", "fs", "io-util", "sync", "time"] }
-tracing = "0.1.44"

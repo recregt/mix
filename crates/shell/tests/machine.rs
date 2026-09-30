@@ -314,7 +314,6 @@ fn every_profile_action_and_its_undo_match_the_model() {
             mirror: Policy::load(std::fs::read_to_string(POLICY_FILE).ok().as_deref())
                 .mirror()
                 .map(|mirror| mirror.url().to_string()),
-            activity: Arc::new(NoopActivity),
             host: HostConfig::default(),
         })
         .with_agent_program("/usr/local/bin/mix".into());

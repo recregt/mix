@@ -537,3 +537,58 @@ fn a_masked_socket_is_left_alone_and_reported() {
         Err(Failure::Conflict { .. })
     ));
 }
+
+#[test]
+fn a_runtime_whose_default_profile_was_lost_is_provisioned_again() {
+    let mut world = machine();
+    let settings = settings(Some(alice()), false);
+    run(&mut world, &settings, Script::default());
+    let profile = std::path::PathBuf::from(DEFAULT_PROFILE_NIX_ENV);
+    let default = profile
+        .parent()
+        .and_then(Path::parent)
+        .expect("the default profile holds bin/nix-env")
+        .to_path_buf();
+    let Fact::Path(PathFacts { id: Some(id), .. }) = world.observe(&Query::Path(default.clone()))
+    else {
+        panic!("a bootstrap installs the default profile");
+    };
+    world
+        .apply(&Action::RemoveCreatedTree {
+            path: default,
+            expect: id,
+        })
+        .unwrap();
+    assert!(matches!(
+        world.observe(&Query::Path(profile.clone())),
+        Fact::Path(PathFacts {
+            kind: Kind::Missing,
+            ..
+        })
+    ));
+
+    let again = run(&mut world, &settings, Script::default());
+
+    assert_eq!(again.report.verdict, Verdict::Succeeded);
+    assert!(again.changes > 0);
+    assert!(!matches!(
+        world.observe(&Query::Path(profile)),
+        Fact::Path(PathFacts {
+            kind: Kind::Missing,
+            ..
+        })
+    ));
+    assert!(validate(&again.stream).is_ok());
+}
+
+#[test]
+fn every_step_is_named_in_the_users_words() {
+    for step in steps(&settings(Some(alice()), true)) {
+        let subject = step.title().subject;
+        assert_eq!(
+            crate::vocabulary::nix_mechanics_in(&subject),
+            Vec::<&str>::new(),
+            "{subject}"
+        );
+    }
+}

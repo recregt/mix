@@ -1,7 +1,9 @@
+#![cfg_attr(not(test), deny(clippy::wildcard_enum_match_arm))]
+
 use std::collections::VecDeque;
 use std::sync::{Mutex, PoisonError};
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::v1::{Envelope, NodeProgress, envelope::Event, node_progress::Progress};
 
@@ -15,15 +17,25 @@ type Slot = (u64, Gauge);
 
 fn slot(event: &Event) -> Option<Slot> {
     match event {
-        Event::NodeProgress(NodeProgress {
-            id,
-            progress: Some(Progress::Bytes(_)),
-        }) => Some((*id, Gauge::Bytes)),
-        Event::NodeProgress(NodeProgress {
-            id,
-            progress: Some(Progress::Builds(_)),
-        }) => Some((*id, Gauge::Builds)),
-        _ => None,
+        Event::NodeProgress(NodeProgress { id, progress }) => match progress {
+            Some(Progress::Bytes(_)) => Some((*id, Gauge::Bytes)),
+            Some(Progress::Builds(_)) => Some((*id, Gauge::Builds)),
+            Some(
+                Progress::Line(_)
+                | Progress::Command(_)
+                | Progress::CommandFinished(_)
+                | Progress::Fetch(_)
+                | Progress::Build(_)
+                | Progress::Stopping(_)
+                | Progress::Observed(_)
+                | Progress::Journaled(_),
+            )
+            | None => None,
+        },
+        Event::NodeStarted(_)
+        | Event::NodeFinished(_)
+        | Event::NotRun(_)
+        | Event::Diagnostic(_) => None,
     }
 }
 
@@ -31,8 +43,9 @@ fn slot(event: &Event) -> Option<Slot> {
 struct Queue {
     head: u64,
     seq: u64,
-    items: VecDeque<Option<Event>>,
+    items: VecDeque<Event>,
     pending: FxHashMap<Slot, u64>,
+    superseded: FxHashSet<u64>,
 }
 
 pub struct Outbox {
@@ -57,10 +70,9 @@ impl Outbox {
             if let Some(slot) = slot(&event)
                 && let Some(superseded) = queue.pending.insert(slot, position)
             {
-                let index = (superseded - queue.head) as usize;
-                queue.items[index] = None;
+                queue.superseded.insert(superseded);
             }
-            queue.items.push_back(Some(event));
+            queue.items.push_back(event);
         }
         (self.wake)();
     }
@@ -81,10 +93,12 @@ impl Outbox {
 
     fn next(&self, queue: &mut Queue) -> Option<Envelope> {
         loop {
-            let item = queue.items.pop_front()?;
+            let event = queue.items.pop_front()?;
             let position = queue.head;
             queue.head += 1;
-            let Some(event) = item else { continue };
+            if !queue.superseded.is_empty() && queue.superseded.remove(&position) {
+                continue;
+            }
             if let Some(slot) = slot(&event)
                 && queue.pending.get(&slot) == Some(&position)
             {

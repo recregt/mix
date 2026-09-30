@@ -1,0 +1,6 @@
+systemd couldn't start `nix-daemon.socket`
+see why with:
+  journalctl -u nix-daemon.socket
+then run `mix install` again
+
+systemd could not start, stop, enable or reload one of the units `mix` manages, usually `nix-daemon`. The message names the unit; `journalctl -u <unit>` shows why.

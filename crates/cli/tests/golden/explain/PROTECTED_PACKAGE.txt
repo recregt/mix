@@ -1,0 +1,4 @@
+`git` can't be removed
+`mix` needs it to work
+
+`mix` needs some packages to work, such as `git`, which records every change to your configuration. They cannot be removed.

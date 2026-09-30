@@ -1,44 +1,10 @@
 use mix_shell::profile::change::Error;
-use mix_shell::profile::state::{Invalid, Source};
+use mix_shell::profile::state::Source;
 
-use super::{Diagnostic, bug, core_error};
+use super::{Context, Diagnostic};
 
 pub(crate) fn describe(error: &Error, command: &str, action: &dyn std::fmt::Display) -> Diagnostic {
-    match error {
-        Error::Core(e) => core_error(e, command, action),
-
-        Error::InvalidPackage(e) => match e.rejected() {
-            Some(name) => bad_name(name),
-            None => bug(),
-        },
-
-        Error::InvalidState(Invalid::Package(name)) => bad_name(name),
-
-        Error::InvalidState(_) => bug(),
-
-        Error::NewerState(_) => Diagnostic::hinting(
-            "this version of `mix` is older than the one that set up your packages",
-            "Update `mix` using your original install method, or visit \
-             https://github.com/recregt/mix",
-        ),
-
-        Error::NotRoot => Diagnostic::hinting(
-            format!("`{command}` can't be run as root"),
-            "Run it again without sudo",
-        ),
-
-        Error::NotBootstrapped => Diagnostic::hinting(
-            "`mix` isn't set up for you yet",
-            "Run `mix bootstrap` first",
-        ),
-    }
-}
-
-fn bad_name(name: &str) -> Diagnostic {
-    Diagnostic::hinting(
-        format!("\"{name}\" isn't a valid package name"),
-        "Package names look like `ripgrep` or `python3`",
-    )
+    super::render::render_error(error, &Context { command, action })
 }
 
 pub fn restored(source: Source) -> Option<Diagnostic> {
@@ -46,13 +12,15 @@ pub fn restored(source: Source) -> Option<Diagnostic> {
         Source::File | Source::Generation => None,
         Source::Fresh => Some(Diagnostic::hinting(
             "your package list was damaged and couldn't be recovered, so it was reset",
-            "Reinstall your packages with `mix install`",
+            "reinstall your packages with `mix install`",
         )),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use mix_shell::profile::state::Invalid;
+
     use super::*;
 
     fn message(error: &Error) -> String {
@@ -97,7 +65,7 @@ mod tests {
         assert_eq!(from_state, from_render);
         assert_eq!(
             from_state,
-            "\"rip grep\" isn't a valid package name\nPackage names look like `ripgrep` or `python3`"
+            "\"rip grep\" isn't a valid package name\npackage names look like `ripgrep` or `python3`"
         );
         assert!(!from_state.to_lowercase().contains("nix"));
     }
@@ -113,7 +81,7 @@ mod tests {
         assert!(restored(Source::Generation).is_none());
         let note = restored(Source::Fresh).unwrap().message();
         assert!(note.contains("couldn't be recovered"));
-        assert!(note.ends_with("Reinstall your packages with `mix install`"));
+        assert!(note.ends_with("reinstall your packages with `mix install`"));
     }
 
     #[test]
