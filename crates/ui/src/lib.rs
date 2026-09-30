@@ -43,6 +43,40 @@ pub(crate) fn stderr_colors() -> bool {
     *ENABLED.get_or_init(|| colors_enabled(std::io::stderr().is_terminal()))
 }
 
+fn stdout_colors() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| colors_enabled(std::io::stdout().is_terminal()))
+}
+
+pub trait Out: Send + Sync {
+    fn line(&self, text: &str);
+    fn colours(&self) -> bool;
+}
+
+pub struct Stderr;
+
+impl Out for Stderr {
+    fn line(&self, text: &str) {
+        print_line(text);
+    }
+
+    fn colours(&self) -> bool {
+        stderr_colors()
+    }
+}
+
+pub struct Stdout;
+
+impl Out for Stdout {
+    fn line(&self, text: &str) {
+        data(text);
+    }
+
+    fn colours(&self) -> bool {
+        stdout_colors()
+    }
+}
+
 fn print_line(line: &str) {
     let write = || {
         let mut out = std::io::stderr().lock();
@@ -99,8 +133,12 @@ pub fn status_line(status: Status, subject: &str, colours: bool) -> String {
     out
 }
 
+pub fn status_to(out: &dyn Out, status: Status, subject: &str) {
+    out.line(&status_line(status, subject, out.colours()));
+}
+
 pub fn status(status: Status, subject: &str) {
-    print_line(&status_line(status, subject, stderr_colors()));
+    status_to(&Stderr, status, subject);
 }
 
 pub fn output_line(line: &str) -> String {
@@ -114,8 +152,12 @@ pub fn output_line(line: &str) -> String {
     out
 }
 
+pub fn output_to(out: &dyn Out, line: &str) {
+    out.line(&output_line(line));
+}
+
 pub fn output(line: &str) {
-    print_line(&output_line(line));
+    output_to(&Stderr, line);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,23 +222,31 @@ pub fn house_style(text: &str) -> bool {
     starts_lowercase && unfinished
 }
 
-pub fn report(severity: Severity, report: &Report<'_>) {
+pub fn report_to(out: &dyn Out, severity: Severity, report: &Report<'_>) {
     debug_assert!(house_style(report.summary), "{:?}", report.summary);
     debug_assert!(
         report.helps.iter().all(|help| house_style(help)),
         "{:?}",
         report.helps
     );
-    print_line(&report_text(severity, report, stderr_colors()));
+    out.line(&report_text(severity, report, out.colours()));
+}
+
+pub fn report(severity: Severity, report: &Report<'_>) {
+    report_to(&Stderr, severity, report);
+}
+
+pub fn note_to(out: &dyn Out, text: &str) {
+    debug_assert!(house_style(text), "{text:?}");
+    let mut line = String::new();
+    painted(&mut line, CYAN, "note", out.colours());
+    line.push_str(": ");
+    line.push_str(text);
+    out.line(&line);
 }
 
 pub fn note(text: &str) {
-    debug_assert!(house_style(text), "{text:?}");
-    let mut out = String::new();
-    painted(&mut out, CYAN, "note", stderr_colors());
-    out.push_str(": ");
-    out.push_str(text);
-    print_line(&out);
+    note_to(&Stderr, text);
 }
 
 pub fn causes_of(first: Option<&dyn std::error::Error>, already: &str) -> Vec<String> {

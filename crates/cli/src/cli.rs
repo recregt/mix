@@ -50,6 +50,16 @@ pub enum EventsCommand {
         /// The file `--events-file` wrote
         file: PathBuf,
     },
+
+    /// Show a recorded events file the way the run looked, at any verbosity
+    Show {
+        /// The file `--events-file` wrote
+        file: PathBuf,
+
+        /// Only this node and what ran inside it, such as `install/activate`
+        #[arg(long)]
+        node: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -229,6 +239,27 @@ mod tests {
             Command::Events {
                 command: EventsCommand::Check { ref file }
             } if file == &PathBuf::from("/tmp/events.ndjson")
+        ));
+    }
+
+    #[test]
+    fn a_recorded_run_is_shown_at_any_verbosity_and_for_one_node() {
+        let cli = parse(&[
+            "mix",
+            "-vv",
+            "events",
+            "show",
+            "/tmp/events.ndjson",
+            "--node",
+            "install/plan/activate",
+        ]);
+
+        assert_eq!(cli.verbose, 2);
+        assert!(matches!(
+            cli.command,
+            Command::Events {
+                command: EventsCommand::Show { ref file, node: Some(ref node) }
+            } if file == &PathBuf::from("/tmp/events.ndjson") && node == "install/plan/activate"
         ));
     }
 

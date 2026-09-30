@@ -12,9 +12,9 @@ use mix_shell::target::Finding;
 use super::{Diagnostic, failed};
 
 /// How the command is spelled when the reader is told to run it again.
-const COMMAND: &str = "mix doctor";
+pub(crate) const COMMAND: &str = "mix doctor";
 
-const ACTION: &str = "finish the health check";
+pub(crate) const ACTION: &str = "finish the health check";
 
 pub fn explain(error: &anyhow::Error) -> Diagnostic {
     match error.downcast_ref::<mix_core::Error>() {

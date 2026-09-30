@@ -5,7 +5,7 @@ use mix_shell::ops::remove::Error;
 use super::{Context, Diagnostic, failed, packages_action};
 
 /// How the command is spelled when the reader is told to run it again.
-const COMMAND: &str = "mix remove";
+pub(crate) const COMMAND: &str = "mix remove";
 
 pub fn explain(error: &anyhow::Error, packages: &[String]) -> Diagnostic {
     let action = packages_action("remove", packages);

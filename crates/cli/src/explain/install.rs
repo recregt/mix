@@ -5,7 +5,7 @@ use mix_shell::profile::change::Error;
 use super::{Diagnostic, change, failed, packages_action};
 
 /// How the command is spelled when the reader is told to run it again.
-const COMMAND: &str = "mix install";
+pub(crate) const COMMAND: &str = "mix install";
 
 pub fn explain(error: &anyhow::Error, packages: &[String]) -> Diagnostic {
     let action = packages_action("install", packages);

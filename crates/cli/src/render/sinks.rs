@@ -72,16 +72,20 @@ impl View {
     }
 
     pub fn level(&self) -> Detail {
-        match (self.quiet, self.verbose) {
-            (true, _) => Detail::Outcome,
-            (false, 0) => Detail::Step,
-            (false, 1) => Detail::Action,
-            (false, _) => Detail::Trace,
-        }
+        level(self.quiet, self.verbose)
     }
 
     pub fn notices(&self, stopping: Stopping) -> Option<Stopping> {
         (self.output == Output::Human).then_some(stopping)
+    }
+}
+
+pub fn level(quiet: bool, verbose: u8) -> Detail {
+    match (quiet, verbose) {
+        (true, _) => Detail::Outcome,
+        (false, 0) => Detail::Step,
+        (false, 1) => Detail::Action,
+        (false, _) => Detail::Trace,
     }
 }
 

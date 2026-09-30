@@ -5,9 +5,9 @@ use mix_shell::target::Error;
 use super::{Diagnostic, failed};
 
 /// How the command is spelled when the reader is told to run it again.
-const COMMAND: &str = "mix repair";
+pub(crate) const COMMAND: &str = "mix repair";
 
-const ACTION: &str = "finish the repair";
+pub(crate) const ACTION: &str = "finish the repair";
 
 pub fn explain(error: &anyhow::Error) -> Diagnostic {
     if let Some(error) = error.downcast_ref::<mix_rpc::Error>() {

@@ -199,6 +199,35 @@ mod evidence_tests {
     }
 }
 
+pub fn outcome(
+    request: Option<&mix_events::v1::command::Request>,
+    fault: &mix_events::Fault,
+) -> Diagnostic {
+    use mix_events::v1::command::Request;
+
+    let (command, action): (&str, Box<dyn Display + '_>) = match request {
+        Some(Request::Install(install)) => (
+            install::COMMAND,
+            Box::new(packages_action("install", &install.packages)),
+        ),
+        Some(Request::Remove(remove)) => (
+            remove::COMMAND,
+            Box::new(packages_action("remove", &remove.packages)),
+        ),
+        Some(Request::Bootstrap(_)) => (bootstrap::COMMAND, Box::new(bootstrap::ACTION)),
+        Some(Request::Repair(_)) => (repair::COMMAND, Box::new(repair::ACTION)),
+        Some(Request::Doctor(_)) => (doctor::COMMAND, Box::new(doctor::ACTION)),
+        None => ("mix", Box::new("finish")),
+    };
+    render(
+        fault,
+        &Context {
+            command,
+            action: &*action,
+        },
+    )
+}
+
 pub(crate) fn failed(action: &dyn Display) -> Diagnostic {
     Diagnostic::hinting(
         format!("couldn't {action}"),

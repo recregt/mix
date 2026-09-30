@@ -1,0 +1,4 @@
+     Writing package list
+note: cancelling and putting the package list back; press Ctrl-C again to stop now
+Rolling back package list
+error: stopped; everything it had changed was undone

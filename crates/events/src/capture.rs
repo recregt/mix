@@ -77,6 +77,7 @@ fn write<W: Write>(out: &mut W, line: &Line) -> std::io::Result<()> {
 pub struct Captured {
     pub header: Header,
     pub envelopes: Vec<Envelope>,
+    pub offsets: Vec<Duration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -103,6 +104,7 @@ pub enum Broken {
 pub fn read(input: impl BufRead) -> Result<Captured, Broken> {
     let mut header = None;
     let mut envelopes = Vec::new();
+    let mut offsets = Vec::new();
     let mut last = (0i64, 0i32);
     for (index, text) in input.lines().enumerate() {
         let number = index + 1;
@@ -138,6 +140,10 @@ pub fn read(input: impl BufRead) -> Result<Captured, Broken> {
                 let mut envelope = envelope;
                 crate::Normalize::normalize(&mut envelope);
                 envelopes.push(envelope);
+                offsets.push(Duration::new(
+                    u64::try_from(offset.seconds).unwrap_or_default(),
+                    u32::try_from(offset.nanos).unwrap_or_default(),
+                ));
             }
             (None, Some(_)) => return Err(Broken::Incomplete(number)),
         }
@@ -145,6 +151,7 @@ pub fn read(input: impl BufRead) -> Result<Captured, Broken> {
     Ok(Captured {
         header: header.ok_or(Broken::NoHeader)?,
         envelopes,
+        offsets,
     })
 }
 

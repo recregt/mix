@@ -24,11 +24,15 @@ pub async fn run() -> ExitCode {
     if let Command::Explain { code } = &cli.command {
         return explain_code(code);
     }
-    if let Command::Events {
-        command: cli::EventsCommand::Check { file },
-    } = &cli.command
-    {
-        return check_events(file);
+    if let Command::Events { command } = &cli.command {
+        return match command {
+            cli::EventsCommand::Check { file } => check_events(file),
+            cli::EventsCommand::Show { file, node } => show_events(
+                file,
+                node.as_deref(),
+                render::sinks::level(cli.quiet, cli.verbose),
+            ),
+        };
     }
 
     let view = render::sinks::View {
@@ -94,7 +98,7 @@ pub async fn run() -> ExitCode {
     match result {
         Ok(code) => from_root.unwrap_or(code),
         Err(e) => {
-            if cli.output == cli::Output::Human {
+            if cli.output == cli::Output::Human && view.exit.code().is_none() {
                 let words = explain(&e);
                 let (summary, hint) = words.parts();
                 let fault = explain::fault_of(&e);
@@ -245,6 +249,25 @@ fn check_events(path: &std::path::Path) -> ExitCode {
         }
         Err(violation) => {
             unreadable(path, format!("{violation:?}"));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn show_events(path: &std::path::Path, node: Option<&str>, level: mix_events::Detail) -> ExitCode {
+    let captured = std::fs::File::open(path)
+        .map_err(|error| error.to_string())
+        .and_then(|file| {
+            mix_events::capture::read(std::io::BufReader::new(file))
+                .map_err(|broken| broken.to_string())
+        });
+    match captured {
+        Ok(captured) => {
+            render::replay::show(&captured, level, node, std::sync::Arc::new(mix_ui::Stdout));
+            ExitCode::SUCCESS
+        }
+        Err(reason) => {
+            unreadable(path, reason);
             ExitCode::FAILURE
         }
     }

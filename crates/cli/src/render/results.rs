@@ -10,7 +10,7 @@ use mix_events::v1::node_finished::Result;
 use mix_events::v1::{InspectionReport, NodeFinished, RepairReport, Status as Ended};
 use mix_shell::ops::doctor::HealthReport;
 use mix_shell::profile::state::Source;
-use mix_ui::{Report, Severity, Status};
+use mix_ui::{Out, Report, Severity, Status};
 
 use crate::explain::change;
 use crate::explain::target::unfixable;
@@ -24,9 +24,10 @@ pub(crate) fn took(elapsed: Duration) -> String {
     }
 }
 
-fn words(severity: Severity, words: &crate::explain::Diagnostic) {
+fn words(out: &dyn Out, severity: Severity, words: &crate::explain::Diagnostic) {
     let (summary, hint) = words.parts();
-    mix_ui::report(
+    mix_ui::report_to(
+        out,
         severity,
         &Report {
             summary,
@@ -36,25 +37,42 @@ fn words(severity: Severity, words: &crate::explain::Diagnostic) {
     );
 }
 
-pub(super) fn finished(node: &NodeFinished, printed: bool, level: Detail, elapsed: Duration) {
+pub(super) fn finished(
+    out: &dyn Out,
+    node: &NodeFinished,
+    printed: bool,
+    level: Detail,
+    elapsed: Duration,
+) {
     let Some(result) = &node.result else {
         return;
     };
     match result {
         Result::Bootstrap(_) => {
-            mix_ui::status(Status::Finished, &format!("setup in {}", took(elapsed)));
-            mix_ui::note(&format!(
-                "to use installed packages in this terminal session, run `source {PROFILE_SNIPPET_DEST}`"
-            ));
+            mix_ui::status_to(
+                out,
+                Status::Finished,
+                &format!("setup in {}", took(elapsed)),
+            );
+            mix_ui::note_to(
+                out,
+                &format!(
+                    "to use installed packages in this terminal session, run `source {PROFILE_SNIPPET_DEST}`"
+                ),
+            );
         }
-        Result::Repair(repair) => {
-            repaired(&repair.reports, node.status() == Ended::Cancelled, elapsed)
-        }
-        Result::Doctor(doctor) => audited(&doctor.reports, level),
+        Result::Repair(repair) => repaired(
+            out,
+            &repair.reports,
+            node.status() == Ended::Cancelled,
+            elapsed,
+        ),
+        Result::Doctor(doctor) => audited(out, &doctor.reports, level),
         Result::Install(install) => {
-            reset(install.restored, level);
+            reset(out, install.restored, level);
             if printed {
                 changed(
+                    out,
                     &install.added,
                     &install.skipped,
                     "already installed",
@@ -64,9 +82,10 @@ pub(super) fn finished(node: &NodeFinished, printed: bool, level: Detail, elapse
             }
         }
         Result::Remove(remove) => {
-            reset(remove.restored, level);
+            reset(out, remove.restored, level);
             if printed {
                 changed(
+                    out,
                     &remove.removed,
                     &remove.skipped,
                     "not installed",
@@ -79,28 +98,40 @@ pub(super) fn finished(node: &NodeFinished, printed: bool, level: Detail, elapse
     }
 }
 
-fn reset(was_reset: bool, level: Detail) {
+fn reset(out: &dyn Out, was_reset: bool, level: Detail) {
     if was_reset
         && level >= Detail::Step
         && let Some(note) = change::restored(Source::Fresh)
     {
-        words(Severity::Warning, &note);
+        words(out, Severity::Warning, &note);
     }
 }
 
-fn changed(changed: &[String], skipped: &[String], why: &str, done: Status, elapsed: Duration) {
+fn changed(
+    out: &dyn Out,
+    changed: &[String],
+    skipped: &[String],
+    why: &str,
+    done: Status,
+    elapsed: Duration,
+) {
     if !skipped.is_empty() {
-        mix_ui::status(Status::Ignored, &format!("{} ({why})", skipped.join(", ")));
+        mix_ui::status_to(
+            out,
+            Status::Ignored,
+            &format!("{} ({why})", skipped.join(", ")),
+        );
     }
     if !changed.is_empty() {
-        mix_ui::status(
+        mix_ui::status_to(
+            out,
             done,
             &format!("{} in {}", changed.join(", "), took(elapsed)),
         );
     }
 }
 
-fn repaired(reports: &[RepairReport], interrupted: bool, elapsed: Duration) {
+fn repaired(out: &dyn Out, reports: &[RepairReport], interrupted: bool, elapsed: Duration) {
     let fixed: Vec<&str> = reports
         .iter()
         .filter(|report| report.fixed)
@@ -109,7 +140,8 @@ fn repaired(reports: &[RepairReport], interrupted: bool, elapsed: Duration) {
     for report in reports {
         match &report.failure {
             None if report.fixed => {}
-            None => mix_ui::report(
+            None => mix_ui::report_to(
+                out,
                 Severity::Warning,
                 &Report {
                     summary: &format!("couldn't repair {}", report.target),
@@ -118,7 +150,8 @@ fn repaired(reports: &[RepairReport], interrupted: bool, elapsed: Duration) {
             ),
             Some(failure) => {
                 let why = why(failure);
-                mix_ui::report(
+                mix_ui::report_to(
+                    out,
                     Severity::Warning,
                     &Report {
                         summary: &format!("couldn't repair {}", report.target),
@@ -131,6 +164,7 @@ fn repaired(reports: &[RepairReport], interrupted: bool, elapsed: Duration) {
     }
     if interrupted {
         words(
+            out,
             Severity::Error,
             &crate::explain::Diagnostic::hinting(
                 "the repair was stopped before it finished",
@@ -140,15 +174,17 @@ fn repaired(reports: &[RepairReport], interrupted: bool, elapsed: Duration) {
         return;
     }
     if !fixed.is_empty() {
-        mix_ui::status(
+        mix_ui::status_to(
+            out,
             Status::Repaired,
             &format!("{} in {}", fixed.join(", "), took(elapsed)),
         );
     }
     if reports.is_empty() {
-        mix_ui::status(Status::Checked, "system, nothing to repair");
+        mix_ui::status_to(out, Status::Checked, "system, nothing to repair");
     } else if fixed.len() < reports.len() {
         words(
+            out,
             Severity::Error,
             &crate::explain::Diagnostic::new("some problems couldn't be repaired automatically"),
         );
@@ -182,7 +218,7 @@ fn why(failure: &mix_events::v1::Diagnostic) -> String {
     }
 }
 
-fn audited(inspected: &[InspectionReport], level: Detail) {
+fn audited(out: &dyn Out, inspected: &[InspectionReport], level: Detail) {
     let reports: Vec<HealthReport> = inspected
         .iter()
         .filter_map(|report| {
@@ -199,14 +235,15 @@ fn audited(inspected: &[InspectionReport], level: Detail) {
     for report in &reports {
         if report.healthy() {
             if level >= Detail::Action {
-                mix_ui::status(Status::Checked, &report.name);
+                mix_ui::status_to(out, Status::Checked, &report.name);
             }
             continue;
         }
         let check = crate::explain::doctor::check(report);
         let mut lines = check.splitn(2, '\n');
         let found = lines.next().unwrap_or_default();
-        mix_ui::report(
+        mix_ui::report_to(
+            out,
             Severity::Warning,
             &Report {
                 summary: &format!("{}: {found}", report.name),
@@ -216,12 +253,14 @@ fn audited(inspected: &[InspectionReport], level: Detail) {
         );
     }
     if reports.iter().all(HealthReport::healthy) {
-        mix_ui::status(
+        mix_ui::status_to(
+            out,
             Status::Checked,
             &format!("{} targets, no problems", reports.len()),
         );
     } else {
         words(
+            out,
             Severity::Error,
             &crate::explain::doctor::unhealthy(&reports),
         );

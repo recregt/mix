@@ -5,9 +5,9 @@ use mix_shell::ops::bootstrap::Error;
 use super::{Context, Diagnostic, failed};
 
 /// How the command is spelled when the reader is told to run it again.
-const COMMAND: &str = "mix bootstrap";
+pub(crate) const COMMAND: &str = "mix bootstrap";
 
-const ACTION: &str = "finish setting up `mix`";
+pub(crate) const ACTION: &str = "finish setting up `mix`";
 
 pub fn explain(error: &anyhow::Error) -> Diagnostic {
     if let Some(error) = error.downcast_ref::<mix_rpc::Error>() {

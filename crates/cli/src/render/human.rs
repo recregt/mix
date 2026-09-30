@@ -2,25 +2,32 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use mix_core::BuildProgress;
 use mix_events::v1::command::Request;
-use mix_events::v1::{Envelope, NodeProgress, envelope::Event, node_progress, node_started};
-use mix_events::{Detail, NodeId, ROOT};
+use mix_events::v1::{
+    Envelope, NodeFinished, NodeProgress, Status as Ended, envelope::Event, node_progress,
+    node_started,
+};
+use mix_events::{Detail, Fault, NodeId, ROOT};
 use mix_shell::render::Render;
-use mix_ui::{Display, Severity, Status, StepLine};
+use mix_ui::{Display, Out, Severity, Status, StepLine};
 
 use super::{trace, verbs};
 use crate::controls::{self, Stopping};
 
 pub struct Human {
     display: Arc<dyn Display>,
+    out: Arc<dyn Out>,
+    recorded: Option<Duration>,
     level: Detail,
     results: bool,
     started: Instant,
     stopping: Option<Stopping>,
     stop_noticed: bool,
+    request: Option<Request>,
+    rolled_back: bool,
     lines: HashMap<NodeId, Arc<dyn StepLine>>,
     subjects: HashMap<NodeId, String>,
     pending: HashMap<NodeId, Status>,
@@ -31,11 +38,15 @@ impl Human {
     pub fn new(display: Arc<dyn Display>) -> Self {
         Self {
             display,
+            out: Arc::new(mix_ui::Stderr),
+            recorded: None,
             level: Detail::Step,
             results: true,
             started: Instant::now(),
             stopping: None,
             stop_noticed: false,
+            request: None,
+            rolled_back: false,
             lines: HashMap::new(),
             subjects: HashMap::new(),
             pending: HashMap::new(),
@@ -46,6 +57,15 @@ impl Human {
     pub fn level(mut self, level: Detail) -> Self {
         self.level = level;
         self
+    }
+
+    pub fn to(mut self, out: Arc<dyn Out>) -> Self {
+        self.out = out;
+        self
+    }
+
+    pub fn at(&mut self, offset: Duration) {
+        self.recorded = Some(offset);
     }
 
     pub fn without_results(mut self) -> Self {
@@ -59,7 +79,7 @@ impl Human {
 
     fn status(&self, detail: Detail, status: Status, subject: &str) {
         if self.shows(detail) {
-            mix_ui::status(status, subject);
+            mix_ui::status_to(self.out.as_ref(), status, subject);
         }
     }
 
@@ -76,6 +96,7 @@ impl Human {
             Event::NodeStarted(node) => match node.kind {
                 Some(node_started::Kind::Command(command)) => {
                     self.stopping = command.request.as_ref().and_then(stopping_for);
+                    self.request = command.request;
                     self.status(Detail::Action, Status::Request, &envelope.request);
                 }
                 Some(node_started::Kind::Step(step)) => {
@@ -88,6 +109,7 @@ impl Human {
                         .get(&rollback.undoes)
                         .cloned()
                         .unwrap_or_default();
+                    self.rolled_back = true;
                     self.announce(node.id, Status::RollingBack, &subject);
                 }
                 Some(node_started::Kind::Action(action)) => {
@@ -116,7 +138,14 @@ impl Human {
                 | None => {}
             },
             Event::NodeFinished(node) if node.id == ROOT => {
-                super::results::finished(&node, self.results, self.level, self.started.elapsed());
+                self.outcome(&node);
+                super::results::finished(
+                    self.out.as_ref(),
+                    &node,
+                    self.results,
+                    self.level,
+                    self.recorded.unwrap_or_else(|| self.started.elapsed()),
+                );
             }
             Event::NodeFinished(node) if self.actions.remove(&node.id) => {
                 self.lines.remove(&node.id);
@@ -138,7 +167,8 @@ impl Human {
                     let code = (self.shows(Detail::Action)
                         && diagnostic.code() != mix_events::v1::Code::Unspecified)
                         .then(|| crate::explain::codes::kebab(diagnostic.code()));
-                    mix_ui::report(
+                    mix_ui::report_to(
+                        self.out.as_ref(),
                         Severity::Warning,
                         &mix_ui::Report {
                             code: code.as_deref(),
@@ -155,6 +185,37 @@ impl Human {
         }
     }
 
+    fn outcome(&self, node: &NodeFinished) {
+        let fault = match node.status() {
+            Ended::Failed => match &node.diagnostic {
+                Some(diagnostic) => Fault::Failed(diagnostic.as_ref().clone()),
+                None => Fault::Failed(mix_events::v1::Diagnostic::default()),
+            },
+            Ended::Cancelled => Fault::Cancelled {
+                cause: node.cancellation(),
+                rolled_back: self.rolled_back,
+            },
+            Ended::Unspecified | Ended::Succeeded | Ended::AlreadySatisfied => return,
+        };
+        let words = crate::explain::outcome(self.request.as_ref(), &fault);
+        let (summary, hint) = words.parts();
+        let code = self
+            .shows(Detail::Action)
+            .then(|| fault.code())
+            .flatten()
+            .map(crate::explain::codes::kebab);
+        mix_ui::report_to(
+            self.out.as_ref(),
+            Severity::Error,
+            &mix_ui::Report {
+                code: code.as_deref(),
+                summary,
+                causes: crate::explain::evidence(&fault),
+                helps: hint.into_iter().collect(),
+            },
+        );
+    }
+
     fn progress(&mut self, id: NodeId, progress: node_progress::Progress) {
         use node_progress::Progress;
 
@@ -164,7 +225,7 @@ impl Human {
                     && let Some(stopping) = &self.stopping
                     && !std::mem::replace(&mut self.stop_noticed, true)
                 {
-                    mix_ui::note(stopping.first);
+                    mix_ui::note_to(self.out.as_ref(), stopping.first);
                 }
             }
             Progress::Command(command) => {
@@ -208,19 +269,27 @@ impl Human {
             }
             Progress::Line(line) => {
                 if self.shows(Detail::Trace) {
-                    mix_ui::output(&line.text);
+                    mix_ui::output_to(self.out.as_ref(), &line.text);
                 }
             }
             Progress::Observed(observed) => {
                 if self.shows(Detail::Trace) {
                     for observation in &observed.observations {
-                        mix_ui::status(Status::Observed, &trace::observation(observation));
+                        mix_ui::status_to(
+                            self.out.as_ref(),
+                            Status::Observed,
+                            &trace::observation(observation),
+                        );
                     }
                 }
             }
             Progress::Journaled(journaled) => {
                 if self.shows(Detail::Trace) {
-                    mix_ui::status(Status::Journaled, &trace::record(&journaled));
+                    mix_ui::status_to(
+                        self.out.as_ref(),
+                        Status::Journaled,
+                        &trace::record(&journaled),
+                    );
                 }
             }
         }
