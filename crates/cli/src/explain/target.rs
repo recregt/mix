@@ -4,14 +4,13 @@
 //! from it, and `mix bootstrap` declares the per-user configuration through it — so what a
 //! finding and a reason read like is written once, here.
 
-use mix_events::Diagnose;
 use mix_shell::target::Error;
 
 pub(crate) use super::render::unfixable;
-use super::{Context, Diagnostic, render};
+use super::{Context, Diagnostic};
 
 pub(crate) fn describe(error: &Error, command: &str, action: &dyn std::fmt::Display) -> Diagnostic {
-    render(&error.fault(), &Context { command, action })
+    super::render::render_error(error, &Context { command, action })
 }
 
 /// What went wrong with one artifact, for printing under its own name.

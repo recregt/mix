@@ -106,9 +106,7 @@ pub(crate) fn core_error(
     command: &str,
     action: &dyn Display,
 ) -> Diagnostic {
-    use mix_events::Diagnose;
-
-    render(&error.fault(), &Context { command, action })
+    render::render_error(error, &Context { command, action })
 }
 
 pub(crate) fn failed(action: &dyn Display) -> Diagnostic {

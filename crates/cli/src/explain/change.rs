@@ -1,11 +1,10 @@
-use mix_events::Diagnose;
 use mix_shell::profile::change::Error;
 use mix_shell::profile::state::Source;
 
-use super::{Context, Diagnostic, render};
+use super::{Context, Diagnostic};
 
 pub(crate) fn describe(error: &Error, command: &str, action: &dyn std::fmt::Display) -> Diagnostic {
-    render(&error.fault(), &Context { command, action })
+    super::render::render_error(error, &Context { command, action })
 }
 
 pub fn restored(source: Source) -> Option<Diagnostic> {

@@ -1,9 +1,8 @@
 //! What `mix bootstrap` says when it cannot finish.
 
-use mix_events::Diagnose;
 use mix_shell::ops::bootstrap::Error;
 
-use super::{Context, Diagnostic, failed, render};
+use super::{Context, Diagnostic, failed};
 
 /// How the command is spelled when the reader is told to run it again.
 const COMMAND: &str = "mix bootstrap";
@@ -21,8 +20,8 @@ pub fn explain(error: &anyhow::Error) -> Diagnostic {
 }
 
 pub(crate) fn describe(error: &Error, command: &str) -> Diagnostic {
-    render(
-        &error.fault(),
+    super::render::render_error(
+        error,
         &Context {
             command,
             action: &ACTION,

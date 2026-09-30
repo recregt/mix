@@ -30,4 +30,8 @@ impl From<Fault> for Ending {
 
 pub trait Diagnose {
     fn fault(&self) -> Fault;
+
+    fn code(&self) -> Option<Code> {
+        self.fault().code()
+    }
 }

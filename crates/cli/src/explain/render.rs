@@ -81,16 +81,116 @@ fn protected(packages: &[String]) -> Diagnostic {
 }
 
 fn failure(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
+    match plain(diagnostic.code(), context) {
+        Some(words) => words,
+        None => detailed(diagnostic, context),
+    }
+}
+
+pub(crate) fn render_error<E: mix_events::Diagnose + ?Sized>(
+    error: &E,
+    context: &Context<'_>,
+) -> Diagnostic {
+    match error.code().and_then(|code| plain(code, context)) {
+        Some(words) => words,
+        None => render(&error.fault(), context),
+    }
+}
+
+fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
+    let command = context.command;
+    match code {
+        Code::Locked => Some(Diagnostic::hinting_parts(
+            "another `mix` command is already running",
+            &["Wait for it to finish, then run `", command, "` again"],
+        )),
+        Code::LockMissing => Some(Diagnostic::hinting(
+            "`mix` isn't set up yet",
+            "Run `mix bootstrap` first",
+        )),
+        Code::Io | Code::CommandFailed | Code::SpawnFailed => Some(failed(context.action)),
+        Code::Internal | Code::Unspecified => Some(bug()),
+        Code::Network => Some(Diagnostic::hinting(
+            "couldn't download required setup files",
+            format!("Check your internet connection, then run `{command}` again"),
+        )),
+        Code::Integrity | Code::Decompression => Some(Diagnostic::hinting(
+            DAMAGED,
+            format!("Run `{command}` again to download them again"),
+        )),
+        Code::MalformedArchive => Some(Diagnostic::hinting(
+            "the downloaded setup files aren't in the expected format",
+            "If you use `--mirror`, check that it serves the right files",
+        )),
+        Code::NotRoot => Some(Diagnostic::hinting(
+            "setting up `mix` needs administrator rights",
+            format!("Run it again with sudo:\n\x20 sudo {command}"),
+        )),
+        Code::UnsupportedHost => Some(Diagnostic::hinting(
+            "this system is NixOS, which already does what `mix` does",
+            "You don't need `mix` here",
+        )),
+        Code::UnsupportedKernel => Some(Diagnostic::hinting(
+            "`mix` needs WSL 2, and this is WSL 1",
+            "Upgrade it from Windows PowerShell:\n\x20 wsl --set-version <distro> 2",
+        )),
+        Code::SystemdUnreachable => Some(Diagnostic::hinting(
+            "`mix` couldn't reach systemd",
+            format!(
+                "Check that the system bus is running with `systemctl status dbus`, then run \
+                 `{command}` again"
+            ),
+        )),
+        Code::AlreadyManaged => Some(Diagnostic::hinting(
+            "Nix is already installed on this system, and `mix` needs to set up its own",
+            format!(
+                "Uninstall it first, then run `{command}` again. Uninstalling removes everything \
+                 you installed with it"
+            ),
+        )),
+        Code::CrossDeviceStore => Some(Diagnostic::hinting(
+            "`/nix/store` is on a different disk than `/nix`, and `mix` needs them on the same one",
+            format!("Remove the separate mount for `/nix/store`, then run `{command}` again"),
+        )),
+        Code::NewerState => Some(Diagnostic::hinting(
+            "this version of `mix` is older than the one that set up your packages",
+            "Update `mix` using your original install method, or visit \
+             https://github.com/recregt/mix",
+        )),
+        Code::RootNotAllowed => Some(Diagnostic::hinting(
+            format!("`{command}` can't be run as root"),
+            "Run it again without sudo",
+        )),
+        Code::NotBootstrapped => Some(Diagnostic::hinting(
+            "`mix` isn't set up for you yet",
+            "Run `mix bootstrap` first",
+        )),
+        Code::PrivilegesUnavailable => Some(Diagnostic::hinting(
+            format!("couldn't get administrator rights to {}", context.action),
+            "Make sure your account can use sudo, then try again",
+        )),
+        Code::WorkerEnded => Some(Diagnostic::hinting(
+            format!("stopped before it could {}", context.action),
+            "Run the same command again to finish; it picks up where it stopped",
+        )),
+        Code::PermissionDenied
+        | Code::Conflict
+        | Code::InvalidMirror
+        | Code::UnsupportedTarget
+        | Code::Unrepairable
+        | Code::SystemdNotReady
+        | Code::UnitFailed
+        | Code::RollbackIncomplete
+        | Code::InvalidPackage
+        | Code::InvalidState
+        | Code::ProtectedPackage => None,
+    }
+}
+
+fn detailed(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
     let command = context.command;
     let detail = diagnostic.detail.as_ref();
     match diagnostic.code() {
-        Code::Locked => Diagnostic::hinting_parts(
-            "another `mix` command is already running",
-            &["Wait for it to finish, then run `", command, "` again"],
-        ),
-        Code::LockMissing => {
-            Diagnostic::hinting("`mix` isn't set up yet", "Run `mix bootstrap` first")
-        }
         Code::PermissionDenied => match detail {
             Some(Detail::Io(io)) => Diagnostic::hinting_parts(
                 &format!("no permission to use {}", io.path),
@@ -98,20 +198,6 @@ fn failure(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
             ),
             _ => failed(context.action),
         },
-        Code::Io | Code::CommandFailed | Code::SpawnFailed => failed(context.action),
-        Code::Internal | Code::Unspecified => bug(),
-        Code::Network => Diagnostic::hinting(
-            "couldn't download required setup files",
-            format!("Check your internet connection, then run `{command}` again"),
-        ),
-        Code::Integrity | Code::Decompression => Diagnostic::hinting(
-            DAMAGED,
-            format!("Run `{command}` again to download them again"),
-        ),
-        Code::MalformedArchive => Diagnostic::hinting(
-            "the downloaded setup files aren't in the expected format",
-            "If you use `--mirror`, check that it serves the right files",
-        ),
         Code::Conflict => match detail {
             Some(Detail::Conflict(conflict)) => Diagnostic::hinting(
                 format!(
@@ -146,18 +232,6 @@ fn failure(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
             },
             _ => bug(),
         },
-        Code::NotRoot => Diagnostic::hinting(
-            "setting up `mix` needs administrator rights",
-            format!("Run it again with sudo:\n\x20 sudo {command}"),
-        ),
-        Code::UnsupportedHost => Diagnostic::hinting(
-            "this system is NixOS, which already does what `mix` does",
-            "You don't need `mix` here",
-        ),
-        Code::UnsupportedKernel => Diagnostic::hinting(
-            "`mix` needs WSL 2, and this is WSL 1",
-            "Upgrade it from Windows PowerShell:\n\x20 wsl --set-version <distro> 2",
-        ),
         Code::SystemdNotReady => match detail {
             Some(Detail::Host(host)) if host.host() == Host::Wsl => Diagnostic::hinting(
                 "`mix` needs systemd, and it isn't running",
@@ -169,13 +243,6 @@ fn failure(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
                 format!("Make sure systemd is your init system, then run `{command}` again"),
             ),
         },
-        Code::SystemdUnreachable => Diagnostic::hinting(
-            "`mix` couldn't reach systemd",
-            format!(
-                "Check that the system bus is running with `systemctl status dbus`, then run \
-                 `{command}` again"
-            ),
-        ),
         Code::UnitFailed => match detail {
             Some(Detail::Unit(unit)) => Diagnostic::hinting(
                 format!("systemd couldn't {} `{}`", unit.operation, unit.unit),
@@ -192,17 +259,6 @@ fn failure(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
             ),
             _ => failed(context.action),
         },
-        Code::AlreadyManaged => Diagnostic::hinting(
-            "Nix is already installed on this system, and `mix` needs to set up its own",
-            format!(
-                "Uninstall it first, then run `{command}` again. Uninstalling removes everything \
-                 you installed with it"
-            ),
-        ),
-        Code::CrossDeviceStore => Diagnostic::hinting(
-            "`/nix/store` is on a different disk than `/nix`, and `mix` needs them on the same one",
-            format!("Remove the separate mount for `/nix/store`, then run `{command}` again"),
-        ),
         Code::RollbackIncomplete => Diagnostic::hinting(
             match diagnostic.causes.first() {
                 Some(cause) => failure(cause, context).summary(),
@@ -218,27 +274,7 @@ fn failure(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
             [name, ..] => bad_name(name),
             [] => bug(),
         },
-        Code::NewerState => Diagnostic::hinting(
-            "this version of `mix` is older than the one that set up your packages",
-            "Update `mix` using your original install method, or visit \
-             https://github.com/recregt/mix",
-        ),
-        Code::RootNotAllowed => Diagnostic::hinting(
-            format!("`{command}` can't be run as root"),
-            "Run it again without sudo",
-        ),
-        Code::NotBootstrapped => Diagnostic::hinting(
-            "`mix` isn't set up for you yet",
-            "Run `mix bootstrap` first",
-        ),
         Code::ProtectedPackage => protected(packages(diagnostic)),
-        Code::PrivilegesUnavailable => Diagnostic::hinting(
-            format!("couldn't get administrator rights to {}", context.action),
-            "Make sure your account can use sudo, then try again",
-        ),
-        Code::WorkerEnded => Diagnostic::hinting(
-            format!("stopped before it could {}", context.action),
-            "Run the same command again to finish; it picks up where it stopped",
-        ),
+        code => plain(code, context).unwrap_or_else(bug),
     }
 }

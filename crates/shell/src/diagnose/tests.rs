@@ -183,3 +183,25 @@ fn a_protected_list_names_its_packages() {
         Some(Detail::Packages(ref detail)) if detail.packages == ["git"]
     ));
 }
+
+#[test]
+fn the_quick_code_is_the_code_of_the_full_diagnostic() {
+    for error in every_bootstrap_error() {
+        assert_eq!(error.code(), error.fault().code(), "{error:?}");
+    }
+    for error in every_change_error() {
+        assert_eq!(error.code(), error.fault().code(), "{error:?}");
+    }
+    let others: Vec<Box<dyn Diagnose>> = vec![
+        Box::new(RemoveError::Protected(vec!["git".into()])),
+        Box::new(RemoveError::Change(ChangeError::NotBootstrapped)),
+        Box::new(TargetError::Core(locked())),
+        Box::new(TargetError::Unrepairable {
+            artifact: "/nix/store".into(),
+            reason: Unfixable::MissingRuntime,
+        }),
+    ];
+    for (index, error) in others.iter().enumerate() {
+        assert_eq!(error.code(), error.fault().code(), "error {index}");
+    }
+}

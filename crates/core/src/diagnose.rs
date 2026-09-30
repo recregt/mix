@@ -44,9 +44,44 @@ impl Diagnose for Failure {
     }
 }
 
+fn joined(parts: &[&str]) -> String {
+    let mut text = String::with_capacity(parts.iter().map(|part| part.len()).sum());
+    parts.iter().for_each(|part| text.push_str(part));
+    text
+}
+
+fn lock(code: Code, path: &std::path::Path, message: impl FnOnce(&str) -> String) -> Fault {
+    let path = match path.to_str() {
+        Some(path) => std::borrow::Cow::Borrowed(path),
+        None => path.to_string_lossy(),
+    };
+    failed(
+        code,
+        message(&path),
+        Some(Detail::Lock(LockDetail {
+            path: path.into_owned(),
+            holder: None,
+        })),
+    )
+}
+
 impl Diagnose for Error {
+    fn code(&self) -> Option<Code> {
+        Some(match self {
+            Error::Io { source, .. } if source.kind() == std::io::ErrorKind::PermissionDenied => {
+                Code::PermissionDenied
+            }
+            Error::Io { .. } => Code::Io,
+            Error::Command { .. } => Code::CommandFailed,
+            Error::Exec { .. } => Code::SpawnFailed,
+            Error::TaskPanicked(_) => Code::Internal,
+            Error::Cancelled { .. } => return None,
+            Error::Locked { .. } => Code::Locked,
+            Error::LockMissing { .. } => Code::LockMissing,
+        })
+    }
+
     fn fault(&self) -> Fault {
-        let message = self.to_string();
         match self {
             Error::Io { path, source } => failed(
                 if source.kind() == std::io::ErrorKind::PermissionDenied {
@@ -54,7 +89,7 @@ impl Diagnose for Error {
                 } else {
                     Code::Io
                 },
-                message,
+                self.to_string(),
                 Some(Detail::Io(IoDetail {
                     path: path.display().to_string(),
                     kind: format!("{:?}", source.kind()),
@@ -62,7 +97,7 @@ impl Diagnose for Error {
             ),
             Error::Command { command, detail } => failed(
                 Code::CommandFailed,
-                message,
+                self.to_string(),
                 Some(Detail::Command(CommandDetail {
                     command: command.clone(),
                     exit_status: None,
@@ -71,34 +106,28 @@ impl Diagnose for Error {
             ),
             Error::Exec { command, .. } => failed(
                 Code::SpawnFailed,
-                message,
+                self.to_string(),
                 Some(Detail::Command(CommandDetail {
                     command: command.clone(),
                     exit_status: None,
                     output_tail: String::new(),
                 })),
             ),
-            Error::TaskPanicked(_) => failed(Code::Internal, message, None),
+            Error::TaskPanicked(_) => failed(Code::Internal, self.to_string(), None),
             Error::Cancelled { .. } => Fault::Cancelled {
                 cause: Cancellation::Interrupted,
                 rolled_back: false,
             },
-            Error::Locked { path } => failed(
-                Code::Locked,
-                message,
-                Some(Detail::Lock(LockDetail {
-                    path: path.display().to_string(),
-                    holder: None,
-                })),
-            ),
-            Error::LockMissing { path } => failed(
-                Code::LockMissing,
-                message,
-                Some(Detail::Lock(LockDetail {
-                    path: path.display().to_string(),
-                    holder: None,
-                })),
-            ),
+            Error::Locked { path } => lock(Code::Locked, path, |path| {
+                joined(&["already locked: ", path])
+            }),
+            Error::LockMissing { path } => lock(Code::LockMissing, path, |path| {
+                joined(&[
+                    "the lock at ",
+                    path,
+                    " does not exist and cannot be created",
+                ])
+            }),
         }
     }
 }
