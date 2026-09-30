@@ -1,0 +1,7 @@
+exit 0
+--- stdout
+✓ Installed: hello.
+--- stderr
+[32m INFO[0m running: write the package list
+[32m INFO[0m running: Installing hello
+[32m INFO[0m running: record the change

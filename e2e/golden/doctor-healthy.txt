@@ -1,0 +1,8 @@
+exit 0
+--- stdout
+✓ Filesystem (23 checks)
+✓ Identity/Users (35 checks)
+✓ Services (2 checks)
+✓ Configuration (3 checks)
+✓ System health is intact.
+--- stderr

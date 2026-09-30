@@ -1,0 +1,12 @@
+exit 1
+--- stdout
+✓ Filesystem (23 checks)
+✓ Identity/Users (35 checks)
+✓ Services (2 checks)
+✓ /etc/mix/policy.json
+✓ /etc/nix/nix.conf
+--- stderr
+Configuration:
+✗ /etc/profile.d/mix-nix.sh: missing.
+✗ Some checks failed
+  Run `mix repair` to fix them.
