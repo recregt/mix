@@ -2,7 +2,10 @@ use protox::prost::Message;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=proto");
-    let descriptors = protox::compile(["mix/events/v1/events.proto"], ["proto"])?;
+    let descriptors = protox::compile(
+        ["mix/events/v1/events.proto", "mix/capture/v1/capture.proto"],
+        ["proto"],
+    )?;
     let encoded = descriptors.encode_to_vec();
 
     prost_build::Config::new()
@@ -17,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .register_descriptors(&encoded)?
         .ignore_unknown_fields()
         .ignore_unknown_enum_variants()
-        .build(&[".mix.events.v1"])?;
+        .build(&[".mix.events.v1", ".mix.capture.v1"])?;
 
     Ok(())
 }

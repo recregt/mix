@@ -4,6 +4,10 @@ pub mod v1 {
     include!(concat!(env!("OUT_DIR"), "/mix.events.v1.serde.rs"));
 }
 
+pub mod capture;
+mod events {
+    pub(crate) use crate::v1;
+}
 mod fault;
 mod outbox;
 mod tree;
