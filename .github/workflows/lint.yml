@@ -67,18 +67,25 @@ jobs:
           version: 1.73.0
           setup_only: true
 
-      - run: buf lint crates/rpc/proto
+      - run: |
+          for module in crates/rpc/proto crates/events/proto; do
+            buf lint "$module"
+          done
 
       - name: Check wire compatibility
         if: github.event_name == 'pull_request'
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
         run: |
-          if git cat-file -e "$BASE:crates/rpc/proto/buf.yaml" 2>/dev/null; then
-            buf breaking crates/rpc/proto --against ".git#ref=$BASE,subdir=crates/rpc/proto"
-          else
-            echo "The base has no worker schema yet, nothing to compare against."
-          fi
+          status=0
+          for module in crates/rpc/proto crates/events/proto; do
+            if git cat-file -e "$BASE:$module/buf.yaml" 2>/dev/null; then
+              buf breaking "$module" --against ".git#ref=$BASE,subdir=$module" || status=1
+            else
+              echo "The base has no schema in $module yet, nothing to compare against."
+            fi
+          done
+          exit $status
 
   commit-messages:
     name: Commit Messages
