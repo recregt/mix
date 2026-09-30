@@ -36,6 +36,13 @@ def pytest_unconfigure(config):
         remove_snapshot()
 
 
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    setattr(item, f"rep_{report.when}", report)
+
+
 @pytest.hookimpl(optionalhook=True)
 def pytest_xdist_auto_num_workers(config):
     return resources.worker_cap()
@@ -43,7 +50,11 @@ def pytest_xdist_auto_num_workers(config):
 
 def pytest_collection_modifyitems(items):
     known = resources.snapshotted(os.environ.get("MIX_TEST_SESSION", ""))
-    items.sort(key=lambda item: -known[item.nodeid].seconds if item.nodeid in known else -math.inf)
+    items.sort(
+        key=lambda item: (
+            -known[item.nodeid].seconds if item.nodeid in known else -math.inf
+        )
+    )
 
 
 def pytest_terminal_summary(terminalreporter, config):

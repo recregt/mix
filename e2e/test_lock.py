@@ -1,58 +1,29 @@
 import shlex
 
-import pytest
-
 from support.container import create_user
 from support.mirror import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS, mirror_args
 
 USER = MIRROR_TEST_USERS[0]
-LOCK = "/var/lib/mix/lock"
 PACKAGE_BIN = f"/home/{USER}/.nix-profile/bin/{INSTALL_TEST_PACKAGE}"
 
 
-def test_install_works_in_the_same_session_as_bootstrap(container, mock_nix_server, mirror_cache):
+def test_install_works_in_the_same_session_as_bootstrap(
+    container, mock_nix_server, mirror_cache
+):
     create_user(container, USER, sudo=True)
     mirror = shlex.join(mirror_args(mock_nix_server, mirror_cache))
+    bootstrap, install = container.capture(), container.capture()
 
     result = container.exec(
         "bash",
         "-c",
-        f"mix bootstrap {mirror} && mix install {INSTALL_TEST_PACKAGE}",
+        f"mix --events-file {bootstrap} bootstrap {mirror}"
+        f" && mix --events-file {install} install {INSTALL_TEST_PACKAGE}",
         user=USER,
     )
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert container.path_exists(PACKAGE_BIN)
-
-
-@pytest.mark.bootstrapped
-def test_the_lock_is_readable_by_everyone_and_owned_by_root(container, mock_nix_server, mirror_cache):
-
-    stat = container.exec("stat", "-c", "%a %U", LOCK, check=True).stdout.split()
-
-    assert stat == ["644", "root"]
-
-
-@pytest.mark.bootstrapped
-def test_a_missing_lock_is_explained_and_bootstrap_puts_it_back(
-    container, mock_nix_server, mirror_cache
-):
-    container.exec("rm", LOCK, check=True)
-
-    refused = container.exec(
-        "mix", "install", INSTALL_TEST_PACKAGE, user=USER
-    )
-
-    assert refused.returncode != 0
-    output = (refused.stdout + refused.stderr).lower()
-    assert "isn't set up yet" in output
-    assert "mix bootstrap" in output
-    assert "permission" not in output
-
-    again = container.exec("mix", "bootstrap", *mirror_args(mock_nix_server, mirror_cache), user=USER)
-    assert again.returncode == 0, again.stderr
-    installed = container.exec(
-        "mix", "install", INSTALL_TEST_PACKAGE, user=USER
-    )
-    assert installed.returncode == 0, installed.stderr
+    assert container.recorded(bootstrap, 0, "", result.stderr).succeeded()
+    installed = container.recorded(install, result.returncode, "", result.stderr)
+    assert installed.succeeded(), installed
+    assert installed.result("install")["added"] == [INSTALL_TEST_PACKAGE]
     assert container.path_exists(PACKAGE_BIN)

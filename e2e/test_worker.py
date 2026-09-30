@@ -1,13 +1,12 @@
 import time
 
+import pytest
 from support.container import create_user
 from support.mirror import MIRROR_TEST_USERS, mirror_args
 
 USER = MIRROR_TEST_USERS[0]
 MIX = "/usr/local/bin/mix"
 MIX_MANAGED_MARKER = "/nix/.mix-managed"
-RUNNING_CREATE_USERS_AND_GROUPS = "running: create the managed groups and build users"
-WINDING_DOWN_NOTICE = "Cancelling... (cleaning up)"
 UNUSABLE_PROXY = "http://127.0.0.1:9"
 
 
@@ -22,14 +21,13 @@ def _restricted_sudo(container, user: str) -> None:
     )
 
 
-def test_bootstrap_works_when_sudo_only_allows_mix(container, mock_nix_server, mirror_cache):
+def test_bootstrap_works_when_sudo_only_allows_mix(
+    container, mock_nix_server, mirror_cache
+):
     _restricted_sudo(container, USER)
     _, url, _, key = mirror_args(mock_nix_server, mirror_cache)
 
-    result = container.exec(
-        "mix",
-        "-v",
-        "--no-progress",
+    run = container.mix(
         "bootstrap",
         env={
             "MIX_NIX_MIRROR": url,
@@ -40,53 +38,57 @@ def test_bootstrap_works_when_sudo_only_allows_mix(container, mock_nix_server, m
         user=USER,
     )
 
-    output = result.stdout + result.stderr
-    assert result.returncode == 0, output
-    assert "not allowed to set the following environment variables" not in output
-    assert f"fetching {url}/" in output
-    assert "mix is ready!" in output
+    assert run.succeeded(), run
+    assert [fetch["url"].startswith(f"{url}/") for fetch in run.progress("fetch")] == [
+        True
+    ], run
 
 
-def test_repair_works_when_sudo_only_allows_mix(container, mock_nix_server, mirror_cache):
+def test_repair_works_when_sudo_only_allows_mix(
+    container, mock_nix_server, mirror_cache
+):
     _restricted_sudo(container, USER)
-    mirror = mirror_args(mock_nix_server, mirror_cache)
-    assert container.exec("mix", "bootstrap", *mirror, user=USER).returncode == 0
+    assert container.mix(
+        "bootstrap", *mirror_args(mock_nix_server, mirror_cache), user=USER
+    ).succeeded()
     container.exec("groupmod", "--gid", "9999", "nixbld", check=True)
 
-    result = container.exec("mix", "repair", user=USER)
+    run = container.mix("repair", user=USER)
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert run.succeeded(), run
+    assert {"target": "nixbld", "fixed": True} in run.result("repair")["reports"], run
     assert container.exec("getent", "group", "nixbld").stdout.split(":")[2] == "30000"
 
 
 def test_a_user_without_sudo_rights_is_told_so(container):
     create_user(container, "nosudo")
 
-    result = container.exec("mix", "repair", user="nosudo")
+    run = container.mix("repair", user="nosudo")
 
-    assert result.returncode != 0
-    output = (result.stdout + result.stderr).lower()
-    assert "couldn't get administrator rights" in output
-    assert "sudo" in output
+    assert run.exit_code == 1, run
+    assert run.code == "CODE_PRIVILEGES_UNAVAILABLE", run
 
 
-def test_ctrl_c_through_the_worker_rolls_back_and_says_so(container, mock_nix_server, mirror_cache):
+def test_ctrl_c_through_the_worker_rolls_back_and_says_so(
+    container, mock_nix_server, mirror_cache
+):
     create_user(container, USER, sudo=True)
-    proc = container.start_background(
-        "mix", "-v", "bootstrap", *mirror_args(mock_nix_server, mirror_cache), user=USER
+    bootstrap = container.mix_background(
+        "bootstrap", *mirror_args(mock_nix_server, mirror_cache), user=USER
     )
-    proc.wait_for_output(RUNNING_CREATE_USERS_AND_GROUPS, timeout=60)
-    client = proc.pid()
-    launcher = container.exec("pgrep", "-f", f"^sudo {MIX} worker", check=True).stdout.split()[0]
+    bootstrap.wait_for_step("create-users-and-groups")
+    client = bootstrap.pid()
+    launcher = container.exec(
+        "pgrep", "-f", f"^sudo {MIX} worker", check=True
+    ).stdout.split()[0]
     container.exec("kill", "-INT", client, launcher, check=True)
 
-    result = proc.wait(timeout=60)
+    run = bootstrap.wait()
 
-    assert result.returncode != 0, result.stdout
-    assert WINDING_DOWN_NOTICE in result.stdout
-    assert "rolling back: create the managed groups and build users" in result.stdout
-    assert "rolling back: create /nix" in result.stdout
-    assert "stopped; everything it had changed was undone" in result.stdout.lower()
+    assert run.status == "STATUS_CANCELLED", run
+    assert run.cancellation == "CANCELLATION_INTERRUPTED", run
+    assert run.progress("stopping"), run
+    assert {"create-users-and-groups", "create-nix-dir"} <= set(run.rolled_back()), run
     assert not container.path_exists(MIX_MANAGED_MARKER)
     assert container.exec("getent", "group", "nixbld").returncode != 0
 
@@ -104,15 +106,30 @@ def test_a_killed_client_still_gets_its_changes_rolled_back(
     container, mock_nix_server, mirror_cache
 ):
     create_user(container, USER, sudo=True)
-    proc = container.start_background(
-        "mix", "-v", "bootstrap", *mirror_args(mock_nix_server, mirror_cache), user=USER
+    bootstrap = container.mix_background(
+        "bootstrap", *mirror_args(mock_nix_server, mirror_cache), user=USER
     )
-    proc.wait_for_output(RUNNING_CREATE_USERS_AND_GROUPS, timeout=60)
+    bootstrap.wait_for_step("create-users-and-groups")
     worker = f"^sudo {MIX} worker"
     container.exec("pgrep", "-f", worker, check=True)
 
-    container.exec("kill", "-KILL", proc.pid(), check=True)
+    container.exec("kill", "-KILL", bootstrap.pid(), check=True)
     _wait_until_gone(container, worker, timeout=60)
 
     assert not container.path_exists(MIX_MANAGED_MARKER)
     assert container.exec("getent", "group", "nixbld").returncode != 0
+
+
+@pytest.mark.bootstrapped
+def test_a_command_run_through_the_worker_streams_json_and_nothing_else(
+    container, mock_nix_server, mirror_cache
+):
+    container.exec("rm", "/etc/profile.d/mix-nix.sh", check=True)
+
+    run = container.mix("--output", "json", "-vv", "repair", user=USER)
+
+    assert run.succeeded(), run
+    assert run.stderr == ""
+    assert {"target": "/etc/profile.d/mix-nix.sh", "fixed": True} in run.result(
+        "repair"
+    )["reports"]

@@ -1,5 +1,0 @@
-exit 0
---- stdout
-✓ Nothing to install.
---- stderr
-• Already installed: git.

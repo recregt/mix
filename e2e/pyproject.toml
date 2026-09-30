@@ -14,5 +14,4 @@ package = false
 addopts = ["-p", "no:cacheprovider", "-rfE"]
 markers = [
     "bootstrapped: start from a container where ciuser already ran `mix bootstrap`",
-    "verbatim_output: run mix with the flags as written, because the test is about its output",
 ]

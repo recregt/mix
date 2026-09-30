@@ -1,7 +1,0 @@
-exit 0
---- stdout
-✓ mix is ready!
---- stderr
-
-To use installed packages in this terminal session, run:
-  source /etc/profile.d/mix-nix.sh

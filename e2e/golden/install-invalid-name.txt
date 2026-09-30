@@ -1,5 +1,0 @@
-exit 1
---- stdout
---- stderr
-✗ "not-a-package!" isn't a valid package name
-  Package names look like `ripgrep` or `python3`

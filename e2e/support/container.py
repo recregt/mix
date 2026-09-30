@@ -12,6 +12,7 @@ import time
 import pytest
 
 from support import mirror, resources
+from support.events import Run, envelopes_of, progress_of, started_step
 from support.paths import CACHE_DIR, REPO_ROOT, TESTS_ROOT
 
 NIX_BINARY = "/nix/var/nix/profiles/default/bin/nix"
@@ -22,8 +23,6 @@ NIX_CONF_DEST = "/etc/nix/nix.conf"
 IMAGE_TAG = "mix-bootstrap-test:latest"
 REMOTE_IMAGE = os.environ.get("MIX_TEST_IMAGE")
 CONTAINER_NAME = re.compile(r"mix-test-(\d+)-\d+")
-VERBOSITY = re.compile(r"-v+")
-MIX_BINARIES = ("mix", "/usr/local/bin/mix")
 SNAPSHOT_REPOSITORY = "mix-bootstrapped"
 SNAPSHOT_TAG = re.compile(r"(\d+)-[0-9a-f]+")
 SNAPSHOT_TEST = "snapshot::bootstrapped"
@@ -68,7 +67,9 @@ class BackgroundProcess:
                     f"(returncode={self.proc.returncode})"
                 )
             time.sleep(0.05)
-        raise TimeoutError(f"process matching {self.pattern!r} never appeared in the container")
+        raise TimeoutError(
+            f"process matching {self.pattern!r} never appeared in the container"
+        )
 
     def wait_for_output(self, substring: str, timeout: float = 15.0) -> None:
         deadline = time.time() + timeout
@@ -107,29 +108,116 @@ class BackgroundProcess:
                 break
             self.output += line
         self.proc.wait(timeout=max(0.01, deadline - time.time()))
-        return subprocess.CompletedProcess(self.proc.args, self.proc.returncode, self.output, "")
+        return subprocess.CompletedProcess(
+            self.proc.args, self.proc.returncode, self.output, ""
+        )
+
+
+class BackgroundRun:
+    def __init__(
+        self, container: "Container", process: BackgroundProcess, capture: str
+    ):
+        self.container = container
+        self.process = process
+        self.capture = capture
+
+    def wait_for(self, found, timeout: float = 60.0) -> dict:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            line = self.process._next_line(max(0.01, deadline - time.time()))
+            if line is None:
+                break
+            self.process.output += line
+            try:
+                envelope = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if found(envelope):
+                return envelope
+        if self.process.proc.poll() is not None:
+            raise AssertionError(
+                f"mix exited ({self.process.proc.returncode}) before the awaited event:\n"
+                f"{self.process.output}"
+            )
+        raise TimeoutError(
+            f"the awaited event never came within {timeout:g}s; processes now:\n"
+            f"{self.container.process_tree()}\nstream so far:\n{self.process.output}"
+        )
+
+    def wait_for_step(self, key: str, timeout: float = 60.0) -> dict:
+        return self.wait_for(lambda envelope: started_step(envelope, key), timeout)
+
+    def wait_for_progress(self, kind: str, timeout: float = 60.0) -> dict:
+        return self.wait_for(
+            lambda envelope: progress_of(envelope, kind) is not None, timeout
+        )
+
+    def pid(self, timeout: float = 10.0) -> str:
+        return self.process.pid(timeout)
+
+    def signal(self, sig_name: str, timeout: float = 10.0) -> None:
+        self.process.signal(sig_name, timeout)
+
+    def wait(self, timeout: float = 60.0, complete: bool = True) -> Run:
+        ended = self.process.wait(timeout=timeout)
+        stdout = ended.stdout
+        if complete:
+            return self.container.recorded(self.capture, ended.returncode, stdout, "")
+        capture = self.container.exec("cat", self.capture).stdout
+        return Run(ended.returncode, stdout, "", envelopes_of(capture))
 
 
 class Container:
-    def __init__(self, name: str, verbatim: bool = False):
+    def __init__(self, name: str):
         self.name = name
-        self.verbatim = verbatim
+        self.captures: list[str] = []
 
-    def _traced(self, args: tuple) -> tuple:
-        if self.verbatim:
-            return args
-        for index, arg in enumerate(args):
-            if arg in MIX_BINARIES:
-                rest = list(args[index + 1 :])
-                options = 0
-                while options < len(rest) and rest[options].startswith("-"):
-                    options += 1
-                kept = [arg for arg in rest[:options] if not VERBOSITY.fullmatch(arg)]
-                return (*args[: index + 1], "-vvv", *kept, *rest[options:])
-        return args
+    def capture(self) -> str:
+        path = f"/tmp/mix-events-{len(self.captures)}.ndjson"
+        self.captures.append(path)
+        return path
+
+    def recorded(self, capture: str, returncode: int, stdout: str, stderr: str) -> Run:
+        contents = self.exec("cat", capture).stdout
+        check = self.exec("mix", "events", "check", capture)
+        assert check.returncode == 0, (
+            f"{capture} is not a valid stream: {check.stderr}\n{contents}"
+        )
+        run = Run(returncode, stdout, stderr, envelopes_of(contents))
+        assert run.exit_code == returncode, (
+            f"the root says exit {run.exit_code}: {run!r}"
+        )
+        return run
+
+    def mix(self, *args, env=None, user=None) -> Run:
+        capture = self.capture()
+        result = self.exec("mix", "--events-file", capture, *args, env=env, user=user)
+        return self.recorded(capture, result.returncode, result.stdout, result.stderr)
+
+    def mix_background(self, *args, env=None, user=None) -> BackgroundRun:
+        capture = self.capture()
+        process = self.start_background(
+            "mix",
+            "--output",
+            "json",
+            "--events-file",
+            capture,
+            *args,
+            env=env,
+            user=user,
+        )
+        return BackgroundRun(self, process, capture)
+
+    def attach_captures(self, test: str) -> None:
+        folder = REPO_ROOT / "target/e2e-events" / re.sub(r"[^\w.-]+", "_", test)
+        folder.mkdir(parents=True, exist_ok=True)
+        for capture in self.captures:
+            subprocess.run(
+                ["podman", "cp", f"{self.name}:{capture}", str(folder)],
+                capture_output=True,
+            )
 
     def exec(self, *args, env=None, check=False, user=None):
-        args = self._traced(args)
         cmd = ["podman", "exec"]
         for key, value in (env or {}).items():
             cmd += ["-e", f"{key}={value}"]
@@ -138,11 +226,12 @@ class Container:
         cmd += [self.name, *args]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if check and result.returncode != 0:
-            raise AssertionError(f"{args} failed ({result.returncode}): {result.stderr}")
+            raise AssertionError(
+                f"{args} failed ({result.returncode}): {result.stderr}"
+            )
         return result
 
     def start_background(self, *args, env=None, user=None) -> BackgroundProcess:
-        args = self._traced(args)
         cmd = ["podman", "exec"]
         for key, value in (env or {}).items():
             cmd += ["-e", f"{key}={value}"]
@@ -159,7 +248,9 @@ class Container:
         return BackgroundProcess(self, proc, pattern=literal(" ".join(args)))
 
     def process_tree(self) -> str:
-        return self.exec("ps", "-eo", "pid,ppid,stat,wchan:24,etime,args", "--forest").stdout
+        return self.exec(
+            "ps", "-eo", "pid,ppid,stat,wchan:24,etime,args", "--forest"
+        ).stdout
 
     def path_exists(self, path: str) -> bool:
         return self.exec("test", "-e", path).returncode == 0
@@ -250,7 +341,16 @@ def container_image():
             if pull.returncode == 0:
                 return REMOTE_IMAGE
         subprocess.run(
-            ["podman", "build", "-q", "-t", IMAGE_TAG, "-f", str(containerfile), str(containerfile.parent)],
+            [
+                "podman",
+                "build",
+                "-q",
+                "-t",
+                IMAGE_TAG,
+                "-f",
+                str(containerfile),
+                str(containerfile.parent),
+            ],
             check=True,
         )
     return IMAGE_TAG
@@ -265,14 +365,24 @@ def reap_orphans() -> None:
         if match and not resources.alive(int(match.group(1))):
             subprocess.run(["podman", "rm", "-f", name], capture_output=True)
     tags = subprocess.run(
-        ["podman", "images", "--filter", f"reference={SNAPSHOT_REPOSITORY}", "--format", "{{.Tag}}"],
+        [
+            "podman",
+            "images",
+            "--filter",
+            f"reference={SNAPSHOT_REPOSITORY}",
+            "--format",
+            "{{.Tag}}",
+        ],
         capture_output=True,
         text=True,
     ).stdout.split()
     for tag in tags:
         match = SNAPSHOT_TAG.fullmatch(tag)
         if match and not resources.alive(int(match.group(1))):
-            subprocess.run(["podman", "rmi", "-f", f"{SNAPSHOT_REPOSITORY}:{tag}"], capture_output=True)
+            subprocess.run(
+                ["podman", "rmi", "-f", f"{SNAPSHOT_REPOSITORY}:{tag}"],
+                capture_output=True,
+            )
 
 
 def snapshot_image() -> str:
@@ -303,9 +413,15 @@ def _bootstrapped_image(container_image, mix_binary, mirror_server, cache) -> st
             built = Container(name)
             create_user(built, BOOTSTRAPPED_USER, sudo=True)
             mirror.bootstrap_as(built, BOOTSTRAPPED_USER, mirror_server, cache)
-            resources.record(SNAPSHOT_TEST, cgroup, time.monotonic() - started, waited, "build")
+            resources.record(
+                SNAPSHOT_TEST, cgroup, time.monotonic() - started, waited, "build"
+            )
             subprocess.run(["podman", "stop", name], check=True, capture_output=True)
-            subprocess.run(["podman", "commit", "--quiet", name, tag], check=True, capture_output=True)
+            subprocess.run(
+                ["podman", "commit", "--quiet", name, tag],
+                check=True,
+                capture_output=True,
+            )
         finally:
             subprocess.run(["podman", "rm", "-f", name], capture_output=True)
             resources.release(name)
@@ -347,20 +463,14 @@ def container(request, container_image, mix_binary):
         _start_container(image, name, mix_binary)
         cgroup = _cgroup_of(name)
         resources.attach(name, cgroup)
-        yield Container(name, verbatim=request.node.get_closest_marker("verbatim_output") is not None)
+        container = Container(name)
+        yield container
+        report = getattr(request.node, "rep_call", None)
+        if report is not None and report.failed:
+            container.attach_captures(test)
     finally:
         if cgroup is not None:
             variant = "snapshot" if bootstrapped else "fresh"
             resources.record(test, cgroup, time.monotonic() - started, waited, variant)
         subprocess.run(["podman", "rm", "-f", name], capture_output=True)
         resources.release(name)
-
-def root_result(stdout: str) -> dict:
-    """The root node's finish, read from `--output json`: the command's typed result and exit code."""
-    envelopes = [json.loads(line) for line in stdout.splitlines() if line.strip()]
-    (finished,) = [
-        envelope["nodeFinished"]
-        for envelope in envelopes
-        if "nodeFinished" in envelope and envelope["nodeFinished"]["id"] == "1"
-    ]
-    return finished

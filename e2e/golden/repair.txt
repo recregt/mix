@@ -1,6 +1,0 @@
-exit 0
---- stdout
-✓ Repaired: /etc/profile.d/mix-nix.sh
-✓ System state repaired.
---- stderr
-Root required. Re-running with sudo...

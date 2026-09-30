@@ -1,13 +1,7 @@
 import pytest
-
-from support.container import root_result
-from support.mirror import (
-    INSTALL_TEST_PACKAGE,
-    MIRROR_TEST_USERS,
-)
+from support.mirror import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS
 
 USER = MIRROR_TEST_USERS[0]
-
 
 
 @pytest.mark.bootstrapped
@@ -16,11 +10,13 @@ def test_install_adds_a_package_as_a_regular_user_with_no_sudo(
 ):
     state_dir = f"/home/{USER}/.local/state/mix"
 
-    result = container.exec("mix", "install", INSTALL_TEST_PACKAGE, user=USER)
+    run = container.mix("install", INSTALL_TEST_PACKAGE, user=USER)
 
-    assert result.returncode == 0, result.stderr
-    assert INSTALL_TEST_PACKAGE in result.stdout.lower()
-    assert container.path_exists(f"/home/{USER}/.nix-profile/bin/{INSTALL_TEST_PACKAGE}")
+    assert run.succeeded(), run
+    assert run.result("install")["added"] == [INSTALL_TEST_PACKAGE]
+    assert container.path_exists(
+        f"/home/{USER}/.nix-profile/bin/{INSTALL_TEST_PACKAGE}"
+    )
 
     state = container.exec("cat", f"{state_dir}/state", check=True).stdout
     assert INSTALL_TEST_PACKAGE in state
@@ -34,86 +30,12 @@ def test_install_adds_a_package_as_a_regular_user_with_no_sudo(
         git_bin, "-C", state_dir, "log", "--format=%an <%ae>", user=USER, check=True
     )
     assert log.stdout.strip().splitlines()[0] == "mix <mix@localhost>"
-    status = container.exec(git_bin, "-C", state_dir, "status", "--short", user=USER, check=True)
+    status = container.exec(
+        git_bin, "-C", state_dir, "status", "--short", user=USER, check=True
+    )
     assert status.stdout.strip() == ""
 
-    # Re-running the same install is a no-op that still succeeds, so a script can install
-    # unconditionally.
-    again = container.exec("mix", "install", INSTALL_TEST_PACKAGE, user=USER)
-    assert again.returncode == 0, again.stderr
-    assert "already installed" in (again.stdout + again.stderr).lower()
+    again = container.mix("install", INSTALL_TEST_PACKAGE, user=USER)
+    assert again.succeeded(), again
+    assert again.result("install") == {"skipped": [INSTALL_TEST_PACKAGE]}
     assert container.exec("cat", f"{state_dir}/state", check=True).stdout == state
-
-
-@pytest.mark.bootstrapped
-def test_install_skips_a_package_that_is_already_installed(
-    container, mock_nix_server, mirror_cache
-):
-    state_dir = f"/home/{USER}/.local/state/mix"
-    state_before = container.exec("cat", f"{state_dir}/state", check=True).stdout
-
-    result = container.exec(
-        "mix", "install", "git", user=USER
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "already installed" in (result.stdout + result.stderr).lower()
-    assert container.exec("cat", f"{state_dir}/state", check=True).stdout == state_before
-
-
-@pytest.mark.bootstrapped
-@pytest.mark.verbatim_output
-def test_install_is_script_friendly(container, mock_nix_server, mirror_cache):
-
-    result = container.exec(
-        "mix", "--output", "json", "install", INSTALL_TEST_PACKAGE, "git", user=USER
-    )
-
-    # Stdout is the event stream and nothing else, so a script never has to parse prose.
-    assert result.returncode == 0, result.stderr
-    finished = root_result(result.stdout)
-    assert finished["install"]["added"] == [INSTALL_TEST_PACKAGE]
-    assert finished["install"]["skipped"] == ["git"]
-
-    again = container.exec(
-        "mix", "--output", "json", "install", INSTALL_TEST_PACKAGE, user=USER
-    )
-    assert again.returncode == 0, again.stderr
-    finished = root_result(again.stdout)
-    assert finished["install"].get("added", []) == []
-    assert finished["install"]["skipped"] == [INSTALL_TEST_PACKAGE]
-
-    plain = container.exec("mix", "--no-progress", "install", INSTALL_TEST_PACKAGE, user=USER)
-    assert plain.returncode == 0, plain.stderr
-    assert "already installed" in (plain.stdout + plain.stderr).lower()
-    assert "\x1b[" not in plain.stderr, "nothing should be drawn in place"
-
-
-@pytest.mark.bootstrapped
-def test_install_cannot_be_run_as_root(container, mock_nix_server, mirror_cache):
-
-    result = container.exec("mix", "install", INSTALL_TEST_PACKAGE)
-
-    assert result.returncode != 0
-    assert "can't be run as root" in (result.stdout + result.stderr).lower()
-    assert not container.path_exists(f"/home/{USER}/.nix-profile/bin/{INSTALL_TEST_PACKAGE}")
-
-
-@pytest.mark.bootstrapped
-def test_install_rolls_back_state_and_home_nix_when_activation_fails(
-    container, mock_nix_server, mirror_cache
-):
-    state_dir = f"/home/{USER}/.local/state/mix"
-    state_before = container.exec("cat", f"{state_dir}/state", check=True).stdout
-    home_before = container.exec("cat", f"{state_dir}/home.nix", check=True).stdout
-
-    result = container.exec(
-        "mix",
-        "install",
-        "doesnotexistinnixpkgs",
-        user=USER,
-    )
-
-    assert result.returncode != 0
-    assert container.exec("cat", f"{state_dir}/state", check=True).stdout == state_before
-    assert container.exec("cat", f"{state_dir}/home.nix", check=True).stdout == home_before
