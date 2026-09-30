@@ -12,6 +12,7 @@ libfuzzer-sys = "0.4"
 mix-cli = { path = ".." }
 mix-events = { path = "../../events" }
 mix-shell = { path = "../../shell" }
+mix-ui = { path = "../../ui" }
 prost = "0.14.4"
 serde_json = "1"
 
