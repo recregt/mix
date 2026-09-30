@@ -9,7 +9,8 @@ use mix_shell::target::Error as TargetError;
 use prost::Message;
 
 use super::convert::{bootstrap_error_from, report_from_wire, target_error_from};
-use crate::render::human::{Exit, Human, Reporters};
+use crate::render::human::Reporters;
+use crate::render::sinks::{Sinks, View};
 
 const LAUNCHER: &str = "sudo";
 const WORKER: &str = "worker";
@@ -24,25 +25,25 @@ pub fn level_for(verbosity: u8) -> Level {
 }
 
 struct Replay {
-    human: Human,
+    sinks: Sinks,
 }
 
 impl Replay {
-    fn new(exit: &Exit) -> Self {
+    fn new(view: &View) -> Result<Self, mix_rpc::Error> {
         let mix_ui::Reporters {
             activity,
             steps,
             downloads,
             ..
         } = mix_ui::reporters();
-        Self {
-            human: Human::new(Reporters {
+        let sinks = view
+            .sinks(Reporters {
                 downloads,
                 steps,
                 activity,
             })
-            .exit_to(exit),
-        }
+            .map_err(mix_rpc::Error::Spawn)?;
+        Ok(Self { sinks })
     }
 
     fn apply(&mut self, event: Event) -> Result<Option<Outcome>, mix_rpc::Error> {
@@ -51,14 +52,14 @@ impl Replay {
                 let envelope = Envelope::decode(bytes.as_slice()).map_err(|error| {
                     mix_rpc::Error::Malformed(Malformed(format!("an event envelope: {error}")))
                 })?;
-                self.human.envelope(envelope);
+                self.sinks.envelope(envelope);
             }
             Event::Log {
                 level,
                 node,
                 message,
             } => {
-                let parent = self.human.span(node).and_then(|span| span.id());
+                let parent = self.sinks.span(node).and_then(|span| span.id());
                 match level {
                     Level::Error => tracing::error!(parent: parent, "{message}"),
                     Level::Warn => tracing::warn!(parent: parent, "{message}"),
@@ -75,10 +76,10 @@ impl Replay {
 
 async fn replay(
     events: impl Stream<Item = Result<Event, mix_rpc::Error>>,
-    exit: &Exit,
+    view: &View,
 ) -> Result<Outcome, mix_rpc::Error> {
     let interrupts = tokio::spawn(async { while tokio::signal::ctrl_c().await.is_ok() {} });
-    let mut replay = Replay::new(exit);
+    let mut replay = Replay::new(view)?;
     let mut events = std::pin::pin!(events);
     let mut outcome = None;
     while let Some(event) = events.next().await {
@@ -100,8 +101,7 @@ pub async fn bootstrap(
     mirror: Option<&str>,
     mirror_key: Option<&str>,
     force: bool,
-    verbosity: u8,
-    exit: &Exit,
+    view: &View,
 ) -> anyhow::Result<()> {
     let mut client = start().await?;
     let request = BootstrapRequest {
@@ -110,9 +110,9 @@ pub async fn bootstrap(
             key: mirror_key.map(str::to_string),
         }),
         force,
-        log_level: level_for(verbosity),
+        log_level: level_for(view.verbose),
     };
-    let outcome = replay(client.bootstrap(&request).await?, exit).await?;
+    let outcome = replay(client.bootstrap(&request).await?, view).await?;
     let _ = client.wait().await;
     match outcome {
         Outcome::BootstrapDone => Ok(()),
@@ -121,12 +121,12 @@ pub async fn bootstrap(
     }
 }
 
-pub async fn repair(verbosity: u8, exit: &Exit) -> anyhow::Result<Repair> {
+pub async fn repair(view: &View) -> anyhow::Result<Repair> {
     let mut client = start().await?;
     let request = RepairRequest {
-        log_level: level_for(verbosity),
+        log_level: level_for(view.verbose),
     };
-    let outcome = replay(client.repair(&request).await?, exit).await?;
+    let outcome = replay(client.repair(&request).await?, view).await?;
     let _ = client.wait().await;
     match outcome {
         Outcome::RepairDone {

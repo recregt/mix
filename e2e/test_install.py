@@ -1,7 +1,6 @@
-import json
-
 import pytest
 
+from support.container import root_result
 from support.mirror import (
     INSTALL_TEST_PACKAGE,
     MIRROR_TEST_USERS,
@@ -67,19 +66,22 @@ def test_install_skips_a_package_that_is_already_installed(
 def test_install_is_script_friendly(container, mock_nix_server, mirror_cache):
 
     result = container.exec(
-        "mix", "install", "--json", INSTALL_TEST_PACKAGE, "git", user=USER
+        "mix", "--output", "json", "install", INSTALL_TEST_PACKAGE, "git", user=USER
     )
 
-    # Stdout is the report and nothing else, so a script never has to parse prose.
+    # Stdout is the event stream and nothing else, so a script never has to parse prose.
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == {
-        "added": [INSTALL_TEST_PACKAGE],
-        "skipped": ["git"],
-    }
+    finished = root_result(result.stdout)
+    assert finished["install"]["added"] == [INSTALL_TEST_PACKAGE]
+    assert finished["install"]["skipped"] == ["git"]
 
-    again = container.exec("mix", "install", "--json", INSTALL_TEST_PACKAGE, user=USER)
+    again = container.exec(
+        "mix", "--output", "json", "install", INSTALL_TEST_PACKAGE, user=USER
+    )
     assert again.returncode == 0, again.stderr
-    assert json.loads(again.stdout) == {"added": [], "skipped": [INSTALL_TEST_PACKAGE]}
+    finished = root_result(again.stdout)
+    assert finished["install"].get("added", []) == []
+    assert finished["install"]["skipped"] == [INSTALL_TEST_PACKAGE]
 
     plain = container.exec("mix", "--no-progress", "install", INSTALL_TEST_PACKAGE, user=USER)
     assert plain.returncode == 0, plain.stderr

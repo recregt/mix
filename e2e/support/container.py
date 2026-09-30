@@ -354,3 +354,13 @@ def container(request, container_image, mix_binary):
             resources.record(test, cgroup, time.monotonic() - started, waited, variant)
         subprocess.run(["podman", "rm", "-f", name], capture_output=True)
         resources.release(name)
+
+def root_result(stdout: str) -> dict:
+    """The root node's finish, read from `--output json`: the command's typed result and exit code."""
+    envelopes = [json.loads(line) for line in stdout.splitlines() if line.strip()]
+    (finished,) = [
+        envelope["nodeFinished"]
+        for envelope in envelopes
+        if "nodeFinished" in envelope and envelope["nodeFinished"]["id"] == "1"
+    ]
+    return finished

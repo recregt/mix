@@ -52,12 +52,3 @@ pub fn acquire_profile() -> Result<(LockGuard, UserConfig), Error> {
 
     Ok((lock, user_config))
 }
-
-pub(crate) fn human(
-    reporters: crate::render::human::Reporters,
-    json: bool,
-    exit: &crate::render::human::Exit,
-) -> crate::render::human::Human {
-    let human = crate::render::human::Human::new(reporters).exit_to(exit);
-    if json { human.without_results() } else { human }
-}

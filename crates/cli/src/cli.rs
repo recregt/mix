@@ -1,4 +1,6 @@
-use clap::{ArgAction, Parser, Subcommand};
+use std::path::PathBuf;
+
+use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(name = "mix", version, about = "Reproducible systems, made effortless")]
@@ -19,8 +21,31 @@ pub struct Cli {
     )]
     pub no_progress: bool,
 
+    /// How to report what happens: `human` for people, `json` for one event per line
+    #[arg(long, global = true, value_enum, default_value_t = Output::Human)]
+    pub output: Output,
+
+    /// Also record every event to this file
+    #[arg(long, global = true, value_name = "PATH")]
+    pub events_file: Option<PathBuf>,
+
     #[command(subcommand)]
     pub command: Command,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Output {
+    Human,
+    Json,
+}
+
+#[derive(Subcommand)]
+pub enum EventsCommand {
+    /// Check that a recorded events file is complete and well formed
+    Check {
+        /// The file `--events-file` wrote
+        file: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -45,10 +70,6 @@ pub enum Command {
         /// Packages to add
         #[arg(required = true)]
         packages: Vec<String>,
-
-        /// Report the result as JSON on stdout, for scripts
-        #[arg(long)]
-        json: bool,
     },
 
     /// Remove packages from your home-manager profile
@@ -56,10 +77,6 @@ pub enum Command {
         /// Packages to remove
         #[arg(required = true)]
         packages: Vec<String>,
-
-        /// Report the result as JSON on stdout, for scripts
-        #[arg(long)]
-        json: bool,
     },
 
     /// Inspect system health
@@ -67,6 +84,12 @@ pub enum Command {
 
     /// Repair configuration drift
     Repair,
+
+    /// Work with recorded events
+    Events {
+        #[command(subcommand)]
+        command: EventsCommand,
+    },
 
     /// Describe a failure code, such as LOCKED
     Explain {
@@ -91,14 +114,11 @@ pub enum Command {
 impl Cli {
     /// Whether output may be drawn in place.
     ///
-    /// `--no-progress` and `--json` are explicit requests for plain output; `CI` is honoured
-    /// because build systems set it and nobody is watching a CI log live.
+    /// `--no-progress` and `--output json` are explicit requests for plain output; `CI` is
+    /// honoured because build systems set it and nobody is watching a CI log live.
     pub fn draws_progress(&self) -> bool {
         !self.no_progress
-            && !matches!(
-                self.command,
-                Command::Install { json: true, .. } | Command::Remove { json: true, .. }
-            )
+            && self.output == Output::Human
             && !ci_asks_for_plain_output(std::env::var("CI").ok().as_deref())
     }
 }
@@ -175,20 +195,43 @@ mod tests {
     }
 
     #[test]
-    fn json_is_off_unless_it_is_asked_for() {
-        let cli = parse(&["mix", "install", "ripgrep"]);
-        assert!(matches!(cli.command, Command::Install { json: false, .. }));
-    }
-
-    #[test]
-    fn json_can_be_asked_for() {
-        let cli = parse(&["mix", "install", "--json", "ripgrep"]);
-        assert!(matches!(cli.command, Command::Install { json: true, .. }));
+    fn output_is_for_people_unless_json_is_asked_for() {
+        assert_eq!(parse(&["mix", "install", "ripgrep"]).output, Output::Human);
+        assert_eq!(
+            parse(&["mix", "--output", "json", "install", "ripgrep"]).output,
+            Output::Json
+        );
+        assert_eq!(
+            parse(&["mix", "install", "--output", "json", "ripgrep"]).output,
+            Output::Json
+        );
     }
 
     #[test]
     fn json_output_implies_plain_output() {
-        assert!(!parse(&["mix", "install", "--json", "ripgrep"]).draws_progress());
+        assert!(!parse(&["mix", "--output", "json", "install", "ripgrep"]).draws_progress());
+    }
+
+    #[test]
+    fn events_can_be_recorded_by_any_command() {
+        let cli = parse(&["mix", "doctor", "--events-file", "/tmp/events.ndjson"]);
+        assert_eq!(cli.events_file, Some(PathBuf::from("/tmp/events.ndjson")));
+    }
+
+    #[test]
+    fn a_recorded_file_is_checked_by_its_own_command() {
+        assert!(matches!(
+            parse(&["mix", "events", "check", "/tmp/events.ndjson"]).command,
+            Command::Events {
+                command: EventsCommand::Check { ref file }
+            } if file == &PathBuf::from("/tmp/events.ndjson")
+        ));
+    }
+
+    #[test]
+    fn the_old_json_flag_is_gone() {
+        assert!(Cli::try_parse_from(["mix", "install", "--json", "ripgrep"]).is_err());
+        assert!(Cli::try_parse_from(["mix", "remove", "--json", "ripgrep"]).is_err());
     }
 
     #[test]
@@ -197,25 +240,13 @@ mod tests {
 
         assert!(matches!(
             cli.command,
-            Command::Remove { ref packages, json: false, .. } if packages == &["ripgrep", "fd"]
+            Command::Remove { ref packages } if packages == &["ripgrep", "fd"]
         ));
     }
 
     #[test]
     fn remove_needs_at_least_one_package() {
         assert!(Cli::try_parse_from(["mix", "remove"]).is_err());
-    }
-
-    #[test]
-    fn remove_json_can_be_asked_for() {
-        let cli = parse(&["mix", "remove", "--json", "ripgrep"]);
-
-        assert!(matches!(cli.command, Command::Remove { json: true, .. }));
-    }
-
-    #[test]
-    fn remove_json_output_implies_plain_output() {
-        assert!(!parse(&["mix", "remove", "--json", "ripgrep"]).draws_progress());
     }
 
     #[test]

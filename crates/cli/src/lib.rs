@@ -24,6 +24,12 @@ pub async fn run() -> ExitCode {
     if let Command::Explain { code } = &cli.command {
         return explain_code(code);
     }
+    if let Command::Events {
+        command: cli::EventsCommand::Check { file },
+    } = &cli.command
+    {
+        return check_events(file);
+    }
 
     mix_ui::init_tracing(cli.verbose, cli.draws_progress());
 
@@ -59,49 +65,121 @@ pub async fn run() -> ExitCode {
             Box::new(|error| explain::remove::explain(error, packages))
         }
         Command::Doctor => Box::new(explain::doctor::explain),
-        Command::Repair | Command::Worker | Command::HomeFiles { .. } | Command::Explain { .. } => {
-            Box::new(explain::repair::explain)
-        }
+        Command::Repair
+        | Command::Worker
+        | Command::HomeFiles { .. }
+        | Command::Explain { .. }
+        | Command::Events { .. } => Box::new(explain::repair::explain),
     };
 
-    let exit = render::human::Exit::default();
+    let view = render::sinks::View {
+        output: cli.output,
+        events_file: cli.events_file.clone(),
+        verbose: cli.verbose,
+        exit: render::sinks::Exit::default(),
+    };
     let result = match &cli.command {
         Command::Bootstrap {
             mirror,
             mirror_key,
             force,
         } => {
-            commands::bootstrap::run(
-                mirror.as_deref(),
-                mirror_key.as_deref(),
-                *force,
-                cli.verbose,
-                &exit,
-            )
-            .await
+            commands::bootstrap::run(mirror.as_deref(), mirror_key.as_deref(), *force, &view).await
         }
-        Command::Install { packages, json } => commands::install::run(packages, *json, &exit).await,
-        Command::Remove { packages, json } => commands::remove::run(packages, *json, &exit).await,
-        Command::Doctor => commands::doctor::run(cli.verbose, &exit).await,
-        Command::Repair | Command::Worker | Command::HomeFiles { .. } | Command::Explain { .. } => {
-            commands::repair::run(cli.verbose, &exit).await
-        }
+        Command::Install { packages } => commands::install::run(packages, &view).await,
+        Command::Remove { packages } => commands::remove::run(packages, &view).await,
+        Command::Doctor => commands::doctor::run(&view).await,
+        Command::Repair
+        | Command::Worker
+        | Command::HomeFiles { .. }
+        | Command::Explain { .. }
+        | Command::Events { .. } => commands::repair::run(&view).await,
     };
 
-    let from_root = exit
+    if let Err(error) = &result
+        && view.exit.code().is_none()
+        && view.streams()
+    {
+        stream_the_failure(&cli.command, error, &view);
+    }
+    let from_root = view
+        .exit
         .code()
         .map(|code| ExitCode::from(u8::try_from(code).unwrap_or(u8::MAX)));
     match result {
         Ok(code) => from_root.unwrap_or(code),
         Err(e) => {
-            let message = explain(&e).message();
-            if cli.verbose > 0 {
-                mix_ui::fail_in_detail(&message, &*e);
-            } else {
-                mix_ui::fail(message);
+            if cli.output == cli::Output::Human {
+                let message = explain(&e).message();
+                if cli.verbose > 0 {
+                    mix_ui::fail_in_detail(&message, &*e);
+                } else {
+                    mix_ui::fail(message);
+                }
             }
             from_root.unwrap_or(ExitCode::FAILURE)
         }
+    }
+}
+
+fn stream_the_failure(command: &Command, error: &anyhow::Error, view: &render::sinks::View) {
+    use mix_events::v1::{
+        BootstrapRequest, DoctorRequest, InstallRequest, RemoveRequest, RepairRequest,
+        command::Request,
+    };
+
+    let Ok(sinks) = view.sinks(render::human::Reporters::silent()) else {
+        return;
+    };
+    let (key, request) = match command {
+        Command::Bootstrap { mirror, force, .. } => (
+            "bootstrap",
+            Request::Bootstrap(BootstrapRequest {
+                force: *force,
+                mirror: mirror.clone(),
+            }),
+        ),
+        Command::Install { packages } => (
+            "install",
+            Request::Install(InstallRequest {
+                packages: packages.clone(),
+            }),
+        ),
+        Command::Remove { packages } => (
+            "remove",
+            Request::Remove(RemoveRequest {
+                packages: packages.clone(),
+            }),
+        ),
+        Command::Doctor => ("doctor", Request::Doctor(DoctorRequest {})),
+        Command::Repair
+        | Command::Worker
+        | Command::HomeFiles { .. }
+        | Command::Explain { .. }
+        | Command::Events { .. } => ("repair", Request::Repair(RepairRequest {})),
+    };
+    let outbox = std::sync::Arc::new(mix_events::Outbox::new(
+        mix_shell::ops::bootstrap::request_id(),
+        || {},
+    ));
+    let mut tree = mix_events::Tree::new(
+        std::sync::Arc::clone(&outbox),
+        std::sync::Arc::new(|| None),
+        mix_events::Start::command(
+            key,
+            mix_events::v1::Command {
+                mix_version: env!("CARGO_PKG_VERSION").to_string(),
+                schema_minor: mix_events::SCHEMA_MINOR,
+                request: Some(request),
+            },
+        ),
+    );
+    let ending: mix_events::Ending = explain::fault_of(error).into();
+    let _ = tree.finish(mix_events::ROOT, ending.for_root(false));
+    drop(tree);
+    let mut sinks = sinks;
+    for envelope in outbox.drain() {
+        mix_shell::render::Render::envelope(&mut sinks, envelope);
     }
 }
 
@@ -130,6 +208,34 @@ fn explain_code(name: &str) -> ExitCode {
         None => {
             eprintln!("`{name}` is not a code `mix` uses. Codes look like LOCKED or NETWORK.");
             ExitCode::from(2)
+        }
+    }
+}
+
+fn check_events(path: &std::path::Path) -> ExitCode {
+    let captured = std::fs::File::open(path)
+        .map_err(|error| error.to_string())
+        .and_then(|file| {
+            mix_events::capture::read(std::io::BufReader::new(file))
+                .map_err(|broken| broken.to_string())
+        });
+    let captured = match captured {
+        Ok(captured) => captured,
+        Err(reason) => {
+            eprintln!("{}: {reason}", path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    match mix_events::validate(captured.envelopes.iter()) {
+        Ok(validated) => {
+            for entry in &validated.entries {
+                println!("{} {:?}", entry.path, entry.outcome);
+            }
+            ExitCode::SUCCESS
+        }
+        Err(violation) => {
+            eprintln!("{}: {violation:?}", path.display());
+            ExitCode::FAILURE
         }
     }
 }

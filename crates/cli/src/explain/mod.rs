@@ -109,6 +109,30 @@ pub(crate) fn core_error(
     render::render_error(error, &Context { command, action })
 }
 
+pub(crate) fn fault_of(error: &anyhow::Error) -> mix_events::Fault {
+    use mix_events::Diagnose;
+
+    if let Some(error) = error.downcast_ref::<mix_rpc::Error>() {
+        return rpc_fault(error);
+    }
+    if let Some(error) = error.downcast_ref::<mix_shell::ops::bootstrap::Error>() {
+        return error.fault();
+    }
+    if let Some(error) = error.downcast_ref::<mix_shell::ops::remove::Error>() {
+        return error.fault();
+    }
+    if let Some(error) = error.downcast_ref::<mix_shell::profile::change::Error>() {
+        return error.fault();
+    }
+    if let Some(error) = error.downcast_ref::<mix_shell::target::Error>() {
+        return error.fault();
+    }
+    if let Some(error) = error.downcast_ref::<mix_core::Error>() {
+        return error.fault();
+    }
+    mix_core::diagnose::failed(mix_events::v1::Code::Internal, error.to_string(), None)
+}
+
 pub(crate) fn failed(action: &dyn Display) -> Diagnostic {
     Diagnostic::hinting(
         format!("couldn't {action}"),

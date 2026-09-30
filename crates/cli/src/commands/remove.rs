@@ -4,22 +4,17 @@ use mix_shell::ops::remove::Error;
 
 pub async fn run(
     packages: &[String],
-    json: bool,
-    exit: &crate::render::human::Exit,
+    view: &crate::render::sinks::View,
 ) -> anyhow::Result<ExitCode> {
     let (_lock, user_config) = super::acquire_profile().map_err(Error::from)?;
     let reporters = mix_ui::reporters();
     let ctx = mix_shell::Context::new(mix_exec::Scope::root())
         .with_user(Some(user_config))
-        .with_render(super::human(
-            crate::render::human::Reporters {
-                downloads: reporters.downloads,
-                steps: reporters.passing_steps,
-                activity: reporters.activity,
-            },
-            json,
-            exit,
-        ))
+        .with_render(view.sinks(crate::render::human::Reporters {
+            downloads: reporters.downloads,
+            steps: reporters.passing_steps,
+            activity: reporters.activity,
+        })?)
         .with_policy(super::policy())
         .with_host(super::host_config());
     let _watch = crate::controls::watch(
@@ -29,10 +24,7 @@ pub async fn run(
         crate::controls::Side::Client,
     );
 
-    let removed = mix_shell::ops::remove::remove(&ctx, packages).await?;
+    mix_shell::ops::remove::remove(&ctx, packages).await?;
 
-    if json {
-        println!("{}", removed.to_json());
-    }
     Ok(ExitCode::SUCCESS)
 }

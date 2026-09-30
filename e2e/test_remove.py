@@ -1,8 +1,6 @@
-import json
-
 import pytest
 
-from support.container import create_user
+from support.container import create_user, root_result
 from support.mirror import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS, bootstrap_as
 
 USER = MIRROR_TEST_USERS[0]
@@ -58,18 +56,21 @@ def test_remove_is_script_friendly(container, mock_nix_server, mirror_cache):
     _bootstrap_with_the_test_package(container, mock_nix_server, mirror_cache)
 
     result = container.exec(
-        "mix", "remove", "--json", INSTALL_TEST_PACKAGE, "notinstalled", user=USER
+        "mix", "--output", "json", "remove", INSTALL_TEST_PACKAGE, "notinstalled", user=USER
     )
 
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == {
-        "removed": [INSTALL_TEST_PACKAGE],
-        "skipped": ["notinstalled"],
-    }
+    finished = root_result(result.stdout)
+    assert finished["remove"]["removed"] == [INSTALL_TEST_PACKAGE]
+    assert finished["remove"]["skipped"] == ["notinstalled"]
 
-    again = container.exec("mix", "remove", "--json", INSTALL_TEST_PACKAGE, user=USER)
+    again = container.exec(
+        "mix", "--output", "json", "remove", INSTALL_TEST_PACKAGE, user=USER
+    )
     assert again.returncode == 0, again.stderr
-    assert json.loads(again.stdout) == {"removed": [], "skipped": [INSTALL_TEST_PACKAGE]}
+    finished = root_result(again.stdout)
+    assert finished["remove"].get("removed", []) == []
+    assert finished["remove"]["skipped"] == [INSTALL_TEST_PACKAGE]
 
     plain = container.exec("mix", "--no-progress", "remove", INSTALL_TEST_PACKAGE, user=USER)
     assert plain.returncode == 0, plain.stderr

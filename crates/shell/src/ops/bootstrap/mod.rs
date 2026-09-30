@@ -36,7 +36,7 @@ impl Environment {
     }
 }
 
-pub(crate) fn request_id() -> String {
+pub fn request_id() -> String {
     uuid::Uuid::now_v7().to_string()
 }
 

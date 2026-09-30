@@ -25,21 +25,16 @@ impl From<Refusal> for Error {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct Removed {
     pub removed: Vec<String>,
     pub skipped: Vec<String>,
-    #[serde(skip)]
     pub restored: Option<Source>,
 }
 
 impl Removed {
     pub fn changed_nothing(&self) -> bool {
         self.removed.is_empty()
-    }
-
-    pub fn to_json(&self) -> String {
-        serde_json::to_string(self).expect("Removed always serializes")
     }
 }
 
@@ -186,27 +181,5 @@ mod tests {
         let err = Error::Protected(vec!["git".to_string(), "curl".to_string()]);
 
         assert_eq!(err.to_string(), "git, curl cannot be removed");
-    }
-
-    #[test]
-    fn the_json_report_names_both_sides_of_the_request() {
-        let removed = Removed {
-            removed: vec!["ripgrep".to_string(), "fd".to_string()],
-            skipped: vec!["bat".to_string()],
-            restored: None,
-        };
-
-        assert_eq!(
-            removed.to_json(),
-            r#"{"removed":["ripgrep","fd"],"skipped":["bat"]}"#
-        );
-    }
-
-    #[test]
-    fn the_json_report_keeps_both_keys_when_nothing_was_removed() {
-        assert_eq!(
-            Removed::default().to_json(),
-            r#"{"removed":[],"skipped":[]}"#
-        );
     }
 }

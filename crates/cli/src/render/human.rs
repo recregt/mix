@@ -28,27 +28,7 @@ impl Reporters {
     }
 }
 
-#[derive(Clone, Default)]
-pub struct Exit(Arc<std::sync::Mutex<Option<u32>>>);
-
-impl Exit {
-    pub fn code(&self) -> Option<u32> {
-        *self
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    fn record(&self, code: u32) {
-        *self
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(code);
-    }
-}
-
 pub struct Human {
-    exit: Exit,
     reporters: Reporters,
     results: bool,
     verbose: bool,
@@ -62,7 +42,6 @@ pub struct Human {
 impl Human {
     pub fn new(reporters: Reporters) -> Self {
         Self {
-            exit: Exit::default(),
             reporters,
             results: true,
             verbose: false,
@@ -72,11 +51,6 @@ impl Human {
             actions: HashSet::new(),
             printed: HashSet::new(),
         }
-    }
-
-    pub fn exit_to(mut self, exit: &Exit) -> Self {
-        self.exit = exit.clone();
-        self
     }
 
     pub fn verbose(mut self, verbose: bool) -> Self {
@@ -122,7 +96,6 @@ impl Human {
                 _ => {}
             },
             Event::NodeFinished(node) if node.id == ROOT => {
-                self.exit.record(node.exit_code);
                 super::results::finished(&node, self.results, self.verbose);
             }
             Event::NodeFinished(node) if self.actions.remove(&node.id) => {
