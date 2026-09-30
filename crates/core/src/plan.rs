@@ -1,6 +1,8 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
 
+use generativity::Id;
+pub use generativity::{Guard, make_guard};
 use mix_events::v1::{
     Action as ActionNode, Cancellation, Code, CommandDetail, Diagnostic, IntegrityDetail, IoDetail,
     NetworkDetail, Operation, Plan, Rollback, Severity, Step, StepsDetail, diagnostic::Detail,
@@ -28,14 +30,49 @@ pub enum Input {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum Next {
+pub enum Next<'id> {
     Observe(Vec<Query>),
     Perform(Action),
-    Finished(Closed),
+    Finished(Closed<'id>),
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct Closed(());
+pub struct Closed<'id>(Id<'id>);
+
+pub struct Session<'id, 'r> {
+    runner: &'r mut Runner,
+    id: Id<'id>,
+}
+
+impl<'id, 'r> Session<'id, 'r> {
+    pub fn step(&mut self, tree: &mut Tree, input: Option<Input>) -> Next<'id> {
+        self.runner.step(self.id, tree, input)
+    }
+
+    pub fn report(self, _: Closed<'id>) -> &'r mut Report {
+        &mut self.runner.report
+    }
+
+    pub fn current_node(&self) -> Option<NodeId> {
+        self.runner.current_node()
+    }
+
+    pub fn rolling_back(&self) -> bool {
+        self.runner.rolling_back()
+    }
+
+    pub fn shielded(&self) -> bool {
+        self.runner.shielded()
+    }
+
+    pub fn in_doubt(&mut self, undo: Vec<Action>) {
+        self.runner.in_doubt(undo);
+    }
+
+    pub fn stop(&mut self, cause: Cancellation) {
+        self.runner.stop(cause);
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
@@ -149,8 +186,11 @@ impl Runner {
         }
     }
 
-    pub fn report(&mut self, _: Closed) -> &mut Report {
-        &mut self.report
+    pub fn brand<'id>(&mut self, guard: Guard<'id>) -> Session<'id, '_> {
+        Session {
+            runner: self,
+            id: guard.into(),
+        }
     }
 
     pub fn independent(mut self) -> Self {
@@ -180,7 +220,7 @@ impl Runner {
         }
     }
 
-    fn act(&mut self, tree: &mut Tree, parent: NodeId, action: Action) -> Next {
+    fn act<'id>(&mut self, tree: &mut Tree, parent: NodeId, action: Action) -> Next<'id> {
         self.performed += 1;
         let (operation, subject) = describe(&action);
         self.acting = Some(
@@ -213,7 +253,7 @@ impl Runner {
         finish(tree, node, ending);
     }
 
-    pub fn current_node(&self) -> Option<NodeId> {
+    fn current_node(&self) -> Option<NodeId> {
         if self.acting.is_some() {
             return self.acting;
         }
@@ -227,11 +267,11 @@ impl Runner {
         }
     }
 
-    pub fn rolling_back(&self) -> bool {
+    fn rolling_back(&self) -> bool {
         matches!(self.phase, Phase::RollingBack { .. })
     }
 
-    pub fn shielded(&self) -> bool {
+    fn shielded(&self) -> bool {
         match &self.phase {
             Phase::RollingBack { .. } | Phase::Committing { .. } => true,
             Phase::Executing { step, .. } => self.steps[*step].shielded(),
@@ -239,7 +279,7 @@ impl Runner {
         }
     }
 
-    pub fn in_doubt(&mut self, undo: Vec<Action>) {
+    fn in_doubt(&mut self, undo: Vec<Action>) {
         if let Phase::Executing { step, .. } = self.phase
             && !undo.is_empty()
         {
@@ -247,11 +287,11 @@ impl Runner {
         }
     }
 
-    pub fn stop(&mut self, cause: Cancellation) {
+    fn stop(&mut self, cause: Cancellation) {
         self.stop.get_or_insert(cause);
     }
 
-    pub fn step(&mut self, tree: &mut Tree, input: Option<Input>) -> Next {
+    fn step<'id>(&mut self, id: Id<'id>, tree: &mut Tree, input: Option<Input>) -> Next<'id> {
         let mut input = input;
         loop {
             match std::mem::replace(&mut self.phase, Phase::Closing) {
@@ -528,11 +568,11 @@ impl Runner {
                     finish(tree, self.plan, ending);
                     self.report.verdict = verdict;
                     self.phase = Phase::Closed;
-                    return Next::Finished(Closed(()));
+                    return Next::Finished(Closed(id));
                 }
                 Phase::Closed => {
                     self.phase = Phase::Closed;
-                    return Next::Finished(Closed(()));
+                    return Next::Finished(Closed(id));
                 }
             }
         }

@@ -13,7 +13,7 @@ use crate::paths::{
     DEFAULT_PROFILE_NIX_ENV, NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_UNIT, POLICY_FILE,
     STATE_FILE, mix_state_dir,
 };
-use crate::plan::{Input, Next, Report, Runner, StepOutcome};
+use crate::plan::{Input, Next, Report, Runner, StepOutcome, make_guard};
 use crate::policy::Policy;
 use crate::privilege::InvokingUser;
 
@@ -89,6 +89,8 @@ fn user(name: &str, uid: u32) -> UserConfig {
 }
 
 fn drive(world: &mut World, mut runner: Runner) -> Report {
+    make_guard!(guard);
+    let mut runner = runner.brand(guard);
     let outbox = Arc::new(Outbox::new("request", || {}));
     let mut tree = Tree::new(
         outbox,

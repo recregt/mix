@@ -80,7 +80,7 @@ fn repair(
     let mut journal: Vec<Record> = Vec::new();
     let scope = mix_exec::Scope::root();
     let stopped: mix_events::Stopped = Arc::new(|| None);
-    let closed = rt.block_on(drive(
+    let report = rt.block_on(drive(
         &mut runner,
         &mut tree,
         performer,
@@ -92,7 +92,7 @@ fn repair(
     let _ = tree.finish(ROOT, Ending::succeeded());
     drop(tree);
     divan::black_box(outbox.drain());
-    divan::black_box(runner.report(closed));
+    divan::black_box(report);
     runner
 }
 

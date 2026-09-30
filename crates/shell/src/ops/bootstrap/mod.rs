@@ -219,7 +219,7 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
     }
     let mut journal = FileJournal::create(journals, &request).map_err(error_from)?;
     let mut runner = Runner::new(ROOT, steps(&settings));
-    let closed = drive(
+    let report = drive(
         &mut runner,
         &mut tree,
         &mut performer,
@@ -229,7 +229,6 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
         &mut bridge,
     )
     .await;
-    let report = runner.report(closed);
     let ending = match &report.verdict {
         Verdict::Succeeded => Ending::succeeded(),
         Verdict::Failed { failure, .. } => Ending::failed(diagnostic(failure)),

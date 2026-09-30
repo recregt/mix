@@ -11,7 +11,7 @@ use mix_core::action::{Action, Fact, Failure, Kind, Outcome, PathFacts, Performe
 use mix_core::journal::Record;
 use mix_core::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
 use mix_core::paths::mix_state_dir;
-use mix_core::plan::{Closed, Input, Next, Runner};
+use mix_core::plan::{Input, Next, Report, Runner, make_guard};
 use mix_core::privilege::InvokingUser;
 use mix_events::v1::node_progress::Progress;
 use mix_events::v1::{Bytes, Cancellation};
@@ -404,15 +404,17 @@ pub fn stopped_by(scope: &Scope) -> Stopped {
     })
 }
 
-pub async fn drive(
-    runner: &mut Runner,
+pub async fn drive<'r>(
+    runner: &'r mut Runner,
     tree: &mut Tree,
     performer: &mut Performer,
     scope: &Scope,
     stopped: &Stopped,
     journal: &mut dyn Journal,
     observer: &mut dyn Observer,
-) -> Closed {
+) -> &'r mut Report {
+    make_guard!(guard);
+    let mut runner = runner.brand(guard);
     let mut input = None;
     let mut seq = 0;
     let mut ended = false;
@@ -497,7 +499,7 @@ pub async fn drive(
                 if !ended {
                     keep(journal, &Record::Ended);
                 }
-                return closed;
+                return runner.report(closed);
             }
         }
     }
@@ -608,7 +610,7 @@ mod tests {
         root: &Path,
         last: &'static str,
         stopped: Stopped,
-    ) -> (mix_core::plan::Report, Vec<mix_events::v1::Envelope>) {
+    ) -> (Report, Vec<mix_events::v1::Envelope>) {
         let outbox = Arc::new(Outbox::new("request", || {}));
         let mut tree = Tree::new(
             outbox.clone(),
@@ -619,7 +621,7 @@ mod tests {
         let mut performer = Performer::new(Files::open(root, "r1").unwrap());
 
         let mut journal = Vec::new();
-        let closed = drive(
+        let report = drive(
             &mut runner,
             &mut tree,
             &mut performer,
@@ -631,7 +633,8 @@ mod tests {
         .await;
         assert_eq!(journal.last(), Some(&Record::Ended));
         drop(tree);
-        (runner.report(closed).clone(), outbox.drain())
+        let report = report.clone();
+        (report, outbox.drain())
     }
 
     #[tokio::test]

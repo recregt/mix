@@ -1,0 +1,11 @@
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> tests/ui/forged_token.rs:10:20
+   |
+10 |     session.report(Closed(unimplemented!()));
+   |                    ^^^^^^
+   |
+note: constructor is not visible here due to private fields
+  --> src/plan.rs
+   |
+   | pub struct Closed<'id>(Id<'id>);
+   |                        ^^^^^^^ private field

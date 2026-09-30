@@ -141,7 +141,7 @@ async fn put_back(
         ),
     );
     let mut runner = Runner::new(ROOT, health::repair_steps(items, request)).independent();
-    let closed = drive(
+    let report = drive(
         &mut runner,
         &mut tree,
         performer,
@@ -151,7 +151,6 @@ async fn put_back(
         &mut (),
     )
     .await;
-    let report = runner.report(closed);
     let ending = match &report.verdict {
         Verdict::Succeeded => Ending::succeeded(),
         Verdict::Failed { failure, .. } => Ending::failed(diagnostic(failure)),

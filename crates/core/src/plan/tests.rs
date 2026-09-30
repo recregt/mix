@@ -184,6 +184,8 @@ fn drive(world: &mut World, steps: Vec<Box<dyn StepSpec>>, script: Script) -> Ru
 }
 
 fn drive_runner(world: &mut World, mut runner: Runner, script: Script) -> Run {
+    make_guard!(guard);
+    let mut runner = runner.brand(guard);
     let outbox = Arc::new(Outbox::new("request", || {}));
     let mut tree = Tree::new(
         outbox.clone(),
@@ -551,6 +553,8 @@ fn a_commit_that_fails_still_succeeds_and_warns() {
         Start::command("bootstrap", Command::default()),
     );
     let mut runner = Runner::new(ROOT, bootstrap_like());
+    make_guard!(guard);
+    let mut runner = runner.brand(guard);
     let mut input = None;
     let report = loop {
         match runner.step(&mut tree, input.take()) {
@@ -705,6 +709,8 @@ fn answer(
     observe: impl Fn(&World, &[Query]) -> Result<Vec<Fact>, Failure>,
     mut fail: impl FnMut(&Action) -> bool,
 ) -> (Report, Vec<(Action, bool)>) {
+    make_guard!(guard);
+    let mut runner = runner.brand(guard);
     let outbox = Arc::new(Outbox::new("request", || {}));
     let mut tree = Tree::new(
         outbox,
@@ -804,6 +810,8 @@ fn crashing_run(
         Start::command("bootstrap", Command::default()),
     );
     let mut runner = Runner::new(ROOT, bootstrap_like());
+    make_guard!(guard);
+    let mut runner = runner.brand(guard);
     let mut records = vec![Record::Began {
         request: "r".into(),
     }];
@@ -904,6 +912,8 @@ fn an_action_that_failed_after_taking_effect_is_undone_as_one_in_doubt() {
             Start::command("bootstrap", Command::default()),
         );
         let mut runner = Runner::new(ROOT, bootstrap_like());
+        make_guard!(guard);
+        let mut runner = runner.brand(guard);
         let mut input = None;
         let mut forward = 0;
         let report = loop {
@@ -950,7 +960,9 @@ fn a_finished_plan_stepped_again_stays_finished() {
         Arc::new(|| None),
         Start::command("bootstrap", Command::default()),
     );
-    let mut runner = Runner::new(ROOT, bootstrap_like());
+    let mut plan = Runner::new(ROOT, bootstrap_like());
+    make_guard!(guard);
+    let mut runner = plan.brand(guard);
     let mut input = None;
     let closed = loop {
         match runner.step(&mut tree, input.take()) {
@@ -966,12 +978,18 @@ fn a_finished_plan_stepped_again_stays_finished() {
     };
     let events = outbox.drain().len();
 
+    let Next::Finished(_) = runner.step(&mut tree, None) else {
+        panic!("a finished plan stays finished");
+    };
+    let first = runner.report(closed).clone();
+    make_guard!(later);
+    let mut runner = plan.brand(later);
     let Next::Finished(again) = runner.step(&mut tree, None) else {
         panic!("a finished plan stays finished");
     };
+
     assert_eq!(outbox.drain().len(), 0);
     assert!(events > 0);
-    let first = runner.report(closed).clone();
     assert_eq!(first.verdict, Verdict::Succeeded);
     assert_eq!(runner.report(again), &first);
 }
