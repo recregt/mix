@@ -226,7 +226,7 @@ async fn activate(
         .map_err(core_failure)?;
     let new = current(user).unwrap_or(predicted);
     if let Err(error) =
-        profile::activate_generation(user, &generation, &context.activity, scope).await
+        profile::activate_generation(user, &generation, &context.activity, &scope.shielded()).await
     {
         let shielded = scope.shielded();
         if previous != Some(new) {

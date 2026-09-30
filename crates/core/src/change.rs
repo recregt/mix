@@ -282,6 +282,10 @@ impl StepSpec for Record {
         "record the change".into()
     }
 
+    fn shielded(&self) -> bool {
+        true
+    }
+
     fn queries(&self) -> Vec<Query> {
         Vec::new()
     }
