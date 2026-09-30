@@ -478,3 +478,66 @@ fn repairing_one_user_leaves_the_other_alone() {
         before
     );
 }
+
+#[test]
+fn every_finding_and_category_survive_the_event_stream() {
+    let findings = [
+        Finding::Missing,
+        Finding::Unreadable {
+            kind: std::io::ErrorKind::PermissionDenied,
+        },
+        Finding::NotADirectory,
+        Finding::Mode {
+            actual: 0o600,
+            expected: 0o644,
+        },
+        Finding::Owner {
+            actual: (0, 0),
+            expected: (1000, 1000),
+        },
+        Finding::ContentDrift,
+        Finding::GroupMissing,
+        Finding::GroupGid {
+            actual: 1,
+            expected: 30000,
+        },
+        Finding::NotAMember { group: "mix-users" },
+        Finding::NoSuchUser,
+        Finding::UserMissing,
+        Finding::UserIds {
+            actual: (1, 2),
+            expected: (30001, 30000),
+        },
+        Finding::UnitMissing,
+        Finding::UnitDrift,
+        Finding::UnitInactive,
+        Finding::RuntimeMissing,
+    ];
+    for finding in findings {
+        let listed = match finding {
+            Finding::Missing
+            | Finding::Unreadable { .. }
+            | Finding::NotADirectory
+            | Finding::Mode { .. }
+            | Finding::Owner { .. }
+            | Finding::ContentDrift
+            | Finding::GroupMissing
+            | Finding::GroupGid { .. }
+            | Finding::NotAMember { .. }
+            | Finding::NoSuchUser
+            | Finding::UserMissing
+            | Finding::UserIds { .. }
+            | Finding::UnitMissing
+            | Finding::UnitDrift
+            | Finding::UnitInactive
+            | Finding::RuntimeMissing => finding,
+        };
+        assert_eq!(wire::finding_from(&wire::finding(listed)), Some(finding));
+    }
+    for category in crate::models::Category::ALL {
+        assert_eq!(
+            wire::category_from(wire::category(category)),
+            Some(category)
+        );
+    }
+}

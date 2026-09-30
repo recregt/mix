@@ -31,6 +31,7 @@ impl Reporters {
 pub struct Human {
     reporters: Reporters,
     results: bool,
+    verbose: bool,
     spans: HashMap<NodeId, tracing::Span>,
     titles: HashMap<NodeId, String>,
     received: HashMap<NodeId, u64>,
@@ -43,12 +44,18 @@ impl Human {
         Self {
             reporters,
             results: true,
+            verbose: false,
             spans: HashMap::new(),
             titles: HashMap::new(),
             received: HashMap::new(),
             actions: HashSet::new(),
             printed: HashSet::new(),
         }
+    }
+
+    pub fn verbose(mut self, verbose: bool) -> Self {
+        self.verbose = verbose;
+        self
     }
 
     pub fn without_results(mut self) -> Self {
@@ -89,7 +96,7 @@ impl Human {
                 _ => {}
             },
             Event::NodeFinished(node) if node.id == ROOT => {
-                super::results::finished(&node, self.results);
+                super::results::finished(&node, self.results, self.verbose);
             }
             Event::NodeFinished(node) if self.actions.remove(&node.id) => {
                 let span = self.spans.remove(&node.id);

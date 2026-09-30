@@ -6,14 +6,22 @@
 //! two commands cannot drift apart. The words are `mix-cli`'s.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use mix_core::action::Failure;
-use mix_core::health;
+use mix_core::health::{self, wire};
 use mix_core::models::Category;
+use mix_events::v1::{
+    Command, DoctorRequest, DoctorResult, Inspection, InspectionReport, InspectionResult, command,
+    node_finished, node_started,
+};
+use mix_events::{Ending, Outbox, ROOT, Start, Tree};
 
 use crate::Context;
-use crate::drive::Performer;
+use crate::drive::{Observer, Performer, stopped_by};
 use crate::effect::files::Files;
+use crate::ops::bootstrap::request_id;
+use crate::render::Relay;
 use crate::target::Finding;
 
 pub struct HealthReport {
@@ -32,6 +40,21 @@ impl HealthReport {
 pub async fn audit(ctx: &Context) -> Vec<HealthReport> {
     tracing::info!("auditing managed environment");
     let items = mix_core::models::targets(ctx.user.as_ref(), &ctx.policy);
+    let outbox = Arc::new(Outbox::new(request_id(), || {}));
+    let mut observer = Relay::new(Arc::clone(&outbox), Arc::clone(&ctx.render));
+    let mut tree = Tree::new(
+        outbox,
+        stopped_by(&ctx.scope),
+        Start::command(
+            "doctor",
+            Command {
+                mix_version: env!("CARGO_PKG_VERSION").to_string(),
+                schema_minor: mix_events::SCHEMA_MINOR,
+                request: Some(command::Request::Doctor(DoctorRequest {})),
+            },
+        )
+        .planned(items.iter().map(|target| target.label().into_owned())),
+    );
     let mut performer = match Files::open(Path::new("/"), "audit") {
         Ok(files) => Some(Performer::new(files)),
         Err(error) => {
@@ -56,12 +79,47 @@ pub async fn audit(ctx: &Context) -> Vec<HealthReport> {
         if let Some(finding) = &finding {
             tracing::debug!("unhealthy: {name}: {finding:?}");
         }
+        if let Ok(node) = tree.start(
+            ROOT,
+            Start::new(
+                name.clone(),
+                node_started::Kind::Inspection(Inspection {
+                    target: name.clone(),
+                    category: wire::category(target.category()) as i32,
+                }),
+            ),
+        ) {
+            let _ = tree.finish(
+                node,
+                Ending::succeeded().with_result(node_finished::Result::Inspection(
+                    InspectionResult {
+                        finding: finding.map(wire::finding),
+                    },
+                )),
+            );
+        }
         reports.push(HealthReport {
             name,
             category: target.category(),
             finding,
         });
     }
+    let result = DoctorResult {
+        reports: reports
+            .iter()
+            .map(|report| InspectionReport {
+                target: report.name.clone(),
+                category: wire::category(report.category) as i32,
+                finding: report.finding.map(wire::finding),
+            })
+            .collect(),
+    };
+    let _ = tree.finish(
+        ROOT,
+        Ending::succeeded().with_result(node_finished::Result::Doctor(result)),
+    );
+    drop(tree);
+    observer.flush();
     reports
 }
 
@@ -133,5 +191,38 @@ mod tests {
         {
             assert_eq!(report.healthy(), report.finding.is_none());
         }
+    }
+
+    struct Recorded(std::sync::Arc<std::sync::Mutex<Vec<mix_events::v1::Envelope>>>);
+
+    impl crate::render::Render for Recorded {
+        fn envelope(&mut self, envelope: mix_events::v1::Envelope) {
+            self.0.lock().unwrap().push(envelope);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_audit_is_one_valid_tree_with_a_node_per_target() {
+        let cfg = user_config();
+        let recorded = std::sync::Arc::default();
+        let ctx = Context::new(mix_exec::Scope::root())
+            .with_user(Some(cfg.clone()))
+            .with_render(Recorded(std::sync::Arc::clone(&recorded)));
+
+        let reports = audit(&ctx).await;
+
+        let envelopes = recorded.lock().unwrap();
+        assert!(mix_events::validate(envelopes.iter()).is_ok());
+        let inspected = envelopes
+            .iter()
+            .filter(|envelope| {
+                matches!(
+                    &envelope.event,
+                    Some(mix_events::v1::envelope::Event::NodeStarted(started))
+                        if matches!(started.kind, Some(node_started::Kind::Inspection(_)))
+                )
+            })
+            .count();
+        assert_eq!(inspected, reports.len());
     }
 }

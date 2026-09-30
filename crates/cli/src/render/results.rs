@@ -1,13 +1,16 @@
+use mix_core::Category;
+use mix_core::health::wire;
 use mix_core::paths::PROFILE_SNIPPET_DEST;
 use mix_events::v1::diagnostic::Detail;
 use mix_events::v1::node_finished::Result;
-use mix_events::v1::{NodeFinished, RepairReport, Status};
+use mix_events::v1::{InspectionReport, NodeFinished, RepairReport, Status};
+use mix_shell::ops::doctor::HealthReport;
 use mix_shell::profile::state::Source;
 
 use crate::explain::change;
 use crate::explain::target::unfixable;
 
-pub(super) fn finished(node: &NodeFinished, printed: bool) {
+pub(super) fn finished(node: &NodeFinished, printed: bool, verbose: bool) {
     let Some(result) = &node.result else {
         return;
     };
@@ -20,6 +23,7 @@ pub(super) fn finished(node: &NodeFinished, printed: bool) {
             ));
         }
         Result::Repair(repair) => repaired(&repair.reports, node.status() == Status::Cancelled),
+        Result::Doctor(doctor) => audited(&doctor.reports, verbose),
         Result::Install(install) => {
             reset(install.restored);
             if printed {
@@ -97,5 +101,47 @@ fn why(failure: &mix_events::v1::Diagnostic) -> String {
             }
         }
         _ => failure.message.clone(),
+    }
+}
+
+fn audited(inspected: &[InspectionReport], verbose: bool) {
+    let reports: Vec<HealthReport> = inspected
+        .iter()
+        .filter_map(|report| {
+            Some(HealthReport {
+                name: report.target.clone(),
+                category: wire::category_from(report.category())?,
+                finding: match &report.finding {
+                    Some(finding) => Some(wire::finding_from(finding)?),
+                    None => None,
+                },
+            })
+        })
+        .collect();
+    for category in Category::ALL {
+        let members: Vec<&HealthReport> = reports
+            .iter()
+            .filter(|report| report.category == category)
+            .collect();
+        if members.is_empty() {
+            continue;
+        }
+        if members.iter().all(|report| report.healthy()) && !verbose {
+            mix_ui::ok(format!("{} ({} checks)", category.label(), members.len()));
+            continue;
+        }
+        mix_ui::header(category.label());
+        for report in members {
+            if report.healthy() {
+                mix_ui::ok(&report.name);
+                continue;
+            }
+            mix_ui::fail_about(&report.name, &crate::explain::doctor::check(report));
+        }
+    }
+    if reports.iter().all(HealthReport::healthy) {
+        mix_ui::ok("System health is intact.");
+    } else {
+        mix_ui::fail(crate::explain::doctor::unhealthy(&reports).message());
     }
 }
