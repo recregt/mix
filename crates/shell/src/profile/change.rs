@@ -5,7 +5,7 @@ use mix_core::action::Failure;
 use mix_core::change::{Change, NewerList, Unrenderable};
 use mix_core::models::UserConfig;
 use mix_core::plan::{Runner, Verdict, diagnostic};
-use mix_events::v1::{Command, command};
+use mix_events::v1::{Command, InstallResult, RemoveResult, command, node_finished};
 use mix_events::{Ending, Outbox, ROOT, Start, Tree};
 
 use crate::Context;
@@ -13,7 +13,7 @@ use crate::drive::{Journal, Observer, Performer, drive, stopped_by};
 use crate::effect::files::Files;
 use crate::effect::generations::ProfileContext;
 use crate::ops::bootstrap::request_id;
-use crate::profile::state::{self, Invalid, Settled};
+use crate::profile::state::{self, Invalid, Settled, Source};
 use crate::render::Relay;
 
 #[derive(Debug, thiserror::Error)]
@@ -79,6 +79,22 @@ impl Verb {
         }
     }
 
+    fn result(&self, change: &Change) -> node_finished::Result {
+        let reset = change.source == Source::Fresh;
+        match self {
+            Verb::Install => node_finished::Result::Install(InstallResult {
+                added: change.changed.clone(),
+                skipped: change.skipped.clone(),
+                restored: reset,
+            }),
+            Verb::Remove => node_finished::Result::Remove(RemoveResult {
+                removed: change.changed.clone(),
+                skipped: change.skipped.clone(),
+                restored: reset,
+            }),
+        }
+    }
+
     fn key(&self) -> &'static str {
         match self {
             Verb::Install => "install",
@@ -96,21 +112,10 @@ pub async fn run(
     journal: &mut dyn Journal,
 ) -> Result<()> {
     let steps = mix_core::change::steps(&cfg.user, change, verb.label())?;
-    if steps.is_empty() {
-        return Ok(());
-    }
     let scope = &ctx.scope;
     let request = request_id();
-    let files = Files::open(Path::new("/"), &request).map_err(|source| mix_core::Error::Io {
-        path: "/".into(),
-        source,
-    })?;
-    let mut performer = Performer::new(files).with_profile(ProfileContext {
-        mirror: ctx.mirror().map(str::to_string),
-        host: ctx.host.clone(),
-    });
-    let outbox = Arc::new(Outbox::new(request, || {}));
-    let mut bridge = Relay::new(Arc::clone(&outbox), Arc::clone(&ctx.render));
+    let outbox = Arc::new(Outbox::new(request.clone(), || {}));
+    let mut observer = Relay::new(Arc::clone(&outbox), Arc::clone(&ctx.render));
     let stopped = stopped_by(scope);
     let mut tree = Tree::new(
         outbox,
@@ -124,25 +129,39 @@ pub async fn run(
             },
         ),
     );
-    let mut runner = Runner::new(ROOT, steps);
-    let report = drive(
-        &mut runner,
-        &mut tree,
-        &mut performer,
-        scope,
-        &stopped,
-        journal,
-        &mut bridge,
-    )
-    .await;
-    let (ending, outcome) = match &report.verdict {
-        Verdict::Succeeded => (Ending::succeeded(), Ok(())),
-        Verdict::Failed { failure, .. } => (
-            Ending::failed(diagnostic(failure)),
-            Err(error_of(failure.clone())),
-        ),
+    let verdict = if steps.is_empty() {
+        Verdict::Succeeded
+    } else {
+        let files =
+            Files::open(Path::new("/"), &request).map_err(|source| mix_core::Error::Io {
+                path: "/".into(),
+                source,
+            })?;
+        let mut performer = Performer::new(files).with_profile(ProfileContext {
+            mirror: ctx.mirror().map(str::to_string),
+            host: ctx.host.clone(),
+        });
+        let mut runner = Runner::new(ROOT, steps);
+        drive(
+            &mut runner,
+            &mut tree,
+            &mut performer,
+            scope,
+            &stopped,
+            journal,
+            &mut observer,
+        )
+        .await
+        .verdict
+        .clone()
+    };
+    let (ending, outcome) = match verdict {
+        Verdict::Succeeded => (Ending::succeeded().with_result(verb.result(change)), Ok(())),
+        Verdict::Failed { failure, .. } => {
+            (Ending::failed(diagnostic(&failure)), Err(error_of(failure)))
+        }
         Verdict::Cancelled(cause) => (
-            Ending::cancelled(*cause),
+            Ending::cancelled(cause),
             Err(Error::Core(mix_core::Error::Cancelled {
                 command: format!("mix {}", verb.key()),
             })),
@@ -150,7 +169,7 @@ pub async fn run(
     };
     let _ = tree.finish(ROOT, ending);
     drop(tree);
-    bridge.flush();
+    observer.flush();
     outcome
 }
 

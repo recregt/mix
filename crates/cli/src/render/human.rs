@@ -5,10 +5,10 @@ use mix_core::{
     ActivityReporter, BuildProgress, DownloadProgress, NoopActivity, NoopProgress, NoopSteps,
     StepObserver,
 };
-use mix_events::NodeId;
 use mix_events::v1::{
     Envelope, NodeProgress, Status, envelope::Event, node_progress, node_started,
 };
+use mix_events::{NodeId, ROOT};
 use mix_shell::render::Render;
 
 #[derive(Clone)]
@@ -30,6 +30,7 @@ impl Reporters {
 
 pub struct Human {
     reporters: Reporters,
+    results: bool,
     spans: HashMap<NodeId, tracing::Span>,
     titles: HashMap<NodeId, String>,
     received: HashMap<NodeId, u64>,
@@ -41,12 +42,18 @@ impl Human {
     pub fn new(reporters: Reporters) -> Self {
         Self {
             reporters,
+            results: true,
             spans: HashMap::new(),
             titles: HashMap::new(),
             received: HashMap::new(),
             actions: HashSet::new(),
             printed: HashSet::new(),
         }
+    }
+
+    pub fn without_results(mut self) -> Self {
+        self.results = false;
+        self
     }
 
     fn replay(&mut self, envelope: Envelope) {
@@ -81,6 +88,11 @@ impl Human {
                 }
                 _ => {}
             },
+            Event::NodeFinished(node) if node.id == ROOT => {
+                if let Some(result) = &node.result {
+                    super::results::finished(result, self.results);
+                }
+            }
             Event::NodeFinished(node) if self.actions.remove(&node.id) => {
                 let span = self.spans.remove(&node.id);
                 self.received.remove(&node.id);
