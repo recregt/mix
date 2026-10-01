@@ -440,7 +440,7 @@ fn a_rewritten_nix_conf_restarts_a_running_daemon() {
     assert!(
         report
             .steps
-            .contains(&(Cow::Borrowed("restart-nix-daemon"), StepOutcome::Changed))
+            .contains(&(Cow::Borrowed(RESTART_NIX_DAEMON), StepOutcome::Changed))
     );
 }
 

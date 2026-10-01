@@ -483,11 +483,13 @@ impl StepSpec for TargetStep {
     }
 }
 
+pub const RESTART_NIX_DAEMON: &str = "restart-nix-daemon";
+
 struct RestartIfStale;
 
 impl StepSpec for RestartIfStale {
     fn key(&self) -> Cow<'static, str> {
-        "restart-nix-daemon".into()
+        RESTART_NIX_DAEMON.into()
     }
 
     fn title(&self) -> Title {

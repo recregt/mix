@@ -220,8 +220,15 @@ async fn put_back(
     .await;
 
     let mut reports = Vec::new();
-    for (name, outcome) in std::mem::take(&mut report.steps) {
+    for (key, outcome) in std::mem::take(&mut report.steps) {
+        let restart = key == health::RESTART_NIX_DAEMON;
+        let name = if restart {
+            std::borrow::Cow::Borrowed("Nix daemon")
+        } else {
+            key
+        };
         match outcome {
+            StepOutcome::Changed if restart => {}
             StepOutcome::Changed => reports.push(RepairReport::repaired(name)),
             StepOutcome::Failed(failure) => {
                 let error = error_of(failure, &name);
