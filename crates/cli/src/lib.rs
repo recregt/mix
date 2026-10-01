@@ -147,11 +147,11 @@ fn stream_the_failure(command: &Command, error: &anyhow::Error, view: &render::s
             mirror,
             mirror_key,
             force,
-        } => Request::Bootstrap(BootstrapRequest {
+        } => Request::Bootstrap(Box::new(BootstrapRequest {
             force: *force,
             mirror: mirror.clone(),
             mirror_key: mirror_key.clone(),
-        }),
+        })),
         Command::Install { packages } => Request::Install(InstallRequest {
             packages: packages.clone(),
         }),

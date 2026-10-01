@@ -130,7 +130,7 @@ impl mix_rpc::Worker for CliWorker {
         };
         let ran = match command.request.clone() {
             Some(Request::Bootstrap(request)) => {
-                bootstrap(caller, request, controls, &forward).await
+                bootstrap(caller, *request, controls, &forward).await
             }
             Some(Request::Repair(_)) => repair(caller, controls, &forward).await,
             Some(Request::Install(request)) => {

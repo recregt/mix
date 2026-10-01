@@ -57,11 +57,11 @@ fn bootstrap(force: bool) -> Command {
     Command {
         mix_version: "1.2.3".into(),
         schema_minor: mix_events::SCHEMA_MINOR,
-        request: Some(command::Request::Bootstrap(BootstrapRequest {
+        request: Some(command::Request::Bootstrap(Box::new(BootstrapRequest {
             force,
             mirror: Some("http://mirror.internal".into()),
             mirror_key: Some("mirror:KEY".into()),
-        })),
+        }))),
     }
 }
 

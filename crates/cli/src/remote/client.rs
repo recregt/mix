@@ -101,11 +101,11 @@ async fn replay(
 }
 
 pub fn bootstrap_request(mirror: Option<&str>, mirror_key: Option<&str>, force: bool) -> Request {
-    Request::Bootstrap(BootstrapRequest {
+    Request::Bootstrap(Box::new(BootstrapRequest {
         force,
         mirror: mirror.map(str::to_string),
         mirror_key: mirror.and(mirror_key).map(str::to_string),
-    })
+    }))
 }
 
 async fn start(view: &View) -> anyhow::Result<Client> {
@@ -145,19 +145,19 @@ mod tests {
     fn the_mirror_this_process_resolved_crosses_sudo_in_the_request() {
         assert_eq!(
             bootstrap_request(Some("http://env.internal"), Some("env:KEY"), false),
-            Request::Bootstrap(BootstrapRequest {
+            Request::Bootstrap(Box::new(BootstrapRequest {
                 force: false,
                 mirror: Some("http://env.internal".into()),
                 mirror_key: Some("env:KEY".into()),
-            })
+            }))
         );
         assert_eq!(
             bootstrap_request(None, Some("stray:KEY"), true),
-            Request::Bootstrap(BootstrapRequest {
+            Request::Bootstrap(Box::new(BootstrapRequest {
                 force: true,
                 mirror: None,
                 mirror_key: None,
-            })
+            }))
         );
     }
 
