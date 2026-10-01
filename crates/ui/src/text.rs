@@ -18,12 +18,9 @@ pub const IMPERATIVES: &[&str] = &[
     "wait",
 ];
 
-const INLINE: usize = std::mem::size_of::<String>() - 2;
-
 #[derive(Debug, Clone)]
 enum Text {
     Static(&'static str),
-    Inline { bytes: [u8; INLINE], len: u8 },
     Owned(String),
 }
 
@@ -58,9 +55,6 @@ impl Phrase {
     pub fn as_str(&self) -> &str {
         match &self.0 {
             Text::Static(text) => text,
-            Text::Inline { bytes, len } => {
-                std::str::from_utf8(&bytes[..usize::from(*len)]).unwrap_or_default()
-            }
             Text::Owned(text) => text,
         }
     }
@@ -256,20 +250,7 @@ pub fn octal(buffer: &mut [u8; 22], value: u64) -> &str {
 
 #[doc(hidden)]
 pub fn joined(parts: &[&str]) -> Phrase {
-    let total: usize = parts.iter().map(|part| part.len()).sum();
-    if total <= INLINE {
-        let mut bytes = [0u8; INLINE];
-        let mut at = 0;
-        for part in parts {
-            bytes[at..at + part.len()].copy_from_slice(part.as_bytes());
-            at += part.len();
-        }
-        return Phrase(Text::Inline {
-            bytes,
-            len: total as u8,
-        });
-    }
-    let mut text = String::with_capacity(total);
+    let mut text = String::with_capacity(parts.iter().map(|part| part.len()).sum());
     for part in parts {
         text.push_str(part);
     }
@@ -427,17 +408,10 @@ mod tests {
     }
 
     #[test]
-    fn a_short_join_stays_inline_and_reads_as_a_long_one_does() {
-        let short = joined(&["found ", "8", " problems"]);
-        assert!(matches!(short.0, Text::Inline { .. }));
-        assert_eq!(short.as_str(), "found 8 problems");
-        let long = joined(&["/nix/var/nix/profiles", " has the wrong permissions"]);
-        assert!(matches!(long.0, Text::Owned(_)));
-        assert_eq!(
-            long.as_str(),
-            "/nix/var/nix/profiles has the wrong permissions"
-        );
-        assert_eq!(short, Phrase::checked_static("found 8 problems"));
+    fn a_joined_phrase_reads_as_its_parts_and_equals_the_same_words() {
+        let joined = joined(&["found ", "8", " problems"]);
+        assert_eq!(joined.as_str(), "found 8 problems");
+        assert_eq!(joined, Phrase::checked_static("found 8 problems"));
     }
 
     #[test]
