@@ -10,9 +10,11 @@ use crate::identity::{
     MIX_USERS_GID, MIX_USERS_GROUP, NIXBLD_GID, NIXBLD_GROUP, NIXBLD_HOME, NIXBLD_SHELL,
     NIXBLD_UID_BASE, NIXBLD_USER_COUNT, user_name,
 };
-use crate::models::{PROFILE_SNIPPET, UserConfig};
+use crate::models::{MIX_DAEMON_SERVICE, MIX_DAEMON_SOCKET, PROFILE_SNIPPET, UserConfig};
 use crate::paths::{
-    DEFAULT_PROFILE_NIX_ENV, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, MIX_STATE_DIR_MODE, NIX_CONF_DEST,
+    DEFAULT_PROFILE_NIX_ENV, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, MIX_BIN_DIR, MIX_DAEMON_BIN,
+    MIX_DAEMON_BIN_MODE, MIX_DAEMON_SERVICE_DEST, MIX_DAEMON_SERVICE_UNIT, MIX_DAEMON_SOCKET_DEST,
+    MIX_DAEMON_SOCKET_UNIT, MIX_STATE_DIR_MODE, MIX_VAR_DIR, NIX_CONF_DEST,
     NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SERVICE_UNIT,
     NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC, NIX_DAEMON_SOCKET_UNIT, NIX_OWNERSHIP_MARKER,
     NIX_PROFILES_DIR_MODE, NIX_TREE_MODE, NIX_TREE_PATHS, POLICY_FILE, PROFILE_SNIPPET_DEST,
@@ -41,6 +43,7 @@ pub struct Settings {
     pub force: bool,
     pub runtime: Runtime,
     pub request: String,
+    pub daemon: PathBuf,
 }
 
 pub(crate) struct Facts<'a>(pub(crate) &'a [Fact]);
@@ -563,25 +566,119 @@ impl StepSpec for ConfigureDaemon {
         if !actions.is_empty() || socket.needs_reload {
             actions.push(Action::DaemonReload);
         }
-        match socket.file_state.as_str() {
-            "enabled" | "static" | "indirect" | "generated" | "alias" => {}
-            "masked" | "masked-runtime" => {
-                return Err(Failure::Conflict {
-                    subject: NIX_DAEMON_SOCKET_UNIT.to_string(),
-                    expected: "a unit mix may enable".to_string(),
-                    found: format!("a {} unit", socket.file_state),
-                });
-            }
-            _ => actions.push(Action::EnableUnit {
-                unit: NIX_DAEMON_SOCKET_UNIT.to_string(),
-            }),
-        }
-        if socket.active_state != "active" {
-            actions.push(Action::StartUnit {
-                unit: NIX_DAEMON_SOCKET_UNIT.to_string(),
+        actions.extend(enable_and_start(NIX_DAEMON_SOCKET_UNIT, socket)?);
+        actions.extend(stale_restart(facts.unit(7), facts.path(8).changed));
+        Ok(actions)
+    }
+}
+
+fn enable_and_start(unit: &str, facts: &UnitFacts) -> Result<Vec<Action>, Failure> {
+    let mut actions = Vec::new();
+    match facts.file_state.as_str() {
+        "enabled" | "static" | "indirect" | "generated" | "alias" => {}
+        "masked" | "masked-runtime" => {
+            return Err(Failure::Conflict {
+                subject: unit.to_string(),
+                expected: "a unit mix may enable".to_string(),
+                found: format!("a {} unit", facts.file_state),
             });
         }
-        actions.extend(stale_restart(facts.unit(7), facts.path(8).changed));
+        _ => actions.push(Action::EnableUnit {
+            unit: unit.to_string(),
+        }),
+    }
+    if facts.active_state != "active" {
+        actions.push(Action::StartUnit {
+            unit: unit.to_string(),
+        });
+    }
+    Ok(actions)
+}
+
+struct InstallMixDaemon(PathBuf);
+
+const MIX_UNITS: [(&str, &str, &str); 2] = [
+    (
+        MIX_DAEMON_SOCKET_UNIT,
+        MIX_DAEMON_SOCKET_DEST,
+        MIX_DAEMON_SOCKET,
+    ),
+    (
+        MIX_DAEMON_SERVICE_UNIT,
+        MIX_DAEMON_SERVICE_DEST,
+        MIX_DAEMON_SERVICE,
+    ),
+];
+
+impl StepSpec for InstallMixDaemon {
+    fn key(&self) -> Cow<'static, str> {
+        "install-mix-daemon".into()
+    }
+
+    fn title(&self) -> Title {
+        Title::new(Verb::Configuring, "mix daemon service")
+    }
+
+    fn queries(&self) -> Vec<Query> {
+        let mut queries = vec![
+            Query::Path(MIX_VAR_DIR.into()),
+            Query::Path(MIX_BIN_DIR.into()),
+            Query::Path(MIX_DAEMON_BIN.into()),
+            Query::Contents(MIX_DAEMON_BIN.into()),
+            Query::Contents(self.0.clone()),
+        ];
+        for (_, destination, _) in MIX_UNITS {
+            queries.push(Query::Path(destination.into()));
+            queries.push(Query::Contents(destination.into()));
+        }
+        queries.push(Query::Unit(MIX_DAEMON_SOCKET_UNIT.to_string()));
+        queries.push(Query::Unit(MIX_DAEMON_SERVICE_UNIT.to_string()));
+        queries
+    }
+
+    fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
+        let facts = Facts(facts);
+        let running = facts.contents(4).ok_or_else(|| Failure::Io {
+            path: self.0.clone(),
+            kind: std::io::ErrorKind::NotFound,
+        })?;
+        let mut actions = Vec::new();
+        actions.extend(ensure_exists(Path::new(MIX_VAR_DIR), facts.path(0), None)?);
+        actions.extend(ensure_exists(Path::new(MIX_BIN_DIR), facts.path(1), None)?);
+        let replaced = facts.contents(3) != Some(running);
+        actions.extend(ensure_file(
+            Path::new(MIX_DAEMON_BIN),
+            facts.path(2),
+            facts.contents(3),
+            running,
+            MIX_DAEMON_BIN_MODE,
+            None,
+        )?);
+        let mut units_changed = false;
+        for (index, (unit, _, text)) in MIX_UNITS.iter().enumerate() {
+            if facts.contents(6 + 2 * index) != Some(text.as_bytes()) {
+                units_changed = true;
+                actions.push(Action::InstallUnit {
+                    unit: unit.to_string(),
+                    contents: Arc::from(text.as_bytes()),
+                    expect: facts
+                        .path(5 + 2 * index)
+                        .id
+                        .map_or(Expect::Absent, Expect::Present),
+                });
+            }
+        }
+        let socket = facts.unit(9);
+        let service = facts.unit(10);
+        if units_changed || socket.needs_reload || service.needs_reload {
+            actions.push(Action::DaemonReload);
+        }
+        actions.extend(enable_and_start(MIX_DAEMON_SOCKET_UNIT, socket)?);
+        if (replaced || units_changed) && service.active_state == "active" {
+            actions.push(Action::RestartUnit {
+                unit: MIX_DAEMON_SERVICE_UNIT.to_string(),
+            });
+        }
         Ok(actions)
     }
 }
@@ -754,6 +851,7 @@ pub fn steps(settings: &Settings) -> Vec<Box<dyn StepSpec>> {
     steps.push(Box::new(FetchRuntime(settings.runtime.clone())));
     steps.push(Box::new(ConfigureNixConf(settings.policy.clone())));
     steps.push(Box::new(ConfigureDaemon));
+    steps.push(Box::new(InstallMixDaemon(settings.daemon.clone())));
     if let Some(user) = &settings.user {
         steps.push(Box::new(WriteHomeConfig(user.clone())));
         steps.push(Box::new(ActivateHome(user.clone())));

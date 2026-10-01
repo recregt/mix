@@ -20,6 +20,7 @@ fn settings(user: Option<UserConfig>, force: bool) -> Settings {
             size: 27_131_728,
         },
         request: "request-1".into(),
+        daemon: "/usr/local/bin/mix-daemon".into(),
     }
 }
 
@@ -41,6 +42,7 @@ fn alice() -> UserConfig {
 fn machine() -> World {
     let mut world = World::default();
     world.with_dir("/home/alice", 0o700, (1000, 1000));
+    world.with_file("/usr/local/bin/mix-daemon", b"mix-daemon", 0o755, (0, 0));
     world
 }
 

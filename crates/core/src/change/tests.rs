@@ -383,6 +383,7 @@ fn drive(world: &mut World, mut runner: Runner, fail: impl Fn(&Action) -> bool) 
 
 fn bootstrapped() -> World {
     let mut world = World::default();
+    world.with_file("/usr/local/bin/mix-daemon", b"mix-daemon", 0o755, (0, 0));
     let config = config();
     world.with_dir(&config.user.home, 0o700, (config.user.uid, config.user.gid));
     world.users.insert(
@@ -405,6 +406,7 @@ fn bootstrapped() -> World {
             size: 1,
         },
         request: "bootstrap".into(),
+        daemon: "/usr/local/bin/mix-daemon".into(),
     };
     let report = drive(
         &mut world,

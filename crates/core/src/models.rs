@@ -6,14 +6,36 @@ use crate::identity::{
     NIXBLD_USER_COUNT,
 };
 use crate::paths::{
-    DEFAULT_PROFILE_NIX_ENV, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, MIX_STATE_DIR_MODE, NIX_CONF_DEST,
-    NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SERVICE_UNIT,
+    DEFAULT_PROFILE_NIX_ENV, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, MIX_DAEMON_SERVICE_DEST,
+    MIX_DAEMON_SERVICE_UNIT, MIX_DAEMON_SOCKET_DEST, MIX_DAEMON_SOCKET_UNIT, MIX_STATE_DIR_MODE,
+    NIX_CONF_DEST, NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SERVICE_UNIT,
     NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC, NIX_DAEMON_SOCKET_UNIT, NIX_OWNERSHIP_MARKER,
     NIX_PROFILES_DIR_MODE, NIX_STORE, NIX_TREE_MODE, NIX_TREE_PATHS, POLICY_FILE,
     PROFILE_SNIPPET_DEST, STATE_FILE, mix_state_dir, nix_profiles_dir,
 };
 use crate::policy::Policy;
 use crate::privilege::InvokingUser;
+
+pub const MIX_DAEMON_SOCKET: &str = "[Unit]
+Description=mix daemon socket
+
+[Socket]
+ListenStream=/run/mix/daemon.sock
+SocketMode=0666
+DirectoryMode=0755
+
+[Install]
+WantedBy=sockets.target
+";
+
+pub const MIX_DAEMON_SERVICE: &str = "[Unit]
+Description=mix daemon
+Requires=mix-daemon.socket
+After=mix-daemon.socket nix-daemon.socket
+
+[Service]
+ExecStart=/var/lib/mix/bin/mix-daemon serve
+";
 
 pub const PROFILE_SNIPPET: &str = "# Managed by mix -- do not edit, changes are overwritten and will trip `mix doctor`.\nif [ -e '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh' ]; then\n    . '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'\nfi\n";
 
@@ -54,6 +76,12 @@ impl Category {
 
 type Owner = Option<(u32, u32)>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitSource {
+    File(&'static str),
+    Text(&'static str),
+}
+
 #[derive(Debug, Clone)]
 pub enum Target<'a> {
     Directory {
@@ -86,7 +114,7 @@ pub enum Target<'a> {
     },
     SystemdUnit {
         name: &'static str,
-        src: &'static str,
+        src: UnitSource,
         dest: &'static str,
         must_be_active: bool,
     },
@@ -218,7 +246,7 @@ fn push_user_targets<'a>(items: &mut Vec<Target<'a>>, cfg: &'a UserConfig) {
     });
 }
 
-const SYSTEM_TARGET_COUNT: usize = 11 + NIX_TREE_PATHS.len() + NIXBLD_USER_COUNT as usize;
+const SYSTEM_TARGET_COUNT: usize = 13 + NIX_TREE_PATHS.len() + NIXBLD_USER_COUNT as usize;
 const USER_TARGET_COUNT: usize = 7;
 
 pub fn user_targets(cfg: &UserConfig) -> Vec<Target<'_>> {
@@ -286,14 +314,26 @@ pub fn targets<'a>(user_config: Option<&'a UserConfig>, policy: &'a Policy) -> V
     }));
     items.push(Target::SystemdUnit {
         name: NIX_DAEMON_SERVICE_UNIT,
-        src: NIX_DAEMON_SERVICE_SRC,
+        src: UnitSource::File(NIX_DAEMON_SERVICE_SRC),
         dest: NIX_DAEMON_SERVICE_DEST,
         must_be_active: false,
     });
     items.push(Target::SystemdUnit {
         name: NIX_DAEMON_SOCKET_UNIT,
-        src: NIX_DAEMON_SOCKET_SRC,
+        src: UnitSource::File(NIX_DAEMON_SOCKET_SRC),
         dest: NIX_DAEMON_SOCKET_DEST,
+        must_be_active: true,
+    });
+    items.push(Target::SystemdUnit {
+        name: MIX_DAEMON_SERVICE_UNIT,
+        src: UnitSource::Text(MIX_DAEMON_SERVICE),
+        dest: MIX_DAEMON_SERVICE_DEST,
+        must_be_active: false,
+    });
+    items.push(Target::SystemdUnit {
+        name: MIX_DAEMON_SOCKET_UNIT,
+        src: UnitSource::Text(MIX_DAEMON_SOCKET),
+        dest: MIX_DAEMON_SOCKET_DEST,
         must_be_active: true,
     });
     items.push(Target::PathExists {
@@ -443,7 +483,7 @@ mod tests {
         assert_eq!(
             Target::SystemdUnit {
                 name: NIX_DAEMON_SOCKET_UNIT,
-                src: NIX_DAEMON_SOCKET_SRC,
+                src: UnitSource::File(NIX_DAEMON_SOCKET_SRC),
                 dest: NIX_DAEMON_SOCKET_DEST,
                 must_be_active: true,
             }
@@ -624,5 +664,23 @@ mod tests {
             Target::GroupMember { group, user }
                 if *group == MIX_USERS_GROUP && user == "mix-user"
         )));
+    }
+}
+
+#[cfg(test)]
+mod daemon_unit_tests {
+    use super::*;
+
+    #[test]
+    fn the_units_name_the_socket_and_the_binary_mix_installs() {
+        assert!(MIX_DAEMON_SOCKET.contains(&format!(
+            "ListenStream={}\n",
+            crate::paths::MIX_DAEMON_SOCKET_PATH
+        )));
+        assert!(MIX_DAEMON_SERVICE.contains(&format!(
+            "ExecStart={} serve\n",
+            crate::paths::MIX_DAEMON_BIN
+        )));
+        assert!(MIX_DAEMON_SERVICE.contains(&format!("Requires={MIX_DAEMON_SOCKET_UNIT}\n")));
     }
 }

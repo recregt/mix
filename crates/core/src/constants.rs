@@ -41,6 +41,15 @@ pub mod paths {
     pub const POLICY_FILE: &str = "/etc/mix/policy.json";
 
     pub const LOCK_FILE: &str = "/var/lib/mix/lock";
+    pub const MIX_VAR_DIR: &str = "/var/lib/mix";
+    pub const MIX_BIN_DIR: &str = "/var/lib/mix/bin";
+    pub const MIX_DAEMON_BIN: &str = "/var/lib/mix/bin/mix-daemon";
+    pub const MIX_DAEMON_BIN_MODE: u32 = 0o755;
+    pub const MIX_DAEMON_SOCKET_PATH: &str = "/run/mix/daemon.sock";
+    pub const MIX_DAEMON_SOCKET_UNIT: &str = "mix-daemon.socket";
+    pub const MIX_DAEMON_SERVICE_UNIT: &str = "mix-daemon.service";
+    pub const MIX_DAEMON_SOCKET_DEST: &str = "/etc/systemd/system/mix-daemon.socket";
+    pub const MIX_DAEMON_SERVICE_DEST: &str = "/etc/systemd/system/mix-daemon.service";
 
     pub const MIX_STATE_DIR: &str = ".local/state/mix";
     pub const MIX_STATE_DIR_MODE: u32 = 0o700;

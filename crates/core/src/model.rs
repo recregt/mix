@@ -132,6 +132,7 @@ impl Default for World {
             UNIT_DIR,
             "/home",
             "/var",
+            "/var/lib",
             "/var/empty",
         ] {
             world.with_dir(dir, 0o755, ROOT);

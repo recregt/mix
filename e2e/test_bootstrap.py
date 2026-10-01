@@ -50,6 +50,19 @@ def test_bootstrap_auto_escalates_for_a_sudo_user(
     assert group_members(container, MIX_USERS_GROUP) == ["ciuser"]
     assert not daemon_trusts(container, "ciuser")
 
+    daemon = container.exec(
+        "stat", "-c", "%U:%G %a", "/var/lib/mix/bin/mix-daemon", check=True
+    )
+    assert daemon.stdout.strip() == "root:root 755"
+    assert (
+        container.exec("cmp", "/usr/local/bin/mix-daemon", "/var/lib/mix/bin/mix-daemon")
+        .returncode
+        == 0
+    )
+    socket = container.exec("systemctl", "is-active", "mix-daemon.socket")
+    assert socket.stdout.strip() == "active", socket
+    assert container.exec("test", "-S", "/run/mix/daemon.sock").returncode == 0
+
     git_dir = f"{state_dir}/.git"
     assert container.path_exists(git_dir)
     git_bin = "/home/ciuser/.nix-profile/bin/git"

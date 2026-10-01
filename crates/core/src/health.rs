@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::action::{Action, Expect, Fact, Failure, Kind, Owner, PathFacts, Query, UserSpec};
 use crate::bootstrap::stale_restart;
 use crate::identity;
-use crate::models::Target;
+use crate::models::{Target, UnitSource};
 use crate::paths::{NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT};
 use crate::plan::{StepSpec, Title};
 use mix_events::v1::Verb;
@@ -145,12 +145,17 @@ pub fn queries(target: &Target<'_>) -> Vec<Query> {
         Target::User { n, .. } => vec![Query::User(identity::user_name(*n).into_owned())],
         Target::SystemdUnit {
             name, src, dest, ..
-        } => vec![
-            Query::Contents((*dest).into()),
-            Query::Contents((*src).into()),
-            Query::Path((*dest).into()),
-            Query::Unit((*name).to_string()),
-        ],
+        } => {
+            let mut queries = vec![
+                Query::Contents((*dest).into()),
+                Query::Path((*dest).into()),
+                Query::Unit((*name).to_string()),
+            ];
+            if let UnitSource::File(path) = src {
+                queries.push(Query::Contents((*path).into()));
+            }
+            queries
+        }
         Target::PathExists { path, .. } => vec![Query::Path((*path).into())],
     }
 }
@@ -166,6 +171,13 @@ fn contents(facts: &[Fact], index: usize) -> Option<&[u8]> {
     match &facts[index] {
         Fact::Contents(contents) => contents.as_deref(),
         other => panic!("fact {index} is not contents: {other:?}"),
+    }
+}
+
+fn unit_source<'f>(src: &UnitSource, facts: &'f [Fact]) -> Option<&'f [u8]> {
+    match src {
+        UnitSource::File(_) => contents(facts, 3),
+        UnitSource::Text(text) => Some(text.as_bytes()),
     }
 }
 
@@ -252,9 +264,9 @@ pub fn drift(target: &Target<'_>, facts: &[Fact]) -> Option<Drift> {
                 hunks: hunks(expected, &text(current)),
             })
         }
-        Target::SystemdUnit { dest, .. } => {
+        Target::SystemdUnit { src, dest, .. } => {
             let installed = contents(facts, 0)?;
-            let source = contents(facts, 1)?;
+            let source = unit_source(src, facts)?;
             (installed != source).then(|| Drift {
                 path: (*dest).to_string(),
                 hunks: hunks(&text(source), &text(installed)),
@@ -346,20 +358,24 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
             }
             _ => None,
         },
-        Target::SystemdUnit { must_be_active, .. } => {
+        Target::SystemdUnit {
+            src,
+            must_be_active,
+            ..
+        } => {
             let installed = contents(facts, 0);
             let Some(installed) = installed else {
-                return match path_facts(facts, 2).kind {
+                return match path_facts(facts, 1).kind {
                     Kind::Missing => Some(Finding::UnitMissing),
                     Kind::Unreadable(kind) => Some(Finding::Unreadable { kind }),
                     _ => Some(Finding::UnitDrift),
                 };
             };
-            if contents(facts, 1).is_some_and(|source| source != installed) {
+            if unit_source(src, facts).is_some_and(|source| source != installed) {
                 return Some(Finding::UnitDrift);
             }
             let active = matches!(
-                &facts[3],
+                &facts[2],
                 Fact::Unit(unit) if unit.active_state == "active" || unit.active_state == "reloading"
             );
             (*must_be_active && !active).then_some(Finding::UnitInactive)
@@ -512,16 +528,17 @@ pub fn fix(
         },
         Target::SystemdUnit {
             name,
+            src,
             must_be_active,
             ..
         } => {
             let mut actions = Vec::new();
             if finding != Finding::UnitInactive {
-                let wanted = contents(facts, 1).ok_or(Unfixable::MissingRuntime)?;
+                let wanted = unit_source(src, facts).ok_or(Unfixable::MissingRuntime)?;
                 actions.push(Action::InstallUnit {
                     unit: (*name).to_string(),
                     contents: Arc::from(wanted),
-                    expect: path_facts(facts, 2)
+                    expect: path_facts(facts, 1)
                         .id
                         .map_or(Expect::Absent, Expect::Present),
                 });
