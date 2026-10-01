@@ -47,6 +47,7 @@ pub(crate) fn rpc_fault(error: &mix_rpc::Error) -> Fault {
         }
         Error::Ended => Code::WorkerEnded,
         Error::VersionMismatch { .. } => Code::VersionMismatch,
+        Error::Denied(_) => Code::NotBootstrapped,
         Error::Malformed(_) | Error::NotAConnection(_) => Code::Internal,
     };
     mix_core::diagnose::failed(code, error.to_string(), None)

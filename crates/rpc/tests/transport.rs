@@ -36,6 +36,10 @@ struct Scripted;
 impl Worker for Scripted {
     const VERSION: &'static str = VERSION;
 
+    fn admits(&self, _caller: Caller) -> bool {
+        true
+    }
+
     async fn run(&self, caller: Caller, command: Command, _controls: Controls, events: Events) {
         let _ = events.send(Reply::Envelope(marked(1, String::new())));
         let _ = events.send(Reply::Envelope(marked(2, format!("caller {}", caller.uid))));
@@ -137,6 +141,10 @@ struct CleansUpWhenAbandoned {
 impl Worker for CleansUpWhenAbandoned {
     const VERSION: &'static str = VERSION;
 
+    fn admits(&self, _caller: Caller) -> bool {
+        true
+    }
+
     async fn run(&self, _caller: Caller, _command: Command, _controls: Controls, events: Events) {
         let _ = events.send(Reply::Envelope(marked(1, String::new())));
         events.closed().await;
@@ -183,6 +191,10 @@ struct WaitsForRelease {
 
 impl Worker for WaitsForRelease {
     const VERSION: &'static str = VERSION;
+
+    fn admits(&self, _caller: Caller) -> bool {
+        true
+    }
 
     async fn run(&self, _caller: Caller, _command: Command, _controls: Controls, events: Events) {
         let _ = events.send(Reply::Envelope(marked(1, String::new())));
@@ -296,6 +308,10 @@ struct Obeys;
 impl Worker for Obeys {
     const VERSION: &'static str = VERSION;
 
+    fn admits(&self, _caller: Caller) -> bool {
+        true
+    }
+
     async fn run(
         &self,
         _caller: Caller,
@@ -343,4 +359,31 @@ async fn a_worker_of_another_version_is_refused_before_any_request() {
         panic!("a worker of another version must be refused, got {refused:?}");
     };
     assert_eq!((ours.as_str(), theirs.as_str()), ("9.9.9", VERSION));
+}
+
+struct Refuses;
+
+impl Worker for Refuses {
+    const VERSION: &'static str = VERSION;
+
+    fn admits(&self, _caller: Caller) -> bool {
+        false
+    }
+
+    async fn run(&self, _caller: Caller, _command: Command, _controls: Controls, _events: Events) {
+        panic!("a refused caller must never reach the worker");
+    }
+}
+
+#[tokio::test]
+async fn a_caller_the_worker_does_not_admit_is_denied_before_any_request() {
+    let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
+    let _server = tokio::spawn(serve_connection(Refuses, theirs));
+
+    let denied = Client::connect(ours, VERSION).await.err();
+
+    assert!(
+        matches!(denied, Some(mix_rpc::Error::Denied(_))),
+        "{denied:?}"
+    );
 }

@@ -166,6 +166,7 @@ fn every_worker_failure_has_a_code_unless_it_is_a_protocol_violation() {
             ours: "1.0.0".into(),
             theirs: "1.1.0".into(),
         },
+        Error::Denied("uid 1001 is not root and not a member of mix-users".into()),
         Error::NotAConnection(std::io::ErrorKind::InvalidInput.into()),
     ];
     for error in &errors {
@@ -175,6 +176,7 @@ fn every_worker_failure_has_a_code_unless_it_is_a_protocol_violation() {
                 assert_eq!(code, Some(Code::Internal))
             }
             Error::VersionMismatch { .. } => assert_eq!(code, Some(Code::VersionMismatch)),
+            Error::Denied(_) => assert_eq!(code, Some(Code::NotBootstrapped)),
             Error::Spawn(_)
             | Error::Launch(_)
             | Error::Connect(_)

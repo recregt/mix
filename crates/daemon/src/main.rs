@@ -1,10 +1,12 @@
 mod controls;
+mod serve;
 mod settings;
 mod worker;
 
 use std::io::Write as _;
 use std::process::ExitCode;
 
+const SERVE: &str = "serve";
 const SERVE_STDIN: &str = "serve-stdin";
 
 #[allow(clippy::disallowed_methods)]
@@ -39,6 +41,7 @@ async fn main() -> ExitCode {
         .collect::<Vec<_>>()
         .as_slice()
     {
+        [SERVE] => serve::serve().await,
         [SERVE_STDIN] => worker::serve_stdin().await,
         [command, request] if *command == mix_shell::effect::home::COMMAND => home_files(request),
         _ => usage(),

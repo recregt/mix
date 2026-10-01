@@ -118,10 +118,36 @@ fn unserved() -> Fault {
     mix_core::diagnose::failed(Code::Internal, "the request names no command", None)
 }
 
-struct CliWorker;
+#[derive(Clone, Copy)]
+pub enum Gate {
+    Sudo,
+    Members,
+}
 
-impl mix_rpc::Worker for CliWorker {
+#[derive(Clone, Copy)]
+pub struct Host {
+    pub gate: Gate,
+}
+
+fn enrolled(uid: u32) -> bool {
+    uid == 0
+        || mix_shell::effect::accounts::user_by_uid(uid).is_some_and(|user| {
+            mix_shell::effect::accounts::group_has_member(
+                mix_core::identity::MIX_USERS_GROUP,
+                &user.name,
+            )
+        })
+}
+
+impl mix_rpc::Worker for Host {
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+
+    fn admits(&self, caller: Caller) -> bool {
+        match self.gate {
+            Gate::Sudo => true,
+            Gate::Members => enrolled(caller.uid),
+        }
+    }
 
     async fn run(&self, caller: Caller, command: Command, controls: Controls, events: Events) {
         let mut forward = Forward {
@@ -175,7 +201,7 @@ pub async fn serve_stdin() -> ExitCode {
         return ExitCode::FAILURE;
     }
     tokio::spawn(controls::ignore_the_terminal());
-    match mix_rpc::serve_stdin(CliWorker).await {
+    match mix_rpc::serve_stdin(Host { gate: Gate::Sudo }).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             mix_ui::report(
@@ -197,7 +223,7 @@ mod tests {
 
     async fn served(command: Command) -> Vec<Envelope> {
         let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
-        let server = tokio::spawn(mix_rpc::serve_connection(CliWorker, theirs));
+        let server = tokio::spawn(mix_rpc::serve_connection(Host { gate: Gate::Sudo }, theirs));
         let mut client = mix_rpc::Client::connect(ours, env!("CARGO_PKG_VERSION"))
             .await
             .unwrap();
@@ -276,5 +302,35 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(refused.code(), Some(Code::RootNotAllowed));
+    }
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use mix_rpc::Worker;
+
+    use super::*;
+
+    #[test]
+    fn the_socket_admits_root_and_refuses_a_user_outside_mix_users() {
+        let host = Host {
+            gate: Gate::Members,
+        };
+
+        assert!(host.admits(Caller { uid: 0, gid: 0 }));
+        assert!(!host.admits(Caller {
+            uid: u32::MAX - 1,
+            gid: u32::MAX - 1
+        }));
+    }
+
+    #[test]
+    fn the_one_shot_worker_admits_whoever_sudo_let_through() {
+        let host = Host { gate: Gate::Sudo };
+
+        assert!(host.admits(Caller {
+            uid: u32::MAX - 1,
+            gid: u32::MAX - 1
+        }));
     }
 }

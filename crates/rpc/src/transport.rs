@@ -36,6 +36,8 @@ pub type Controls = mpsc::UnboundedReceiver<Control>;
 pub trait Worker: Send + Sync + 'static {
     const VERSION: &'static str;
 
+    fn admits(&self, caller: Caller) -> bool;
+
     fn run(
         &self,
         caller: Caller,
@@ -62,6 +64,9 @@ pub enum Error {
     #[error("the privileged worker stopped before it finished")]
     Ended,
 
+    #[error("the mix daemon does not serve this user: {0}")]
+    Denied(String),
+
     #[error("the privileged worker is mix {theirs}, but this is mix {ours}")]
     VersionMismatch { ours: String, theirs: String },
 
@@ -78,6 +83,20 @@ struct Service<W> {
     worker: Arc<W>,
     running: TaskTracker,
     one_at_a_time: Arc<Semaphore>,
+}
+
+impl<W: Worker> Service<W> {
+    fn admit<T>(&self, request: &Request<T>) -> Result<Caller, Status> {
+        let caller = caller(request)?;
+        if self.worker.admits(caller) {
+            Ok(caller)
+        } else {
+            Err(Status::permission_denied(format!(
+                "uid {} is not root and not a member of mix-users",
+                caller.uid
+            )))
+        }
+    }
 }
 
 fn caller<T>(request: &Request<T>) -> Result<Caller, Status> {
@@ -175,8 +194,9 @@ impl<W: Worker> proto::worker_service_server::WorkerService for Service<W> {
 
     async fn hello(
         &self,
-        _request: Request<proto::HelloRequest>,
+        request: Request<proto::HelloRequest>,
     ) -> Result<Response<proto::HelloResponse>, Status> {
+        self.admit(&request)?;
         Ok(Response::new(proto::HelloResponse {
             version: W::VERSION.to_string(),
             protocol: PROTOCOL,
@@ -187,7 +207,7 @@ impl<W: Worker> proto::worker_service_server::WorkerService for Service<W> {
         &self,
         request: Request<Streaming<proto::RunRequest>>,
     ) -> Result<Response<Self::RunStream>, Status> {
-        let caller = caller(&request)?;
+        let caller = self.admit(&request)?;
         let mut calls = request.into_inner();
         let command = command(&mut calls).await?;
         let permit = Arc::clone(&self.one_at_a_time)
@@ -398,7 +418,10 @@ impl Client {
 }
 
 fn refused(status: Status) -> Error {
-    Error::Refused(status.message().to_string())
+    match status.code() {
+        tonic::Code::PermissionDenied => Error::Denied(status.message().to_string()),
+        _ => Error::Refused(status.message().to_string()),
+    }
 }
 
 fn envelope(bytes: &[u8]) -> Result<Envelope, Error> {
