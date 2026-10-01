@@ -8,13 +8,11 @@ pub mod render;
 use std::io::Write as _;
 use std::process::ExitCode;
 
-use clap::Parser;
-
 use cli::{Cli, Command};
 use explain::Diagnostic;
 
 pub async fn run() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = Cli::parse_with_color();
     mix_ui::set_color(match cli.color {
         cli::Color::Auto => mix_ui::ColorChoice::Auto,
         cli::Color::Always => mix_ui::ColorChoice::Always,

@@ -1,9 +1,25 @@
 use std::path::PathBuf;
 
+use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 
+const STYLES: Styles = Styles::styled()
+    .header(AnsiColor::BrightGreen.on_default().effects(Effects::BOLD))
+    .usage(AnsiColor::BrightGreen.on_default().effects(Effects::BOLD))
+    .literal(AnsiColor::BrightCyan.on_default().effects(Effects::BOLD))
+    .placeholder(AnsiColor::Cyan.on_default())
+    .error(AnsiColor::BrightRed.on_default().effects(Effects::BOLD))
+    .valid(AnsiColor::BrightCyan.on_default().effects(Effects::BOLD))
+    .invalid(AnsiColor::Yellow.on_default().effects(Effects::BOLD));
+
 #[derive(Parser)]
-#[command(name = "mix", version, about = "Reproducible systems, made effortless")]
+#[command(
+    name = "mix",
+    version,
+    about = "Reproducible systems, made effortless",
+    styles = STYLES,
+    after_help = "See 'mix help <command>' for more information on a specific command."
+)]
 pub struct Cli {
     /// Use verbose output (-vv also shows each program's output)
     #[arg(short, long, action = ArgAction::Count, global = true, conflicts_with = "quiet")]
@@ -139,7 +155,50 @@ pub enum Command {
     HomeFiles { request: String },
 }
 
+pub fn color_requested<I, S>(args: I) -> Color
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let mut args = args.into_iter();
+    let mut found = Color::Auto;
+    while let Some(arg) = args.next() {
+        let arg = arg.as_ref().to_string_lossy();
+        let value = match arg.as_ref() {
+            "--" => break,
+            "--color" => args
+                .next()
+                .map(|value| value.as_ref().to_string_lossy().into_owned()),
+            other => other.strip_prefix("--color=").map(str::to_string),
+        };
+        if let Some(value) = value
+            && let Ok(color) = Color::from_str(&value, false)
+        {
+            found = color;
+        }
+    }
+    found
+}
+
+impl Color {
+    pub fn clap(self) -> clap::ColorChoice {
+        match self {
+            Color::Auto => clap::ColorChoice::Auto,
+            Color::Always => clap::ColorChoice::Always,
+            Color::Never => clap::ColorChoice::Never,
+        }
+    }
+}
+
 impl Cli {
+    pub fn parse_with_color() -> Self {
+        use clap::{CommandFactory, FromArgMatches};
+
+        let color = color_requested(std::env::args_os().skip(1));
+        let matches = Self::command().color(color.clap()).get_matches();
+        Self::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
+    }
+
     /// Whether output may be drawn in place.
     ///
     /// `--no-progress` and `--output json` are explicit requests for plain output; `CI` is
@@ -208,6 +267,21 @@ mod tests {
     #[test]
     fn every_help_text_reads_like_cargo_s() {
         check_help(&Cli::command(), "mix");
+    }
+
+    #[test]
+    fn a_color_request_is_found_before_clap_reads_the_arguments() {
+        assert_eq!(color_requested(["install", "hello"]), Color::Auto);
+        assert_eq!(
+            color_requested(["--color", "never", "doctor"]),
+            Color::Never
+        );
+        assert_eq!(color_requested(["doctor", "--color=always"]), Color::Always);
+        assert_eq!(
+            color_requested(["install", "--", "--color=never"]),
+            Color::Auto
+        );
+        assert_eq!(color_requested(["--color", "sometimes"]), Color::Auto);
     }
 
     #[test]
