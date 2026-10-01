@@ -46,6 +46,7 @@ pub(crate) fn rpc_fault(error: &mix_rpc::Error) -> Fault {
             Code::PrivilegesUnavailable
         }
         Error::Ended => Code::WorkerEnded,
+        Error::VersionMismatch { .. } => Code::VersionMismatch,
         Error::Malformed(_) | Error::NotAConnection(_) => Code::Internal,
     };
     mix_core::diagnose::failed(code, error.to_string(), None)
@@ -233,6 +234,11 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
             .help(help!(
                 "run the same command again to pick up where it stopped"
             )),
+        Code::VersionMismatch => Diagnostic::new(phrase!(
+            "the `mix` program was replaced while this command was starting"
+        ))
+        .note(note!("nothing was changed"))
+        .help(help!("run the same command again")),
         Code::PermissionDenied
         | Code::Conflict
         | Code::InvalidMirror

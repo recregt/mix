@@ -27,11 +27,15 @@ use crate::types::{Caller, Control, Malformed, Reply};
 
 const WORKER_URI: &str = "http://worker";
 
+pub const PROTOCOL: u32 = 1;
+
 pub type Events = mpsc::UnboundedSender<Reply>;
 
 pub type Controls = mpsc::UnboundedReceiver<Control>;
 
 pub trait Worker: Send + Sync + 'static {
+    const VERSION: &'static str;
+
     fn run(
         &self,
         caller: Caller,
@@ -57,6 +61,9 @@ pub enum Error {
 
     #[error("the privileged worker stopped before it finished")]
     Ended,
+
+    #[error("the privileged worker is mix {theirs}, but this is mix {ours}")]
+    VersionMismatch { ours: String, theirs: String },
 
     #[error(transparent)]
     Malformed(#[from] Malformed),
@@ -165,6 +172,16 @@ impl Controller {
 #[tonic::async_trait]
 impl<W: Worker> proto::worker_service_server::WorkerService for Service<W> {
     type RunStream = Responses;
+
+    async fn hello(
+        &self,
+        _request: Request<proto::HelloRequest>,
+    ) -> Result<Response<proto::HelloResponse>, Status> {
+        Ok(Response::new(proto::HelloResponse {
+            version: W::VERSION.to_string(),
+            protocol: PROTOCOL,
+        }))
+    }
 
     async fn run(
         &self,
@@ -287,7 +304,7 @@ pub struct Client {
 }
 
 impl Client {
-    pub async fn connect(connection: UnixStream) -> Result<Self, Error> {
+    pub async fn connect(connection: UnixStream, version: &str) -> Result<Self, Error> {
         let slot = Arc::new(Mutex::new(Some(connection)));
         let channel = Endpoint::from_static(WORKER_URI)
             .connect_with_connector(tower::service_fn(move |_: Uri| {
@@ -300,13 +317,33 @@ impl Client {
             }))
             .await
             .map_err(|error| Error::Connect(error.to_string()))?;
+        let mut inner = WorkerServiceClient::new(channel);
+        let answer = inner
+            .hello(proto::HelloRequest {
+                version: version.to_string(),
+                protocol: PROTOCOL,
+            })
+            .await
+            .map_err(refused)?
+            .into_inner();
+        if answer.version != version || answer.protocol != PROTOCOL {
+            return Err(Error::VersionMismatch {
+                ours: version.to_string(),
+                theirs: answer.version,
+            });
+        }
         Ok(Self {
-            inner: WorkerServiceClient::new(channel),
+            inner,
             worker: None,
         })
     }
 
-    pub async fn start(program: &Path, args: &[&str], via: Option<&str>) -> Result<Self, Error> {
+    pub async fn start(
+        program: &Path,
+        args: &[&str],
+        via: Option<&str>,
+        version: &str,
+    ) -> Result<Self, Error> {
         let (ours, theirs) = std::os::unix::net::UnixStream::pair().map_err(Error::Spawn)?;
         let command = match via {
             Some(launcher) => mix_exec::Command::new(launcher).arg(program),
@@ -317,7 +354,8 @@ impl Client {
             .spawn_foreground(OwnedFd::from(theirs))
             .map_err(Error::Launch)?;
         ours.set_nonblocking(true).map_err(Error::Spawn)?;
-        let mut client = Self::connect(UnixStream::from_std(ours).map_err(Error::Spawn)?).await?;
+        let connection = UnixStream::from_std(ours).map_err(Error::Spawn)?;
+        let mut client = Self::connect(connection, version).await?;
         client.worker = Some(worker);
         Ok(client)
     }

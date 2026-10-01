@@ -29,9 +29,13 @@ fn echo(command: Command) -> Envelope {
     }
 }
 
+const VERSION: &str = "1.2.3";
+
 struct Scripted;
 
 impl Worker for Scripted {
+    const VERSION: &'static str = VERSION;
+
     async fn run(&self, caller: Caller, command: Command, _controls: Controls, events: Events) {
         let _ = events.send(Reply::Envelope(marked(1, String::new())));
         let _ = events.send(Reply::Envelope(marked(2, format!("caller {}", caller.uid))));
@@ -46,7 +50,7 @@ fn current_uid() -> u32 {
 async fn connected() -> (Client, tokio::task::JoinHandle<Result<(), mix_rpc::Error>>) {
     let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
     let server = tokio::spawn(serve_connection(Scripted, theirs));
-    (Client::connect(ours).await.unwrap(), server)
+    (Client::connect(ours, VERSION).await.unwrap(), server)
 }
 
 fn bootstrap(force: bool) -> Command {
@@ -131,6 +135,8 @@ struct CleansUpWhenAbandoned {
 }
 
 impl Worker for CleansUpWhenAbandoned {
+    const VERSION: &'static str = VERSION;
+
     async fn run(&self, _caller: Caller, _command: Command, _controls: Controls, events: Events) {
         let _ = events.send(Reply::Envelope(marked(1, String::new())));
         events.closed().await;
@@ -149,7 +155,7 @@ async fn the_worker_waits_for_a_request_its_client_left() {
         },
         theirs,
     ));
-    let mut client = Client::connect(ours).await.unwrap();
+    let mut client = Client::connect(ours, VERSION).await.unwrap();
     let (controls, mut events) = client.run(&bootstrap(false)).await.unwrap();
     assert!(matches!(
         events.next().await,
@@ -176,6 +182,8 @@ struct WaitsForRelease {
 }
 
 impl Worker for WaitsForRelease {
+    const VERSION: &'static str = VERSION;
+
     async fn run(&self, _caller: Caller, _command: Command, _controls: Controls, events: Events) {
         let _ = events.send(Reply::Envelope(marked(1, String::new())));
         self.release.notified().await;
@@ -193,7 +201,7 @@ async fn a_second_request_is_refused_while_the_first_is_running() {
         },
         theirs,
     ));
-    let mut client = Client::connect(ours).await.unwrap();
+    let mut client = Client::connect(ours, VERSION).await.unwrap();
     let (_controls, mut first) = client.run(&bootstrap(false)).await.unwrap();
     assert!(matches!(
         first.next().await,
@@ -227,7 +235,7 @@ async fn a_worker_that_dies_mid_request_reads_as_ended_not_refused() {
         )
         .await
     });
-    let mut client = Client::connect(tokio::net::UnixStream::from_std(ours).unwrap())
+    let mut client = Client::connect(tokio::net::UnixStream::from_std(ours).unwrap(), VERSION)
         .await
         .unwrap();
     let (_controls, mut events) = client.run(&bootstrap(false)).await.unwrap();
@@ -245,30 +253,32 @@ async fn a_worker_that_dies_mid_request_reads_as_ended_not_refused() {
 }
 
 #[tokio::test]
-async fn waiting_for_the_worker_hands_back_how_it_exited() {
-    let client = Client::start(
-        std::path::Path::new("sh"),
-        &["-c", "cat >/dev/null; exit 3"],
-        None,
+async fn a_program_that_exits_without_answering_is_refused() {
+    let started = tokio::time::timeout(
+        Duration::from_secs(5),
+        Client::start(std::path::Path::new("sh"), &["-c", "exit 3"], None, VERSION),
     )
     .await
-    .unwrap();
+    .expect("a program that exited cannot keep the client waiting");
 
-    let status = tokio::time::timeout(Duration::from_secs(5), client.wait())
-        .await
-        .expect("waiting for an exited worker does not block")
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(status.code(), Some(3));
+    assert!(
+        matches!(started, Err(mix_rpc::Error::Refused(_))),
+        "{:?}",
+        started.err()
+    );
 }
 
 #[tokio::test]
 async fn a_worker_that_cannot_start_is_named_in_the_error() {
-    let missing = Client::start(std::path::Path::new("mix-no-such-program"), &[], None)
-        .await
-        .err()
-        .expect("a missing program cannot start");
+    let missing = Client::start(
+        std::path::Path::new("mix-no-such-program"),
+        &[],
+        None,
+        VERSION,
+    )
+    .await
+    .err()
+    .expect("a missing program cannot start");
 
     assert!(
         std::error::Error::source(&missing)
@@ -280,6 +290,8 @@ async fn a_worker_that_cannot_start_is_named_in_the_error() {
 struct Obeys;
 
 impl Worker for Obeys {
+    const VERSION: &'static str = VERSION;
+
     async fn run(
         &self,
         _caller: Caller,
@@ -301,7 +313,7 @@ impl Worker for Obeys {
 async fn each_control_reaches_the_worker_in_order_and_comes_back_applied() {
     let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
     let _server = tokio::spawn(serve_connection(Obeys, theirs));
-    let mut client = Client::connect(ours).await.unwrap();
+    let mut client = Client::connect(ours, VERSION).await.unwrap();
     let (controls, replies) = client.run(&bootstrap(false)).await.unwrap();
     let mut replies = std::pin::pin!(replies);
     assert!(matches!(replies.next().await, Some(Ok(Reply::Envelope(_)))));
@@ -314,4 +326,17 @@ async fn each_control_reaches_the_worker_in_order_and_comes_back_applied() {
         );
     }
     assert!(replies.next().await.is_none());
+}
+
+#[tokio::test]
+async fn a_worker_of_another_version_is_refused_before_any_request() {
+    let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
+    let _server = tokio::spawn(serve_connection(Scripted, theirs));
+
+    let refused = Client::connect(ours, "9.9.9").await.err();
+
+    let Some(mix_rpc::Error::VersionMismatch { ours, theirs }) = refused else {
+        panic!("a worker of another version must be refused, got {refused:?}");
+    };
+    assert_eq!((ours.as_str(), theirs.as_str()), ("9.9.9", VERSION));
 }

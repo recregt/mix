@@ -116,7 +116,13 @@ async fn start(view: &View) -> anyhow::Result<Client> {
         );
     }
     let program = std::env::current_exe()?;
-    Ok(Client::start(&program, &[WORKER], Some(LAUNCHER)).await?)
+    Ok(Client::start(
+        &program,
+        &[WORKER],
+        Some(LAUNCHER),
+        env!("CARGO_PKG_VERSION"),
+    )
+    .await?)
 }
 
 pub async fn run(request: Request, view: &View) -> anyhow::Result<()> {

@@ -295,6 +295,11 @@ pub fn explanation(code: Code) -> Explanation {
             "`mix` starts a helper with administrator rights for this command. Whatever it had changed is undone by the next command.",
             ["run the command again to finish"]
         ),
+        Code::VersionMismatch => explained!(
+            "The privileged helper is a different version of `mix` than the command that started it.",
+            "`mix` starts its helper with administrator rights from its own program file. That file was replaced, usually by an update, between the command starting and the helper starting. The two must be the same version, so the helper refused the request before changing anything.",
+            ["run the command again"]
+        ),
     }
 }
 

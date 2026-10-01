@@ -121,6 +121,8 @@ fn unserved() -> Fault {
 struct CliWorker;
 
 impl mix_rpc::Worker for CliWorker {
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+
     async fn run(&self, caller: Caller, command: Command, controls: Controls, events: Events) {
         let mut forward = Forward {
             events,
@@ -196,7 +198,9 @@ mod tests {
     async fn served(command: Command) -> Vec<Envelope> {
         let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
         let server = tokio::spawn(mix_rpc::serve_connection(CliWorker, theirs));
-        let mut client = mix_rpc::Client::connect(ours).await.unwrap();
+        let mut client = mix_rpc::Client::connect(ours, env!("CARGO_PKG_VERSION"))
+            .await
+            .unwrap();
         let (controls, replies) = client.run(&command).await.unwrap();
         let envelopes = replies
             .filter_map(|reply| async move {
