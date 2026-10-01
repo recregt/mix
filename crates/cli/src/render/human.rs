@@ -29,6 +29,7 @@ pub struct Human {
     request: Option<Request>,
     lines: HashMap<NodeId, Arc<dyn StepLine>>,
     subjects: HashMap<NodeId, String>,
+    undone: HashMap<NodeId, String>,
     pending: HashMap<NodeId, Status>,
     actions: HashSet<NodeId>,
 }
@@ -47,6 +48,7 @@ impl Human {
             request: None,
             lines: HashMap::new(),
             subjects: HashMap::new(),
+            undone: HashMap::new(),
             pending: HashMap::new(),
             actions: HashSet::new(),
         }
@@ -105,11 +107,13 @@ impl Human {
                 }
                 Some(node_started::Kind::Step(step)) => {
                     self.pending.insert(node.id, verbs::step(step.verb()));
+                    self.undone
+                        .insert(node.id, verbs::undone(step.verb(), &step.subject));
                     self.subjects.insert(node.id, step.subject);
                 }
                 Some(node_started::Kind::Rollback(rollback)) => {
                     let subject = self
-                        .subjects
+                        .undone
                         .get(&rollback.undoes)
                         .cloned()
                         .unwrap_or_default();

@@ -19,6 +19,22 @@ pub(crate) fn step(verb: Verb) -> Status {
     }
 }
 
+pub(crate) fn undone(verb: Verb, subject: &str) -> String {
+    match verb {
+        Verb::Removing => format!("removal of {subject}"),
+        Verb::Installing => format!("install of {subject}"),
+        Verb::Activating => format!("activation of {subject}"),
+        Verb::Restarting => format!("restart of {subject}"),
+        Verb::Repairing => format!("repair of {subject}"),
+        Verb::Recovering => format!("recovery of {subject}"),
+        Verb::Creating
+        | Verb::Writing
+        | Verb::Configuring
+        | Verb::Recording
+        | Verb::Unspecified => subject.to_string(),
+    }
+}
+
 pub(crate) fn action(operation: Operation) -> Status {
     match operation {
         Operation::CreateDir | Operation::CreateDirs => Status::Creating,

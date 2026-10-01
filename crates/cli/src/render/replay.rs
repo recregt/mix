@@ -456,6 +456,16 @@ mod tests {
             .unwrap();
         tree.finish(activate, Ending::failed(failure.clone()))
             .unwrap();
+        let undo_activate = tree
+            .start(
+                plan,
+                start(
+                    Kind::Rollback(Rollback { undoes: activate }),
+                    "undo-activate",
+                ),
+            )
+            .unwrap();
+        tree.finish(undo_activate, Ending::succeeded()).unwrap();
         let rollback = tree
             .start(
                 plan,

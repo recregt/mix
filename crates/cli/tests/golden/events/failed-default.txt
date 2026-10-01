@@ -1,5 +1,6 @@
      Writing package list
   Installing hello
+Rolling back install of hello
 Rolling back package list
 error: `hello` isn't a package `mix` can find
 
