@@ -6,11 +6,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub mod activity;
 mod display;
+mod problem;
 mod progress;
 mod status;
 pub mod text;
 
 pub use display::{Display, Silent, StepLine, display};
+pub use problem::{Labels, Lines, Problem, problem_text, problem_to};
 pub use progress::{init, live_style};
 pub use status::Status;
 pub use text::{Help, Note, Phrase};
@@ -139,7 +141,7 @@ impl<O: Out> Out for Spaced<O> {
             self.inner.line("");
         }
         self.inner.line(text);
-        if text.contains("\n\n") {
+        if text.contains('\n') {
             self.gap.store(true, Ordering::Relaxed);
         }
     }

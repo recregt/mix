@@ -63,6 +63,19 @@ impl Diagnostic {
         }
     }
 
+    pub fn problem<'a>(&'a self, lines: Option<mix_ui::Lines<'a>>) -> mix_ui::Problem<'a> {
+        let notes = match lines {
+            Some(_) => &[],
+            None => self.note.as_slice(),
+        };
+        mix_ui::Problem {
+            summary: &self.summary,
+            lines,
+            notes,
+            helps: self.help.as_slice(),
+        }
+    }
+
     pub fn summary_text(&self) -> &str {
         self.summary.as_str()
     }

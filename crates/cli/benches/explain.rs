@@ -49,6 +49,7 @@ fn report(name: &str, finding: Finding) -> HealthReport {
         name: name.to_string(),
         category: Category::Filesystem,
         finding: Some(finding),
+        drift: None,
     }
 }
 

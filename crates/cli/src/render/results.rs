@@ -218,6 +218,7 @@ fn audited(out: &dyn Out, inspected: &[InspectionReport], level: Detail, elapsed
                     Some(finding) => Some(wire::finding_from(finding)?),
                     None => None,
                 },
+                drift: report.drift.as_ref().map(wire::drift_from),
             })
         })
         .collect();
@@ -232,11 +233,18 @@ fn audited(out: &dyn Out, inspected: &[InspectionReport], level: Detail, elapsed
         if !chatty {
             continue;
         }
-        words(
-            out,
-            Severity::Warning,
-            &crate::explain::doctor::check(report),
-        );
+        let words = crate::explain::doctor::check(report);
+        let labels = report.finding.map(crate::explain::doctor::labels);
+        let lines = report
+            .drift
+            .as_ref()
+            .zip(labels.as_ref())
+            .map(|(drift, labels)| mix_ui::Lines {
+                path: &drift.path,
+                hunks: &drift.hunks,
+                labels,
+            });
+        mix_ui::problem_to(out, Severity::Warning, &words.problem(lines));
     }
     if reports.iter().all(HealthReport::healthy) {
         if chatty {
@@ -247,11 +255,8 @@ fn audited(out: &dyn Out, inspected: &[InspectionReport], level: Detail, elapsed
             );
         }
     } else {
-        words(
-            out,
-            Severity::Error,
-            &crate::explain::doctor::unhealthy(&reports),
-        );
+        let verdict = crate::explain::doctor::unhealthy(&reports);
+        mix_ui::problem_to(out, Severity::Error, &verdict.problem(None));
     }
 }
 

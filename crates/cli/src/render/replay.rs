@@ -517,6 +517,41 @@ mod tests {
                     target: (*target).into(),
                     category: mix_events::v1::Category::Filesystem as i32,
                     finding: finding.map(mix_core::health::wire::finding),
+                    drift: match *target {
+                        "nix-daemon.service" => {
+                            Some(mix_core::health::wire::drift(&mix_core::health::Drift {
+                                path: "/etc/systemd/system/nix-daemon.service".into(),
+                                hunks: vec![mix_core::health::Hunk {
+                                    found_line: 18,
+                                    found: vec!["Nice=10".into()],
+                                    expected: vec![],
+                                }],
+                            }))
+                        }
+                        "/etc/nix/nix.conf" => Some({
+                            mix_core::health::wire::drift(&mix_core::health::Drift {
+                                path: "/etc/nix/nix.conf".into(),
+                                hunks: vec![
+                                    mix_core::health::Hunk {
+                                        found_line: 1,
+                                        found: vec!["build-users-group = nixbuild".into()],
+                                        expected: vec!["build-users-group = nixbld".into()],
+                                    },
+                                    mix_core::health::Hunk {
+                                        found_line: 3,
+                                        found: vec![],
+                                        expected: vec!["max-jobs = auto".into()],
+                                    },
+                                    mix_core::health::Hunk {
+                                        found_line: 4,
+                                        found: vec!["trusted-users = ciuser".into()],
+                                        expected: vec![],
+                                    },
+                                ],
+                            })
+                        }),
+                        _ => None,
+                    },
                 })
                 .collect(),
         };
@@ -540,6 +575,7 @@ mod tests {
         let problems = doctored(&[
             ("/nix", None),
             ("/etc/nix/nix.conf", Some(Finding::ContentDrift)),
+            ("nix-daemon.service", Some(Finding::UnitDrift)),
             (
                 "/nix/var/nix/profiles",
                 Some(Finding::Mode {

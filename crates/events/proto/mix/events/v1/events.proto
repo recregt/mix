@@ -419,10 +419,23 @@ message InspectionReport {
   string target = 1;
   Category category = 2;
   Finding finding = 3;
+  Drift drift = 4;
 }
 
 message InspectionResult {
   Finding finding = 1;
+  Drift drift = 2;
+}
+
+message Drift {
+  string path = 1;
+  repeated Hunk hunks = 2;
+}
+
+message Hunk {
+  uint32 found_line = 1;
+  repeated string found = 2;
+  repeated string expected = 3;
 }
 
 message Finding {

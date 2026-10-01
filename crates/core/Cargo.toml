@@ -9,6 +9,7 @@ license = "MPL-2.0"
 model = []
 
 [dependencies]
+similar = "3.2.0"
 mix-events = { path = "../events" }
 mix-nixgen = { path = "../nixgen" }
 serde = { workspace = true, features = ["rc"] }

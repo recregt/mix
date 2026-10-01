@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use mix_core::action::Failure;
-use mix_core::health::{self, wire};
+use mix_core::health::{self, Drift, wire};
 use mix_core::models::Category;
 use mix_events::v1::{
     Command, DoctorRequest, DoctorResult, Inspection, InspectionReport, InspectionResult, command,
@@ -25,8 +25,8 @@ use crate::target::Finding;
 pub struct HealthReport {
     pub name: String,
     pub category: Category,
-    /// What the inspection measured, or `None` when the artifact is as it should be.
     pub finding: Option<Finding>,
+    pub drift: Option<Drift>,
 }
 
 impl HealthReport {
@@ -54,14 +54,20 @@ pub async fn audit(ctx: &Context) -> Vec<HealthReport> {
     let mut performer = Files::open(Path::new("/"), "audit").map(Performer::new);
     let mut reports = Vec::with_capacity(items.len());
     for target in &items {
-        let finding = match &mut performer {
+        let (finding, drift) = match &mut performer {
             Ok(performer) => match performer.observe(&health::queries(target)).await {
-                Ok(facts) => health::classify(target, &facts),
-                Err(failure) => Some(Finding::Unreadable {
-                    kind: kind_of(&failure),
-                }),
+                Ok(facts) => (
+                    health::classify(target, &facts),
+                    health::drift(target, &facts),
+                ),
+                Err(failure) => (
+                    Some(Finding::Unreadable {
+                        kind: kind_of(&failure),
+                    }),
+                    None,
+                ),
             },
-            Err(error) => Some(Finding::Unreadable { kind: error.kind() }),
+            Err(error) => (Some(Finding::Unreadable { kind: error.kind() }), None),
         };
         let name = target.label().into_owned();
         if let Ok(node) = tree.start(
@@ -79,6 +85,7 @@ pub async fn audit(ctx: &Context) -> Vec<HealthReport> {
                 Ending::succeeded().with_result(node_finished::Result::Inspection(
                     InspectionResult {
                         finding: finding.map(wire::finding),
+                        drift: drift.as_ref().map(wire::drift),
                     },
                 )),
             );
@@ -87,6 +94,7 @@ pub async fn audit(ctx: &Context) -> Vec<HealthReport> {
             name,
             category: target.category(),
             finding,
+            drift,
         });
     }
     let result = DoctorResult {
@@ -96,6 +104,7 @@ pub async fn audit(ctx: &Context) -> Vec<HealthReport> {
                 target: report.name.clone(),
                 category: wire::category(report.category) as i32,
                 finding: report.finding.map(wire::finding),
+                drift: report.drift.as_ref().map(wire::drift),
             })
             .collect(),
     };

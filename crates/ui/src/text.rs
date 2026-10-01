@@ -274,6 +274,20 @@ impl Around {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoteAround(Around);
+
+impl NoteAround {
+    #[doc(hidden)]
+    pub const fn checked(around: Around) -> Self {
+        Self(around)
+    }
+
+    pub fn note(&self, value: &str) -> Note {
+        Note::checked(self.0.around(value))
+    }
+}
+
 pub const fn starts_parts(first: &str) -> bool {
     first.is_empty() || (is_fragment(first) && is_phrase(first))
 }
@@ -298,6 +312,17 @@ macro_rules! around {
             "the text around a value starts a phrase or is empty, and ends as a fragment"
         );
         $crate::text::Around::checked($before, $after)
+    }};
+}
+
+#[macro_export]
+macro_rules! note_around {
+    ($before:literal, $after:literal) => {{
+        const _: () = assert!(
+            !$crate::text::starts_with_imperative($before),
+            "a note states a fact; an instruction belongs in a help"
+        );
+        $crate::text::NoteAround::checked($crate::around!($before, $after))
     }};
 }
 

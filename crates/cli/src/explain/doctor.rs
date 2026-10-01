@@ -7,7 +7,7 @@
 use mix_shell::ops::doctor::HealthReport;
 use mix_shell::target::Finding;
 use mix_ui::text::{decimal, octal};
-use mix_ui::{around, help, note, note_parts, phrase, phrase_parts};
+use mix_ui::{Labels, around, help, note, note_around, note_parts, phrase, phrase_parts};
 
 use super::{Diagnostic, failed};
 
@@ -142,6 +142,37 @@ pub fn check(report: &HealthReport) -> Diagnostic {
     }
 }
 
+pub fn labels(finding: Finding) -> Labels {
+    match finding {
+        Finding::UnitDrift => Labels {
+            added: phrase!("not in the Nix runtime's copy"),
+            changed: phrase!("differs from the Nix runtime's copy"),
+            missing: note_around!("lines of the Nix runtime's copy are missing at line ", ""),
+            fix: phrase!("`mix repair` puts back the Nix runtime's copy"),
+        },
+        Finding::Missing
+        | Finding::Unreadable { .. }
+        | Finding::NotADirectory
+        | Finding::Mode { .. }
+        | Finding::Owner { .. }
+        | Finding::ContentDrift
+        | Finding::GroupMissing
+        | Finding::GroupGid { .. }
+        | Finding::NotAMember { .. }
+        | Finding::NoSuchUser
+        | Finding::UserMissing
+        | Finding::UserIds { .. }
+        | Finding::UnitMissing
+        | Finding::UnitInactive
+        | Finding::RuntimeMissing => Labels {
+            added: phrase!("not written by `mix`"),
+            changed: phrase!("differs from what `mix` wrote"),
+            missing: note_around!("lines `mix` wrote are missing at line ", ""),
+            fix: phrase!("`mix repair` puts back what `mix` wrote"),
+        },
+    }
+}
+
 pub fn unhealthy(reports: &[HealthReport]) -> Diagnostic {
     let (problems, fixable) = reports.iter().filter(|report| !report.healthy()).fold(
         (0u64, 0u64),
@@ -179,6 +210,7 @@ mod tests {
             name: name.to_string(),
             category: Category::Filesystem,
             finding,
+            drift: None,
         }
     }
 
