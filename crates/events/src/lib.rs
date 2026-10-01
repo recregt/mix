@@ -26,4 +26,4 @@ pub use pbjson_types::Timestamp;
 pub use tree::{Ending, Misuse, Node, NodeId, ROOT, Start, Stopped, Tree, exit, output};
 pub use validate::{Entry, Outcome, Validated, Validator, Violation, validate};
 
-pub const SCHEMA_MINOR: u32 = 0;
+pub const SCHEMA_MINOR: u32 = 1;

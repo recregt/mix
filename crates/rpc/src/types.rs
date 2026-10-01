@@ -1,19 +1,4 @@
-use std::path::PathBuf;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Mirror {
-    pub url: String,
-    pub key: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BootstrapRequest {
-    pub mirror: Option<Mirror>,
-    pub force: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RepairRequest;
+use mix_events::v1::Envelope;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Caller {
@@ -21,85 +6,20 @@ pub struct Caller {
     pub gid: u32,
 }
 
-#[derive(Debug)]
-pub enum Event {
-    Envelope(Vec<u8>),
-    Finished(Outcome),
-}
-
-#[derive(Debug)]
-pub enum Outcome {
-    BootstrapDone,
-    RepairDone {
-        reports: Vec<RepairReport>,
-        interrupted: bool,
-    },
-    Failure(Failure),
-}
-
-#[derive(Debug)]
-pub struct RepairReport {
-    pub name: String,
-    pub failure: Option<TargetFailure>,
-}
-
-#[derive(Debug)]
-pub enum Failure {
-    Core(mix_core::Error),
-    Network(String),
-    Integrity {
-        artifact: String,
-        detail: String,
-    },
-    UnsupportedTarget(String),
-    InvalidMirror(String),
-    Conflict {
-        subject: String,
-        expected: String,
-        found: String,
-    },
-    Target(TargetFailure),
-    Decompression(String),
-    MalformedArchive(String),
-    NotRoot(String),
-    UnsupportedHost,
-    UnsupportedKernel,
-    SystemdNotReady {
-        host: Host,
-    },
-    SystemdUnreachable,
-    Unit {
-        operation: String,
-        unit: String,
-        detail: String,
-        invocation: Option<String>,
-    },
-    AlreadyManaged,
-    CrossDeviceStore {
-        path: PathBuf,
-    },
-    Rollback {
-        cause: Box<Failure>,
-        summary: String,
-    },
-    Interrupted,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Host {
-    Native,
-    Wsl,
+pub enum Control {
+    Interrupt,
+    Terminate,
+    Pause,
+    Resume,
 }
 
-#[derive(Debug)]
-pub enum TargetFailure {
-    Core(mix_core::Error),
-    Unrepairable { artifact: String, reason: Unfixable },
+#[derive(Debug, Clone, PartialEq)]
+pub enum Reply {
+    Envelope(Envelope),
+    Applied(Control),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Unfixable {
-    NotADirectory,
-    MissingUser,
-    MissingRuntime,
-}
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("the worker sent a message this version of mix cannot read: {0}")]
+pub struct Malformed(pub String);

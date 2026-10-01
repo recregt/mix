@@ -12,12 +12,7 @@ pub async fn run(
         .with_render(view.sinks(mix_ui::display())?)
         .with_policy(super::policy())
         .with_host(super::host_config());
-    let _watch = crate::controls::watch(
-        &ctx.scope,
-        view.notices(crate::controls::change()),
-        std::future::pending(),
-        crate::controls::Side::Client,
-    );
+    let _watch = crate::controls::watch(&ctx.scope, view.notices(crate::controls::change()));
 
     mix_shell::ops::remove::remove(&ctx, packages).await?;
 

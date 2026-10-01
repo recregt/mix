@@ -7,38 +7,42 @@ use std::task::{Context, Poll};
 
 use futures_util::{Stream, StreamExt};
 use hyper_util::rt::TokioIo;
+use mix_events::Normalize;
+use mix_events::v1::{Command, Envelope};
+use prost::Message;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::UnixStream;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio_util::task::TaskTracker;
 use tonic::transport::server::{Connected, UdsConnectInfo};
 use tonic::transport::{Channel, Endpoint, Server, Uri};
-use tonic::{Request, Response, Status};
+use tonic::{Request, Response, Status, Streaming};
 
-use crate::convert::{self, Malformed};
 use crate::proto;
+use crate::proto::run_request::Call;
+use crate::proto::run_response;
 use crate::proto::worker_service_client::WorkerServiceClient;
 use crate::proto::worker_service_server::WorkerServiceServer;
-use crate::types::{BootstrapRequest, Caller, Event, Outcome, RepairRequest};
+use crate::types::{Caller, Control, Malformed, Reply};
 
 const WORKER_URI: &str = "http://worker";
 
-pub type Events = mpsc::UnboundedSender<Event>;
+pub const PROTOCOL: u32 = 1;
+
+pub type Events = mpsc::UnboundedSender<Reply>;
+
+pub type Controls = mpsc::UnboundedReceiver<Control>;
 
 pub trait Worker: Send + Sync + 'static {
-    fn bootstrap(
-        &self,
-        caller: Caller,
-        request: BootstrapRequest,
-        events: Events,
-    ) -> impl Future<Output = Outcome> + Send;
+    const VERSION: &'static str;
 
-    fn repair(
+    fn run(
         &self,
         caller: Caller,
-        request: RepairRequest,
+        command: Command,
+        controls: Controls,
         events: Events,
-    ) -> impl Future<Output = Outcome> + Send;
+    ) -> impl Future<Output = ()> + Send;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -58,6 +62,9 @@ pub enum Error {
     #[error("the privileged worker stopped before it finished")]
     Ended,
 
+    #[error("the privileged worker is mix {theirs}, but this is mix {ours}")]
+    VersionMismatch { ours: String, theirs: String },
+
     #[error(transparent)]
     Malformed(#[from] Malformed),
 
@@ -65,32 +72,12 @@ pub enum Error {
     NotAConnection(#[source] std::io::Error),
 }
 
-type Responses<R> = Pin<Box<dyn Stream<Item = Result<R, Status>> + Send>>;
+type Responses = Pin<Box<dyn Stream<Item = Result<proto::RunResponse, Status>> + Send>>;
 
 struct Service<W> {
     worker: Arc<W>,
     running: TaskTracker,
     one_at_a_time: Arc<Semaphore>,
-}
-
-impl<W: Worker> Service<W> {
-    fn run<F, Fut>(&self, work: F) -> Result<mpsc::UnboundedReceiver<Event>, Status>
-    where
-        F: FnOnce(Arc<W>, Events) -> Fut,
-        Fut: Future<Output = Outcome> + Send + 'static,
-    {
-        let permit = Arc::clone(&self.one_at_a_time)
-            .try_acquire_owned()
-            .map_err(|_| Status::resource_exhausted("the worker is already running a request"))?;
-        let (events, received) = mpsc::unbounded_channel();
-        let work = work(Arc::clone(&self.worker), events.clone());
-        self.running.spawn(async move {
-            let outcome = work.await;
-            drop(permit);
-            let _ = events.send(Event::Finished(outcome));
-        });
-        Ok(received)
-    }
 }
 
 fn caller<T>(request: &Request<T>) -> Result<Caller, Status> {
@@ -105,54 +92,120 @@ fn caller<T>(request: &Request<T>) -> Result<Caller, Status> {
         .ok_or_else(|| Status::unauthenticated("the caller could not be identified"))
 }
 
-fn stream<R: Send + 'static>(
-    events: mpsc::UnboundedReceiver<Event>,
-    to_wire: fn(Event) -> R,
-) -> Responses<R> {
-    Box::pin(
-        futures_util::stream::unfold(events, |mut events| async move {
-            events.recv().await.map(|event| (event, events))
-        })
-        .map(move |event| Ok(to_wire(event))),
-    )
+async fn command(calls: &mut Streaming<proto::RunRequest>) -> Result<Command, Status> {
+    match calls.message().await? {
+        Some(proto::RunRequest {
+            call: Some(Call::Command(bytes)),
+        }) => Command::decode(bytes.as_slice())
+            .map_err(|error| Status::invalid_argument(format!("the command: {error}"))),
+        Some(_) => Err(Status::invalid_argument(
+            "the first message of a request must be its command",
+        )),
+        None => Err(Status::invalid_argument(
+            "the request ended before its command",
+        )),
+    }
 }
 
-fn malformed(error: Malformed) -> Status {
-    Status::invalid_argument(error.to_string())
+fn control_from_wire(control: i32) -> Option<Control> {
+    match proto::Control::try_from(control).ok()? {
+        proto::Control::Interrupt => Some(Control::Interrupt),
+        proto::Control::Terminate => Some(Control::Terminate),
+        proto::Control::Pause => Some(Control::Pause),
+        proto::Control::Resume => Some(Control::Resume),
+        proto::Control::Unspecified => None,
+    }
+}
+
+fn control_to_wire(control: Control) -> proto::Control {
+    match control {
+        Control::Interrupt => proto::Control::Interrupt,
+        Control::Terminate => proto::Control::Terminate,
+        Control::Pause => proto::Control::Pause,
+        Control::Resume => proto::Control::Resume,
+    }
+}
+
+async fn forward_controls(
+    mut calls: Streaming<proto::RunRequest>,
+    controls: mpsc::UnboundedSender<Control>,
+) {
+    while let Ok(Some(call)) = calls.message().await {
+        if let Some(Call::Control(control)) = call.call
+            && let Some(control) = control_from_wire(control)
+            && controls.send(control).is_err()
+        {
+            return;
+        }
+    }
+}
+
+fn reply_to_wire(reply: Reply) -> proto::RunResponse {
+    proto::RunResponse {
+        reply: Some(match reply {
+            Reply::Envelope(envelope) => run_response::Reply::Envelope(envelope.encode_to_vec()),
+            Reply::Applied(control) => {
+                run_response::Reply::Applied(control_to_wire(control) as i32)
+            }
+        }),
+    }
+}
+
+fn reply_from_wire(response: proto::RunResponse) -> Result<Reply, Error> {
+    match response.reply {
+        Some(run_response::Reply::Envelope(bytes)) => envelope(&bytes).map(Reply::Envelope),
+        Some(run_response::Reply::Applied(control)) => control_from_wire(control)
+            .map(Reply::Applied)
+            .ok_or_else(|| Malformed(format!("an applied control: {control}")).into()),
+        None => Err(Malformed("a reply with nothing in it".to_string()).into()),
+    }
+}
+
+pub struct Controller(mpsc::UnboundedSender<Control>);
+
+impl Controller {
+    pub fn send(&self, control: Control) {
+        let _ = self.0.send(control);
+    }
 }
 
 #[tonic::async_trait]
 impl<W: Worker> proto::worker_service_server::WorkerService for Service<W> {
-    type BootstrapStream = Responses<proto::BootstrapResponse>;
-    type RepairStream = Responses<proto::RepairResponse>;
+    type RunStream = Responses;
 
-    async fn bootstrap(
+    async fn hello(
         &self,
-        request: Request<proto::BootstrapRequest>,
-    ) -> Result<Response<Self::BootstrapStream>, Status> {
-        let caller = caller(&request)?;
-        let request =
-            convert::bootstrap_request_from_wire(request.into_inner()).map_err(malformed)?;
-        let received = self
-            .run(|worker, events| async move { worker.bootstrap(caller, request, events).await })?;
-        Ok(Response::new(stream(
-            received,
-            convert::bootstrap_response_to_wire,
-        )))
+        _request: Request<proto::HelloRequest>,
+    ) -> Result<Response<proto::HelloResponse>, Status> {
+        Ok(Response::new(proto::HelloResponse {
+            version: W::VERSION.to_string(),
+            protocol: PROTOCOL,
+        }))
     }
 
-    async fn repair(
+    async fn run(
         &self,
-        request: Request<proto::RepairRequest>,
-    ) -> Result<Response<Self::RepairStream>, Status> {
+        request: Request<Streaming<proto::RunRequest>>,
+    ) -> Result<Response<Self::RunStream>, Status> {
         let caller = caller(&request)?;
-        let request = convert::repair_request_from_wire(request.into_inner()).map_err(malformed)?;
-        let received =
-            self.run(|worker, events| async move { worker.repair(caller, request, events).await })?;
-        Ok(Response::new(stream(
-            received,
-            convert::repair_response_to_wire,
-        )))
+        let mut calls = request.into_inner();
+        let command = command(&mut calls).await?;
+        let permit = Arc::clone(&self.one_at_a_time)
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("the worker is already running a request"))?;
+        let (events, received) = mpsc::unbounded_channel();
+        let (controls, steering) = mpsc::unbounded_channel();
+        tokio::spawn(forward_controls(calls, controls));
+        let worker = Arc::clone(&self.worker);
+        self.running.spawn(async move {
+            worker.run(caller, command, steering, events).await;
+            drop(permit);
+        });
+        let responses = futures_util::stream::unfold(received, |mut received| async move {
+            received.recv().await.map(|reply| (reply, received))
+        })
+        .map(|reply| Ok(reply_to_wire(reply)));
+        Ok(Response::new(Box::pin(responses)))
     }
 }
 
@@ -251,7 +304,7 @@ pub struct Client {
 }
 
 impl Client {
-    pub async fn connect(connection: UnixStream) -> Result<Self, Error> {
+    pub async fn connect(connection: UnixStream, version: &str) -> Result<Self, Error> {
         let slot = Arc::new(Mutex::new(Some(connection)));
         let channel = Endpoint::from_static(WORKER_URI)
             .connect_with_connector(tower::service_fn(move |_: Uri| {
@@ -264,13 +317,33 @@ impl Client {
             }))
             .await
             .map_err(|error| Error::Connect(error.to_string()))?;
+        let mut inner = WorkerServiceClient::new(channel);
+        let answer = inner
+            .hello(proto::HelloRequest {
+                version: version.to_string(),
+                protocol: PROTOCOL,
+            })
+            .await
+            .map_err(refused)?
+            .into_inner();
+        if answer.version != version || answer.protocol != PROTOCOL {
+            return Err(Error::VersionMismatch {
+                ours: version.to_string(),
+                theirs: answer.version,
+            });
+        }
         Ok(Self {
-            inner: WorkerServiceClient::new(channel),
+            inner,
             worker: None,
         })
     }
 
-    pub async fn start(program: &Path, args: &[&str], via: Option<&str>) -> Result<Self, Error> {
+    pub async fn start(
+        program: &Path,
+        args: &[&str],
+        via: Option<&str>,
+        version: &str,
+    ) -> Result<Self, Error> {
         let (ours, theirs) = std::os::unix::net::UnixStream::pair().map_err(Error::Spawn)?;
         let command = match via {
             Some(launcher) => mix_exec::Command::new(launcher).arg(program),
@@ -281,35 +354,38 @@ impl Client {
             .spawn_foreground(OwnedFd::from(theirs))
             .map_err(Error::Launch)?;
         ours.set_nonblocking(true).map_err(Error::Spawn)?;
-        let mut client = Self::connect(UnixStream::from_std(ours).map_err(Error::Spawn)?).await?;
+        let connection = UnixStream::from_std(ours).map_err(Error::Spawn)?;
+        let mut client = Self::connect(connection, version).await?;
         client.worker = Some(worker);
         Ok(client)
     }
 
-    pub async fn bootstrap(
+    pub async fn run(
         &mut self,
-        request: &BootstrapRequest,
-    ) -> Result<impl Stream<Item = Result<Event, Error>> + use<>, Error> {
-        let events = self
-            .inner
-            .bootstrap(convert::bootstrap_request_to_wire(request))
-            .await
-            .map_err(refused)?
-            .into_inner();
-        Ok(decode(events, convert::bootstrap_response_from_wire))
-    }
-
-    pub async fn repair(
-        &mut self,
-        request: &RepairRequest,
-    ) -> Result<impl Stream<Item = Result<Event, Error>> + use<>, Error> {
-        let events = self
-            .inner
-            .repair(convert::repair_request_to_wire(request))
-            .await
-            .map_err(refused)?
-            .into_inner();
-        Ok(decode(events, convert::repair_response_from_wire))
+        command: &Command,
+    ) -> Result<(Controller, impl Stream<Item = Result<Reply, Error>> + use<>), Error> {
+        let first = proto::RunRequest {
+            call: Some(Call::Command(command.encode_to_vec())),
+        };
+        let (controls, steering) = mpsc::unbounded_channel();
+        let calls = futures_util::stream::once(async move { first }).chain(
+            futures_util::stream::unfold(steering, |mut steering| async move {
+                steering.recv().await.map(|control: Control| {
+                    let call = proto::RunRequest {
+                        call: Some(Call::Control(control_to_wire(control) as i32)),
+                    };
+                    (call, steering)
+                })
+            }),
+        );
+        let responses = self.inner.run(calls).await.map_err(refused)?.into_inner();
+        Ok((
+            Controller(controls),
+            responses.map(|response| match response {
+                Ok(response) => reply_from_wire(response),
+                Err(_) => Err(Error::Ended),
+            }),
+        ))
     }
 
     pub async fn wait(mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
@@ -325,12 +401,9 @@ fn refused(status: Status) -> Error {
     Error::Refused(status.message().to_string())
 }
 
-fn decode<R>(
-    responses: tonic::Streaming<R>,
-    from_wire: fn(R) -> Result<Event, Malformed>,
-) -> impl Stream<Item = Result<Event, Error>> {
-    responses.map(move |response| match response {
-        Ok(response) => Ok(from_wire(response)?),
-        Err(_) => Err(Error::Ended),
-    })
+fn envelope(bytes: &[u8]) -> Result<Envelope, Error> {
+    let mut envelope = Envelope::decode(bytes)
+        .map_err(|error| Malformed(format!("an event envelope: {error}")))?;
+    envelope.normalize();
+    Ok(envelope)
 }

@@ -37,5 +37,6 @@ Failure codes:
     unrepairable           `mix repair` found something it will not change on its own
     privileges-unavailable `mix` could not get administrator rights
     worker-ended           The privileged helper stopped before it answered
+    version-mismatch       The privileged helper is a different version of `mix` than the command that started it
 
 Run `mix explain <code>` to read about one of them.

@@ -175,10 +175,15 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
             Command {
                 mix_version: env!("CARGO_PKG_VERSION").to_string(),
                 schema_minor: mix_events::SCHEMA_MINOR,
-                request: Some(command::Request::Bootstrap(BootstrapRequest {
+                request: Some(command::Request::Bootstrap(Box::new(BootstrapRequest {
                     force,
                     mirror: ctx.mirror().map(str::to_string),
-                })),
+                    mirror_key: ctx
+                        .policy
+                        .mirror()
+                        .and_then(|mirror| mirror.key())
+                        .map(str::to_string),
+                }))),
             },
         ),
     );

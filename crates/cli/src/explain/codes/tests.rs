@@ -162,6 +162,10 @@ fn every_worker_failure_has_a_code_unless_it_is_a_protocol_violation() {
         Error::Connect("refused".into()),
         Error::Refused("not allowed".into()),
         Error::Ended,
+        Error::VersionMismatch {
+            ours: "1.0.0".into(),
+            theirs: "1.1.0".into(),
+        },
         Error::NotAConnection(std::io::ErrorKind::InvalidInput.into()),
     ];
     for error in &errors {
@@ -170,6 +174,7 @@ fn every_worker_failure_has_a_code_unless_it_is_a_protocol_violation() {
             Error::Malformed(_) | Error::NotAConnection(_) => {
                 assert_eq!(code, Some(Code::Internal))
             }
+            Error::VersionMismatch { .. } => assert_eq!(code, Some(Code::VersionMismatch)),
             Error::Spawn(_)
             | Error::Launch(_)
             | Error::Connect(_)

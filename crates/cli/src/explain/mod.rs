@@ -160,6 +160,9 @@ pub(crate) fn fault_of(error: &anyhow::Error) -> mix_events::Fault {
     if let Some(error) = error.downcast_ref::<mix_rpc::Error>() {
         return rpc_fault(error);
     }
+    if let Some(failed) = error.downcast_ref::<crate::remote::client::Failed>() {
+        return failed.fault.clone();
+    }
     if let Some(error) = error.downcast_ref::<mix_shell::ops::bootstrap::Error>() {
         return error.fault();
     }

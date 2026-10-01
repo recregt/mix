@@ -25,6 +25,7 @@ pub struct Human {
     results: bool,
     started: Instant,
     stopping: Option<Stopping>,
+    detaching: bool,
     stop_noticed: bool,
     request: Option<Request>,
     lines: HashMap<NodeId, Arc<dyn StepLine>>,
@@ -44,6 +45,7 @@ impl Human {
             results: true,
             started: Instant::now(),
             stopping: None,
+            detaching: false,
             stop_noticed: false,
             request: None,
             lines: HashMap::new(),
@@ -56,6 +58,11 @@ impl Human {
 
     pub fn level(mut self, level: Detail) -> Self {
         self.level = level;
+        self
+    }
+
+    pub fn detaching(mut self) -> Self {
+        self.detaching = true;
         self
     }
 
@@ -95,7 +102,18 @@ impl Human {
         match event {
             Event::NodeStarted(node) => match node.kind {
                 Some(node_started::Kind::Command(command)) => {
-                    self.stopping = command.request.as_ref().and_then(stopping_for);
+                    self.stopping =
+                        command
+                            .request
+                            .as_ref()
+                            .and_then(stopping_for)
+                            .map(|stopping| {
+                                if self.detaching {
+                                    stopping.detached()
+                                } else {
+                                    stopping
+                                }
+                            });
                     self.request = command.request;
                     if self.shows(Detail::Trace) {
                         mix_ui::note_to(
@@ -238,7 +256,7 @@ impl Human {
                     mix_ui::note_to(
                         self.out.as_ref(),
                         &stopping.first,
-                        Some(&stopping.first_help),
+                        Some(&stopping.first_help()),
                     );
                 }
             }

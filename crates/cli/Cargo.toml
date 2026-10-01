@@ -9,6 +9,7 @@ license = "MPL-2.0"
 embed-tarball = ["mix-shell/embed-tarball"]
 
 [dependencies]
+thiserror = { workspace = true }
 mix-shell = { path = "../shell" }
 mix-core = { path = "../core" }
 mix-exec = { path = "../exec" }
@@ -20,7 +21,6 @@ futures-util = { workspace = true }
 nix = { workspace = true, features = ["signal"] }
 tokio = { workspace = true, features = ["signal"] }
 mix-events = { path = "../events" }
-prost = "0.14.4"
 pbjson-types = "0.9.0"
 serde_json = { workspace = true }
 

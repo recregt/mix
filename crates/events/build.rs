@@ -190,6 +190,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .boxed(".mix.events.v1.NodeFinished.diagnostic")
         .boxed(".mix.events.v1.Diagnostic.detail.conflict")
         .boxed(".mix.events.v1.Diagnostic.detail.unit")
+        // Keeps Command, and so every NodeStarted, from growing with each bootstrap option.
+        .boxed(".mix.events.v1.Command.request.bootstrap")
         .compile_fds(descriptors)?;
 
     pbjson_build::Builder::new()

@@ -17,15 +17,11 @@ pub async fn run(
             .with_render(view.sinks(mix_ui::display())?)
             .with_policy(policy)
             .with_host(super::host_config());
-        let _watch = crate::controls::watch(
-            &ctx.scope,
-            view.notices(crate::controls::bootstrap()),
-            std::future::pending(),
-            crate::controls::Side::Client,
-        );
+        let _watch = crate::controls::watch(&ctx.scope, view.notices(crate::controls::bootstrap()));
         mix_shell::ops::bootstrap::bootstrap(&ctx, force).await?;
     } else {
-        crate::remote::client::bootstrap(mirror, mirror_key, force, view).await?;
+        let request = crate::remote::client::bootstrap_request(mirror, mirror_key, force);
+        crate::remote::client::run(request, view).await?;
     }
     Ok(ExitCode::SUCCESS)
 }

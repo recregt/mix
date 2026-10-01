@@ -96,6 +96,13 @@ pub struct Sinks {
     exit: Exit,
 }
 
+impl Sinks {
+    pub fn detaching(mut self) -> Self {
+        self.human = self.human.map(Human::detaching);
+        self
+    }
+}
+
 impl Render for Sinks {
     fn detail(&self) -> Detail {
         if self.json || self.file.is_some() {
