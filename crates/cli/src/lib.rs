@@ -242,12 +242,12 @@ fn check_events(path: &std::path::Path) -> ExitCode {
     match mix_events::validate(captured.envelopes.iter()) {
         Ok(validated) => {
             for entry in &validated.entries {
-                mix_ui::data(&format!("{} {:?}", entry.path, entry.outcome));
+                mix_ui::data(&format!("{} {}", entry.path, outcome_words(entry.outcome)));
             }
             ExitCode::SUCCESS
         }
         Err(violation) => {
-            unreadable(path, format!("{violation:?}"));
+            unreadable(path, violation.to_string());
             ExitCode::FAILURE
         }
     }
@@ -272,6 +272,25 @@ fn show_events(path: &std::path::Path, node: Option<&str>, level: mix_events::De
     }
 }
 
+fn named(name: &str, prefix: &str) -> String {
+    name.trim_start_matches(prefix)
+        .to_ascii_lowercase()
+        .replace('_', "-")
+}
+
+fn outcome_words(outcome: mix_events::Outcome) -> String {
+    match outcome {
+        mix_events::Outcome::Running => "running".to_string(),
+        mix_events::Outcome::Finished(status) => named(status.as_str_name(), "STATUS_"),
+        mix_events::Outcome::NotRun(reason) => {
+            format!(
+                "not run: {}",
+                named(reason.as_str_name(), "NOT_RUN_REASON_")
+            )
+        }
+    }
+}
+
 fn unreadable(path: &std::path::Path, reason: String) {
     mix_ui::report(
         mix_ui::Severity::Error,
@@ -291,6 +310,20 @@ mod tests {
     use mix_events::v1::envelope::Event;
 
     use super::*;
+
+    #[test]
+    fn a_checked_node_reads_its_outcome_in_words() {
+        use mix_events::v1::{NotRunReason, Status};
+
+        assert_eq!(
+            outcome_words(mix_events::Outcome::Finished(Status::AlreadySatisfied)),
+            "already-satisfied"
+        );
+        assert_eq!(
+            outcome_words(mix_events::Outcome::NotRun(NotRunReason::NotReached)),
+            "not run: not-reached"
+        );
+    }
 
     #[test]
     fn a_stream_that_already_started_is_left_as_it_ended_rather_than_given_a_second_root() {
