@@ -61,6 +61,7 @@ pub(crate) fn io_error(path: impl AsRef<Path>, source: std::io::Error) -> Error 
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 

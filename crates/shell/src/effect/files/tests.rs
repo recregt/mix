@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 

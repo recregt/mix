@@ -55,6 +55,7 @@ pub fn show(captured: &Captured, level: Detail, node: Option<&str>, out: Arc<dyn
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use std::path::PathBuf;
     use std::sync::Mutex;

@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 use std::io::Write as _;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -479,6 +481,7 @@ fn root_home_from(passwd_dir: impl FnOnce() -> Option<PathBuf>) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 

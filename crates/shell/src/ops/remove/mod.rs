@@ -61,6 +61,7 @@ pub async fn remove(ctx: &Context, packages: &[String]) -> Result<Removed> {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
     use mix_core::privilege::InvokingUser;

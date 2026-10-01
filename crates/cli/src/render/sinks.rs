@@ -146,6 +146,7 @@ struct Recorder {
 }
 
 impl Recorder {
+    #[allow(clippy::disallowed_methods)]
     fn create(path: &Path) -> std::io::Result<Self> {
         Ok(Self {
             path: path.to_path_buf(),

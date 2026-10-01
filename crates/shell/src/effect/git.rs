@@ -155,6 +155,7 @@ async fn write_gitignore(state_dir: &Path, scope: &Scope) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 
