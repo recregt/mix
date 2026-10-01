@@ -4,9 +4,6 @@ use mix_shell::ops::doctor::HealthReport;
 use mix_shell::profile::change::Error as InstallError;
 use mix_shell::target::{Error as TargetError, Finding, Unfixable};
 
-static PACKAGES: std::sync::LazyLock<Vec<String>> =
-    std::sync::LazyLock::new(|| vec!["package".to_string()]);
-
 fn main() {
     divan::main();
 }
@@ -23,11 +20,12 @@ fn explain_a_held_lock(bencher: divan::Bencher) {
     let error = anyhow::Error::from(InstallError::Core(mix_core::Error::Locked {
         path: "/var/lib/mix/lock".into(),
     }));
+    let packages = vec!["package".to_string()];
 
     bencher.bench(|| {
         shown(explain::install::explain(
             divan::black_box(&error),
-            &PACKAGES,
+            &packages,
         ))
     });
 }
