@@ -3,7 +3,7 @@ note: request 01920000-0000-7000-8000-000000000002
      Writing /home/ciuser/.local/state/mix/state
       Exited on signal 2: `/usr/bin/git add`
 note: cancelling and putting the package list back
-help: press Ctrl-C again to stop now
+help: press Ctrl-C again to leave it running in the background
 
 Rolling back package list
    Restoring /home/ciuser/.local/state/mix/state

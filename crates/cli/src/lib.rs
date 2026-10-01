@@ -95,7 +95,7 @@ pub async fn run() -> ExitCode {
         Ok(code) => from_root.unwrap_or(code),
         Err(e) => {
             if cli.output == cli::Output::Human && view.exit.code().is_none() {
-                let words = explain(&e);
+                let words = words_for(&e, &request_of(&cli.command), explain.as_ref());
                 let fault = explain::fault_of(&e);
                 let code = (cli.verbose > 0)
                     .then(|| fault.code())
@@ -121,16 +121,13 @@ fn unstreamed(view: &render::sinks::View) -> bool {
     view.streams() && !view.exit.started()
 }
 
-fn stream_the_failure(command: &Command, error: &anyhow::Error, view: &render::sinks::View) {
+fn request_of(command: &Command) -> mix_events::v1::command::Request {
     use mix_events::v1::{
         BootstrapRequest, DoctorRequest, InstallRequest, RemoveRequest, RepairRequest,
         command::Request,
     };
 
-    let Ok(mut sinks) = view.sinks(std::sync::Arc::new(mix_ui::Silent)) else {
-        return;
-    };
-    let request = match command {
+    match command {
         Command::Bootstrap {
             mirror,
             mirror_key,
@@ -150,9 +147,29 @@ fn stream_the_failure(command: &Command, error: &anyhow::Error, view: &render::s
         Command::Repair | Command::Explain { .. } | Command::Events { .. } => {
             Request::Repair(RepairRequest {})
         }
+    }
+}
+
+fn words_for(
+    error: &anyhow::Error,
+    request: &mix_events::v1::command::Request,
+    local: &dyn Fn(&anyhow::Error) -> Diagnostic,
+) -> Diagnostic {
+    if let Some(failed) = error.downcast_ref::<remote::client::Failed>() {
+        return explain::outcome(Some(&failed.request), &failed.fault);
+    }
+    if let Some(error) = error.downcast_ref::<mix_rpc::Error>() {
+        return explain::outcome(Some(request), &explain::rpc_fault(error));
+    }
+    local(error)
+}
+
+fn stream_the_failure(command: &Command, error: &anyhow::Error, view: &render::sinks::View) {
+    let Ok(mut sinks) = view.sinks(std::sync::Arc::new(mix_ui::Silent)) else {
+        return;
     };
     mix_shell::root::fail(
-        mix_shell::root::command(request),
+        mix_shell::root::command(request_of(command)),
         explain::fault_of(error),
         &mut sinks,
     );

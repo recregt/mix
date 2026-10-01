@@ -12,10 +12,13 @@ def test_hard_kill_during_fetch_and_unpack_then_bootstrap_converges(
             "bootstrap", env={"MIX_NIX_MIRROR": silent}
         )
         bootstrap.wait_for_step("fetch-runtime")
-        bootstrap.signal("KILL")
+        worker = container.exec(
+            "pgrep", "-f", "^/usr/local/bin/mix-daemon serve-stdin", check=True
+        ).stdout.split()[0]
+        container.exec("kill", "-KILL", worker, check=True)
 
-        killed = bootstrap.wait(timeout=15.0, complete=False)
-    assert killed.returncode == 137
+        orphaned = bootstrap.wait(timeout=15.0, complete=False)
+    assert orphaned.returncode == 1, orphaned
 
     fix = container.mix("bootstrap", env={"MIX_NIX_MIRROR": mock_nix_server["url"]})
     assert fix.succeeded(), fix

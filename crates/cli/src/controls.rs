@@ -1,65 +1,34 @@
 use mix_exec::Reason;
-use mix_exec::Scope;
-use mix_ui::{Help, Note, Phrase, help, note, phrase};
+use mix_ui::{Help, Note, help, note};
 use nix::sys::signal::Signal;
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::task::JoinHandle;
-
-#[derive(Debug)]
-pub enum Then {
-    Stop { forced: Phrase, help: Help },
-    Detach,
-}
 
 #[derive(Debug)]
 pub struct Stopping {
     pub first: Note,
-    pub then: Then,
 }
 
 impl Stopping {
     pub fn first_help(&self) -> Help {
-        match self.then {
-            Then::Stop { .. } => help!("press Ctrl-C again to stop now"),
-            Then::Detach => help!("press Ctrl-C again to leave it running in the background"),
-        }
-    }
-
-    pub fn detached(self) -> Self {
-        Self {
-            then: Then::Detach,
-            ..self
-        }
+        help!("press Ctrl-C again to leave it running in the background")
     }
 }
 
 pub fn bootstrap() -> Stopping {
     Stopping {
         first: note!("cancelling and cleaning up"),
-        then: Then::Stop {
-            forced: phrase!("stopped before the cleanup finished"),
-            help: help!("run `mix bootstrap` again to finish it"),
-        },
     }
 }
 
 pub fn repair() -> Stopping {
     Stopping {
         first: note!("stopping after the current repair"),
-        then: Then::Stop {
-            forced: phrase!("stopped in the middle of a repair"),
-            help: help!("run `mix repair` again to finish it"),
-        },
     }
 }
 
 pub fn change() -> Stopping {
     Stopping {
         first: note!("cancelling and putting the package list back"),
-        then: Then::Stop {
-            forced: phrase!("stopped before the package list was put back"),
-            help: help!("run any `mix` command to put it back"),
-        },
     }
 }
 
@@ -67,7 +36,7 @@ pub fn detached() -> Note {
     note!("`mix` is finishing the cleanup in the background")
 }
 
-pub const FORCED_EXIT: u32 = mix_events::exit::INTERRUPTED;
+pub const DETACHED_EXIT: u32 = mix_events::exit::INTERRUPTED;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Received {
@@ -80,7 +49,7 @@ pub enum Received {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Control {
     Cancel(Reason),
-    ForceStop,
+    Detach,
     Pause,
     Resume,
 }
@@ -97,7 +66,7 @@ impl Translator {
             Received::Continue => Control::Resume,
             Received::Interrupt | Received::Terminate => {
                 if std::mem::replace(&mut self.cancelled, true) {
-                    return Control::ForceStop;
+                    return Control::Detach;
                 }
                 Control::Cancel(if received == Received::Interrupt {
                     Reason::Interrupted
@@ -109,38 +78,7 @@ impl Translator {
     }
 }
 
-pub fn apply(scope: &Scope, notices: Option<&Stopping>, control: Control) {
-    match control {
-        Control::Cancel(reason) => scope.cancel(reason),
-        Control::ForceStop => {
-            if let Some(Stopping {
-                then: Then::Stop { forced, help },
-                ..
-            }) = notices
-            {
-                mix_ui::report(
-                    mix_ui::Severity::Error,
-                    &mix_ui::Report::new(forced).help(help),
-                );
-            }
-            scope.processes().kill();
-            mix_ui::restore_terminal();
-            std::process::exit(i32::try_from(FORCED_EXIT).unwrap_or(i32::MAX));
-        }
-        Control::Pause => scope.processes().pause(),
-        Control::Resume => scope.processes().resume(),
-    }
-}
-
-pub struct Watch(JoinHandle<()>);
-
-impl Drop for Watch {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
-pub fn listen(signal_number: Signal) -> tokio::signal::unix::Signal {
+fn listen(signal_number: Signal) -> tokio::signal::unix::Signal {
     signal(SignalKind::from_raw(signal_number as i32))
         .unwrap_or_else(|error| panic!("registering a {signal_number} handler: {error}"))
 }
@@ -172,30 +110,9 @@ impl Terminal {
     }
 }
 
-pub fn watch(scope: &Scope, notices: Option<Stopping>) -> Watch {
-    let mut terminal = Terminal::listen();
-    let scope = scope.clone();
-    Watch(tokio::spawn(async move {
-        let mut translator = Translator::default();
-        loop {
-            let control = translator.translate(terminal.next().await);
-            apply(&scope, notices.as_ref(), control);
-            if control == Control::Pause {
-                let _ = nix::sys::signal::raise(Signal::SIGSTOP);
-            }
-        }
-    }))
-}
-
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use nix::sys::signal;
-
     use super::*;
-
-    static ONE_WATCH_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     fn translated(received: &[Received]) -> Vec<Control> {
         let mut translator = Translator::default();
@@ -206,14 +123,14 @@ mod tests {
     }
 
     #[test]
-    fn a_first_interrupt_cancels_and_a_second_forces_a_stop() {
+    fn a_first_interrupt_cancels_and_a_second_detaches() {
         assert_eq!(
             translated(&[Received::Interrupt, Received::Interrupt]),
-            [Control::Cancel(Reason::Interrupted), Control::ForceStop]
+            [Control::Cancel(Reason::Interrupted), Control::Detach]
         );
         assert_eq!(
             translated(&[Received::Terminate, Received::Interrupt]),
-            [Control::Cancel(Reason::Terminated), Control::ForceStop]
+            [Control::Cancel(Reason::Terminated), Control::Detach]
         );
     }
 
@@ -231,62 +148,5 @@ mod tests {
             translated(&[Received::Suspend, Received::Interrupt]),
             [Control::Pause, Control::Cancel(Reason::Interrupted)]
         );
-    }
-
-    #[test]
-    fn cancelling_stops_the_scope_and_pausing_does_not() {
-        let scope = mix_exec::Scope::root();
-
-        apply(&scope, Some(&bootstrap()), Control::Pause);
-        apply(&scope, Some(&bootstrap()), Control::Resume);
-        assert!(!scope.is_stopped());
-
-        apply(
-            &scope,
-            Some(&bootstrap()),
-            Control::Cancel(Reason::Terminated),
-        );
-        assert_eq!(scope.reason(), Some(Reason::Terminated));
-    }
-
-    #[test]
-    fn only_a_run_that_can_detach_offers_to_leave_it_running() {
-        assert_eq!(
-            bootstrap().first_help().as_str(),
-            "press Ctrl-C again to stop now"
-        );
-        assert_eq!(
-            bootstrap().detached().first_help().as_str(),
-            "press Ctrl-C again to leave it running in the background"
-        );
-    }
-
-    async fn cancelled_within_a_few_seconds(scope: &Scope) {
-        tokio::time::timeout(Duration::from_secs(5), scope.stopped())
-            .await
-            .expect("the scope should be stopped");
-    }
-
-    #[tokio::test]
-    async fn sigint_cancels_the_request() {
-        let _alone = ONE_WATCH_AT_A_TIME.lock().await;
-        let scope = mix_exec::Scope::root();
-        let _watch = watch(&scope, Some(bootstrap()));
-
-        signal::raise(Signal::SIGINT).unwrap();
-
-        cancelled_within_a_few_seconds(&scope).await;
-    }
-
-    #[tokio::test]
-    async fn sigterm_cancels_the_request() {
-        let _alone = ONE_WATCH_AT_A_TIME.lock().await;
-        let scope = mix_exec::Scope::root();
-        let _watch = watch(&scope, Some(bootstrap()));
-
-        signal::raise(Signal::SIGTERM).unwrap();
-
-        cancelled_within_a_few_seconds(&scope).await;
-        assert_eq!(scope.reason(), Some(Reason::Terminated));
     }
 }

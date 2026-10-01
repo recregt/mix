@@ -53,8 +53,12 @@ async fn bootstrap(
     let policy =
         crate::settings::requested_policy(request.mirror.as_deref(), request.mirror_key.as_deref())
             .map_err(fault)?;
-    let user = mix_shell::effect::accounts::user_by_uid(caller.uid)
-        .and_then(mix_shell::profile::user_config_for);
+    let account = if caller.uid == 0 {
+        mix_shell::effect::accounts::invoking_user()
+    } else {
+        mix_shell::effect::accounts::user_by_uid(caller.uid)
+    };
+    let user = account.and_then(mix_shell::profile::user_config_for);
     let ctx = context(user, forward).with_policy(policy);
     let _steer = controls::steer(&ctx.scope, controls, &forward.events);
     mix_shell::ops::bootstrap::bootstrap(&ctx, request.force)

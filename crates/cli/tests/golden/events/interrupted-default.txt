@@ -1,6 +1,6 @@
      Writing package list
 note: cancelling and putting the package list back
-help: press Ctrl-C again to stop now
+help: press Ctrl-C again to leave it running in the background
 
 Rolling back package list
    Cancelled `mix install` in 16.00s

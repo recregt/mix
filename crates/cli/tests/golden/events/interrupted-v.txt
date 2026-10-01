@@ -1,7 +1,7 @@
      Writing package list
      Writing /home/ciuser/.local/state/mix/state
 note: cancelling and putting the package list back
-help: press Ctrl-C again to stop now
+help: press Ctrl-C again to leave it running in the background
 
 Rolling back package list
    Restoring /home/ciuser/.local/state/mix/state

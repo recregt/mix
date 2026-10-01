@@ -13,9 +13,6 @@ pub fn explain(error: &anyhow::Error) -> Diagnostic {
     if let Some(error) = error.downcast_ref::<mix_rpc::Error>() {
         return super::privileged(error, &ACTION);
     }
-    if let Some(failed) = error.downcast_ref::<crate::remote::client::Failed>() {
-        return super::outcome(Some(&failed.request), &failed.fault);
-    }
     match error.downcast_ref::<Error>() {
         Some(error) => super::target::describe(error, COMMAND, &ACTION),
         None => failed(&ACTION),

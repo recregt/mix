@@ -2,7 +2,7 @@ import time
 
 import pytest
 from support.container import create_user
-from support.mirror import MIRROR_TEST_USERS, mirror_args
+from support.mirror import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS, mirror_args
 
 USER = MIRROR_TEST_USERS[0]
 DAEMON = "/usr/local/bin/mix-daemon"
@@ -60,13 +60,34 @@ def test_repair_works_when_sudo_only_allows_mix(
     assert container.exec("getent", "group", "nixbld").stdout.split(":")[2] == "30000"
 
 
-def test_a_user_without_sudo_rights_is_told_so(container):
+def test_a_user_without_sudo_rights_cannot_bootstrap(container):
     create_user(container, "nosudo")
 
-    run = container.mix("repair", user="nosudo")
+    run = container.mix("bootstrap", user="nosudo")
 
     assert run.exit_code == 1, run
     assert run.code == "CODE_PRIVILEGES_UNAVAILABLE", run
+
+
+@pytest.mark.bootstrapped
+def test_the_daemon_serves_no_user_outside_mix_users(container):
+    create_user(container, "outsider")
+
+    run = container.mix("repair", user="outsider")
+
+    assert run.exit_code == 1, run
+    assert run.code == "CODE_NOT_BOOTSTRAPPED", run
+
+
+@pytest.mark.bootstrapped
+def test_an_enrolled_user_installs_through_the_daemon_without_sudo(container):
+    container.exec("rm", f"/etc/sudoers.d/{USER}", check=True)
+    assert container.exec("sudo", "-n", "true", user=USER).returncode != 0
+
+    run = container.mix("install", INSTALL_TEST_PACKAGE, user=USER)
+
+    assert run.succeeded(), run
+    assert run.result("install")["added"] == [INSTALL_TEST_PACKAGE], run
 
 
 def test_ctrl_c_through_the_worker_rolls_back_and_says_so(
