@@ -10,7 +10,7 @@
 {"record":{"offset":"8s","envelope":{"seq":"9","request":"01920000-0000-7000-8000-000000000001","nodeFinished":{"id":"5","status":"STATUS_SUCCEEDED"}}}}
 {"record":{"offset":"9s","envelope":{"seq":"10","request":"01920000-0000-7000-8000-000000000001","nodeFinished":{"id":"4","status":"STATUS_SUCCEEDED"}}}}
 {"record":{"offset":"10s","envelope":{"seq":"11","request":"01920000-0000-7000-8000-000000000001","nodeStarted":{"id":"6","parent":"3","key":"activate","step":{"verb":"VERB_INSTALLING","subject":"hello"}}}}}
-{"record":{"offset":"11s","envelope":{"seq":"12","request":"01920000-0000-7000-8000-000000000001","nodeStarted":{"id":"7","parent":"6","key":"a2","action":{"operation":"OPERATION_ACTIVATE_PROFILE","subject":"ciuser"}}}}}
+{"record":{"offset":"11s","envelope":{"seq":"12","request":"01920000-0000-7000-8000-000000000001","nodeStarted":{"id":"7","parent":"6","key":"a2","action":{"operation":"OPERATION_ACTIVATE_PROFILE","subject":"ciuser's profile"}}}}}
 {"record":{"offset":"12s","envelope":{"seq":"13","request":"01920000-0000-7000-8000-000000000001","nodeStarted":{"id":"8","parent":"7","key":"p1","process":{"program":"nix","args":["build"]}}}}}
 {"record":{"offset":"13s","envelope":{"seq":"14","request":"01920000-0000-7000-8000-000000000001","nodeFinished":{"id":"8","status":"STATUS_SUCCEEDED"}}}}
 {"record":{"offset":"14s","envelope":{"seq":"15","request":"01920000-0000-7000-8000-000000000001","nodeStarted":{"id":"9","parent":"7","key":"d1","download":{"artifact":"hello","url":"http://mirror.internal/hello.nar"}}}}}

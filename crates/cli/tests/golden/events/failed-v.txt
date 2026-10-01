@@ -1,7 +1,7 @@
      Writing package list
      Writing /home/ciuser/.local/state/mix/state
   Installing hello
-  Activating ciuser
+  Activating ciuser's profile
 Rolling back package list
    Restoring /home/ciuser/.local/state/mix/state
 error[unknown-package]: `hello` isn't a package `mix` can find

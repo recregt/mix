@@ -678,11 +678,38 @@ pub fn describe(action: &Action) -> (Operation, String) {
         Action::DaemonReload => (Operation::DaemonReload, String::new()),
         Action::InstallRuntime { url, .. } => (Operation::InstallRuntime, url.clone()),
         Action::RemoveRuntime { .. } => (Operation::RemoveRuntime, String::new()),
-        Action::ActivateProfile { user } => (Operation::ActivateProfile, user.name.clone()),
-        Action::SwitchGeneration { user, .. } => (Operation::SwitchGeneration, user.name.clone()),
-        Action::DeleteGeneration { user, .. } => (Operation::DeleteGeneration, user.name.clone()),
-        Action::RecordState { user } => (Operation::RecordState, user.name.clone()),
-        Action::ApplyGeneration { user } => (Operation::ApplyGeneration, user.name.clone()),
+        Action::ActivateProfile { user } => (
+            Operation::ActivateProfile,
+            format!("{}'s profile", user.name),
+        ),
+        Action::SwitchGeneration {
+            user,
+            generation: Some(generation),
+            ..
+        } => (
+            Operation::SwitchGeneration,
+            format!("{}'s profile to generation {generation}", user.name),
+        ),
+        Action::SwitchGeneration {
+            user,
+            generation: None,
+            ..
+        } => (
+            Operation::SwitchGeneration,
+            format!("{}'s profile to no generation", user.name),
+        ),
+        Action::DeleteGeneration { user, generation } => (
+            Operation::DeleteGeneration,
+            format!("generation {generation} of {}'s profile", user.name),
+        ),
+        Action::RecordState { user } => (
+            Operation::RecordState,
+            format!("{}'s package list", user.name),
+        ),
+        Action::ApplyGeneration { user } => (
+            Operation::ApplyGeneration,
+            format!("{}'s current generation", user.name),
+        ),
         Action::Commit => (Operation::Commit, "changes".to_string()),
     }
 }

@@ -4,7 +4,7 @@ note: request 01920000-0000-7000-8000-000000000001
     Observed contents of /home/ciuser/.local/state/mix/state: 412 bytes
    Journaled step 0 prepared, undone by restoring /home/ciuser/.local/state/mix/state
   Installing hello
-  Activating ciuser
+  Activating ciuser's profile
     Fetching http://mirror.internal/hello.nar
      Running `/nix/var/nix/profiles/default/bin/nix build`
     Building /nix/store/bbx79xgf89bvd25i1sivdcykhy39bz14-hello-2.12.drv

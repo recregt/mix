@@ -2,7 +2,7 @@ note: request 01920000-0000-7000-8000-000000000004
      Writing package list
      Writing /home/ciuser/.local/state/mix/state
   Installing hello
-  Activating ciuser
+  Activating ciuser's profile
 Rolling back package list
    Restoring /home/ciuser/.local/state/mix/state
 error[unknown-package]: `hello` isn't a package `mix` can find

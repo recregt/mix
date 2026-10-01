@@ -199,7 +199,7 @@ mod tests {
         let profile = tree
             .start(
                 activate,
-                start(action(Operation::ActivateProfile, "ciuser"), "a2"),
+                start(action(Operation::ActivateProfile, "ciuser's profile"), "a2"),
             )
             .unwrap();
         let process = tree
@@ -443,7 +443,7 @@ mod tests {
         let profile = tree
             .start(
                 activate,
-                start(action(Operation::ActivateProfile, "ciuser"), "a2"),
+                start(action(Operation::ActivateProfile, "ciuser's profile"), "a2"),
             )
             .unwrap();
         let failure = mix_core::diagnose::command_failure(
