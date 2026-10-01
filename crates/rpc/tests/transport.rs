@@ -262,8 +262,12 @@ async fn a_program_that_exits_without_answering_is_refused() {
     .expect("a program that exited cannot keep the client waiting");
 
     assert!(
-        matches!(started, Err(mix_rpc::Error::Refused(_))),
-        "{:?}",
+        matches!(
+            started,
+            Err(mix_rpc::Error::Refused(_) | mix_rpc::Error::Connect(_))
+        ),
+        "the program may exit before or after the connection is up, and either way it was \
+         never a worker: {:?}",
         started.err()
     );
 }
