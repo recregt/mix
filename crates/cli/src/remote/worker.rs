@@ -87,15 +87,52 @@ async fn repair(caller: Caller, forward: &Forward) -> Result<(), Box<Fault>> {
     Ok(())
 }
 
-fn unserved(command: &Command) -> Fault {
-    mix_core::diagnose::failed(
-        Code::Internal,
-        format!(
-            "the worker does not serve `{}`",
-            crate::root::key_of(command.request.as_ref())
-        ),
+enum Change {
+    Install,
+    Remove,
+}
+
+async fn change(
+    caller: Caller,
+    verb: Change,
+    packages: &[String],
+    forward: &Forward,
+) -> Result<(), Box<Fault>> {
+    if caller.uid == 0 {
+        return Err(fault(mix_shell::profile::change::Error::NotRoot));
+    }
+    let _lock = mix_shell::effect::lock::acquire_exclusive(LOCK_FILE).map_err(fault)?;
+    let user = mix_shell::effect::accounts::user_by_uid(caller.uid)
+        .and_then(mix_shell::profile::existing_user_config_for);
+    let ctx = context(user, forward).with_policy(crate::commands::policy());
+    let _watch = controls::watch(
+        &ctx.scope,
         None,
-    )
+        client_gone(&forward.events),
+        controls::Side::Worker,
+    );
+    match verb {
+        Change::Install => mix_shell::ops::install::install(&ctx, packages)
+            .await
+            .map(drop)
+            .map_err(fault),
+        Change::Remove => mix_shell::ops::remove::remove(&ctx, packages)
+            .await
+            .map(drop)
+            .map_err(fault),
+    }
+}
+
+async fn doctor(caller: Caller, forward: &Forward) -> Result<(), Box<Fault>> {
+    let user = mix_shell::effect::accounts::user_by_uid(caller.uid)
+        .and_then(mix_shell::profile::existing_user_config_for);
+    let ctx = context(user, forward).with_policy(crate::commands::policy());
+    mix_shell::ops::doctor::audit(&ctx).await;
+    Ok(())
+}
+
+fn unserved() -> Fault {
+    mix_core::diagnose::failed(Code::Internal, "the request names no command", None)
 }
 
 struct CliWorker;
@@ -109,9 +146,14 @@ impl mix_rpc::Worker for CliWorker {
         let ran = match command.request.clone() {
             Some(Request::Bootstrap(request)) => bootstrap(caller, request, &forward).await,
             Some(Request::Repair(_)) => repair(caller, &forward).await,
-            Some(Request::Install(_) | Request::Remove(_) | Request::Doctor(_)) | None => {
-                Err(Box::new(unserved(&command)))
+            Some(Request::Install(request)) => {
+                change(caller, Change::Install, &request.packages, &forward).await
             }
+            Some(Request::Remove(request)) => {
+                change(caller, Change::Remove, &request.packages, &forward).await
+            }
+            Some(Request::Doctor(_)) => doctor(caller, &forward).await,
+            None => Err(Box::new(unserved())),
         };
         if let Err(fault) = ran
             && !forward.started.load(Ordering::SeqCst)
@@ -141,5 +183,89 @@ pub async fn run() -> ExitCode {
             );
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures_util::StreamExt;
+    use mix_events::v1::{DoctorRequest, NodeFinished, node_finished};
+
+    use super::*;
+
+    async fn served(command: Command) -> Vec<Envelope> {
+        let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
+        let server = tokio::spawn(mix_rpc::serve_connection(CliWorker, theirs));
+        let mut client = mix_rpc::Client::connect(ours).await.unwrap();
+        let envelopes = client
+            .run(&command)
+            .await
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+            .await;
+        drop(client);
+        server.await.unwrap().unwrap();
+        envelopes
+    }
+
+    fn root(envelopes: &[Envelope]) -> &NodeFinished {
+        envelopes
+            .iter()
+            .find_map(|envelope| match &envelope.event {
+                Some(envelope::Event::NodeFinished(finished)) if finished.id == ROOT => {
+                    Some(finished)
+                }
+                _ => None,
+            })
+            .expect("every request ends with its root")
+    }
+
+    #[tokio::test]
+    async fn a_doctor_request_ends_with_the_reports_in_its_root() {
+        let envelopes = served(crate::root::command(Request::Doctor(DoctorRequest {}))).await;
+
+        assert!(matches!(
+            root(&envelopes).result,
+            Some(node_finished::Result::Doctor(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_request_that_never_started_still_ends_with_a_failed_root() {
+        let envelopes = served(Command::default()).await;
+
+        let root = root(&envelopes);
+        assert_eq!(root.status(), mix_events::v1::Status::Failed);
+        assert_eq!(
+            root.diagnostic
+                .as_deref()
+                .map(|diagnostic| diagnostic.code()),
+            Some(Code::Internal)
+        );
+        assert!(
+            mix_events::validate(&envelopes).is_ok(),
+            "the fallback root is a valid stream"
+        );
+    }
+
+    #[tokio::test]
+    async fn root_is_refused_a_package_change_before_anything_is_locked() {
+        let (events, _received) = tokio::sync::mpsc::unbounded_channel();
+        let forward = Forward {
+            events,
+            started: Arc::new(AtomicBool::new(false)),
+        };
+
+        let refused = change(
+            Caller { uid: 0, gid: 0 },
+            Change::Install,
+            &["hello".to_string()],
+            &forward,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(refused.code(), Some(Code::RootNotAllowed));
     }
 }
