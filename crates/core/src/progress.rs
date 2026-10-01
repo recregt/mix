@@ -30,6 +30,8 @@ pub trait ActivityReporter: Send + Sync {
     fn clear(&self);
 
     fn build_started(&self, _derivation: &str) {}
+
+    fn fetch_started(&self, _path: &str) {}
 }
 
 pub struct NoopActivity;

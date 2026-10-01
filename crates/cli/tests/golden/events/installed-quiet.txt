@@ -1,1 +1,0 @@
-   Installed hello in 29.00s

@@ -41,13 +41,13 @@ pub enum Status {
     Observed,
     Journaled,
     Exited,
-    Request,
     Installed,
     Removed,
     Ignored,
     Repaired,
     Checked,
     Finished,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,19 +90,19 @@ impl Status {
             Status::Observed => verb!("Observed"),
             Status::Journaled => verb!("Journaled"),
             Status::Exited => verb!("Exited"),
-            Status::Request => verb!("Request"),
             Status::Installed => verb!("Installed"),
             Status::Removed => verb!("Removed"),
             Status::Ignored => verb!("Ignored"),
             Status::Repaired => verb!("Repaired"),
             Status::Checked => verb!("Checked"),
             Status::Finished => verb!("Finished"),
+            Status::Cancelled => verb!("Cancelled"),
         }
     }
 
     pub(crate) const fn tone(self) -> Tone {
         match self {
-            Status::RollingBack | Status::Exited => Tone::Caution,
+            Status::RollingBack | Status::Exited | Status::Cancelled => Tone::Caution,
             Status::Creating
             | Status::Removing
             | Status::Installing
@@ -132,7 +132,6 @@ impl Status {
             | Status::Building
             | Status::Observed
             | Status::Journaled
-            | Status::Request
             | Status::Installed
             | Status::Removed
             | Status::Ignored

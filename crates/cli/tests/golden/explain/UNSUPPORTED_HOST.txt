@@ -1,4 +1,11 @@
-this system is NixOS, which already does what `mix` does
-you don't need `mix` here
+$ mix install ripgrep
+error: this system is NixOS, which already does what `mix` does
 
-This system is NixOS, which manages packages with Nix natively. `mix` exists to bring that to other distributions, so it has nothing to do here.
+note: `mix` has nothing to do here
+
+$ mix explain unsupported-host
+UNSUPPORTED_HOST
+
+This system is NixOS.
+
+NixOS manages packages with Nix natively. `mix` exists to bring that to other distributions, so it has nothing to do here.

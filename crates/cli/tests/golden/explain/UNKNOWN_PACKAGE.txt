@@ -1,4 +1,15 @@
-something went wrong inside `mix`
-this is a bug in `mix`; please report it at https://github.com/recregt/mix/issues
+$ mix install ripgrep
+error: something went wrong inside `mix`
 
-The package list names something the package collection `mix` installs from does not have. Usually the name is misspelt, or the package goes by another name. Check the name, then run the command again.
+help: report this bug at https://github.com/recregt/mix/issues
+
+$ mix explain unknown-package
+UNKNOWN_PACKAGE
+
+The package list names a package that does not exist.
+
+The package collection `mix` installs from has nothing by that name. Usually the name is misspelt, or the package goes by another name.
+
+To fix it:
+  - check the name
+  - run the command again

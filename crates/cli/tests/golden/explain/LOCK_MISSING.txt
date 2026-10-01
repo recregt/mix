@@ -1,4 +1,14 @@
-`mix` isn't set up yet
-run `mix bootstrap` first
+$ mix install ripgrep
+error: `mix` isn't set up yet
 
-The lock file `mix` uses to keep commands apart does not exist, so `mix` has not been set up on this machine. Run `mix bootstrap` first.
+help: run `mix bootstrap` first
+
+$ mix explain lock-missing
+LOCK_MISSING
+
+`mix` has not been set up on this machine.
+
+The lock file `mix` uses to keep commands apart does not exist yet.
+
+To fix it:
+  - run `mix bootstrap`

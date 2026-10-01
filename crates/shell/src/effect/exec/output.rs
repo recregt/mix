@@ -84,6 +84,7 @@ fn report(line: &str, log: &mut NixLog, decoded: &mut TailBuffer, activity: &dyn
         }
         Event::Transient(text) => activity.line(&text),
         Event::Building(derivation) => activity.build_started(derivation),
+        Event::Fetching(path) => activity.fetch_started(path),
         Event::Progress => activity.progress(&log.snapshot()),
         Event::Ignored => {}
     }

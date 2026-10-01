@@ -1,5 +1,15 @@
-setting up `mix` needs administrator rights
-run it again with sudo:
-  sudo mix install
+$ mix install ripgrep
+error: setting up `mix` needs administrator rights
 
-Setting up `mix` changes the whole system: it creates `/nix`, build users and a system service. Run `mix bootstrap` with sudo.
+help: run it again with sudo:
+        sudo mix install
+
+$ mix explain not-root
+NOT_ROOT
+
+Setting up `mix` needs administrator rights.
+
+Setting up changes the whole system: it creates `/nix`, build users and a system service.
+
+To fix it:
+  - run `mix bootstrap` with sudo

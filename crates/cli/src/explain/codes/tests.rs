@@ -11,10 +11,7 @@ use super::*;
 use crate::explain::{Context, render, rpc_fault};
 
 fn every_code() -> Vec<Code> {
-    (0..=i32::from(u8::MAX))
-        .filter_map(|value| Code::try_from(value).ok())
-        .filter(|code| *code != Code::Unspecified)
-        .collect()
+    super::defined().collect()
 }
 
 fn detail(code: Code) -> Option<Detail> {
@@ -82,9 +79,13 @@ fn golden(code: Code) -> String {
             command: "mix install",
             action: &"install ripgrep",
         },
+    );
+    let shown = mix_ui::report_text(mix_ui::Severity::Error, &words.report(), false);
+    format!(
+        "$ mix install ripgrep\n{shown}\n\n$ mix explain {}\n{}\n",
+        kebab(code),
+        explanation_text(code)
     )
-    .message();
-    format!("{words}\n\n{}\n", long(code))
 }
 
 fn golden_dir() -> PathBuf {
@@ -97,7 +98,7 @@ fn every_code_has_a_name_that_parses_back_and_a_long_text() {
         assert_eq!(parse(name(code)), Some(code), "{code:?}");
         assert_eq!(parse(&name(code).to_lowercase()), Some(code), "{code:?}");
         assert_eq!(parse(code.as_str_name()), Some(code), "{code:?}");
-        assert!(long(code).len() > 40, "{code:?}");
+        assert!(explanation(code).why.len() > 20, "{code:?}");
     }
 }
 
@@ -114,6 +115,18 @@ fn a_name_mix_does_not_use_is_not_a_code() {
     assert_eq!(parse("NOPE"), None);
     assert_eq!(parse("UNSPECIFIED"), None);
     assert_eq!(parse(""), None);
+}
+
+#[test]
+fn the_list_reads_as_its_golden_file() {
+    let path = golden_dir().with_file_name("explain-list.txt");
+    let rendered = format!("$ mix explain --list\n{}\n", list_text());
+    if std::env::var("MIX_UPDATE_GOLDEN").is_ok_and(|value| value == "1") {
+        std::fs::write(&path, &rendered).unwrap();
+    }
+    let expected =
+        std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("{} is missing", path.display()));
+    assert_eq!(rendered, expected, "{}", path.display());
 }
 
 #[test]
@@ -168,43 +181,6 @@ fn every_worker_failure_has_a_code_unless_it_is_a_protocol_violation() {
 }
 
 #[test]
-fn every_diagnostic_mix_prints_follows_the_house_style() {
-    let context = crate::explain::render::Context {
-        command: "mix install ripgrep",
-        action: &"install ripgrep",
-    };
-    for code in every_code() {
-        let wire = mix_events::v1::Diagnostic {
-            code: code as i32,
-            message: "it failed".into(),
-            ..mix_events::v1::Diagnostic::default()
-        };
-        for words in [
-            crate::explain::render::render(&mix_events::Fault::Failed(wire.clone()), &context),
-            crate::explain::render::warning(&wire),
-        ] {
-            let (summary, hint) = words.parts();
-            assert!(mix_ui::house_style(summary), "{code:?}: {summary:?}");
-            if let Some(hint) = hint {
-                assert!(mix_ui::house_style(hint), "{code:?}: {hint:?}");
-            }
-        }
-    }
-    for stopping in [
-        crate::controls::BOOTSTRAP,
-        crate::controls::REPAIR,
-        crate::controls::CHANGE,
-    ] {
-        assert!(mix_ui::house_style(stopping.first), "{:?}", stopping.first);
-        assert!(
-            mix_ui::house_style(stopping.forced),
-            "{:?}",
-            stopping.forced
-        );
-    }
-}
-
-#[test]
 fn nothing_mix_says_by_default_names_nix_mechanics() {
     let context = crate::explain::render::Context {
         command: "mix install ripgrep",
@@ -223,7 +199,7 @@ fn nothing_mix_says_by_default_names_nix_mechanics() {
         };
         let words =
             crate::explain::render::render(&mix_events::Fault::Failed(wire), &context).message();
-        for text in [words.as_str(), long(code)] {
+        for text in [words.as_str(), explanation_text(code).as_str()] {
             assert_eq!(
                 mix_core::vocabulary::nix_mechanics_in(text),
                 Vec::<&str>::new(),

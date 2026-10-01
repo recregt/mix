@@ -5,7 +5,6 @@ use std::time::Duration;
 use mix_core::health::wire;
 use mix_core::paths::PROFILE_SNIPPET_DEST;
 use mix_events::Detail;
-use mix_events::v1::diagnostic::Detail as Found;
 use mix_events::v1::node_finished::Result;
 use mix_events::v1::{InspectionReport, NodeFinished, RepairReport, Status as Ended};
 use mix_shell::ops::doctor::HealthReport;
@@ -13,7 +12,6 @@ use mix_shell::profile::state::Source;
 use mix_ui::{Out, Report, Severity, Status};
 
 use crate::explain::change;
-use crate::explain::target::unfixable;
 
 pub(crate) fn took(elapsed: Duration) -> String {
     let seconds = elapsed.as_secs();
@@ -25,16 +23,7 @@ pub(crate) fn took(elapsed: Duration) -> String {
 }
 
 fn words(out: &dyn Out, severity: Severity, words: &crate::explain::Diagnostic) {
-    let (summary, hint) = words.parts();
-    mix_ui::report_to(
-        out,
-        severity,
-        &Report {
-            summary,
-            helps: hint.into_iter().collect(),
-            ..Report::default()
-        },
-    );
+    mix_ui::report_to(out, severity, &words.report());
 }
 
 pub(super) fn finished(
@@ -47,30 +36,35 @@ pub(super) fn finished(
     let Some(result) = &node.result else {
         return;
     };
+    let chatty = level >= Detail::Step;
     match result {
         Result::Bootstrap(_) => {
-            mix_ui::status_to(
-                out,
-                Status::Finished,
-                &format!("setup in {}", took(elapsed)),
-            );
-            mix_ui::note_to(
-                out,
-                &format!(
-                    "to use installed packages in this terminal session, run `source {PROFILE_SNIPPET_DEST}`"
-                ),
-            );
+            if chatty {
+                mix_ui::status_to(
+                    out,
+                    Status::Finished,
+                    &format!("setup in {}", took(elapsed)),
+                );
+                mix_ui::note_to(
+                    out,
+                    &mix_ui::note!("new terminal sessions see the installed packages"),
+                    Some(&mix_ui::help!(
+                        "run `source {PROFILE_SNIPPET_DEST}` to use them in this one"
+                    )),
+                );
+            }
         }
         Result::Repair(repair) => repaired(
             out,
             &repair.reports,
             node.status() == Ended::Cancelled,
+            chatty,
             elapsed,
         ),
-        Result::Doctor(doctor) => audited(out, &doctor.reports, level),
+        Result::Doctor(doctor) => audited(out, &doctor.reports, level, elapsed),
         Result::Install(install) => {
             reset(out, install.restored, level);
-            if printed {
+            if printed && chatty {
                 changed(
                     out,
                     &install.added,
@@ -83,7 +77,7 @@ pub(super) fn finished(
         }
         Result::Remove(remove) => {
             reset(out, remove.restored, level);
-            if printed {
+            if printed && chatty {
                 changed(
                     out,
                     &remove.removed,
@@ -131,49 +125,60 @@ fn changed(
     }
 }
 
-fn repaired(out: &dyn Out, reports: &[RepairReport], interrupted: bool, elapsed: Duration) {
+fn repaired(
+    out: &dyn Out,
+    reports: &[RepairReport],
+    interrupted: bool,
+    chatty: bool,
+    elapsed: Duration,
+) {
     let fixed: Vec<&str> = reports
         .iter()
         .filter(|report| report.fixed)
         .map(|report| report.target.as_str())
         .collect();
-    for report in reports {
-        match &report.failure {
-            None if report.fixed => {}
-            None => mix_ui::report_to(
-                out,
-                Severity::Warning,
-                &Report {
-                    summary: &format!("couldn't repair {}", report.target),
-                    ..Report::default()
-                },
-            ),
-            Some(failure) => {
-                let why = why(failure);
-                mix_ui::report_to(
+    if chatty {
+        for report in reports {
+            match &report.failure {
+                None if report.fixed => {}
+                None => mix_ui::report_to(
                     out,
                     Severity::Warning,
-                    &Report {
-                        summary: &format!("couldn't repair {}", report.target),
-                        helps: vec![&why],
-                        ..Report::default()
-                    },
-                );
+                    &Report::new(&mix_ui::phrase!("couldn't repair {}", report.target)),
+                ),
+                Some(failure) => {
+                    let fault = mix_events::Fault::Failed(failure.clone());
+                    let action = format!("repair {}", report.target);
+                    let words = crate::explain::render(
+                        &fault,
+                        &crate::explain::Context {
+                            command: crate::explain::repair::COMMAND,
+                            action: &action,
+                        },
+                    );
+                    mix_ui::report_to(
+                        out,
+                        Severity::Warning,
+                        &words.report().causes(crate::explain::evidence(&fault)),
+                    );
+                }
             }
         }
     }
     if interrupted {
-        words(
-            out,
-            Severity::Error,
-            &crate::explain::Diagnostic::hinting(
-                "the repair was stopped before it finished",
-                "run `mix repair` again to finish it",
-            ),
-        );
+        if chatty {
+            words(
+                out,
+                Severity::Warning,
+                &crate::explain::Diagnostic::new(mix_ui::phrase!(
+                    "the repair was stopped before it finished"
+                ))
+                .help(mix_ui::help!("run `mix repair` again to finish it")),
+            );
+        }
         return;
     }
-    if !fixed.is_empty() {
+    if chatty && !fixed.is_empty() {
         mix_ui::status_to(
             out,
             Status::Repaired,
@@ -181,44 +186,25 @@ fn repaired(out: &dyn Out, reports: &[RepairReport], interrupted: bool, elapsed:
         );
     }
     if reports.is_empty() {
-        mix_ui::status_to(out, Status::Checked, "system, nothing to repair");
+        if chatty {
+            mix_ui::status_to(
+                out,
+                Status::Checked,
+                &format!("system in {}", took(elapsed)),
+            );
+        }
     } else if fixed.len() < reports.len() {
         words(
             out,
             Severity::Error,
-            &crate::explain::Diagnostic::new("some problems couldn't be repaired automatically"),
+            &crate::explain::Diagnostic::new(mix_ui::phrase!(
+                "some problems couldn't be repaired automatically"
+            )),
         );
     }
 }
 
-fn why(failure: &mix_events::v1::Diagnostic) -> String {
-    match &failure.detail {
-        Some(Found::Unrepairable(detail)) => {
-            match crate::explain::render::unfixable_of(detail.reason) {
-                Some(reason) => format!("{reason}\n{}", unfixable(reason)),
-                None => failure.message.clone(),
-            }
-        }
-        Some(
-            Found::Io(_)
-            | Found::Command(_)
-            | Found::Network(_)
-            | Found::Integrity(_)
-            | Found::Target(_)
-            | Found::Host(_)
-            | Found::Path(_)
-            | Found::Packages(_)
-            | Found::Format(_)
-            | Found::Lock(_)
-            | Found::Steps(_)
-            | Found::Conflict(_)
-            | Found::Unit(_),
-        )
-        | None => failure.message.clone(),
-    }
-}
-
-fn audited(out: &dyn Out, inspected: &[InspectionReport], level: Detail) {
+fn audited(out: &dyn Out, inspected: &[InspectionReport], level: Detail, elapsed: Duration) {
     let reports: Vec<HealthReport> = inspected
         .iter()
         .filter_map(|report| {
@@ -229,9 +215,11 @@ fn audited(out: &dyn Out, inspected: &[InspectionReport], level: Detail) {
                     Some(finding) => Some(wire::finding_from(finding)?),
                     None => None,
                 },
+                drift: report.drift.as_ref().map(wire::drift_from),
             })
         })
         .collect();
+    let chatty = level >= Detail::Step;
     for report in &reports {
         if report.healthy() {
             if level >= Detail::Action {
@@ -239,31 +227,33 @@ fn audited(out: &dyn Out, inspected: &[InspectionReport], level: Detail) {
             }
             continue;
         }
-        let check = crate::explain::doctor::check(report);
-        let mut lines = check.splitn(2, '\n');
-        let found = lines.next().unwrap_or_default();
-        mix_ui::report_to(
-            out,
-            Severity::Warning,
-            &Report {
-                summary: &format!("{}: {found}", report.name),
-                helps: lines.collect(),
-                ..Report::default()
-            },
-        );
+        if !chatty {
+            continue;
+        }
+        let words = crate::explain::doctor::check(report);
+        let labels = report.finding.map(crate::explain::doctor::labels);
+        let lines = report
+            .drift
+            .as_ref()
+            .zip(labels.as_ref())
+            .map(|(drift, labels)| mix_ui::Lines {
+                path: &drift.path,
+                hunks: &drift.hunks,
+                labels,
+            });
+        mix_ui::problem_to(out, Severity::Warning, &words.problem(lines));
     }
     if reports.iter().all(HealthReport::healthy) {
-        mix_ui::status_to(
-            out,
-            Status::Checked,
-            &format!("{} targets, no problems", reports.len()),
-        );
+        if chatty {
+            mix_ui::status_to(
+                out,
+                Status::Checked,
+                &format!("system in {}", took(elapsed)),
+            );
+        }
     } else {
-        words(
-            out,
-            Severity::Error,
-            &crate::explain::doctor::unhealthy(&reports),
-        );
+        let verdict = crate::explain::doctor::unhealthy(&reports);
+        mix_ui::problem_to(out, Severity::Error, &verdict.problem(None));
     }
 }
 

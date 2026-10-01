@@ -1,15 +1,31 @@
 use std::path::PathBuf;
 
+use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 
+const STYLES: Styles = Styles::styled()
+    .header(AnsiColor::BrightGreen.on_default().effects(Effects::BOLD))
+    .usage(AnsiColor::BrightGreen.on_default().effects(Effects::BOLD))
+    .literal(AnsiColor::BrightCyan.on_default().effects(Effects::BOLD))
+    .placeholder(AnsiColor::Cyan.on_default())
+    .error(AnsiColor::BrightRed.on_default().effects(Effects::BOLD))
+    .valid(AnsiColor::BrightCyan.on_default().effects(Effects::BOLD))
+    .invalid(AnsiColor::Yellow.on_default().effects(Effects::BOLD));
+
 #[derive(Parser)]
-#[command(name = "mix", version, about = "Reproducible systems, made effortless")]
+#[command(
+    name = "mix",
+    version,
+    about = "Reproducible systems, made effortless",
+    styles = STYLES,
+    after_help = "See 'mix help <command>' for more information on a specific command."
+)]
 pub struct Cli {
-    /// Verbosity: -v commands and actions, -vv each program's output
+    /// Use verbose output (-vv also shows each program's output)
     #[arg(short, long, action = ArgAction::Count, global = true, conflicts_with = "quiet")]
     pub verbose: u8,
 
-    /// Print only results and errors
+    /// Print only errors
     #[arg(short, long, global = true)]
     pub quiet: bool,
 
@@ -19,13 +35,11 @@ pub struct Cli {
         global = true,
         env = "MIX_NO_PROGRESS",
         action = ArgAction::SetTrue,
-        // A script exporting MIX_NO_PROGRESS=1 means it, and an empty one means nothing, so the
-        // usual shell spellings are all accepted rather than just "true".
         value_parser = clap::builder::FalseyValueParser::new(),
     )]
     pub no_progress: bool,
 
-    /// How to report what happens: `human` for people, `json` for one event per line
+    /// Write output for people, or as one JSON event per line
     #[arg(long, global = true, value_enum, default_value_t = Output::Human)]
     pub output: Output,
 
@@ -33,8 +47,19 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     pub events_file: Option<PathBuf>,
 
+    /// Choose when to color the output
+    #[arg(long, global = true, value_enum, value_name = "WHEN", default_value_t = Color::Auto)]
+    pub color: Color,
+
     #[command(subcommand)]
     pub command: Command,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Color {
+    Auto,
+    Always,
+    Never,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -56,7 +81,7 @@ pub enum EventsCommand {
         /// The file `--events-file` wrote
         file: PathBuf,
 
-        /// Only this node and what ran inside it, such as `install/activate`
+        /// Show only this node and what ran inside it, such as `install/activate`
         #[arg(long)]
         node: Option<String>,
     },
@@ -64,7 +89,7 @@ pub enum EventsCommand {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Initialize runtime and system dependencies
+    /// Set up `mix` and its runtime on this machine
     Bootstrap {
         /// Mirror for Nix and packages, used by every user [env: MIX_NIX_MIRROR]
         #[arg(long)]
@@ -93,7 +118,7 @@ pub enum Command {
         packages: Vec<String>,
     },
 
-    /// Inspect system health
+    /// Check the health of the system
     Doctor,
 
     /// Repair configuration drift
@@ -105,10 +130,15 @@ pub enum Command {
         command: EventsCommand,
     },
 
-    /// Describe a failure code, such as LOCKED
+    /// Describe a failure code, such as `locked`
     Explain {
         /// The code, as a failure prints it
-        code: String,
+        #[arg(required_unless_present = "list")]
+        code: Option<String>,
+
+        /// List every failure code
+        #[arg(long, conflicts_with = "code")]
+        list: bool,
     },
 
     #[command(
@@ -125,7 +155,76 @@ pub enum Command {
     HomeFiles { request: String },
 }
 
+pub fn color_requested<I, S>(args: I) -> Color
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let mut args = args.into_iter();
+    let mut found = Color::Auto;
+    while let Some(arg) = args.next() {
+        let arg = arg.as_ref().to_string_lossy();
+        let value = match arg.as_ref() {
+            "--" => break,
+            "--color" => args
+                .next()
+                .map(|value| value.as_ref().to_string_lossy().into_owned()),
+            other => other.strip_prefix("--color=").map(str::to_string),
+        };
+        if let Some(value) = value
+            && let Ok(color) = Color::from_str(&value, false)
+        {
+            found = color;
+        }
+    }
+    found
+}
+
+impl Color {
+    pub fn clap(self) -> clap::ColorChoice {
+        match self {
+            Color::Auto => clap::ColorChoice::Auto,
+            Color::Always => clap::ColorChoice::Always,
+            Color::Never => clap::ColorChoice::Never,
+        }
+    }
+}
+
+pub fn exit_status() -> clap::builder::StyledStr {
+    use mix_events::exit;
+
+    let header = STYLES.get_header();
+    let literal = STYLES.get_literal();
+    let rows = [
+        (exit::SUCCEEDED, "succeeded"),
+        (exit::FAILED, "failed"),
+        (exit::USAGE, "the arguments were not valid"),
+        (
+            exit::PROBLEMS_REMAIN,
+            "problems remain: `mix doctor` found some, or `mix repair` left some",
+        ),
+        (exit::INTERRUPTED, "interrupted"),
+    ];
+    let mut text = format!("{header}Exit status:{header:#}\n");
+    for (code, meaning) in rows {
+        text.push_str(&format!("  {literal}{code:<3}{literal:#}  {meaning}\n"));
+    }
+    text.push_str("\nSee 'mix help <command>' for more information on a specific command.");
+    text.into()
+}
+
 impl Cli {
+    pub fn parse_with_color() -> Self {
+        use clap::{CommandFactory, FromArgMatches};
+
+        let color = color_requested(std::env::args_os().skip(1));
+        let matches = Self::command()
+            .color(color.clap())
+            .after_long_help(exit_status())
+            .get_matches();
+        Self::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
+    }
+
     /// Whether output may be drawn in place.
     ///
     /// `--no-progress` and `--output json` are explicit requests for plain output; `CI` is
@@ -152,25 +251,37 @@ mod tests {
 
     const MAX_HELP_LEN: usize = 80;
 
+    fn cargo_style(text: &str) -> bool {
+        text.is_ascii()
+            && text.chars().count() <= MAX_HELP_LEN
+            && text
+                .chars()
+                .next()
+                .is_some_and(|first| !first.is_ascii_lowercase())
+            && !text.ends_with('.')
+            && !text.contains("; ")
+            && !text.contains(". ")
+            && !text.contains('\n')
+    }
+
     fn check_help(command: &clap::Command, path: &str) {
-        if let Some(about) = command.get_about() {
+        let abouts = [command.get_about(), command.get_long_about()];
+        for about in abouts.into_iter().flatten() {
             let text = about.to_string();
-            assert!(
-                text.chars().count() <= MAX_HELP_LEN,
-                "{path}: help text is {} chars (max {MAX_HELP_LEN}): {text:?}",
-                text.chars().count()
-            );
+            assert!(cargo_style(&text), "{path}: {text:?}");
         }
 
         for arg in command.get_arguments() {
-            if let Some(help) = arg.get_help() {
+            let helps = [arg.get_help(), arg.get_long_help()];
+            for help in helps.into_iter().flatten() {
                 let text = help.to_string();
-                assert!(
-                    text.chars().count() <= MAX_HELP_LEN,
-                    "{path} --{}: help text is {} chars (max {MAX_HELP_LEN}): {text:?}",
-                    arg.get_id(),
-                    text.chars().count()
-                );
+                assert!(cargo_style(&text), "{path} {}: {text:?}", arg.get_id());
+            }
+            for value in arg.get_possible_values() {
+                if let Some(help) = value.get_help() {
+                    let text = help.to_string();
+                    assert!(cargo_style(&text), "{path} {}: {text:?}", value.get_name());
+                }
             }
         }
 
@@ -180,8 +291,23 @@ mod tests {
     }
 
     #[test]
-    fn help_text_stays_within_the_length_budget() {
+    fn every_help_text_reads_like_cargo_s() {
         check_help(&Cli::command(), "mix");
+    }
+
+    #[test]
+    fn a_color_request_is_found_before_clap_reads_the_arguments() {
+        assert_eq!(color_requested(["install", "hello"]), Color::Auto);
+        assert_eq!(
+            color_requested(["--color", "never", "doctor"]),
+            Color::Never
+        );
+        assert_eq!(color_requested(["doctor", "--color=always"]), Color::Always);
+        assert_eq!(
+            color_requested(["install", "--", "--color=never"]),
+            Color::Auto
+        );
+        assert_eq!(color_requested(["--color", "sometimes"]), Color::Auto);
     }
 
     #[test]

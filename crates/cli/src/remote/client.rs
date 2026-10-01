@@ -1,6 +1,6 @@
 use futures_util::{Stream, StreamExt};
-use mix_events::Normalize;
 use mix_events::v1::Envelope;
+use mix_events::{Detail, Normalize};
 use mix_rpc::{
     BootstrapRequest, Client, Event, Failure, Malformed, Mirror, Outcome, RepairRequest,
 };
@@ -59,8 +59,11 @@ fn bootstrap_request(
 }
 
 async fn start(view: &View) -> anyhow::Result<Client> {
-    if view.output == Output::Human {
-        mix_ui::note("root is required, re-running with sudo");
+    if view.output == Output::Human && view.level() >= Detail::Step {
+        mix_ui::note(
+            &mix_ui::note!("root is required, re-running with sudo"),
+            None,
+        );
     }
     let program = std::env::current_exe()?;
     Ok(Client::start(&program, &[WORKER], Some(LAUNCHER)).await?)

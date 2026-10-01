@@ -1,17 +1,20 @@
-     Request 01920000-0000-7000-8000-000000000001
+note: request 01920000-0000-7000-8000-000000000001
      Writing package list
      Writing /home/ciuser/.local/state/mix/state
     Observed contents of /home/ciuser/.local/state/mix/state: 412 bytes
-   Journaled prepared 0: undo RESTORE /home/ciuser/.local/state/mix/state
+   Journaled step 0 prepared, undone by restoring /home/ciuser/.local/state/mix/state
   Installing hello
-  Activating ciuser
+  Activating ciuser's profile
     Fetching http://mirror.internal/hello.nar
      Running `/nix/var/nix/profiles/default/bin/nix build`
+    Fetching /nix/store/xl1h9i29pgq2q5cszjhm5wpfxfbbqwyi-glibc-2.40
     Building /nix/store/bbx79xgf89bvd25i1sivdcykhy39bz14-hello-2.12.drv
              | building hello
 warning[git-record-failed]: the change was made but not recorded in git
 
+help: run `mix repair` to record it
+
 Caused by:
   fatal: not a git repository
-  help: `mix repair` records it
-   Installed hello in 29.00s
+
+   Installed hello in 30.00s

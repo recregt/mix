@@ -329,6 +329,15 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
             &[(NIX_DAEMON_SOCKET_UNIT, Finding::UnitMissing)],
         ),
         (
+            "a unit whose source cannot be read",
+            |world: &mut World| {
+                world
+                    .files
+                    .remove(Path::new(crate::constants::paths::NIX_DAEMON_SOCKET_SRC));
+            },
+            &[],
+        ),
+        (
             "a changed unit",
             |world: &mut World| {
                 world.with_file(NIX_DAEMON_SOCKET_DEST, b"[Socket]\n", 0o644, (0, 0));
@@ -440,7 +449,7 @@ fn a_rewritten_nix_conf_restarts_a_running_daemon() {
     assert!(
         report
             .steps
-            .contains(&(Cow::Borrowed("restart-nix-daemon"), StepOutcome::Changed))
+            .contains(&(Cow::Borrowed(RESTART_NIX_DAEMON), StepOutcome::Changed))
     );
 }
 
@@ -540,4 +549,58 @@ fn every_finding_and_category_survive_the_event_stream() {
             Some(category)
         );
     }
+}
+
+#[test]
+fn a_drift_is_the_lines_there_now_against_the_lines_mix_wrote() {
+    let wrote = "build-users-group = nixbld\nmax-jobs = auto\nsandbox = true\n";
+    let now = "build-users-group = nixbuild\nsandbox = true\ntrusted-users = ciuser\n";
+
+    assert_eq!(
+        hunks(wrote, now),
+        [
+            Hunk {
+                found_line: 1,
+                found: vec!["build-users-group = nixbuild".into()],
+                expected: vec![
+                    "build-users-group = nixbld".into(),
+                    "max-jobs = auto".into()
+                ],
+            },
+            Hunk {
+                found_line: 3,
+                found: vec!["trusted-users = ciuser".into()],
+                expected: vec![],
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_secret_setting_never_leaves_the_core_with_its_value() {
+    let wrote = "sandbox = true\n";
+    let now = "sandbox = true\naccess-tokens = github.com=ghp_secret\nextra-access-tokens=x=y\n";
+
+    let drift = hunks(wrote, now);
+
+    assert_eq!(
+        drift[0].found,
+        ["access-tokens = <hidden>", "extra-access-tokens = <hidden>"]
+    );
+    assert!(!format!("{drift:?}").contains("ghp_secret"));
+}
+
+#[test]
+fn files_without_known_contents_have_no_drift_to_show() {
+    let world = World::default();
+    let target = Target::Directory {
+        path: Path::new("/nix").into(),
+        mode: 0o755,
+        owner: None,
+    };
+    let facts: Vec<Fact> = queries(&target)
+        .iter()
+        .map(|query| world.observe(query))
+        .collect();
+    assert_eq!(drift(&target, &facts), None);
 }

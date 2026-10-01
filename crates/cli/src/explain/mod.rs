@@ -2,15 +2,15 @@
 //!
 //! The crates underneath this one raise errors that state facts: a path, a command line, an
 //! errno, a list of derivations. None of them know which command is running, so none of them can
-//! know what a reader should be told to try — `already locked` asks a different question of
+//! know what a reader should be told to try. `already locked` asks a different question of
 //! someone running `mix install` than of someone running `mix repair`, and `root privileges are
 //! required` is advice to re-run with sudo in one command and a refusal in another.
 //!
-//! So the facts travel up untouched and the sentences are written here, one module per command.
-//! The work more than one command shares — activating a profile, reconciling a declared target —
-//! is written once in a module of its own and told which command to name.
-//! A [`Diagnostic`] is what comes out: what happened, and — when there is one worth giving — what
-//! to do about it on the line underneath.
+//! So the facts travel up untouched and the words are written here, one module per command.
+//! The work more than one command shares, such as activating a profile or reconciling a declared
+//! target, is written once in a module of its own and told which command to name.
+//! A [`Diagnostic`] is what comes out: a summary of what happened, a note with a fact the reader
+//! needs, and a help with what to do about it. Each is checked when `mix` is built.
 
 pub mod bootstrap;
 pub mod codes;
@@ -25,86 +25,126 @@ pub mod target;
 
 pub(crate) use render::{Context, render, rpc_fault};
 
-use std::borrow::Cow;
 use std::fmt::{self, Display};
 
-/// A failure in the words the reader should see: what happened, and what to do next.
-#[derive(Debug, PartialEq, Eq)]
+use std::borrow::Cow;
+
+use mix_ui::text::HelpAround;
+use mix_ui::{Help, Note, Phrase, help, phrase};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     text: Cow<'static, str>,
-    summary_len: usize,
+    summary_end: usize,
+    note_end: usize,
 }
 
 impl Diagnostic {
-    /// A failure that speaks for itself.
-    pub fn new(summary: impl Into<Cow<'static, str>>) -> Self {
-        let text = summary.into();
+    #[inline]
+    pub fn new(summary: Phrase) -> Self {
+        let text = summary.into_cow();
+        let end = text.len();
         Self {
-            summary_len: text.len(),
             text,
+            summary_end: end,
+            note_end: end,
         }
     }
 
-    /// A failure with the way out written under it.
-    pub fn hinting(
-        summary: impl Into<Cow<'static, str>>,
-        hint: impl Into<Cow<'static, str>>,
-    ) -> Self {
-        let hint = hint.into();
-        let mut text = match summary.into() {
-            Cow::Owned(mut summary) => {
-                summary.reserve_exact(1 + hint.len());
-                summary
-            }
+    #[inline]
+    fn owned(&mut self, extra: usize) -> &mut String {
+        if let Cow::Borrowed(text) = self.text {
+            let mut owned = String::with_capacity(text.len() + extra);
+            owned.push_str(text);
+            self.text = Cow::Owned(owned);
+        }
+        self.text.to_mut()
+    }
+
+    pub fn note(mut self, note: Note) -> Self {
+        let at = self.note_end;
+        let note = note.as_str();
+        let text = self.owned(note.len() + 1);
+        text.insert(at, '\n');
+        text.insert_str(at + 1, note);
+        self.note_end = at + 1 + note.len();
+        self
+    }
+
+    #[inline]
+    pub fn help(mut self, help: Help) -> Self {
+        let help = help.as_str();
+        let text = self.owned(help.len() + 1);
+        text.push('\n');
+        text.push_str(help);
+        self
+    }
+
+    pub fn hinting(summary: Phrase, help: HelpAround, value: &str) -> Self {
+        Self::new(summary).help_around(help, value)
+    }
+
+    pub fn help_around(mut self, help: HelpAround, value: &str) -> Self {
+        let (before, after) = help.parts();
+        let parts = ["\n", before, value, after];
+        let extra: usize = parts.iter().map(|part| part.len()).sum();
+        let mut text = match std::mem::take(&mut self.text) {
             Cow::Borrowed(summary) => {
-                let mut text = String::with_capacity(summary.len() + 1 + hint.len());
+                let mut text = String::with_capacity(summary.len() + extra);
                 text.push_str(summary);
                 text
             }
-        };
-        let summary_len = text.len();
-        text.push('\n');
-        text.push_str(&hint);
-        Self {
-            text: text.into(),
-            summary_len,
-        }
-    }
-
-    pub(crate) fn hinting_parts(summary: &str, hint: &[&str]) -> Self {
-        let hint_len: usize = hint.iter().map(|part| part.len()).sum();
-        let mut text = String::with_capacity(summary.len() + 1 + hint_len);
-        text.push_str(summary);
-        text.push('\n');
-        hint.iter().for_each(|part| text.push_str(part));
-        Self {
-            text: text.into(),
-            summary_len: summary.len(),
-        }
-    }
-
-    pub fn parts(&self) -> (&str, Option<&str>) {
-        let (summary, rest) = self.text.split_at(self.summary_len);
-        (summary, rest.strip_prefix('\n'))
-    }
-
-    pub fn message(self) -> String {
-        self.text.into_owned()
-    }
-
-    pub(crate) fn summary(self) -> Cow<'static, str> {
-        match self.text {
-            Cow::Borrowed(text) => Cow::Borrowed(&text[..self.summary_len]),
             Cow::Owned(mut text) => {
-                text.truncate(self.summary_len);
-                Cow::Owned(text)
+                text.reserve_exact(extra);
+                text
+            }
+        };
+        for part in parts {
+            text.push_str(part);
+        }
+        self.text = Cow::Owned(text);
+        self
+    }
+
+    #[inline]
+    pub fn summary_text(&self) -> &str {
+        &self.text[..self.summary_end]
+    }
+
+    #[inline]
+    fn note_text(&self) -> Option<&str> {
+        (self.note_end > self.summary_end).then(|| &self.text[self.summary_end + 1..self.note_end])
+    }
+
+    #[inline]
+    fn help_text(&self) -> Option<&str> {
+        (self.text.len() > self.note_end).then(|| &self.text[self.note_end + 1..])
+    }
+
+    #[inline]
+    pub fn report(&self) -> mix_ui::Report<'_> {
+        mix_ui::Report::checked(self.summary_text(), self.note_text(), self.help_text())
+    }
+
+    pub fn problem<'a>(&'a self, lines: Option<mix_ui::Lines<'a>>) -> mix_ui::Problem<'a> {
+        mix_ui::Problem::checked(self.summary_text(), self.note_text(), self.help_text())
+            .lines(lines)
+    }
+
+    pub fn message(&self) -> String {
+        self.text.to_string()
+    }
+
+    pub(crate) fn summary(self) -> Phrase {
+        match self.text {
+            Cow::Borrowed(text) => Phrase::checked_static(&text[..self.summary_end]),
+            Cow::Owned(mut text) => {
+                text.truncate(self.summary_end);
+                Phrase::checked_owned(text)
             }
         }
     }
 }
-
-const REPORT_BUG: &str =
-    "this is a bug in `mix`; please report it at https://github.com/recregt/mix/issues";
 
 pub(crate) fn core_error(
     error: &mix_core::Error,
@@ -138,13 +178,20 @@ pub(crate) fn fault_of(error: &anyhow::Error) -> mix_events::Fault {
     mix_core::diagnose::failed(mix_events::v1::Code::Internal, error.to_string(), None)
 }
 
+fn unworded(code: mix_events::v1::Code) -> bool {
+    matches!(
+        code,
+        mix_events::v1::Code::Internal | mix_events::v1::Code::Unspecified
+    )
+}
+
 pub fn evidence(fault: &mix_events::Fault) -> Vec<String> {
     fn collect(diagnostic: &mix_events::v1::Diagnostic, cause: bool, out: &mut Vec<String>) {
         let words = match &diagnostic.detail {
             Some(mix_events::v1::diagnostic::Detail::Command(command)) => {
                 command.output_tail.trim()
             }
-            _ if cause => diagnostic.message.trim(),
+            _ if cause || unworded(diagnostic.code()) => diagnostic.message.trim(),
             _ => "",
         };
         if !words.is_empty() && !out.iter().any(|known| known == words) {
@@ -171,6 +218,7 @@ mod evidence_tests {
     #[test]
     fn evidence_is_the_programs_own_words_and_each_causes_message() {
         let fault = mix_events::Fault::Failed(Wire {
+            code: mix_events::v1::Code::BuildFailed as i32,
             message: "the summary is worded elsewhere".into(),
             causes: vec![
                 Wire {
@@ -197,6 +245,35 @@ mod evidence_tests {
             ]
         );
     }
+
+    #[test]
+    fn a_failure_mix_has_no_words_for_keeps_its_producers_words() {
+        for code in [
+            mix_events::v1::Code::Internal,
+            mix_events::v1::Code::Unspecified,
+        ] {
+            let fault = mix_events::Fault::Failed(Wire {
+                code: code as i32,
+                message: "state file ended early".into(),
+                ..Wire::default()
+            });
+
+            assert_eq!(evidence(&fault), ["state file ended early"], "{code:?}");
+        }
+    }
+}
+
+pub fn command_of(request: Option<&mix_events::v1::command::Request>) -> &'static str {
+    use mix_events::v1::command::Request;
+
+    match request {
+        Some(Request::Install(_)) => install::COMMAND,
+        Some(Request::Remove(_)) => remove::COMMAND,
+        Some(Request::Bootstrap(_)) => bootstrap::COMMAND,
+        Some(Request::Repair(_)) => repair::COMMAND,
+        Some(Request::Doctor(_)) => doctor::COMMAND,
+        None => "mix",
+    }
 }
 
 pub fn outcome(
@@ -205,38 +282,32 @@ pub fn outcome(
 ) -> Diagnostic {
     use mix_events::v1::command::Request;
 
-    let (command, action): (&str, Box<dyn Display + '_>) = match request {
-        Some(Request::Install(install)) => (
-            install::COMMAND,
-            Box::new(packages_action("install", &install.packages)),
-        ),
-        Some(Request::Remove(remove)) => (
-            remove::COMMAND,
-            Box::new(packages_action("remove", &remove.packages)),
-        ),
-        Some(Request::Bootstrap(_)) => (bootstrap::COMMAND, Box::new(bootstrap::ACTION)),
-        Some(Request::Repair(_)) => (repair::COMMAND, Box::new(repair::ACTION)),
-        Some(Request::Doctor(_)) => (doctor::COMMAND, Box::new(doctor::ACTION)),
-        None => ("mix", Box::new("finish")),
+    let action: Box<dyn Display + '_> = match request {
+        Some(Request::Install(install)) => Box::new(packages_action("install", &install.packages)),
+        Some(Request::Remove(remove)) => Box::new(packages_action("remove", &remove.packages)),
+        Some(Request::Bootstrap(_)) => Box::new(bootstrap::ACTION),
+        Some(Request::Repair(_)) => Box::new(repair::ACTION),
+        Some(Request::Doctor(_)) => Box::new(doctor::ACTION),
+        None => Box::new("finish"),
     };
     render(
         fault,
         &Context {
-            command,
+            command: command_of(request),
             action: &*action,
         },
     )
 }
 
 pub(crate) fn failed(action: &dyn Display) -> Diagnostic {
-    Diagnostic::hinting(
-        format!("couldn't {action}"),
-        "run it again with `-v` to see what went wrong",
-    )
+    Diagnostic::new(phrase!("couldn't {action}"))
+        .help(help!("run it again with `-v` to see what went wrong"))
 }
 
 pub(crate) fn bug() -> Diagnostic {
-    Diagnostic::hinting("something went wrong inside `mix`", REPORT_BUG)
+    Diagnostic::new(phrase!("something went wrong inside `mix`")).help(help!(
+        "report this bug at https://github.com/recregt/mix/issues"
+    ))
 }
 
 pub(crate) fn privileged(error: &mix_rpc::Error, action: &dyn Display) -> Diagnostic {
@@ -284,18 +355,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_hint_is_printed_on_the_line_under_the_summary() {
-        let diagnostic = Diagnostic::hinting("it failed", "try again");
+    fn a_message_lists_the_summary_then_the_note_then_the_help() {
+        let diagnostic = Diagnostic::new(phrase!("it failed"))
+            .help(help!("run it again"))
+            .note(mix_ui::note!("it was busy"));
 
-        assert_eq!(diagnostic.message(), "it failed\ntry again");
+        assert_eq!(diagnostic.message(), "it failed\nit was busy\nrun it again");
     }
 
     #[test]
-    fn a_failure_without_a_hint_is_left_as_it_was_written() {
-        assert_eq!(Diagnostic::new("it failed").message(), "it failed");
+    fn a_failure_without_a_note_or_help_is_its_summary() {
+        assert_eq!(Diagnostic::new(phrase!("it failed")).message(), "it failed");
     }
 
-    /// The same raw error, two commands: the lock is the fact, the command to retry is not.
     #[test]
     fn a_held_lock_names_the_command_the_reader_ran() {
         let error = mix_core::Error::Locked {
@@ -347,7 +419,7 @@ mod tests {
         )
         .message();
 
-        assert!(message.contains("bug in `mix`"));
+        assert!(message.contains("report this bug"));
         assert!(message.contains("github.com/recregt/mix/issues"));
         assert!(!message.contains("oops"));
     }

@@ -104,10 +104,9 @@ pub async fn run() -> ExitCode {
     if !mix_shell::effect::accounts::is_root() {
         mix_ui::report(
             mix_ui::Severity::Error,
-            &mix_ui::Report {
-                summary: "the worker must be started by `mix` itself, as root",
-                ..mix_ui::Report::default()
-            },
+            &mix_ui::Report::new(&mix_ui::phrase!(
+                "the worker must be started by `mix` itself, as root"
+            )),
         );
         return ExitCode::FAILURE;
     }
@@ -116,11 +115,8 @@ pub async fn run() -> ExitCode {
         Err(error) => {
             mix_ui::report(
                 mix_ui::Severity::Error,
-                &mix_ui::Report {
-                    summary: "the worker stopped serving its client",
-                    causes: vec![error.to_string()],
-                    ..mix_ui::Report::default()
-                },
+                &mix_ui::Report::new(&mix_ui::phrase!("the worker stopped serving its client"))
+                    .causes(vec![error.to_string()]),
             );
             ExitCode::FAILURE
         }

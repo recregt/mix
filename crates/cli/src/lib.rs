@@ -8,21 +8,28 @@ pub mod render;
 use std::io::Write as _;
 use std::process::ExitCode;
 
-use clap::Parser;
-
 use cli::{Cli, Command};
 use explain::Diagnostic;
 
 pub async fn run() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = Cli::parse_with_color();
+    mix_ui::set_color(match cli.color {
+        cli::Color::Auto => mix_ui::ColorChoice::Auto,
+        cli::Color::Always => mix_ui::ColorChoice::Always,
+        cli::Color::Never => mix_ui::ColorChoice::Never,
+    });
     if matches!(cli.command, Command::Worker) {
         return remote::worker::run().await;
     }
     if let Command::HomeFiles { request } = &cli.command {
         return home_files(request);
     }
-    if let Command::Explain { code } = &cli.command {
-        return explain_code(code);
+    if let Command::Explain { code, list } = &cli.command {
+        if *list {
+            mix_ui::data(&explain::codes::list_text());
+            return ExitCode::SUCCESS;
+        }
+        return explain_code(code.as_deref().unwrap_or_default());
     }
     if let Command::Events { command } = &cli.command {
         return match command {
@@ -100,26 +107,20 @@ pub async fn run() -> ExitCode {
         Err(e) => {
             if cli.output == cli::Output::Human && view.exit.code().is_none() {
                 let words = explain(&e);
-                let (summary, hint) = words.parts();
                 let fault = explain::fault_of(&e);
                 let code = (cli.verbose > 0)
                     .then(|| fault.code())
                     .flatten()
                     .map(explain::codes::kebab);
                 let mut causes = explain::evidence(&fault);
-                for cause in mix_ui::causes_of(e.chain().nth(1), summary) {
+                for cause in mix_ui::causes_of(e.chain().nth(1), words.summary_text()) {
                     if !causes.iter().any(|known| known.contains(&cause)) {
                         causes.push(cause);
                     }
                 }
                 mix_ui::report(
                     mix_ui::Severity::Error,
-                    &mix_ui::Report {
-                        code: code.as_deref(),
-                        summary,
-                        causes,
-                        helps: hint.into_iter().collect(),
-                    },
+                    &words.report().code(code.as_deref()).causes(causes),
                 );
             }
             from_root.unwrap_or(ExitCode::FAILURE)
@@ -205,23 +206,16 @@ fn home_files(request: &str) -> ExitCode {
 fn explain_code(name: &str) -> ExitCode {
     match explain::codes::parse(name) {
         Some(code) => {
-            mix_ui::data(&format!(
-                "{}\n\n{}",
-                explain::codes::name(code),
-                explain::codes::long(code)
-            ));
+            mix_ui::data(&explain::codes::explanation_text(code));
             ExitCode::SUCCESS
         }
         None => {
             mix_ui::report(
                 mix_ui::Severity::Error,
-                &mix_ui::Report {
-                    summary: &format!("`{name}` isn't a code `mix` uses"),
-                    helps: vec!["codes look like `locked` or `network`"],
-                    ..mix_ui::Report::default()
-                },
+                &mix_ui::Report::new(&mix_ui::phrase!("`{name}` isn't a code `mix` uses"))
+                    .note(&mix_ui::note!("codes look like `locked` or `network`")),
             );
-            ExitCode::from(2)
+            ExitCode::from(u8::try_from(mix_events::exit::USAGE).unwrap_or(u8::MAX))
         }
     }
 }
@@ -243,12 +237,12 @@ fn check_events(path: &std::path::Path) -> ExitCode {
     match mix_events::validate(captured.envelopes.iter()) {
         Ok(validated) => {
             for entry in &validated.entries {
-                mix_ui::data(&format!("{} {:?}", entry.path, entry.outcome));
+                mix_ui::data(&format!("{} {}", entry.path, outcome_words(entry.outcome)));
             }
             ExitCode::SUCCESS
         }
         Err(violation) => {
-            unreadable(path, format!("{violation:?}"));
+            unreadable(path, violation.to_string());
             ExitCode::FAILURE
         }
     }
@@ -273,14 +267,33 @@ fn show_events(path: &std::path::Path, node: Option<&str>, level: mix_events::De
     }
 }
 
+fn named(name: &str, prefix: &str) -> String {
+    name.trim_start_matches(prefix)
+        .to_ascii_lowercase()
+        .replace('_', "-")
+}
+
+fn outcome_words(outcome: mix_events::Outcome) -> String {
+    match outcome {
+        mix_events::Outcome::Running => "running".to_string(),
+        mix_events::Outcome::Finished(status) => named(status.as_str_name(), "STATUS_"),
+        mix_events::Outcome::NotRun(reason) => {
+            format!(
+                "not run: {}",
+                named(reason.as_str_name(), "NOT_RUN_REASON_")
+            )
+        }
+    }
+}
+
 fn unreadable(path: &std::path::Path, reason: String) {
     mix_ui::report(
         mix_ui::Severity::Error,
-        &mix_ui::Report {
-            summary: &format!("{} isn't a valid events file", path.display()),
-            causes: vec![reason],
-            ..mix_ui::Report::default()
-        },
+        &mix_ui::Report::new(&mix_ui::phrase!(
+            "{} isn't a valid events file",
+            path.display()
+        ))
+        .causes(vec![reason]),
     );
 }
 
@@ -290,6 +303,20 @@ mod tests {
     use mix_events::v1::envelope::Event;
 
     use super::*;
+
+    #[test]
+    fn a_checked_node_reads_its_outcome_in_words() {
+        use mix_events::v1::{NotRunReason, Status};
+
+        assert_eq!(
+            outcome_words(mix_events::Outcome::Finished(Status::AlreadySatisfied)),
+            "already-satisfied"
+        );
+        assert_eq!(
+            outcome_words(mix_events::Outcome::NotRun(NotRunReason::NotReached)),
+            "not run: not-reached"
+        );
+    }
 
     #[test]
     fn a_stream_that_already_started_is_left_as_it_ended_rather_than_given_a_second_root() {

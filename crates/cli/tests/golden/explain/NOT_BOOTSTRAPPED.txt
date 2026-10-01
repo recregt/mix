@@ -1,4 +1,14 @@
-`mix` isn't set up for you yet
-run `mix bootstrap` first
+$ mix install ripgrep
+error: `mix` isn't set up for you yet
 
-`mix` has not been set up for your user on this machine. Run `mix bootstrap` first.
+help: run `mix bootstrap` first
+
+$ mix explain not-bootstrapped
+NOT_BOOTSTRAPPED
+
+`mix` has not been set up for your user on this machine.
+
+Each user needs their own setup before `mix` can manage their packages.
+
+To fix it:
+  - run `mix bootstrap`

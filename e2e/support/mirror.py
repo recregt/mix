@@ -22,9 +22,6 @@ MIRROR_URL_ENV = "MIX_TEST_MIRROR_URL"
 
 INSTALL_TEST_PACKAGE = "hello"
 
-# A package deliberately left out of the mirror's cache: installing it against that mirror can
-# only be done by compiling it.
-
 NIX_ARGS = ["--extra-experimental-features", "nix-command flakes"]
 
 

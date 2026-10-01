@@ -69,8 +69,8 @@ mod tests {
         Action, BuildStarted, Builds, Bytes, Cancellation, Command, CommandFinished,
         CommandStarted, Download, FetchStarted, Inspection, InstallRequest, InstallResult,
         Journaled, LockWait, NixActivity, NotRunReason, Observation, Observed, Operation,
-        OutputLine, Plan, Process, Rollback, Sequenced, Step, Stopping, Stream, Verb, journaled,
-        node_finished, observation,
+        OutputLine, Plan, Process, Rollback, Sequenced, Step, Stopping, Stream,
+        SubstitutionStarted, Verb, journaled, node_finished, observation,
     };
     use mix_events::{Ending, Outbox, ROOT, Start, Tree};
 
@@ -199,7 +199,7 @@ mod tests {
         let profile = tree
             .start(
                 activate,
-                start(action(Operation::ActivateProfile, "ciuser"), "a2"),
+                start(action(Operation::ActivateProfile, "ciuser's profile"), "a2"),
             )
             .unwrap();
         let process = tree
@@ -259,6 +259,9 @@ mod tests {
         for progress in [
             Progress::Command(CommandStarted {
                 line: "/nix/var/nix/profiles/default/bin/nix build".into(),
+            }),
+            Progress::Substitution(SubstitutionStarted {
+                path: "/nix/store/xl1h9i29pgq2q5cszjhm5wpfxfbbqwyi-glibc-2.40".into(),
             }),
             Progress::Build(BuildStarted {
                 derivation: "/nix/store/bbx79xgf89bvd25i1sivdcykhy39bz14-hello-2.12.drv".into(),
@@ -405,6 +408,199 @@ mod tests {
         outbox.drain()
     }
 
+    fn failed() -> Vec<Envelope> {
+        let outbox = Arc::new(Outbox::new("01920000-0000-7000-8000-000000000004", || {}));
+        let mut tree = Tree::new(Arc::clone(&outbox), Arc::new(|| None), command());
+        let plan = tree
+            .start(
+                ROOT,
+                start(
+                    Kind::Plan(Plan {
+                        title: "install".into(),
+                    }),
+                    "plan",
+                )
+                .planned(["write-config", "activate"]),
+            )
+            .unwrap();
+        let write = tree
+            .start(
+                plan,
+                start(step(Verb::Writing, "package list"), "write-config"),
+            )
+            .unwrap();
+        let put = tree
+            .start(
+                write,
+                start(
+                    action(Operation::PutFile, "/home/ciuser/.local/state/mix/state"),
+                    "a1",
+                ),
+            )
+            .unwrap();
+        tree.finish(put, Ending::succeeded()).unwrap();
+        tree.finish(write, Ending::succeeded()).unwrap();
+        let activate = tree
+            .start(plan, start(step(Verb::Installing, "hello"), "activate"))
+            .unwrap();
+        let profile = tree
+            .start(
+                activate,
+                start(action(Operation::ActivateProfile, "ciuser's profile"), "a2"),
+            )
+            .unwrap();
+        let failure = mix_core::diagnose::command_failure(
+            "/nix/var/nix/profiles/default/bin/nix build",
+            Some(1),
+            "error: attribute 'hello' missing\n       at /nix/store/x5piy362vlnbxc71zd6alpswvgsdsv55-source/home.nix:10:7:\n            9|       pkgs.git\n           10|       pkgs.hello\n             |       ^\n           11|     ];\n       Did you mean hello2?\n",
+            "nix build failed".into(),
+        );
+        tree.finish(profile, Ending::failed(failure.clone()))
+            .unwrap();
+        tree.finish(activate, Ending::failed(failure.clone()))
+            .unwrap();
+        let undo_activate = tree
+            .start(
+                plan,
+                start(
+                    Kind::Rollback(Rollback { undoes: activate }),
+                    "undo-activate",
+                ),
+            )
+            .unwrap();
+        tree.finish(undo_activate, Ending::succeeded()).unwrap();
+        let rollback = tree
+            .start(
+                plan,
+                start(
+                    Kind::Rollback(Rollback { undoes: write }),
+                    "undo-write-config",
+                ),
+            )
+            .unwrap();
+        let restore = tree
+            .start(
+                rollback,
+                start(
+                    action(Operation::Restore, "/home/ciuser/.local/state/mix/state"),
+                    "u1",
+                ),
+            )
+            .unwrap();
+        tree.finish(restore, Ending::succeeded()).unwrap();
+        tree.finish(rollback, Ending::succeeded()).unwrap();
+        tree.finish(plan, Ending::failed(failure.clone())).unwrap();
+        tree.finish(ROOT, Ending::failed(failure).for_root(false))
+            .unwrap();
+        drop(tree);
+        outbox.drain()
+    }
+
+    fn doctored(findings: &[(&str, Option<mix_core::health::Finding>)]) -> Vec<Envelope> {
+        let outbox = Arc::new(Outbox::new("01920000-0000-7000-8000-000000000005", || {}));
+        let mut tree = Tree::new(
+            Arc::clone(&outbox),
+            Arc::new(|| None),
+            Start::command(
+                "doctor",
+                Command {
+                    mix_version: "0.1.0".into(),
+                    schema_minor: mix_events::SCHEMA_MINOR,
+                    request: Some(Request::Doctor(mix_events::v1::DoctorRequest::default())),
+                },
+            ),
+        );
+        let result = mix_events::v1::DoctorResult {
+            reports: findings
+                .iter()
+                .map(|(target, finding)| mix_events::v1::InspectionReport {
+                    target: (*target).into(),
+                    category: mix_events::v1::Category::Filesystem as i32,
+                    finding: finding.map(mix_core::health::wire::finding),
+                    drift: match *target {
+                        "nix-daemon.service" => {
+                            Some(mix_core::health::wire::drift(&mix_core::health::Drift {
+                                path: "/etc/systemd/system/nix-daemon.service".into(),
+                                hunks: vec![mix_core::health::Hunk {
+                                    found_line: 18,
+                                    found: vec!["Nice=10".into()],
+                                    expected: vec![],
+                                }],
+                            }))
+                        }
+                        "/etc/nix/nix.conf" => Some({
+                            mix_core::health::wire::drift(&mix_core::health::Drift {
+                                path: "/etc/nix/nix.conf".into(),
+                                hunks: vec![
+                                    mix_core::health::Hunk {
+                                        found_line: 1,
+                                        found: vec!["build-users-group = nixbuild".into()],
+                                        expected: vec!["build-users-group = nixbld".into()],
+                                    },
+                                    mix_core::health::Hunk {
+                                        found_line: 3,
+                                        found: vec![],
+                                        expected: vec!["max-jobs = auto".into()],
+                                    },
+                                    mix_core::health::Hunk {
+                                        found_line: 4,
+                                        found: vec!["trusted-users = ciuser".into()],
+                                        expected: vec![],
+                                    },
+                                ],
+                            })
+                        }),
+                        _ => None,
+                    },
+                })
+                .collect(),
+        };
+        let problems = findings.iter().any(|(_, finding)| finding.is_some());
+        tree.finish(
+            ROOT,
+            Ending::succeeded()
+                .with_result(node_finished::Result::Doctor(result))
+                .for_root(problems),
+        )
+        .unwrap();
+        drop(tree);
+        outbox.drain()
+    }
+
+    #[test]
+    fn doctor_reads_at_every_level_as_recorded() {
+        use mix_core::health::Finding;
+
+        let healthy = doctored(&[("/nix", None), ("nix-daemon.service", None)]);
+        let problems = doctored(&[
+            ("/nix", None),
+            ("/etc/nix/nix.conf", Some(Finding::ContentDrift)),
+            ("nix-daemon.service", Some(Finding::UnitDrift)),
+            (
+                "/nix/var/nix/profiles",
+                Some(Finding::Mode {
+                    actual: 0o700,
+                    expected: 0o755,
+                }),
+            ),
+            ("default profile", Some(Finding::RuntimeMissing)),
+        ]);
+        for (name, envelopes) in [("doctor-healthy", healthy), ("doctor-problems", problems)] {
+            mix_events::validate(envelopes.iter()).unwrap();
+            let (_, captured) = captured(&envelopes);
+            for (level, suffix) in [
+                (Detail::Outcome, "quiet"),
+                (Detail::Step, "default"),
+                (Detail::Action, "v"),
+            ] {
+                golden(
+                    &format!("{name}-{suffix}.txt"),
+                    rendered(&captured, level, None).as_bytes(),
+                );
+            }
+        }
+    }
+
     fn slot(envelope: &Envelope) -> Option<usize> {
         Some(match envelope.event.as_ref()? {
             Event::NodeStarted(started) => match started.kind.as_ref()? {
@@ -433,11 +629,12 @@ mod tests {
                 Progress::CommandFinished(_) => 20,
                 Progress::Observed(_) => 21,
                 Progress::Journaled(_) => 22,
+                Progress::Substitution(_) => 23,
             },
         })
     }
 
-    const SLOTS: usize = 23;
+    const SLOTS: usize = 24;
 
     fn captured(envelopes: &[Envelope]) -> (Vec<u8>, Captured) {
         let mut capture = Capture::start(
@@ -463,8 +660,12 @@ mod tests {
     fn rendered(captured: &Captured, level: Detail, node: Option<&str>) -> String {
         let out = Arc::new(Buffer(Mutex::new(Vec::new())));
         show(captured, level, node, out.clone());
-        let lines = out.0.lock().unwrap().join("\n");
-        lines + "\n"
+        out.0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|line| format!("{line}\n"))
+            .collect()
     }
 
     fn golden(name: &str, observed: &[u8]) {
@@ -488,7 +689,11 @@ mod tests {
     #[test]
     fn every_kind_of_event_renders_at_every_level_as_recorded() {
         let mut seen = [false; SLOTS];
-        for (name, envelopes) in [("installed", installed()), ("interrupted", interrupted())] {
+        for (name, envelopes) in [
+            ("installed", installed()),
+            ("interrupted", interrupted()),
+            ("failed", failed()),
+        ] {
             mix_events::validate(envelopes.iter()).unwrap();
             for index in envelopes.iter().filter_map(slot) {
                 seen[index] = true;
@@ -509,6 +714,32 @@ mod tests {
         }
         let missing: Vec<usize> = (0..SLOTS).filter(|index| !seen[*index]).collect();
         assert_eq!(missing, Vec::<usize>::new(), "slots no fixture shows");
+    }
+
+    #[test]
+    fn a_warning_without_words_of_its_own_is_a_bug_and_its_producers_words_are_the_cause() {
+        let outbox = Arc::new(Outbox::new("01920000-0000-7000-8000-000000000003", || {}));
+        let mut tree = Tree::new(Arc::clone(&outbox), Arc::new(|| None), command());
+        tree.warn(
+            ROOT,
+            mix_events::v1::Diagnostic {
+                severity: mix_events::v1::Severity::Warning as i32,
+                message: "Mix.".into(),
+                ..mix_events::v1::Diagnostic::default()
+            },
+        )
+        .unwrap();
+        tree.finish(ROOT, Ending::succeeded().for_root(false))
+            .unwrap();
+        drop(tree);
+        let (_, captured) = captured(&outbox.drain());
+
+        let shown = rendered(&captured, Detail::Step, None);
+
+        assert_eq!(
+            shown,
+            "warning: something went wrong inside `mix`\n\nhelp: report this bug at https://github.com/recregt/mix/issues\n\nCaused by:\n  Mix.\n"
+        );
     }
 
     #[test]

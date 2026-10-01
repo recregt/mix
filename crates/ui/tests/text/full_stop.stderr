@@ -1,0 +1,7 @@
+error[E0080]: evaluation panicked: a phrase is ASCII, starts lowercase, has no `; ` or `. `, and no final `.`
+ --> tests/text/full_stop.rs:2:13
+  |
+2 |     let _ = mix_ui::phrase!("something went wrong.");
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `main::_` failed here
+  |
+  = note: this error originates in the macro `$crate::panic::panic_2021` which comes from the expansion of the macro `mix_ui::phrase` (in Nightly builds, run with -Z macro-backtrace for more info)

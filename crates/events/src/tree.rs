@@ -164,6 +164,7 @@ impl Open {
             | Progress::Command(_)
             | Progress::Fetch(_)
             | Progress::Build(_)
+            | Progress::Substitution(_)
             | Progress::Stopping(_)
             | Progress::CommandFinished(_)
             | Progress::Observed(_)

@@ -182,6 +182,94 @@ fn owner_drift(actual: (u32, u32), owner: Option<(u32, u32)>) -> Option<Finding>
     (actual != expected).then_some(Finding::Owner { actual, expected })
 }
 
+const SECRET_SETTINGS: &[&str] = &["access-tokens"];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Drift {
+    pub path: String,
+    pub hunks: Vec<Hunk>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hunk {
+    pub found_line: u32,
+    pub found: Vec<String>,
+    pub expected: Vec<String>,
+}
+
+fn hidden(line: &str) -> String {
+    match line.split_once('=') {
+        Some((key, _)) if SECRET_SETTINGS.contains(&key.trim().trim_start_matches("extra-")) => {
+            format!("{} = <hidden>", key.trim())
+        }
+        _ => line.to_string(),
+    }
+}
+
+fn hunks(expected: &str, found: &str) -> Vec<Hunk> {
+    let expected: Vec<&str> = expected.lines().collect();
+    let found: Vec<&str> = found.lines().collect();
+    let mut hunks: Vec<Hunk> = Vec::new();
+    let mut open = false;
+    for op in similar::capture_diff_slices(similar::Algorithm::Myers, &expected, &found) {
+        let (tag, old, new) = op.as_tag_tuple();
+        if tag == similar::DiffTag::Equal {
+            open = false;
+            continue;
+        }
+        if !open {
+            hunks.push(Hunk {
+                found_line: u32::try_from(new.start + 1).unwrap_or(u32::MAX),
+                found: Vec::new(),
+                expected: Vec::new(),
+            });
+            open = true;
+        }
+        if let Some(hunk) = hunks.last_mut() {
+            hunk.found
+                .extend(found[new].iter().map(|line| hidden(line)));
+            hunk.expected
+                .extend(expected[old].iter().map(|line| hidden(line)));
+        }
+    }
+    hunks
+}
+
+fn text(bytes: &[u8]) -> Cow<'_, str> {
+    String::from_utf8_lossy(bytes)
+}
+
+pub fn drift(target: &Target<'_>, facts: &[Fact]) -> Option<Drift> {
+    match target {
+        Target::File {
+            path,
+            expected: Some(expected),
+            ..
+        } => {
+            let current = contents(facts, 1)?;
+            (current != expected.as_bytes()).then(|| Drift {
+                path: path.display().to_string(),
+                hunks: hunks(expected, &text(current)),
+            })
+        }
+        Target::SystemdUnit { dest, .. } => {
+            let installed = contents(facts, 0)?;
+            let source = contents(facts, 1)?;
+            (installed != source).then(|| Drift {
+                path: (*dest).to_string(),
+                hunks: hunks(&text(source), &text(installed)),
+            })
+        }
+        Target::Directory { .. }
+        | Target::File { expected: None, .. }
+        | Target::SeededFile { .. }
+        | Target::Group { .. }
+        | Target::GroupMember { .. }
+        | Target::User { .. }
+        | Target::PathExists { .. } => None,
+    }
+}
+
 pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
     match target {
         Target::Directory { mode, owner, .. } => {
@@ -267,7 +355,7 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
                     _ => Some(Finding::UnitDrift),
                 };
             };
-            if contents(facts, 1) != Some(installed) {
+            if contents(facts, 1).is_some_and(|source| source != installed) {
                 return Some(Finding::UnitDrift);
             }
             let active = matches!(
@@ -483,11 +571,13 @@ impl StepSpec for TargetStep {
     }
 }
 
+pub const RESTART_NIX_DAEMON: &str = "restart-nix-daemon";
+
 struct RestartIfStale;
 
 impl StepSpec for RestartIfStale {
     fn key(&self) -> Cow<'static, str> {
-        "restart-nix-daemon".into()
+        RESTART_NIX_DAEMON.into()
     }
 
     fn title(&self) -> Title {
@@ -537,11 +627,41 @@ pub mod wire {
         Category as WireCategory, Finding as WireFinding, Gid, Ids, Mode, NotAMember, Unreadable,
     };
 
-    use super::Finding;
+    use super::{Drift, Finding, Hunk};
     use crate::identity::MIX_USERS_GROUP;
     use crate::models::Category;
 
     const GROUPS: [&str; 1] = [MIX_USERS_GROUP];
+
+    pub fn drift(drift: &Drift) -> mix_events::v1::Drift {
+        mix_events::v1::Drift {
+            path: drift.path.clone(),
+            hunks: drift
+                .hunks
+                .iter()
+                .map(|hunk| mix_events::v1::Hunk {
+                    found_line: hunk.found_line,
+                    found: hunk.found.clone(),
+                    expected: hunk.expected.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    pub fn drift_from(drift: &mix_events::v1::Drift) -> Drift {
+        Drift {
+            path: drift.path.clone(),
+            hunks: drift
+                .hunks
+                .iter()
+                .map(|hunk| Hunk {
+                    found_line: hunk.found_line,
+                    found: hunk.found.clone(),
+                    expected: hunk.expected.clone(),
+                })
+                .collect(),
+        }
+    }
 
     pub fn category(category: Category) -> WireCategory {
         match category {

@@ -33,7 +33,7 @@ pub(crate) fn describe(error: &Error, command: &str) -> Diagnostic {
 mod tests {
     use mix_shell::ops::bootstrap::Host;
 
-    use super::super::render::DAMAGED;
+    use super::super::render::damaged;
     use super::*;
 
     fn message(error: Error) -> String {
@@ -66,7 +66,7 @@ mod tests {
         let decompression = message(Error::Decompression("unexpected end".into()));
 
         assert_eq!(integrity, decompression);
-        assert!(integrity.starts_with(DAMAGED));
+        assert!(integrity.starts_with(damaged().as_str()));
     }
 
     #[test]

@@ -6,21 +6,25 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub mod activity;
 mod display;
+mod problem;
 mod progress;
 mod status;
+pub mod text;
 
 pub use display::{Display, Silent, StepLine, display};
+pub use problem::{Labels, Lines, Problem, problem_text, problem_to};
 pub use progress::{init, live_style};
 pub use status::Status;
+pub use text::{Help, Note, Phrase};
 
 use status::{GUTTER, Tone};
 
 static PROGRESS: AtomicBool = AtomicBool::new(true);
 
-const GREEN: &str = "\u{1b}[32m";
-const RED: &str = "\u{1b}[31m";
+const GREEN: &str = "\u{1b}[92m";
+const RED: &str = "\u{1b}[91m";
 const YELLOW: &str = "\u{1b}[33m";
-const CYAN: &str = "\u{1b}[36m";
+const CYAN: &str = "\u{1b}[96m";
 const BOLD: &str = "\u{1b}[1m";
 const RESET: &str = "\u{1b}[0m";
 
@@ -34,8 +38,58 @@ pub fn progress_enabled() -> bool {
     PROGRESS.load(Ordering::Relaxed)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorChoice {
+    Auto,
+    Always,
+    Never,
+}
+
+static CHOICE: OnceLock<ColorChoice> = OnceLock::new();
+
+pub fn set_color(choice: ColorChoice) {
+    let _ = CHOICE.set(choice);
+    console::set_colors_enabled_stderr(stderr_colors());
+    console::set_colors_enabled(stdout_colors());
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct Environment {
+    no_color: bool,
+    clicolor_force: bool,
+    clicolor: Option<bool>,
+    term_supports_color: bool,
+    ci: bool,
+}
+
+impl Environment {
+    fn read() -> Self {
+        Self {
+            no_color: anstyle_query::no_color(),
+            clicolor_force: anstyle_query::clicolor_force(),
+            clicolor: anstyle_query::clicolor(),
+            term_supports_color: anstyle_query::term_supports_color(),
+            ci: anstyle_query::is_ci(),
+        }
+    }
+}
+
+fn decide(choice: ColorChoice, is_terminal: bool, env: Environment) -> bool {
+    match choice {
+        ColorChoice::Always => true,
+        ColorChoice::Never => false,
+        ColorChoice::Auto if env.no_color => false,
+        ColorChoice::Auto if env.clicolor_force => true,
+        ColorChoice::Auto if env.clicolor == Some(false) => false,
+        ColorChoice::Auto => {
+            is_terminal && (env.term_supports_color || env.clicolor == Some(true) || env.ci)
+        }
+    }
+}
+
 fn colors_enabled(is_terminal: bool) -> bool {
-    is_terminal && std::env::var_os("NO_COLOR").is_none()
+    let choice = CHOICE.get().copied().unwrap_or(ColorChoice::Auto);
+    decide(choice, is_terminal, Environment::read())
 }
 
 pub(crate) fn stderr_colors() -> bool {
@@ -66,6 +120,46 @@ impl Out for Stderr {
 }
 
 pub struct Stdout;
+
+pub struct Spaced<O> {
+    inner: O,
+    gap: AtomicBool,
+}
+
+impl<O: Out> Spaced<O> {
+    pub fn new(inner: O) -> Self {
+        Self {
+            inner,
+            gap: AtomicBool::new(false),
+        }
+    }
+}
+
+impl<O: Out> Out for Spaced<O> {
+    fn line(&self, text: &str) {
+        if self.gap.swap(false, Ordering::Relaxed) {
+            self.inner.line("");
+        }
+        self.inner.line(text);
+        if text.contains('\n') {
+            self.gap.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn colours(&self) -> bool {
+        self.inner.colours()
+    }
+}
+
+impl<O: Out + ?Sized> Out for std::sync::Arc<O> {
+    fn line(&self, text: &str) {
+        (**self).line(text);
+    }
+
+    fn colours(&self) -> bool {
+        (**self).colours()
+    }
+}
 
 impl Out for Stdout {
     fn line(&self, text: &str) {
@@ -172,22 +266,66 @@ pub enum Severity {
     Warning,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Report<'a> {
-    pub code: Option<&'a str>,
-    pub summary: &'a str,
-    pub causes: Vec<String>,
-    pub helps: Vec<&'a str>,
+    code: Option<&'a str>,
+    summary: &'a str,
+    note: Option<&'a str>,
+    help: Option<&'a str>,
+    causes: Vec<String>,
 }
 
-fn write_help(out: &mut String, text: &str, colours: bool) {
+impl<'a> Report<'a> {
+    pub fn new(summary: &'a Phrase) -> Self {
+        Self::checked(summary.as_str(), None, None)
+    }
+
+    #[doc(hidden)]
+    pub fn checked(summary: &'a str, note: Option<&'a str>, help: Option<&'a str>) -> Self {
+        Self {
+            code: None,
+            summary,
+            note,
+            help,
+            causes: Vec::new(),
+        }
+    }
+
+    pub fn code(mut self, code: Option<&'a str>) -> Self {
+        self.code = code;
+        self
+    }
+
+    pub fn note(mut self, note: &'a Note) -> Self {
+        self.note = Some(note.as_str());
+        self
+    }
+
+    pub fn help(mut self, help: &'a Help) -> Self {
+        self.help = Some(help.as_str());
+        self
+    }
+
+    pub fn causes(mut self, causes: Vec<String>) -> Self {
+        self.causes = causes;
+        self
+    }
+
+    pub fn has_help(&self) -> bool {
+        self.help.is_some()
+    }
+}
+
+fn write_label(out: &mut String, colour: &str, label: &str, text: &str, colours: bool) {
     let mut lines = text.lines();
-    out.push_str("\n  ");
-    painted(out, CYAN, "help", colours);
+    painted(out, colour, label, colours);
     out.push_str(": ");
     out.push_str(lines.next().unwrap_or_default());
     for line in lines {
-        out.push_str("\n        ");
+        out.push('\n');
+        for _ in 0..label.len() + 2 {
+            out.push(' ');
+        }
         out.push_str(line);
     }
 }
@@ -204,37 +342,30 @@ pub fn report_text(severity: Severity, report: &Report<'_>, colours: bool) -> St
     }
     out.push_str(": ");
     out.push_str(report.summary);
-    if !report.causes.is_empty() {
+    let subs = report
+        .note
+        .map(|note| (GREEN, "note", note))
+        .into_iter()
+        .chain(report.help.map(|help| (CYAN, "help", help)));
+    for (index, (colour, label, text)) in subs.enumerate() {
+        out.push_str(if index == 0 { "\n\n" } else { "\n" });
+        write_label(&mut out, colour, label, text, colours);
+    }
+    for cause in &report.causes {
         out.push_str("\n\nCaused by:");
-        for cause in &report.causes {
-            for line in cause.lines() {
-                out.push_str("\n  ");
-                out.push_str(&activity::printable(line));
+        for line in cause.lines() {
+            let line = activity::printable(line);
+            out.push('\n');
+            if !line.is_empty() {
+                out.push_str("  ");
+                out.push_str(&line);
             }
         }
-    }
-    for help in &report.helps {
-        write_help(&mut out, help, colours);
     }
     out
 }
 
-pub fn house_style(text: &str) -> bool {
-    let starts_lowercase = text
-        .chars()
-        .next()
-        .is_none_or(|first| !first.is_uppercase());
-    let unfinished = !text.trim_end().ends_with('.');
-    starts_lowercase && unfinished
-}
-
 pub fn report_to(out: &dyn Out, severity: Severity, report: &Report<'_>) {
-    debug_assert!(house_style(report.summary), "{:?}", report.summary);
-    debug_assert!(
-        report.helps.iter().all(|help| house_style(help)),
-        "{:?}",
-        report.helps
-    );
     out.line(&report_text(severity, report, out.colours()));
 }
 
@@ -242,17 +373,19 @@ pub fn report(severity: Severity, report: &Report<'_>) {
     report_to(&Stderr, severity, report);
 }
 
-pub fn note_to(out: &dyn Out, text: &str) {
-    debug_assert!(house_style(text), "{text:?}");
+pub fn note_to(out: &dyn Out, note: &Note, help: Option<&Help>) {
+    let colours = out.colours();
     let mut line = String::new();
-    painted(&mut line, CYAN, "note", out.colours());
-    line.push_str(": ");
-    line.push_str(text);
+    write_label(&mut line, GREEN, "note", note.as_str(), colours);
+    if let Some(help) = help {
+        line.push('\n');
+        write_label(&mut line, CYAN, "help", help.as_str(), colours);
+    }
     out.line(&line);
 }
 
-pub fn note(text: &str) {
-    note_to(&Stderr, text);
+pub fn note(note: &Note, help: Option<&Help>) {
+    note_to(&Stderr, note, help);
 }
 
 pub fn causes_of(first: Option<&dyn std::error::Error>, already: &str) -> Vec<String> {
@@ -283,6 +416,64 @@ pub fn restore_terminal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn color_follows_the_flag_then_the_environment_as_cargo_does() {
+        let terminal = Environment {
+            term_supports_color: true,
+            ..Environment::default()
+        };
+        assert!(decide(ColorChoice::Auto, true, terminal));
+        assert!(!decide(ColorChoice::Auto, false, terminal));
+        assert!(!decide(
+            ColorChoice::Auto,
+            true,
+            Environment {
+                no_color: true,
+                ..terminal
+            }
+        ));
+        assert!(decide(
+            ColorChoice::Auto,
+            false,
+            Environment {
+                clicolor_force: true,
+                ..Environment::default()
+            }
+        ));
+        assert!(!decide(
+            ColorChoice::Auto,
+            true,
+            Environment {
+                clicolor: Some(false),
+                ..terminal
+            }
+        ));
+        assert!(!decide(ColorChoice::Auto, true, Environment::default()));
+        assert!(decide(
+            ColorChoice::Auto,
+            true,
+            Environment {
+                ci: true,
+                ..Environment::default()
+            }
+        ));
+        assert!(decide(ColorChoice::Always, false, Environment::default()));
+        assert!(!decide(ColorChoice::Never, true, terminal));
+    }
+
+    #[derive(Default)]
+    struct Recorder(std::sync::Mutex<Vec<String>>);
+
+    impl Out for Recorder {
+        fn line(&self, text: &str) {
+            self.0.lock().unwrap().push(text.to_string());
+        }
+
+        fn colours(&self) -> bool {
+            false
+        }
+    }
 
     #[derive(Debug)]
     struct Chained {
@@ -335,41 +526,72 @@ mod tests {
     }
 
     #[test]
-    fn a_warning_names_its_code_and_puts_the_help_under_it() {
+    fn a_warning_names_its_code_then_its_note_and_help_follow_a_blank_line() {
+        let summary = phrase!("the change was made but not recorded in git");
+        let note = note!("`git` failed while recording it");
+        let help = help!("run `mix repair` to record it");
         let text = report_text(
             Severity::Warning,
-            &Report {
-                code: Some("git-record-failed"),
-                summary: "the change was made but not recorded in git",
-                helps: vec!["`mix repair` records it"],
-                ..Report::default()
-            },
+            &Report::new(&summary)
+                .code(Some("git-record-failed"))
+                .note(&note)
+                .help(&help),
             false,
         );
         assert_eq!(
             text,
-            "warning[git-record-failed]: the change was made but not recorded in git\n  help: `mix repair` records it"
+            "warning[git-record-failed]: the change was made but not recorded in git\n\nnote: `git` failed while recording it\nhelp: run `mix repair` to record it"
         );
     }
 
     #[test]
-    fn an_error_lists_its_causes_before_the_help() {
+    fn an_error_gives_its_help_then_each_cause_in_its_own_block_as_cargo_does() {
+        let summary = phrase!("couldn't install ripgrep");
+        let help = help!("run it again with `-v`\nto see each step");
         let text = report_text(
             Severity::Error,
-            &Report {
-                summary: "couldn't install ripgrep",
-                causes: vec![
-                    "`nix build` exited with status 1".into(),
-                    "error: \u{1b}[31mbuilder failed\u{1b}[0m".into(),
-                ],
-                helps: vec!["Run it again with `-v`\nto see each step"],
-                ..Report::default()
-            },
+            &Report::new(&summary).help(&help).causes(vec![
+                "`nix build` exited with status 1".into(),
+                "error: \u{1b}[31mbuilder failed\u{1b}[0m\n\n  at home.nix:10".into(),
+            ]),
             false,
         );
         assert_eq!(
             text,
-            "error: couldn't install ripgrep\n\nCaused by:\n  `nix build` exited with status 1\n  error: builder failed\n  help: Run it again with `-v`\n        to see each step"
+            "error: couldn't install ripgrep\n\nhelp: run it again with `-v`\n      to see each step\n\nCaused by:\n  `nix build` exited with status 1\n\nCaused by:\n  error: builder failed\n\n    at home.nix:10"
+        );
+    }
+
+    #[test]
+    fn a_note_carries_its_help_on_the_next_line() {
+        let seen = Recorder::default();
+        note_to(
+            &seen,
+            &note!("cancelling"),
+            Some(&help!("press Ctrl-C again to stop now")),
+        );
+        assert_eq!(
+            seen.0.lock().unwrap().as_slice(),
+            ["note: cancelling\nhelp: press Ctrl-C again to stop now"]
+        );
+    }
+
+    #[test]
+    fn a_block_of_several_parts_is_set_apart_from_what_follows() {
+        let spaced = Spaced::new(Recorder::default());
+        spaced.line("  Installing hello");
+        spaced.line("warning: it was not recorded\n\nhelp: run `mix repair` to record it");
+        spaced.line("   Installed hello in 1.00s");
+        spaced.line("     Checked system in 1.00s");
+        assert_eq!(
+            spaced.inner.0.lock().unwrap().as_slice(),
+            [
+                "  Installing hello",
+                "warning: it was not recorded\n\nhelp: run `mix repair` to record it",
+                "",
+                "   Installed hello in 1.00s",
+                "     Checked system in 1.00s",
+            ]
         );
     }
 
@@ -383,15 +605,6 @@ mod tests {
             ),
             ["connection refused", "dns"]
         );
-    }
-
-    #[test]
-    fn text_after_a_label_starts_lowercase_and_has_no_full_stop() {
-        assert!(house_style("the change was made but not recorded in git"));
-        assert!(house_style("`mix repair` records it"));
-        assert!(house_style("run it again with sudo:\n  sudo mix bootstrap"));
-        assert!(!house_style("Run `mix repair` to fix them"));
-        assert!(!house_style("some checks failed."));
     }
 
     #[test]

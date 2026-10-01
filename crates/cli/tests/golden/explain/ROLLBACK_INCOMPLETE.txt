@@ -1,4 +1,15 @@
-couldn't download required setup files
-some changes couldn't be undone; run `mix doctor` to see what's left
+$ mix install ripgrep
+error: couldn't download required setup files
 
-The command failed, and undoing what it had already changed failed too, so some changes are still in place. `mix doctor` lists what is left; `mix repair` puts back what it can.
+help: run `mix doctor` to see the changes that couldn't be undone
+
+$ mix explain rollback-incomplete
+ROLLBACK_INCOMPLETE
+
+The command failed, and undoing its changes failed too.
+
+Some of the changes the command had already made are still in place.
+
+To fix it:
+  - run `mix doctor` to see what is left
+  - run `mix repair` to put back what it can

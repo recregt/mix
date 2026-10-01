@@ -27,9 +27,9 @@ pub struct Human {
     stopping: Option<Stopping>,
     stop_noticed: bool,
     request: Option<Request>,
-    rolled_back: bool,
     lines: HashMap<NodeId, Arc<dyn StepLine>>,
     subjects: HashMap<NodeId, String>,
+    undone: HashMap<NodeId, String>,
     pending: HashMap<NodeId, Status>,
     actions: HashSet<NodeId>,
 }
@@ -38,7 +38,7 @@ impl Human {
     pub fn new(display: Arc<dyn Display>) -> Self {
         Self {
             display,
-            out: Arc::new(mix_ui::Stderr),
+            out: Arc::new(mix_ui::Spaced::new(mix_ui::Stderr)),
             recorded: None,
             level: Detail::Step,
             results: true,
@@ -46,9 +46,9 @@ impl Human {
             stopping: None,
             stop_noticed: false,
             request: None,
-            rolled_back: false,
             lines: HashMap::new(),
             subjects: HashMap::new(),
+            undone: HashMap::new(),
             pending: HashMap::new(),
             actions: HashSet::new(),
         }
@@ -60,7 +60,7 @@ impl Human {
     }
 
     pub fn to(mut self, out: Arc<dyn Out>) -> Self {
-        self.out = out;
+        self.out = Arc::new(mix_ui::Spaced::new(out));
         self
     }
 
@@ -97,19 +97,26 @@ impl Human {
                 Some(node_started::Kind::Command(command)) => {
                     self.stopping = command.request.as_ref().and_then(stopping_for);
                     self.request = command.request;
-                    self.status(Detail::Action, Status::Request, &envelope.request);
+                    if self.shows(Detail::Trace) {
+                        mix_ui::note_to(
+                            self.out.as_ref(),
+                            &mix_ui::note!("request {}", envelope.request),
+                            None,
+                        );
+                    }
                 }
                 Some(node_started::Kind::Step(step)) => {
                     self.pending.insert(node.id, verbs::step(step.verb()));
+                    self.undone
+                        .insert(node.id, verbs::undone(step.verb(), &step.subject));
                     self.subjects.insert(node.id, step.subject);
                 }
                 Some(node_started::Kind::Rollback(rollback)) => {
                     let subject = self
-                        .subjects
+                        .undone
                         .get(&rollback.undoes)
                         .cloned()
                         .unwrap_or_default();
-                    self.rolled_back = true;
                     self.announce(node.id, Status::RollingBack, &subject);
                 }
                 Some(node_started::Kind::Action(action)) => {
@@ -138,14 +145,15 @@ impl Human {
                 | None => {}
             },
             Event::NodeFinished(node) if node.id == ROOT => {
-                self.outcome(&node);
+                let elapsed = self.recorded.unwrap_or_else(|| self.started.elapsed());
                 super::results::finished(
                     self.out.as_ref(),
                     &node,
                     self.results,
                     self.level,
-                    self.recorded.unwrap_or_else(|| self.started.elapsed()),
+                    elapsed,
                 );
+                self.outcome(&node, elapsed);
             }
             Event::NodeFinished(node) if self.actions.remove(&node.id) => {
                 self.lines.remove(&node.id);
@@ -163,21 +171,18 @@ impl Human {
             Event::Diagnostic(diagnostic) => {
                 if self.shows(Detail::Step) {
                     let words = crate::explain::render::warning(&diagnostic);
-                    let (summary, hint) = words.parts();
                     let code = (self.shows(Detail::Action)
                         && diagnostic.code() != mix_events::v1::Code::Unspecified)
                         .then(|| crate::explain::codes::kebab(diagnostic.code()));
                     mix_ui::report_to(
                         self.out.as_ref(),
                         Severity::Warning,
-                        &mix_ui::Report {
-                            code: code.as_deref(),
-                            summary,
-                            causes: crate::explain::evidence(&mix_events::Fault::Failed(
+                        &words
+                            .report()
+                            .code(code.as_deref())
+                            .causes(crate::explain::evidence(&mix_events::Fault::Failed(
                                 diagnostic.clone(),
-                            )),
-                            helps: hint.into_iter().collect(),
-                        },
+                            ))),
                     );
                 }
             }
@@ -185,20 +190,27 @@ impl Human {
         }
     }
 
-    fn outcome(&self, node: &NodeFinished) {
+    fn outcome(&self, node: &NodeFinished, elapsed: std::time::Duration) {
         let fault = match node.status() {
             Ended::Failed => match &node.diagnostic {
                 Some(diagnostic) => Fault::Failed(diagnostic.as_ref().clone()),
                 None => Fault::Failed(mix_events::v1::Diagnostic::default()),
             },
-            Ended::Cancelled => Fault::Cancelled {
-                cause: node.cancellation(),
-                rolled_back: self.rolled_back,
-            },
+            Ended::Cancelled => {
+                self.status(
+                    Detail::Step,
+                    Status::Cancelled,
+                    &format!(
+                        "`{}` in {}",
+                        crate::explain::command_of(self.request.as_ref()),
+                        super::results::took(elapsed)
+                    ),
+                );
+                return;
+            }
             Ended::Unspecified | Ended::Succeeded | Ended::AlreadySatisfied => return,
         };
         let words = crate::explain::outcome(self.request.as_ref(), &fault);
-        let (summary, hint) = words.parts();
         let code = self
             .shows(Detail::Action)
             .then(|| fault.code())
@@ -207,12 +219,10 @@ impl Human {
         mix_ui::report_to(
             self.out.as_ref(),
             Severity::Error,
-            &mix_ui::Report {
-                code: code.as_deref(),
-                summary,
-                causes: crate::explain::evidence(&fault),
-                helps: hint.into_iter().collect(),
-            },
+            &words
+                .report()
+                .code(code.as_deref())
+                .causes(crate::explain::evidence(&fault)),
         );
     }
 
@@ -225,7 +235,11 @@ impl Human {
                     && let Some(stopping) = &self.stopping
                     && !std::mem::replace(&mut self.stop_noticed, true)
                 {
-                    mix_ui::note_to(self.out.as_ref(), stopping.first);
+                    mix_ui::note_to(
+                        self.out.as_ref(),
+                        &stopping.first,
+                        Some(&stopping.first_help),
+                    );
                 }
             }
             Progress::Command(command) => {
@@ -247,6 +261,15 @@ impl Human {
             Progress::Fetch(fetch) => self.status(Detail::Action, Status::Fetching, &fetch.url),
             Progress::Build(build) => {
                 self.status(Detail::Action, Status::Building, &build.derivation);
+                if let Some(line) = self.lines.get(&id) {
+                    line.item(mix_core::nix_log::package_name(&build.derivation));
+                }
+            }
+            Progress::Substitution(substitution) => {
+                self.status(Detail::Action, Status::Fetching, &substitution.path);
+                if let Some(line) = self.lines.get(&id) {
+                    line.item(mix_core::nix_log::package_name(&substitution.path));
+                }
             }
             Progress::Bytes(bytes) => {
                 if let Some(line) = self.lines.get(&id) {
@@ -298,9 +321,9 @@ impl Human {
 
 fn stopping_for(request: &Request) -> Option<Stopping> {
     match request {
-        Request::Bootstrap(_) => Some(controls::BOOTSTRAP),
-        Request::Repair(_) => Some(controls::REPAIR),
-        Request::Install(_) | Request::Remove(_) => Some(controls::CHANGE),
+        Request::Bootstrap(_) => Some(controls::bootstrap()),
+        Request::Repair(_) => Some(controls::repair()),
+        Request::Install(_) | Request::Remove(_) => Some(controls::change()),
         Request::Doctor(_) => None,
     }
 }
@@ -354,6 +377,10 @@ mod tests {
                 "builds {}/{}",
                 progress.builds_done, progress.builds_expected
             ));
+        }
+
+        fn item(&self, name: &str) {
+            self.0.push(format!("item {name}"));
         }
 
         fn finish(&self) {

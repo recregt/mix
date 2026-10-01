@@ -4,11 +4,13 @@ use mix_shell::ops::doctor::HealthReport;
 use mix_shell::profile::change::Error as InstallError;
 use mix_shell::target::{Error as TargetError, Finding, Unfixable};
 
-static PACKAGES: std::sync::LazyLock<Vec<String>> =
-    std::sync::LazyLock::new(|| vec!["package".to_string()]);
-
 fn main() {
     divan::main();
+}
+
+fn shown(words: explain::Diagnostic) -> explain::Diagnostic {
+    divan::black_box(words.report());
+    words
 }
 
 /// The cheapest shape: a raw error from the bottom of the tool, named for the command that hit
@@ -18,20 +20,26 @@ fn explain_a_held_lock(bencher: divan::Bencher) {
     let error = anyhow::Error::from(InstallError::Core(mix_core::Error::Locked {
         path: "/var/lib/mix/lock".into(),
     }));
+    let packages = vec!["package".to_string()];
 
-    bencher.bench(|| explain::install::explain(divan::black_box(&error), &PACKAGES).message());
+    bencher.bench(|| {
+        shown(explain::install::explain(
+            divan::black_box(&error),
+            &packages,
+        ))
+    });
 }
 
-/// The one that is written per artifact rather than per run: `mix repair` prints one of these
-/// for every target it could not put back.
+/// A target `mix repair` will not change, named with its reason and the way out, as repair prints
+/// it for every target it could not put back.
 #[divan::bench]
-fn explain_a_repair_report(bencher: divan::Bencher) {
+fn explain_an_unrepairable_target(bencher: divan::Bencher) {
     let error = TargetError::Unrepairable {
         artifact: "default profile".to_string(),
         reason: Unfixable::MissingRuntime,
     };
 
-    bencher.bench(|| explain::target::report(divan::black_box(&error)));
+    bencher.bench(|| shown(explain::target::report(divan::black_box(&error))));
 }
 
 fn report(name: &str, finding: Finding) -> HealthReport {
@@ -39,13 +47,14 @@ fn report(name: &str, finding: Finding) -> HealthReport {
         name: name.to_string(),
         category: Category::Filesystem,
         finding: Some(finding),
+        drift: None,
     }
 }
 
-/// The line `mix doctor` writes per failed check: the measurement the audit handed over, put
-/// into words.
+/// A problem as `mix doctor` writes it: the item and what is wrong with it, and a note with what
+/// was found against what `mix` set.
 #[divan::bench]
-fn explain_a_health_check(bencher: divan::Bencher) {
+fn explain_a_doctor_problem(bencher: divan::Bencher) {
     let report = report(
         "/nix",
         Finding::Mode {
@@ -54,25 +63,24 @@ fn explain_a_health_check(bencher: divan::Bencher) {
         },
     );
 
-    bencher.bench(|| explain::doctor::check(divan::black_box(&report)));
+    bencher.bench(|| shown(explain::doctor::check(divan::black_box(&report))));
 }
 
-/// The same line for a finding repair cannot reconcile: the way out is looked up from the
-/// finding and written under it.
+/// A problem repair cannot fix, which also carries its own way out.
 #[divan::bench]
-fn explain_an_unfixable_health_check(bencher: divan::Bencher) {
+fn explain_a_doctor_problem_repair_cannot_fix(bencher: divan::Bencher) {
     let report = report("default profile", Finding::RuntimeMissing);
 
-    bencher.bench(|| explain::doctor::check(divan::black_box(&report)));
+    bencher.bench(|| shown(explain::doctor::check(divan::black_box(&report))));
 }
 
-/// The verdict at the end of an audit: every finding is read to decide whether `mix repair` is
-/// worth suggesting, so this is the one that grows with the number of checks that failed.
+/// The verdict at the end of an audit: the problems are counted and every finding is read to
+/// decide whether `mix repair` is worth suggesting, so it grows with the number found.
 #[divan::bench(args = [1, 8, 64])]
-fn explain_the_audit_verdict(bencher: divan::Bencher, n: usize) {
+fn explain_the_doctor_verdict(bencher: divan::Bencher, n: usize) {
     let reports: Vec<HealthReport> = (0..n)
         .map(|i| report(&format!("nixbld{i}"), Finding::RuntimeMissing))
         .collect();
 
-    bencher.bench(|| explain::doctor::unhealthy(divan::black_box(&reports)).message());
+    bencher.bench(|| shown(explain::doctor::unhealthy(divan::black_box(&reports))));
 }

@@ -2,32 +2,47 @@ use std::future::Future;
 
 use mix_exec::Reason;
 use mix_exec::Scope;
+use mix_ui::{Help, Note, Phrase, help, note, phrase};
 use nix::sys::signal::Signal;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::task::JoinHandle;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub struct Stopping {
-    pub first: &'static str,
-    pub forced: &'static str,
+    pub first: Note,
+    pub first_help: Help,
+    pub forced: Phrase,
+    pub forced_help: Help,
 }
 
-pub const BOOTSTRAP: Stopping = Stopping {
-    first: "cancelling and cleaning up; press Ctrl-C again to stop now",
-    forced: "stopped before the cleanup finished; run `mix bootstrap` again to finish it",
-};
+pub fn bootstrap() -> Stopping {
+    Stopping {
+        first: note!("cancelling and cleaning up"),
+        first_help: help!("press Ctrl-C again to stop now"),
+        forced: phrase!("stopped before the cleanup finished"),
+        forced_help: help!("run `mix bootstrap` again to finish it"),
+    }
+}
 
-pub const REPAIR: Stopping = Stopping {
-    first: "stopping after the current repair; press Ctrl-C again to stop now",
-    forced: "stopped in the middle of a repair; run `mix repair` again to finish it",
-};
+pub fn repair() -> Stopping {
+    Stopping {
+        first: note!("stopping after the current repair"),
+        first_help: help!("press Ctrl-C again to stop now"),
+        forced: phrase!("stopped in the middle of a repair"),
+        forced_help: help!("run `mix repair` again to finish it"),
+    }
+}
 
-pub const CHANGE: Stopping = Stopping {
-    first: "cancelling and putting the package list back; press Ctrl-C again to stop now",
-    forced: "stopped before the package list was put back; the next `mix` command puts it back",
-};
+pub fn change() -> Stopping {
+    Stopping {
+        first: note!("cancelling and putting the package list back"),
+        first_help: help!("press Ctrl-C again to stop now"),
+        forced: phrase!("stopped before the package list was put back"),
+        forced_help: help!("run any `mix` command to put it back"),
+    }
+}
 
-const FORCED_EXIT: i32 = 130;
+const FORCED_EXIT: u32 = mix_events::exit::INTERRUPTED;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Received {
@@ -89,11 +104,14 @@ pub fn apply(scope: &Scope, notices: Option<&Stopping>, control: Control) {
         Control::Cancel(reason) => scope.cancel(reason),
         Control::ForceStop => {
             if let Some(notices) = notices {
-                mix_ui::note(notices.forced);
+                mix_ui::report(
+                    mix_ui::Severity::Error,
+                    &mix_ui::Report::new(&notices.forced).help(&notices.forced_help),
+                );
             }
             scope.processes().kill();
             mix_ui::restore_terminal();
-            std::process::exit(FORCED_EXIT);
+            std::process::exit(i32::try_from(FORCED_EXIT).unwrap_or(i32::MAX));
         }
         Control::Pause => scope.processes().pause(),
         Control::Resume => scope.processes().resume(),
@@ -232,13 +250,13 @@ mod tests {
     fn cancelling_stops_the_scope_and_pausing_does_not() {
         let scope = mix_exec::Scope::root();
 
-        apply(&scope, Some(&BOOTSTRAP), Control::Pause);
-        apply(&scope, Some(&BOOTSTRAP), Control::Resume);
+        apply(&scope, Some(&bootstrap()), Control::Pause);
+        apply(&scope, Some(&bootstrap()), Control::Resume);
         assert!(!scope.is_stopped());
 
         apply(
             &scope,
-            Some(&BOOTSTRAP),
+            Some(&bootstrap()),
             Control::Cancel(Reason::Terminated),
         );
         assert_eq!(scope.reason(), Some(Reason::Terminated));
@@ -256,7 +274,7 @@ mod tests {
         let scope = mix_exec::Scope::root();
         let _watch = watch(
             &scope,
-            Some(BOOTSTRAP),
+            Some(bootstrap()),
             std::future::pending(),
             Side::Client,
         );
@@ -272,7 +290,7 @@ mod tests {
         let scope = mix_exec::Scope::root();
         let _watch = watch(
             &scope,
-            Some(BOOTSTRAP),
+            Some(bootstrap()),
             std::future::pending(),
             Side::Client,
         );
@@ -290,7 +308,7 @@ mod tests {
         let (leave, left) = tokio::sync::oneshot::channel::<()>();
         let _watch = watch(
             &scope,
-            Some(BOOTSTRAP),
+            Some(bootstrap()),
             async {
                 let _ = left.await;
             },
@@ -310,7 +328,7 @@ mod tests {
         let (leave, left) = tokio::sync::oneshot::channel::<()>();
         let watch = watch(
             &scope,
-            Some(BOOTSTRAP),
+            Some(bootstrap()),
             async {
                 let _ = left.await;
             },

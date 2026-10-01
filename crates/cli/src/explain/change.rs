@@ -10,10 +10,12 @@ pub(crate) fn describe(error: &Error, command: &str, action: &dyn std::fmt::Disp
 pub fn restored(source: Source) -> Option<Diagnostic> {
     match source {
         Source::File | Source::Generation => None,
-        Source::Fresh => Some(Diagnostic::hinting(
-            "your package list was damaged and couldn't be recovered, so it was reset",
-            "reinstall your packages with `mix install`",
-        )),
+        Source::Fresh => Some(
+            Diagnostic::new(mix_ui::phrase!(
+                "your package list was damaged and couldn't be recovered, so it was reset"
+            ))
+            .help(mix_ui::help!("reinstall your packages with `mix install`")),
+        ),
     }
 }
 
@@ -72,7 +74,7 @@ mod tests {
 
     #[test]
     fn a_list_mix_built_wrong_is_reported_as_a_bug() {
-        assert!(message(&Error::InvalidState(Invalid::Missing("git"))).contains("bug in `mix`"));
+        assert!(message(&Error::InvalidState(Invalid::Missing("git"))).contains("report this bug"));
     }
 
     #[test]

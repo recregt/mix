@@ -1,7 +1,7 @@
 //! What a declared target says when it drifted, or could not be put back.
 //!
-//! Three commands read the same measurement — `mix doctor` prints it, `mix repair` reconciles
-//! from it, and `mix bootstrap` declares the per-user configuration through it — so what a
+//! Three commands read the same measurement: `mix doctor` prints it, `mix repair` reconciles
+//! from it, and `mix bootstrap` declares the per-user configuration through it. So what a
 //! finding and a reason read like is written once, here.
 
 use mix_shell::target::Error;
@@ -13,15 +13,10 @@ pub(crate) fn describe(error: &Error, command: &str, action: &dyn std::fmt::Disp
     super::render::render_error(error, &Context { command, action })
 }
 
-/// What went wrong with one artifact, for printing under its own name.
-///
-/// An artifact that could not be repaired says why, and what would put it back; anything else is
-/// the raw failure as it was raised. The name is the caller's to print, so nothing here has to
-/// guess whether it is a word or a path.
-pub fn report(error: &Error) -> String {
+pub fn report(error: &Error) -> Diagnostic {
     match error {
-        Error::Unrepairable { reason, .. } => format!("{reason}\n{}", unfixable(*reason)),
-        e => e.to_string(),
+        Error::Unrepairable { artifact, reason } => super::render::unrepairable(artifact, *reason),
+        e => Diagnostic::new(mix_ui::phrase!("{e}")),
     }
 }
 
@@ -38,7 +33,7 @@ mod tests {
             reason: Unfixable::MissingRuntime,
         };
 
-        let line = report(&error);
+        let line = report(&error).message();
 
         assert!(line.contains("`mix repair` can't restore it"));
         assert!(line.contains("mix bootstrap"));
@@ -68,7 +63,7 @@ mod tests {
         });
 
         assert_eq!(
-            report(&error),
+            report(&error).message(),
             "command `gpasswd --add ciuser mix-users` failed: exit 1"
         );
     }

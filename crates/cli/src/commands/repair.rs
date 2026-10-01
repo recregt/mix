@@ -15,7 +15,7 @@ pub async fn run(view: &crate::render::sinks::View) -> anyhow::Result<ExitCode> 
             .with_host(super::host_config());
         let _watch = crate::controls::watch(
             &ctx.scope,
-            view.notices(crate::controls::REPAIR),
+            view.notices(crate::controls::repair()),
             std::future::pending(),
             crate::controls::Side::Client,
         );

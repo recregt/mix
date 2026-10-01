@@ -1,4 +1,14 @@
-/nix: exists but is not a directory
-remove it, then run `mix repair` again
+$ mix install ripgrep
+error: /nix: exists but is not a directory
 
-`mix repair` found something it will not change on its own: something in the way it would have to delete, a user that no longer exists, or a missing Nix runtime. The message says what to do about it.
+help: remove it, then run `mix repair` again
+
+$ mix explain unrepairable
+UNREPAIRABLE
+
+`mix repair` found something it will not change on its own.
+
+It is something in the way that it would have to delete, a user that no longer exists, or a missing Nix runtime. The message says which.
+
+To fix it:
+  - use the help under the message

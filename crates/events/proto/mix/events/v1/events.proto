@@ -182,6 +182,7 @@ message NodeProgress {
     CommandFinished command_finished = 9;
     Observed observed = 10;
     Journaled journaled = 11;
+    SubstitutionStarted substitution = 12;
   }
 }
 
@@ -318,6 +319,10 @@ message FetchStarted {
   string url = 1;
 }
 
+message SubstitutionStarted {
+  string path = 1;
+}
+
 message Bytes {
   uint64 done = 1;
   optional uint64 total = 2;
@@ -414,10 +419,23 @@ message InspectionReport {
   string target = 1;
   Category category = 2;
   Finding finding = 3;
+  Drift drift = 4;
 }
 
 message InspectionResult {
   Finding finding = 1;
+  Drift drift = 2;
+}
+
+message Drift {
+  string path = 1;
+  repeated Hunk hunks = 2;
+}
+
+message Hunk {
+  uint32 found_line = 1;
+  repeated string found = 2;
+  repeated string expected = 3;
 }
 
 message Finding {
