@@ -83,6 +83,7 @@ fn managed(cfg: UserConfig, member: impl Fn(&str, &str) -> bool) -> Option<UserC
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use std::path::Path;
 

@@ -24,6 +24,7 @@ fn read(path: &Path) -> Option<String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use mix_core::state::StateManifest;
 

@@ -87,6 +87,7 @@ async fn systemd_active_at(marker: &Path, comm_path: &Path) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 

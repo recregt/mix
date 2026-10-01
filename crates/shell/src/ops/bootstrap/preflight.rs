@@ -60,6 +60,7 @@ pub async fn check_systemd_ready() -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 

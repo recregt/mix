@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 use mix_core::{DownloadProgress, Error as CoreError};
 use mix_exec::Scope;
 use sha2::{Digest, Sha256};
@@ -287,6 +289,7 @@ pub fn unpack(tarball: &[u8], dest: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use mockito::Server;

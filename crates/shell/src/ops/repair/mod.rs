@@ -263,6 +263,7 @@ async fn commit_the_tracked_state(
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use mix_core::journal::Record;
 

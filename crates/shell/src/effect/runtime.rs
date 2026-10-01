@@ -166,6 +166,7 @@ pub async fn remove(created: &[PathBuf], kept: &[PathBuf]) -> Outcome {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 

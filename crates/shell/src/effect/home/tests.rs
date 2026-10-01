@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 use std::io::Cursor;
 use std::sync::Arc;
 

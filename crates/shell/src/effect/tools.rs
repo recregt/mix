@@ -102,6 +102,7 @@ pub fn root_command(name: &str) -> Result<mix_exec::Command, Failure> {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
 

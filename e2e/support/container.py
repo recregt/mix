@@ -1,4 +1,5 @@
 import fcntl
+import hashlib
 import functools
 import json
 import os
@@ -12,7 +13,7 @@ import time
 
 import pytest
 
-from support import mirror, resources
+from support import mirror, resources, trace
 from support.events import Run, envelopes_of, progress_of, started_step
 from support.paths import CACHE_DIR, REPO_ROOT, TESTS_ROOT
 
@@ -21,7 +22,7 @@ ERE_SPECIAL = set("\\.[]{}()*+?^$|")
 MIX_USERS_GROUP = "mix-users"
 NIX_CONF_DEST = "/etc/nix/nix.conf"
 
-IMAGE_TAG = "mix-bootstrap-test:latest"
+IMAGE_REPOSITORY = "mix-bootstrap-test"
 REMOTE_IMAGE = os.environ.get("MIX_TEST_IMAGE")
 CONTAINER_NAME = re.compile(r"mix-test-(\d+)-\d+")
 SNAPSHOT_REPOSITORY = "mix-bootstrapped"
@@ -195,6 +196,24 @@ class Container:
         result = self.exec("mix", "--events-file", capture, *args, env=env, user=user)
         return self.recorded(capture, result.returncode, result.stdout, result.stderr)
 
+    def traced_mix(self, *args, user: str) -> tuple[Run, list[trace.Write]]:
+        capture = self.capture()
+        output = f"{capture}.strace"
+        account = self.exec("getent", "passwd", user, check=True).stdout.split(":")
+        setuid_root = self.exec(
+            "find", "/", "-xdev", "-type", "f", "-user", "root", "-perm", "-4000",
+            check=True,
+        ).stdout.split()
+        result = self.exec(
+            "strace", "-f", "-qq", "-y", "-o", output, "-e", f"trace={trace.SYSCALLS}",
+            "-u", user,
+            "env", f"HOME={account[5]}", f"USER={user}", f"LOGNAME={user}",
+            "mix", "--events-file", capture, *args,
+        )
+        run = self.recorded(capture, result.returncode, result.stdout, result.stderr)
+        calls = self.exec("cat", output, check=True).stdout
+        return run, trace.writes(calls, int(account[2]), set(setuid_root))
+
     def mix_background(self, *args, env=None, user=None) -> BackgroundRun:
         capture = self.capture()
         process = self.start_background(
@@ -289,6 +308,7 @@ def _start_container(image: str, name: str, binary: pathlib.Path) -> str:
             "-d",
             "--systemd=always",
             "--cap-add=SYS_ADMIN",
+            "--cap-add=SYS_PTRACE",
             "--pids-limit=-1",
             "--volume",
             f"{binary}:/usr/local/bin/mix:ro",
@@ -358,27 +378,31 @@ def mix_binary():
 @pytest.fixture(scope="session")
 def container_image():
     containerfile = TESTS_ROOT / "Containerfile"
+    digest = hashlib.sha256(containerfile.read_bytes()).hexdigest()
+    local = f"{IMAGE_REPOSITORY}:{digest}"
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     with open(CACHE_DIR / "container-image.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if REMOTE_IMAGE:
-            pull = subprocess.run(["podman", "pull", REMOTE_IMAGE])
+            remote = f"{REMOTE_IMAGE}:{digest}"
+            pull = subprocess.run(["podman", "pull", remote], capture_output=True)
             if pull.returncode == 0:
-                return REMOTE_IMAGE
-        subprocess.run(
-            [
-                "podman",
-                "build",
-                "-q",
-                "-t",
-                IMAGE_TAG,
-                "-f",
-                str(containerfile),
-                str(containerfile.parent),
-            ],
-            check=True,
-        )
-    return IMAGE_TAG
+                return remote
+        if subprocess.run(["podman", "image", "exists", local]).returncode != 0:
+            subprocess.run(
+                [
+                    "podman",
+                    "build",
+                    "-q",
+                    "-t",
+                    local,
+                    "-f",
+                    str(containerfile),
+                    str(containerfile.parent),
+                ],
+                check=True,
+            )
+    return local
 
 
 def reap_orphans() -> None:

@@ -43,6 +43,7 @@ pub async fn install(ctx: &Context, packages: &[String]) -> Result<Installed> {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
     use mix_core::privilege::InvokingUser;

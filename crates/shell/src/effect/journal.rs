@@ -24,6 +24,7 @@ pub struct FileJournal {
 }
 
 impl FileJournal {
+    #[allow(clippy::disallowed_methods)]
     pub fn create(dir: &Path, request: &str) -> Result<Self, Failure> {
         std::fs::DirBuilder::new()
             .recursive(true)
@@ -44,6 +45,7 @@ impl FileJournal {
         Ok(journal)
     }
 
+    #[allow(clippy::disallowed_methods)]
     pub fn finish(self) -> Result<(), Failure> {
         std::fs::remove_file(&self.path).map_err(|error| io(&self.path, error))
     }
@@ -90,6 +92,7 @@ pub struct Recovered {
     pub failures: Vec<(Action, Failure)>,
 }
 
+#[allow(clippy::disallowed_methods)]
 pub async fn recover_all(dir: &Path, performer: &mut Performer, scope: &Scope) -> Recovered {
     let mut recovered = Recovered::default();
     for path in unfinished(dir) {

@@ -40,7 +40,7 @@ jobs:
 
       - name: Run integration tests
         env:
-          MIX_TEST_IMAGE: ghcr.io/recregt/mix-bootstrap-test:latest
+          MIX_TEST_IMAGE: ghcr.io/recregt/mix-bootstrap-test
           MIX_TEST_ALLOW_NETWORK: "1"
           PYTHONUNBUFFERED: "1"
         run: bash e2e/run.sh --durations=15

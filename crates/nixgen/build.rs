@@ -1,4 +1,4 @@
-#![allow(clippy::disallowed_macros)]
+#![allow(clippy::disallowed_macros, clippy::disallowed_methods)]
 #![allow(dead_code)]
 
 #[path = "src/ast.rs"]

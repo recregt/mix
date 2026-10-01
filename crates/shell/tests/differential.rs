@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 use std::collections::BTreeMap;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
