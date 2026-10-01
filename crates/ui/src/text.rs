@@ -52,6 +52,13 @@ impl Phrase {
         Self(Text::Owned(text))
     }
 
+    pub fn into_cow(self) -> std::borrow::Cow<'static, str> {
+        match self.0 {
+            Text::Static(text) => std::borrow::Cow::Borrowed(text),
+            Text::Owned(text) => std::borrow::Cow::Owned(text),
+        }
+    }
+
     pub fn as_str(&self) -> &str {
         match &self.0 {
             Text::Static(text) => text,
@@ -272,6 +279,24 @@ impl Around {
     pub fn around(&self, value: &str) -> Phrase {
         joined(&[self.before, value, self.after])
     }
+
+    pub fn parts(&self) -> (&'static str, &'static str) {
+        (self.before, self.after)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HelpAround(Around);
+
+impl HelpAround {
+    #[doc(hidden)]
+    pub const fn checked(around: Around) -> Self {
+        Self(around)
+    }
+
+    pub fn parts(&self) -> (&'static str, &'static str) {
+        self.0.parts()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -316,6 +341,17 @@ macro_rules! around {
 }
 
 #[macro_export]
+macro_rules! help_around {
+    ($before:literal, $after:literal) => {{
+        const _: () = assert!(
+            $crate::text::starts_with_imperative($before),
+            "a help starts with an instruction from `mix_ui::text::IMPERATIVES`"
+        );
+        $crate::text::HelpAround::checked($crate::around!($before, $after))
+    }};
+}
+
+#[macro_export]
 macro_rules! note_around {
     ($before:literal, $after:literal) => {{
         const _: () = assert!(
@@ -334,19 +370,6 @@ macro_rules! note_parts {
             "a note states a fact; an instruction belongs in a help"
         );
         $crate::text::Note::checked($crate::phrase_parts![$first $(, $arg, $next)*])
-    }};
-}
-
-#[macro_export]
-macro_rules! help_parts {
-    [$first:literal $(, $arg:expr, $next:literal)* $(,)?] => {{
-        const _: () = assert!(
-            $crate::text::is_fragment($first)
-                && $crate::text::is_help($first)
-                $(&& $crate::text::is_fragment($next))*,
-            "a help starts with an instruction, and every part is a phrase fragment"
-        );
-        $crate::text::Help::checked($crate::text::joined(&[$first $(, $arg, $next)*]))
     }};
 }
 

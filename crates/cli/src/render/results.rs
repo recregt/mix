@@ -159,10 +159,7 @@ fn repaired(
                     mix_ui::report_to(
                         out,
                         Severity::Warning,
-                        &Report {
-                            causes: crate::explain::evidence(&fault),
-                            ..words.report()
-                        },
+                        &words.report().causes(crate::explain::evidence(&fault)),
                     );
                 }
             }

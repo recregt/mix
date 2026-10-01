@@ -268,22 +268,51 @@ pub enum Severity {
 
 #[derive(Debug)]
 pub struct Report<'a> {
-    pub code: Option<&'a str>,
-    pub summary: &'a Phrase,
-    pub notes: &'a [Note],
-    pub helps: &'a [Help],
-    pub causes: Vec<String>,
+    code: Option<&'a str>,
+    summary: &'a str,
+    note: Option<&'a str>,
+    help: Option<&'a str>,
+    causes: Vec<String>,
 }
 
 impl<'a> Report<'a> {
     pub fn new(summary: &'a Phrase) -> Self {
+        Self::checked(summary.as_str(), None, None)
+    }
+
+    #[doc(hidden)]
+    pub fn checked(summary: &'a str, note: Option<&'a str>, help: Option<&'a str>) -> Self {
         Self {
             code: None,
             summary,
-            notes: &[],
-            helps: &[],
+            note,
+            help,
             causes: Vec::new(),
         }
+    }
+
+    pub fn code(mut self, code: Option<&'a str>) -> Self {
+        self.code = code;
+        self
+    }
+
+    pub fn note(mut self, note: &'a Note) -> Self {
+        self.note = Some(note.as_str());
+        self
+    }
+
+    pub fn help(mut self, help: &'a Help) -> Self {
+        self.help = Some(help.as_str());
+        self
+    }
+
+    pub fn causes(mut self, causes: Vec<String>) -> Self {
+        self.causes = causes;
+        self
+    }
+
+    pub fn has_help(&self) -> bool {
+        self.help.is_some()
     }
 }
 
@@ -306,23 +335,18 @@ pub fn report_text(severity: Severity, report: &Report<'_>, colours: bool) -> St
         Severity::Error => ("error", RED),
         Severity::Warning => ("warning", YELLOW),
     };
-    let mut out = String::with_capacity(report.summary.as_str().len() + 64);
+    let mut out = String::with_capacity(report.summary.len() + 64);
     match report.code {
         Some(code) => painted(&mut out, colour, &format!("{label}[{code}]"), colours),
         None => painted(&mut out, colour, label, colours),
     }
     out.push_str(": ");
-    out.push_str(report.summary.as_str());
+    out.push_str(report.summary);
     let subs = report
-        .notes
-        .iter()
-        .map(|note| (GREEN, "note", note.as_str()))
-        .chain(
-            report
-                .helps
-                .iter()
-                .map(|help| (CYAN, "help", help.as_str())),
-        );
+        .note
+        .map(|note| (GREEN, "note", note))
+        .into_iter()
+        .chain(report.help.map(|help| (CYAN, "help", help)));
     for (index, (colour, label, text)) in subs.enumerate() {
         out.push_str(if index == 0 { "\n\n" } else { "\n" });
         write_label(&mut out, colour, label, text, colours);
@@ -508,12 +532,10 @@ mod tests {
         let help = help!("run `mix repair` to record it");
         let text = report_text(
             Severity::Warning,
-            &Report {
-                code: Some("git-record-failed"),
-                notes: std::slice::from_ref(&note),
-                helps: std::slice::from_ref(&help),
-                ..Report::new(&summary)
-            },
+            &Report::new(&summary)
+                .code(Some("git-record-failed"))
+                .note(&note)
+                .help(&help),
             false,
         );
         assert_eq!(
@@ -528,14 +550,10 @@ mod tests {
         let help = help!("run it again with `-v`\nto see each step");
         let text = report_text(
             Severity::Error,
-            &Report {
-                causes: vec![
-                    "`nix build` exited with status 1".into(),
-                    "error: \u{1b}[31mbuilder failed\u{1b}[0m\n\n  at home.nix:10".into(),
-                ],
-                helps: std::slice::from_ref(&help),
-                ..Report::new(&summary)
-            },
+            &Report::new(&summary).help(&help).causes(vec![
+                "`nix build` exited with status 1".into(),
+                "error: \u{1b}[31mbuilder failed\u{1b}[0m\n\n  at home.nix:10".into(),
+            ]),
             false,
         );
         assert_eq!(

@@ -177,13 +177,12 @@ impl Human {
                     mix_ui::report_to(
                         self.out.as_ref(),
                         Severity::Warning,
-                        &mix_ui::Report {
-                            code: code.as_deref(),
-                            causes: crate::explain::evidence(&mix_events::Fault::Failed(
+                        &words
+                            .report()
+                            .code(code.as_deref())
+                            .causes(crate::explain::evidence(&mix_events::Fault::Failed(
                                 diagnostic.clone(),
-                            )),
-                            ..words.report()
-                        },
+                            ))),
                     );
                 }
             }
@@ -220,11 +219,10 @@ impl Human {
         mix_ui::report_to(
             self.out.as_ref(),
             Severity::Error,
-            &mix_ui::Report {
-                code: code.as_deref(),
-                causes: crate::explain::evidence(&fault),
-                ..words.report()
-            },
+            &words
+                .report()
+                .code(code.as_deref())
+                .causes(crate::explain::evidence(&fault)),
         );
     }
 

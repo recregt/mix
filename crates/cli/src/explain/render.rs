@@ -4,7 +4,7 @@ use mix_events::Fault;
 use mix_events::v1::diagnostic::Detail;
 use mix_events::v1::{Code, Diagnostic as Wire, Host, Unfixable as WireUnfixable};
 use mix_shell::target::Unfixable;
-use mix_ui::{Help, help, help_parts, note, phrase, phrase_parts};
+use mix_ui::{Help, help, help_around, note, phrase, phrase_parts};
 
 use super::{Diagnostic, bug, failed};
 
@@ -134,13 +134,11 @@ pub(crate) fn damaged() -> mix_ui::Phrase {
 fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
     let command = context.command;
     let words = match code {
-        Code::Locked => {
-            Diagnostic::new(phrase!("another `mix` command is already running")).help(help_parts![
-                "wait for it to finish, then run `",
-                command,
-                "` again"
-            ])
-        }
+        Code::Locked => Diagnostic::hinting(
+            phrase!("another `mix` command is already running"),
+            help_around!("wait for it to finish, then run `", "` again"),
+            command,
+        ),
         Code::LockMissing => Diagnostic::new(phrase!("`mix` isn't set up yet"))
             .help(help!("run `mix bootstrap` first")),
         Code::Io | Code::CommandFailed | Code::SpawnFailed => failed(context.action),
@@ -159,20 +157,27 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
             Diagnostic::new(phrase!("the change was made but not recorded in git"))
                 .help(help!("run `mix repair` to record it"))
         }
-        Code::Network => Diagnostic::new(phrase!("couldn't download required setup files")).help(
-            help!("check your internet connection, then run `{command}` again"),
+        Code::Network => Diagnostic::hinting(
+            phrase!("couldn't download required setup files"),
+            help_around!("check your internet connection, then run `", "` again"),
+            command,
         ),
-        Code::Integrity | Code::Decompression => {
-            Diagnostic::new(damaged()).help(help!("run `{command}` again to download them again"))
-        }
+        Code::Integrity | Code::Decompression => Diagnostic::hinting(
+            damaged(),
+            help_around!("run `", "` again to download them again"),
+            command,
+        ),
         Code::MalformedArchive => Diagnostic::new(phrase!(
             "the downloaded setup files aren't in the expected format"
         ))
         .help(help!(
             "check that the mirror given with `--mirror` serves the right files"
         )),
-        Code::NotRoot => Diagnostic::new(phrase!("setting up `mix` needs administrator rights"))
-            .help(help!("run it again with sudo:\n\x20 sudo {command}")),
+        Code::NotRoot => Diagnostic::hinting(
+            phrase!("setting up `mix` needs administrator rights"),
+            help_around!("run it again with sudo:\n\x20 sudo ", ""),
+            command,
+        ),
         Code::UnsupportedHost => Diagnostic::new(phrase!(
             "this system is NixOS, which already does what `mix` does"
         ))
@@ -181,12 +186,15 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
             .help(help!(
                 "upgrade it from Windows PowerShell:\n\x20 wsl --set-version <distro> 2"
             )),
-        Code::SystemdUnreachable => {
-            Diagnostic::new(phrase!("`mix` couldn't reach systemd")).help(help!(
+        Code::SystemdUnreachable => Diagnostic::hinting(
+            phrase!("`mix` couldn't reach systemd"),
+            help_around!(
                 "check that the system bus is running with `systemctl status dbus`, then run \
-                 `{command}` again"
-            ))
-        }
+                 `",
+                "` again"
+            ),
+            command,
+        ),
         Code::AlreadyManaged => Diagnostic::new(phrase!(
             "this system already has Nix, set up by something other than `mix`"
         ))
@@ -194,13 +202,17 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
             "`mix` needs to set up its own, and uninstalling the existing one removes everything \
              you installed with it"
         ))
-        .help(help!("uninstall it, then run `{command}` again")),
-        Code::CrossDeviceStore => Diagnostic::new(phrase!(
-            "`/nix/store` is on a different disk than `/nix`, and `mix` needs them on the same one"
-        ))
-        .help(help!(
-            "remove the separate mount for `/nix/store`, then run `{command}` again"
-        )),
+        .help_around(help_around!("uninstall it, then run `", "` again"), command),
+        Code::CrossDeviceStore => Diagnostic::hinting(
+            phrase!(
+                "`/nix/store` is on a different disk than `/nix`, and `mix` needs them on the same one"
+            ),
+            help_around!(
+                "remove the separate mount for `/nix/store`, then run `",
+                "` again"
+            ),
+            command,
+        ),
         Code::NewerState => Diagnostic::new(phrase!(
             "this version of `mix` is older than the one that set up your packages"
         ))
@@ -243,22 +255,22 @@ fn detailed(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
     let detail = diagnostic.detail.as_ref();
     match diagnostic.code() {
         Code::PermissionDenied => match detail {
-            Some(Detail::Io(io)) => Diagnostic::new(phrase!("no permission to use {}", io.path))
-                .help(help_parts![
-                    "check who owns it, then run `",
-                    command,
-                    "` again"
-                ]),
+            Some(Detail::Io(io)) => Diagnostic::hinting(
+                phrase!("no permission to use {}", io.path),
+                help_around!("check who owns it, then run `", "` again"),
+                command,
+            ),
             _ => failed(context.action),
         },
         Code::Conflict => match detail {
-            Some(Detail::Conflict(conflict)) => Diagnostic::new(phrase!(
-                "{} changed while mix was working, so mix left it alone",
-                conflict.subject
-            ))
-            .help(help!(
-                "run `{command}` again to start from what is there now"
-            )),
+            Some(Detail::Conflict(conflict)) => Diagnostic::hinting(
+                phrase!(
+                    "{} changed while mix was working, so mix left it alone",
+                    conflict.subject
+                ),
+                help_around!("run `", "` again to start from what is there now"),
+                command,
+            ),
             _ => failed(context.action),
         },
         Code::InvalidMirror => Diagnostic::new(phrase!(
@@ -293,9 +305,13 @@ fn detailed(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
                         "turn it on: add `[boot]` with `systemd=true` to `/etc/wsl.conf`, run \
                          `wsl.exe --shutdown` from Windows, then reopen the distro"
                     )),
-                _ => Diagnostic::new(summary).help(help!(
-                    "make sure systemd is your init system, then run `{command}` again"
-                )),
+                _ => Diagnostic::new(summary).help_around(
+                    help_around!(
+                        "make sure systemd is your init system, then run `",
+                        "` again"
+                    ),
+                    command,
+                ),
             }
         }
         Code::UnitFailed => match detail {
@@ -327,8 +343,11 @@ fn detailed(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
             [] => bug(),
         },
         Code::UnknownPackage => match packages(diagnostic) {
-            [name, ..] => Diagnostic::new(phrase!("`{name}` isn't a package `mix` can find"))
-                .help(help!("check the name, then run `{command}` again")),
+            [name, ..] => Diagnostic::hinting(
+                phrase!("`{name}` isn't a package `mix` can find"),
+                help_around!("check the name, then run `", "` again"),
+                command,
+            ),
             [] => bug(),
         },
         Code::BuildFailed => match packages(diagnostic) {

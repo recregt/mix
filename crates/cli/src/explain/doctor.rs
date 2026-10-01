@@ -324,7 +324,7 @@ mod tests {
     fn a_problem_repair_fixes_leaves_the_way_out_to_the_verdict() {
         let words = check(&report("/nix", Some(Finding::ContentDrift)));
 
-        assert!(words.report().helps.is_empty());
+        assert!(!words.report().has_help());
     }
 
     #[test]

@@ -106,10 +106,7 @@ pub fn apply(scope: &Scope, notices: Option<&Stopping>, control: Control) {
             if let Some(notices) = notices {
                 mix_ui::report(
                     mix_ui::Severity::Error,
-                    &mix_ui::Report {
-                        helps: std::slice::from_ref(&notices.forced_help),
-                        ..mix_ui::Report::new(&notices.forced)
-                    },
+                    &mix_ui::Report::new(&notices.forced).help(&notices.forced_help),
                 );
             }
             scope.processes().kill();

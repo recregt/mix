@@ -115,10 +115,8 @@ pub async fn run() -> ExitCode {
         Err(error) => {
             mix_ui::report(
                 mix_ui::Severity::Error,
-                &mix_ui::Report {
-                    causes: vec![error.to_string()],
-                    ..mix_ui::Report::new(&mix_ui::phrase!("the worker stopped serving its client"))
-                },
+                &mix_ui::Report::new(&mix_ui::phrase!("the worker stopped serving its client"))
+                    .causes(vec![error.to_string()]),
             );
             ExitCode::FAILURE
         }

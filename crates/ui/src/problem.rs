@@ -19,10 +19,44 @@ pub struct Lines<'a> {
 }
 
 pub struct Problem<'a> {
-    pub summary: &'a Phrase,
-    pub lines: Option<Lines<'a>>,
-    pub notes: &'a [Note],
-    pub helps: &'a [Help],
+    summary: &'a str,
+    lines: Option<Lines<'a>>,
+    note: Option<&'a str>,
+    help: Option<&'a str>,
+}
+
+impl<'a> Problem<'a> {
+    pub fn new(summary: &'a Phrase) -> Self {
+        Self::checked(summary.as_str(), None, None)
+    }
+
+    #[doc(hidden)]
+    pub fn checked(summary: &'a str, note: Option<&'a str>, help: Option<&'a str>) -> Self {
+        Self {
+            summary,
+            lines: None,
+            note,
+            help,
+        }
+    }
+
+    pub fn lines(mut self, lines: Option<Lines<'a>>) -> Self {
+        if lines.is_some() {
+            self.note = None;
+        }
+        self.lines = lines;
+        self
+    }
+
+    pub fn note(mut self, note: &'a Note) -> Self {
+        self.note = Some(note.as_str());
+        self
+    }
+
+    pub fn help(mut self, help: &'a Help) -> Self {
+        self.help = Some(help.as_str());
+        self
+    }
 }
 
 fn joined(lines: &[String]) -> String {
@@ -41,7 +75,7 @@ pub fn problem_text(severity: Severity, problem: &Problem<'_>, colours: bool) ->
         .map(|hunk| (joined(&hunk.found), joined(&hunk.expected)))
         .collect();
     let mut missing = Vec::new();
-    let mut title = Group::with_title(level.primary_title(problem.summary.as_str()));
+    let mut title = Group::with_title(level.primary_title(problem.summary));
     let mut fix = None;
     if let Some(lines) = &problem.lines {
         let mut suggestion =
@@ -98,11 +132,11 @@ pub fn problem_text(severity: Severity, problem: &Problem<'_>, colours: bool) ->
             .collect(),
         None => Vec::new(),
     };
-    for note in missing_notes.iter().chain(problem.notes) {
-        title = title.element(Level::NOTE.message(note.as_str()));
+    for note in missing_notes.iter().map(Note::as_str).chain(problem.note) {
+        title = title.element(Level::NOTE.message(note));
     }
-    for help in problem.helps {
-        title = title.element(Level::HELP.message(help.as_str()));
+    if let Some(help) = problem.help {
+        title = title.element(Level::HELP.message(help));
     }
     let renderer = if colours {
         Renderer::styled()

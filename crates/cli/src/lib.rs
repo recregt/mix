@@ -120,11 +120,7 @@ pub async fn run() -> ExitCode {
                 }
                 mix_ui::report(
                     mix_ui::Severity::Error,
-                    &mix_ui::Report {
-                        code: code.as_deref(),
-                        causes,
-                        ..words.report()
-                    },
+                    &words.report().code(code.as_deref()).causes(causes),
                 );
             }
             from_root.unwrap_or(ExitCode::FAILURE)
@@ -216,12 +212,8 @@ fn explain_code(name: &str) -> ExitCode {
         None => {
             mix_ui::report(
                 mix_ui::Severity::Error,
-                &mix_ui::Report {
-                    notes: std::slice::from_ref(&mix_ui::note!(
-                        "codes look like `locked` or `network`"
-                    )),
-                    ..mix_ui::Report::new(&mix_ui::phrase!("`{name}` isn't a code `mix` uses"))
-                },
+                &mix_ui::Report::new(&mix_ui::phrase!("`{name}` isn't a code `mix` uses"))
+                    .note(&mix_ui::note!("codes look like `locked` or `network`")),
             );
             ExitCode::from(u8::try_from(mix_events::exit::USAGE).unwrap_or(u8::MAX))
         }
@@ -297,13 +289,11 @@ fn outcome_words(outcome: mix_events::Outcome) -> String {
 fn unreadable(path: &std::path::Path, reason: String) {
     mix_ui::report(
         mix_ui::Severity::Error,
-        &mix_ui::Report {
-            causes: vec![reason],
-            ..mix_ui::Report::new(&mix_ui::phrase!(
-                "{} isn't a valid events file",
-                path.display()
-            ))
-        },
+        &mix_ui::Report::new(&mix_ui::phrase!(
+            "{} isn't a valid events file",
+            path.display()
+        ))
+        .causes(vec![reason]),
     );
 }
 

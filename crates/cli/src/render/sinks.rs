@@ -187,13 +187,11 @@ impl Recorder {
             self.failed = true;
             mix_ui::report(
                 mix_ui::Severity::Warning,
-                &mix_ui::Report {
-                    causes: vec![error.to_string()],
-                    ..mix_ui::Report::new(&mix_ui::phrase!(
-                        "couldn't record events to {}",
-                        self.path.display()
-                    ))
-                },
+                &mix_ui::Report::new(&mix_ui::phrase!(
+                    "couldn't record events to {}",
+                    self.path.display()
+                ))
+                .causes(vec![error.to_string()]),
             );
         }
     }
