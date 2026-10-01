@@ -329,6 +329,15 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
             &[(NIX_DAEMON_SOCKET_UNIT, Finding::UnitMissing)],
         ),
         (
+            "a unit whose source cannot be read",
+            |world: &mut World| {
+                world
+                    .files
+                    .remove(Path::new(crate::constants::paths::NIX_DAEMON_SOCKET_SRC));
+            },
+            &[],
+        ),
+        (
             "a changed unit",
             |world: &mut World| {
                 world.with_file(NIX_DAEMON_SOCKET_DEST, b"[Socket]\n", 0o644, (0, 0));

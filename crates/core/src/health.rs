@@ -267,7 +267,7 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
                     _ => Some(Finding::UnitDrift),
                 };
             };
-            if contents(facts, 1) != Some(installed) {
+            if contents(facts, 1).is_some_and(|source| source != installed) {
                 return Some(Finding::UnitDrift);
             }
             let active = matches!(
