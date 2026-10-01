@@ -21,7 +21,6 @@ futures-util = { workspace = true }
 nix = { workspace = true, features = ["signal"] }
 tokio = { workspace = true, features = ["signal"] }
 mix-events = { path = "../events" }
-prost = "0.14.4"
 pbjson-types = "0.9.0"
 serde_json = { workspace = true }
 

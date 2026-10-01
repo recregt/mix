@@ -1420,7 +1420,6 @@ dependencies = [
  "mix-ui",
  "nix",
  "pbjson-types",
- "prost",
  "serde_json",
  "tempfile",
  "thiserror",
