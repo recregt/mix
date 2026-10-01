@@ -4,7 +4,7 @@ use mix_events::Fault;
 use mix_events::v1::diagnostic::Detail;
 use mix_events::v1::{Code, Diagnostic as Wire, Host, Unfixable as WireUnfixable};
 use mix_shell::target::Unfixable;
-use mix_ui::{Help, help, help_parts, note, phrase};
+use mix_ui::{Help, help, help_parts, note, phrase, phrase_parts};
 
 use super::{Diagnostic, bug, failed};
 
@@ -70,8 +70,23 @@ pub(crate) fn unfixable(reason: Unfixable) -> Help {
     }
 }
 
+fn unfixable_reason(reason: Unfixable) -> &'static str {
+    match reason {
+        Unfixable::NotADirectory => "exists but is not a directory",
+        Unfixable::MissingUser => "the user no longer exists",
+        Unfixable::MissingRuntime => "missing, and `mix repair` can't restore it",
+    }
+}
+
 pub(crate) fn unrepairable(artifact: &str, reason: Unfixable) -> Diagnostic {
-    Diagnostic::new(phrase!("{artifact}: {reason}")).help(unfixable(reason))
+    Diagnostic::new(phrase_parts![
+        "",
+        artifact,
+        ": ",
+        unfixable_reason(reason),
+        ""
+    ])
+    .help(unfixable(reason))
 }
 
 fn packages(diagnostic: &Wire) -> &[String] {

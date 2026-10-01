@@ -215,6 +215,60 @@ macro_rules! write_phrase {
     }};
 }
 
+fn digits(buffer: &mut [u8; 22], value: u64, base: u64) -> &str {
+    let mut at = buffer.len();
+    let mut rest = value;
+    loop {
+        at -= 1;
+        buffer[at] = b'0' + (rest % base) as u8;
+        rest /= base;
+        if rest == 0 {
+            break;
+        }
+    }
+    std::str::from_utf8(&buffer[at..]).unwrap_or_default()
+}
+
+pub fn decimal(buffer: &mut [u8; 22], value: u64) -> &str {
+    digits(buffer, value, 10)
+}
+
+pub fn octal(buffer: &mut [u8; 22], value: u64) -> &str {
+    digits(buffer, value, 8)
+}
+
+pub const fn starts_parts(first: &str) -> bool {
+    first.is_empty() || (is_fragment(first) && is_phrase(first))
+}
+
+#[macro_export]
+macro_rules! phrase_parts {
+    [$first:literal $(, $arg:expr, $next:literal)* $(,)?] => {{
+        const _: () = assert!(
+            $crate::text::starts_parts($first)
+                $(&& $crate::text::is_fragment($next))*,
+            "every part of a phrase is a fragment, and the first starts the phrase or is empty"
+        );
+        let parts: &[&str] = &[$first $(, $arg, $next)*];
+        let mut text = String::with_capacity(parts.iter().map(|part| part.len()).sum());
+        for part in parts {
+            text.push_str(part);
+        }
+        $crate::text::Phrase::checked_owned(text)
+    }};
+}
+
+#[macro_export]
+macro_rules! note_parts {
+    [$first:literal $(, $arg:expr, $next:literal)* $(,)?] => {{
+        const _: () = assert!(
+            !$crate::text::starts_with_imperative($first),
+            "a note states a fact; an instruction belongs in a help"
+        );
+        $crate::text::Note::checked($crate::phrase_parts![$first $(, $arg, $next)*])
+    }};
+}
+
 #[macro_export]
 macro_rules! help_parts {
     [$first:literal $(, $arg:expr, $next:literal)* $(,)?] => {{
@@ -313,6 +367,16 @@ mod tests {
         assert!(is_note("`mix` needs it to work"));
         assert!(!is_note("run it again"));
         assert!(!is_help("runaway"));
+    }
+
+    #[test]
+    fn a_number_is_written_without_a_formatter() {
+        let mut buffer = [0u8; 22];
+        assert_eq!(decimal(&mut buffer, 0), "0");
+        assert_eq!(decimal(&mut buffer, 64), "64");
+        assert_eq!(decimal(&mut buffer, u64::MAX), "18446744073709551615");
+        assert_eq!(octal(&mut buffer, 0o755), "755");
+        assert_eq!(octal(&mut buffer, u64::MAX), "1777777777777777777777");
     }
 
     #[test]

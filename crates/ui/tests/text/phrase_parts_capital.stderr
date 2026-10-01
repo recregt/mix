@@ -1,0 +1,7 @@
+error[E0080]: evaluation panicked: every part of a phrase is a fragment, and the first starts the phrase or is empty
+ --> tests/text/phrase_parts_capital.rs:3:13
+  |
+3 |     let _ = mix_ui::phrase_parts!["Found ", count, " problems"];
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `main::_` failed here
+  |
+  = note: this error originates in the macro `$crate::panic::panic_2021` which comes from the expansion of the macro `mix_ui::phrase_parts` (in Nightly builds, run with -Z macro-backtrace for more info)

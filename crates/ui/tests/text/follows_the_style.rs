@@ -7,4 +7,5 @@ fn main() {
     let _ = mix_ui::sentence!("`mix` has not been set up on this machine.");
     let _ = mix_ui::prose!("It stopped. Nothing was changed.");
     let _ = mix_ui::instruction!("run `mix repair`");
+    let _ = mix_ui::phrase_parts!["found ", command, " problems"];
 }
