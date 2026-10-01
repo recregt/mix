@@ -8,7 +8,7 @@ use mix_events::v1::{
     BootstrapRequest, Command, Envelope, NodeStarted, RepairRequest, command, envelope,
     node_started,
 };
-use mix_rpc::{Caller, Client, Events, Worker, serve_connection};
+use mix_rpc::{Caller, Client, Control, Controls, Events, Reply, Worker, serve_connection};
 
 fn marked(seq: u64, request: String) -> Envelope {
     Envelope {
@@ -32,10 +32,10 @@ fn echo(command: Command) -> Envelope {
 struct Scripted;
 
 impl Worker for Scripted {
-    async fn run(&self, caller: Caller, command: Command, events: Events) {
-        let _ = events.send(marked(1, String::new()));
-        let _ = events.send(marked(2, format!("caller {}", caller.uid)));
-        let _ = events.send(echo(command));
+    async fn run(&self, caller: Caller, command: Command, _controls: Controls, events: Events) {
+        let _ = events.send(Reply::Envelope(marked(1, String::new())));
+        let _ = events.send(Reply::Envelope(marked(2, format!("caller {}", caller.uid))));
+        let _ = events.send(Reply::Envelope(echo(command)));
     }
 }
 
@@ -69,11 +69,12 @@ fn repair() -> Command {
 }
 
 async fn every_envelope(client: &mut Client, command: &Command) -> Vec<Envelope> {
-    client
-        .run(command)
-        .await
-        .unwrap()
-        .map(Result::unwrap)
+    let (_controls, replies) = client.run(command).await.unwrap();
+    replies
+        .map(|reply| match reply.unwrap() {
+            Reply::Envelope(envelope) => envelope,
+            Reply::Applied(control) => panic!("nothing was asked of the worker, yet {control:?}"),
+        })
         .collect()
         .await
 }
@@ -130,8 +131,8 @@ struct CleansUpWhenAbandoned {
 }
 
 impl Worker for CleansUpWhenAbandoned {
-    async fn run(&self, _caller: Caller, _command: Command, events: Events) {
-        let _ = events.send(marked(1, String::new()));
+    async fn run(&self, _caller: Caller, _command: Command, _controls: Controls, events: Events) {
+        let _ = events.send(Reply::Envelope(marked(1, String::new())));
         events.closed().await;
         tokio::time::sleep(Duration::from_millis(200)).await;
         self.cleaned_up.store(true, Ordering::SeqCst);
@@ -149,12 +150,13 @@ async fn the_worker_waits_for_a_request_its_client_left() {
         theirs,
     ));
     let mut client = Client::connect(ours).await.unwrap();
-    let mut events = client.run(&bootstrap(false)).await.unwrap();
+    let (controls, mut events) = client.run(&bootstrap(false)).await.unwrap();
     assert!(matches!(
         events.next().await,
-        Some(Ok(envelope)) if envelope.seq == 1
+        Some(Ok(Reply::Envelope(envelope))) if envelope.seq == 1
     ));
 
+    drop(controls);
     drop(events);
     drop(client);
 
@@ -174,10 +176,10 @@ struct WaitsForRelease {
 }
 
 impl Worker for WaitsForRelease {
-    async fn run(&self, _caller: Caller, _command: Command, events: Events) {
-        let _ = events.send(marked(1, String::new()));
+    async fn run(&self, _caller: Caller, _command: Command, _controls: Controls, events: Events) {
+        let _ = events.send(Reply::Envelope(marked(1, String::new())));
         self.release.notified().await;
-        let _ = events.send(marked(2, String::new()));
+        let _ = events.send(Reply::Envelope(marked(2, String::new())));
     }
 }
 
@@ -192,13 +194,13 @@ async fn a_second_request_is_refused_while_the_first_is_running() {
         theirs,
     ));
     let mut client = Client::connect(ours).await.unwrap();
-    let mut first = client.run(&bootstrap(false)).await.unwrap();
+    let (_controls, mut first) = client.run(&bootstrap(false)).await.unwrap();
     assert!(matches!(
         first.next().await,
-        Some(Ok(envelope)) if envelope.seq == 1
+        Some(Ok(Reply::Envelope(envelope))) if envelope.seq == 1
     ));
 
-    let second = client.run(&repair()).await;
+    let second = client.run(&repair()).await.map(drop);
 
     let Err(mix_rpc::Error::Refused(reason)) = second else {
         panic!("a second request must be refused while the first is running");
@@ -207,7 +209,7 @@ async fn a_second_request_is_refused_while_the_first_is_running() {
     release.notify_one();
     assert!(matches!(
         first.next().await,
-        Some(Ok(envelope)) if envelope.seq == 2
+        Some(Ok(Reply::Envelope(envelope))) if envelope.seq == 2
     ));
 }
 
@@ -228,7 +230,7 @@ async fn a_worker_that_dies_mid_request_reads_as_ended_not_refused() {
     let mut client = Client::connect(tokio::net::UnixStream::from_std(ours).unwrap())
         .await
         .unwrap();
-    let mut events = client.run(&bootstrap(false)).await.unwrap();
+    let (_controls, mut events) = client.run(&bootstrap(false)).await.unwrap();
     assert!(matches!(events.next().await, Some(Ok(_))));
 
     worker_process.shutdown_background();
@@ -273,4 +275,43 @@ async fn a_worker_that_cannot_start_is_named_in_the_error() {
             .is_some_and(|source| source.to_string().contains("mix-no-such-program")),
         "{missing}"
     );
+}
+
+struct Obeys;
+
+impl Worker for Obeys {
+    async fn run(
+        &self,
+        _caller: Caller,
+        _command: Command,
+        mut controls: Controls,
+        events: Events,
+    ) {
+        let _ = events.send(Reply::Envelope(marked(1, String::new())));
+        while let Some(control) = controls.recv().await {
+            let _ = events.send(Reply::Applied(control));
+            if control == Control::Interrupt {
+                return;
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn each_control_reaches_the_worker_in_order_and_comes_back_applied() {
+    let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
+    let _server = tokio::spawn(serve_connection(Obeys, theirs));
+    let mut client = Client::connect(ours).await.unwrap();
+    let (controls, replies) = client.run(&bootstrap(false)).await.unwrap();
+    let mut replies = std::pin::pin!(replies);
+    assert!(matches!(replies.next().await, Some(Ok(Reply::Envelope(_)))));
+
+    for control in [Control::Pause, Control::Resume, Control::Interrupt] {
+        controls.send(control);
+        assert_eq!(
+            replies.next().await.unwrap().unwrap(),
+            Reply::Applied(control)
+        );
+    }
+    assert!(replies.next().await.is_none());
 }

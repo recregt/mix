@@ -6,12 +6,24 @@ service WorkerService {
   rpc Run(stream RunRequest) returns (stream RunResponse);
 }
 
+enum Control {
+  CONTROL_UNSPECIFIED = 0;
+  CONTROL_INTERRUPT = 1;
+  CONTROL_TERMINATE = 2;
+  CONTROL_PAUSE = 3;
+  CONTROL_RESUME = 4;
+}
+
 message RunRequest {
   oneof call {
     bytes command = 1;
+    Control control = 2;
   }
 }
 
 message RunResponse {
-  bytes envelope = 1;
+  oneof reply {
+    bytes envelope = 1;
+    Control applied = 2;
+  }
 }

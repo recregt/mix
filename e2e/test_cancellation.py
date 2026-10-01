@@ -8,6 +8,7 @@ USER = MIRROR_TEST_USERS[0]
 MIX = "/usr/local/bin/mix"
 STATE_DIR = f"/home/{USER}/.local/state/mix"
 NIX_BUILD = "bin/nix build .*--print-out-paths"
+JOURNAL_DIR = "/var/lib/mix/journal"
 
 
 def _pid_of(container, pattern: str, timeout: float = 60.0) -> str:
@@ -67,7 +68,16 @@ def test_an_interrupted_install_stops_a_frozen_nix_then_puts_the_list_back(
     assert INSTALL_TEST_PACKAGE not in home_nix
 
 
-def test_a_second_ctrl_c_stops_the_worker_at_once_and_bootstrap_converges_after(
+def _wait_until_gone(container, pid: str, timeout: float = 60.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _gone(container, pid):
+            return
+        time.sleep(0.05)
+    raise TimeoutError(f"process {pid} is still running:\n{container.process_tree()}")
+
+
+def test_a_second_ctrl_c_leaves_the_worker_to_finish_the_rollback(
     container, mock_nix_server, mirror_cache
 ):
     create_user(container, USER, sudo=True)
@@ -76,24 +86,47 @@ def test_a_second_ctrl_c_stops_the_worker_at_once_and_bootstrap_converges_after(
     build = _pid_of(container, NIX_BUILD, timeout=180)
     container.exec("kill", "-STOP", build, check=True)
     worker = _pid_of(container, f"^{MIX} worker")
+    client = bootstrap.pid()
     assert _pgid(container, build) != _pgid(container, worker)
 
-    container.exec("kill", "-INT", worker, check=True)
+    container.exec("kill", "-INT", client, check=True)
     bootstrap.wait_for_progress("stopping", timeout=15)
-    container.exec("kill", "-INT", worker, check=True)
+    container.exec("kill", "-INT", client, check=True)
     run = bootstrap.wait(timeout=30, complete=False)
 
-    assert run.returncode == 1, run
+    assert run.returncode == 130, run
     assert not [
         e for e in run.envelopes if e.get("nodeFinished", {}).get("id") == "1"
-    ], (
-        "a worker stopped at once cannot finish its stream, and the client must not invent one"
-    )
+    ], "a client that detached cannot have seen the end, and must not invent one"
+    _wait_until_gone(container, worker)
     assert _gone(container, build)
-    assert _gone(container, worker)
+    journals = container.exec("ls", "-A", JOURNAL_DIR).stdout
+    assert journals == "", f"the worker left an unfinished rollback: {journals}"
 
     again = container.mix("bootstrap", *mirror, user=USER)
     assert again.succeeded(), again
+    assert not [step for step in again.steps() if step == "recover"], again
+
+
+def test_ctrl_z_pauses_the_workers_nix_and_resuming_lets_bootstrap_finish(
+    container, mock_nix_server, mirror_cache
+):
+    create_user(container, USER, sudo=True)
+    bootstrap = container.mix_background(
+        "bootstrap", *mirror_args(mock_nix_server, mirror_cache), user=USER
+    )
+    build = _pid_of(container, NIX_BUILD, timeout=180)
+    client = bootstrap.pid()
+
+    container.exec("kill", "-TSTP", client, check=True)
+
+    _wait_for_state(container, build, lambda state: state.startswith("T"))
+    _wait_for_state(container, client, lambda state: state.startswith("T"))
+    container.exec("kill", "-CONT", client, check=True)
+    _wait_for_state(container, build, lambda state: not state.startswith("T"))
+    run = bootstrap.wait(timeout=300)
+
+    assert run.succeeded(), run
 
 
 @pytest.mark.bootstrapped

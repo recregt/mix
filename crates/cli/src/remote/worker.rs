@@ -6,7 +6,7 @@ use mix_core::paths::LOCK_FILE;
 use mix_events::v1::command::Request;
 use mix_events::v1::{BootstrapRequest, Code, Command, Envelope, envelope};
 use mix_events::{Diagnose, Fault, ROOT};
-use mix_rpc::{Caller, Events};
+use mix_rpc::{Caller, Controls, Events, Reply};
 use mix_shell::render::Render;
 
 use crate::controls;
@@ -24,7 +24,7 @@ impl Render for Forward {
         {
             self.started.store(true, Ordering::SeqCst);
         }
-        let _ = self.events.send(envelope);
+        let _ = self.events.send(Reply::Envelope(envelope));
     }
 
     fn detail(&self) -> mix_events::Detail {
@@ -34,11 +34,6 @@ impl Render for Forward {
 
 fn fault(error: impl Diagnose) -> Box<Fault> {
     Box::new(error.fault())
-}
-
-fn client_gone(events: &Events) -> impl Future<Output = ()> + Send + 'static {
-    let events = events.clone();
-    async move { events.closed().await }
 }
 
 fn context(user: Option<mix_core::models::UserConfig>, forward: &Forward) -> mix_shell::Context {
@@ -51,6 +46,7 @@ fn context(user: Option<mix_core::models::UserConfig>, forward: &Forward) -> mix
 async fn bootstrap(
     caller: Caller,
     request: BootstrapRequest,
+    controls: Controls,
     forward: &Forward,
 ) -> Result<(), Box<Fault>> {
     let _lock = mix_shell::effect::lock::acquire_exclusive(LOCK_FILE).map_err(fault)?;
@@ -60,29 +56,19 @@ async fn bootstrap(
     let user = mix_shell::effect::accounts::user_by_uid(caller.uid)
         .and_then(mix_shell::profile::user_config_for);
     let ctx = context(user, forward).with_policy(policy);
-    let _watch = controls::watch(
-        &ctx.scope,
-        None,
-        client_gone(&forward.events),
-        controls::Side::Worker,
-    );
+    let _steer = controls::steer(&ctx.scope, controls, &forward.events);
     mix_shell::ops::bootstrap::bootstrap(&ctx, request.force)
         .await
         .map(drop)
         .map_err(fault)
 }
 
-async fn repair(caller: Caller, forward: &Forward) -> Result<(), Box<Fault>> {
+async fn repair(caller: Caller, controls: Controls, forward: &Forward) -> Result<(), Box<Fault>> {
     let _lock = mix_shell::effect::lock::acquire_exclusive(LOCK_FILE).map_err(fault)?;
     let user = mix_shell::effect::accounts::user_by_uid(caller.uid)
         .and_then(mix_shell::profile::existing_user_config_for);
     let ctx = context(user, forward).with_policy(crate::commands::policy());
-    let _watch = controls::watch(
-        &ctx.scope,
-        None,
-        client_gone(&forward.events),
-        controls::Side::Worker,
-    );
+    let _steer = controls::steer(&ctx.scope, controls, &forward.events);
     mix_shell::ops::repair::repair(&ctx).await;
     Ok(())
 }
@@ -96,6 +82,7 @@ async fn change(
     caller: Caller,
     verb: Change,
     packages: &[String],
+    controls: Controls,
     forward: &Forward,
 ) -> Result<(), Box<Fault>> {
     if caller.uid == 0 {
@@ -105,12 +92,7 @@ async fn change(
     let user = mix_shell::effect::accounts::user_by_uid(caller.uid)
         .and_then(mix_shell::profile::existing_user_config_for);
     let ctx = context(user, forward).with_policy(crate::commands::policy());
-    let _watch = controls::watch(
-        &ctx.scope,
-        None,
-        client_gone(&forward.events),
-        controls::Side::Worker,
-    );
+    let _steer = controls::steer(&ctx.scope, controls, &forward.events);
     match verb {
         Change::Install => mix_shell::ops::install::install(&ctx, packages)
             .await
@@ -123,10 +105,11 @@ async fn change(
     }
 }
 
-async fn doctor(caller: Caller, forward: &Forward) -> Result<(), Box<Fault>> {
+async fn doctor(caller: Caller, controls: Controls, forward: &Forward) -> Result<(), Box<Fault>> {
     let user = mix_shell::effect::accounts::user_by_uid(caller.uid)
         .and_then(mix_shell::profile::existing_user_config_for);
     let ctx = context(user, forward).with_policy(crate::commands::policy());
+    let _steer = controls::steer(&ctx.scope, controls, &forward.events);
     mix_shell::ops::doctor::audit(&ctx).await;
     Ok(())
 }
@@ -138,21 +121,37 @@ fn unserved() -> Fault {
 struct CliWorker;
 
 impl mix_rpc::Worker for CliWorker {
-    async fn run(&self, caller: Caller, command: Command, events: Events) {
+    async fn run(&self, caller: Caller, command: Command, controls: Controls, events: Events) {
         let mut forward = Forward {
             events,
             started: Arc::new(AtomicBool::new(false)),
         };
         let ran = match command.request.clone() {
-            Some(Request::Bootstrap(request)) => bootstrap(caller, request, &forward).await,
-            Some(Request::Repair(_)) => repair(caller, &forward).await,
+            Some(Request::Bootstrap(request)) => {
+                bootstrap(caller, request, controls, &forward).await
+            }
+            Some(Request::Repair(_)) => repair(caller, controls, &forward).await,
             Some(Request::Install(request)) => {
-                change(caller, Change::Install, &request.packages, &forward).await
+                change(
+                    caller,
+                    Change::Install,
+                    &request.packages,
+                    controls,
+                    &forward,
+                )
+                .await
             }
             Some(Request::Remove(request)) => {
-                change(caller, Change::Remove, &request.packages, &forward).await
+                change(
+                    caller,
+                    Change::Remove,
+                    &request.packages,
+                    controls,
+                    &forward,
+                )
+                .await
             }
-            Some(Request::Doctor(_)) => doctor(caller, &forward).await,
+            Some(Request::Doctor(_)) => doctor(caller, controls, &forward).await,
             None => Err(Box::new(unserved())),
         };
         if let Err(fault) = ran
@@ -173,6 +172,7 @@ pub async fn run() -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
+    tokio::spawn(controls::ignore_the_terminal());
     match mix_rpc::serve_stdin(CliWorker).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -197,13 +197,17 @@ mod tests {
         let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
         let server = tokio::spawn(mix_rpc::serve_connection(CliWorker, theirs));
         let mut client = mix_rpc::Client::connect(ours).await.unwrap();
-        let envelopes = client
-            .run(&command)
-            .await
-            .unwrap()
-            .map(Result::unwrap)
+        let (controls, replies) = client.run(&command).await.unwrap();
+        let envelopes = replies
+            .filter_map(|reply| async move {
+                match reply.unwrap() {
+                    Reply::Envelope(envelope) => Some(envelope),
+                    Reply::Applied(_) => None,
+                }
+            })
             .collect()
             .await;
+        drop(controls);
         drop(client);
         server.await.unwrap().unwrap();
         envelopes
@@ -261,6 +265,7 @@ mod tests {
             Caller { uid: 0, gid: 0 },
             Change::Install,
             &["hello".to_string()],
+            tokio::sync::mpsc::unbounded_channel().1,
             &forward,
         )
         .await

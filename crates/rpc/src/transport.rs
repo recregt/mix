@@ -20,19 +20,23 @@ use tonic::{Request, Response, Status, Streaming};
 
 use crate::proto;
 use crate::proto::run_request::Call;
+use crate::proto::run_response;
 use crate::proto::worker_service_client::WorkerServiceClient;
 use crate::proto::worker_service_server::WorkerServiceServer;
-use crate::types::{Caller, Malformed};
+use crate::types::{Caller, Control, Malformed, Reply};
 
 const WORKER_URI: &str = "http://worker";
 
-pub type Events = mpsc::UnboundedSender<Envelope>;
+pub type Events = mpsc::UnboundedSender<Reply>;
+
+pub type Controls = mpsc::UnboundedReceiver<Control>;
 
 pub trait Worker: Send + Sync + 'static {
     fn run(
         &self,
         caller: Caller,
         command: Command,
+        controls: Controls,
         events: Events,
     ) -> impl Future<Output = ()> + Send;
 }
@@ -96,6 +100,68 @@ async fn command(calls: &mut Streaming<proto::RunRequest>) -> Result<Command, St
     }
 }
 
+fn control_from_wire(control: i32) -> Option<Control> {
+    match proto::Control::try_from(control).ok()? {
+        proto::Control::Interrupt => Some(Control::Interrupt),
+        proto::Control::Terminate => Some(Control::Terminate),
+        proto::Control::Pause => Some(Control::Pause),
+        proto::Control::Resume => Some(Control::Resume),
+        proto::Control::Unspecified => None,
+    }
+}
+
+fn control_to_wire(control: Control) -> proto::Control {
+    match control {
+        Control::Interrupt => proto::Control::Interrupt,
+        Control::Terminate => proto::Control::Terminate,
+        Control::Pause => proto::Control::Pause,
+        Control::Resume => proto::Control::Resume,
+    }
+}
+
+async fn forward_controls(
+    mut calls: Streaming<proto::RunRequest>,
+    controls: mpsc::UnboundedSender<Control>,
+) {
+    while let Ok(Some(call)) = calls.message().await {
+        if let Some(Call::Control(control)) = call.call
+            && let Some(control) = control_from_wire(control)
+            && controls.send(control).is_err()
+        {
+            return;
+        }
+    }
+}
+
+fn reply_to_wire(reply: Reply) -> proto::RunResponse {
+    proto::RunResponse {
+        reply: Some(match reply {
+            Reply::Envelope(envelope) => run_response::Reply::Envelope(envelope.encode_to_vec()),
+            Reply::Applied(control) => {
+                run_response::Reply::Applied(control_to_wire(control) as i32)
+            }
+        }),
+    }
+}
+
+fn reply_from_wire(response: proto::RunResponse) -> Result<Reply, Error> {
+    match response.reply {
+        Some(run_response::Reply::Envelope(bytes)) => envelope(&bytes).map(Reply::Envelope),
+        Some(run_response::Reply::Applied(control)) => control_from_wire(control)
+            .map(Reply::Applied)
+            .ok_or_else(|| Malformed(format!("an applied control: {control}")).into()),
+        None => Err(Malformed("a reply with nothing in it".to_string()).into()),
+    }
+}
+
+pub struct Controller(mpsc::UnboundedSender<Control>);
+
+impl Controller {
+    pub fn send(&self, control: Control) {
+        let _ = self.0.send(control);
+    }
+}
+
 #[tonic::async_trait]
 impl<W: Worker> proto::worker_service_server::WorkerService for Service<W> {
     type RunStream = Responses;
@@ -111,19 +177,17 @@ impl<W: Worker> proto::worker_service_server::WorkerService for Service<W> {
             .try_acquire_owned()
             .map_err(|_| Status::resource_exhausted("the worker is already running a request"))?;
         let (events, received) = mpsc::unbounded_channel();
+        let (controls, steering) = mpsc::unbounded_channel();
+        tokio::spawn(forward_controls(calls, controls));
         let worker = Arc::clone(&self.worker);
         self.running.spawn(async move {
-            worker.run(caller, command, events).await;
+            worker.run(caller, command, steering, events).await;
             drop(permit);
         });
         let responses = futures_util::stream::unfold(received, |mut received| async move {
-            received.recv().await.map(|envelope| (envelope, received))
+            received.recv().await.map(|reply| (reply, received))
         })
-        .map(|envelope: Envelope| {
-            Ok(proto::RunResponse {
-                envelope: envelope.encode_to_vec(),
-            })
-        });
+        .map(|reply| Ok(reply_to_wire(reply)));
         Ok(Response::new(Box::pin(responses)))
     }
 }
@@ -261,20 +325,29 @@ impl Client {
     pub async fn run(
         &mut self,
         command: &Command,
-    ) -> Result<impl Stream<Item = Result<Envelope, Error>> + use<>, Error> {
-        let call = proto::RunRequest {
+    ) -> Result<(Controller, impl Stream<Item = Result<Reply, Error>> + use<>), Error> {
+        let first = proto::RunRequest {
             call: Some(Call::Command(command.encode_to_vec())),
         };
-        let responses = self
-            .inner
-            .run(futures_util::stream::once(async move { call }))
-            .await
-            .map_err(refused)?
-            .into_inner();
-        Ok(responses.map(|response| match response {
-            Ok(response) => envelope(&response.envelope),
-            Err(_) => Err(Error::Ended),
-        }))
+        let (controls, steering) = mpsc::unbounded_channel();
+        let calls = futures_util::stream::once(async move { first }).chain(
+            futures_util::stream::unfold(steering, |mut steering| async move {
+                steering.recv().await.map(|control: Control| {
+                    let call = proto::RunRequest {
+                        call: Some(Call::Control(control_to_wire(control) as i32)),
+                    };
+                    (call, steering)
+                })
+            }),
+        );
+        let responses = self.inner.run(calls).await.map_err(refused)?.into_inner();
+        Ok((
+            Controller(controls),
+            responses.map(|response| match response {
+                Ok(response) => reply_from_wire(response),
+                Err(_) => Err(Error::Ended),
+            }),
+        ))
     }
 
     pub async fn wait(mut self) -> std::io::Result<Option<std::process::ExitStatus>> {

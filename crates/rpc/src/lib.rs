@@ -4,5 +4,7 @@ mod proto {
 mod transport;
 mod types;
 
-pub use transport::{Client, Error, Events, Worker, serve_connection, serve_stdin};
+pub use transport::{
+    Client, Controller, Controls, Error, Events, Worker, serve_connection, serve_stdin,
+};
 pub use types::*;

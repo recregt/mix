@@ -2,10 +2,13 @@ use futures_util::{Stream, StreamExt};
 use mix_events::v1::command::Request;
 use mix_events::v1::{BootstrapRequest, Envelope, NodeFinished, Status, envelope};
 use mix_events::{Detail, Fault, ROOT};
-use mix_rpc::Client;
+use mix_exec::Reason;
+use mix_rpc::{Client, Controller, Reply};
 use mix_shell::render::Render;
+use nix::sys::signal::Signal;
 
 use crate::cli::Output;
+use crate::controls::{Control, Terminal, Translator};
 use crate::render::sinks::{Sinks, View};
 
 const LAUNCHER: &str = "sudo";
@@ -38,24 +41,62 @@ fn fault_of(root: &NodeFinished) -> Option<Fault> {
     }
 }
 
+fn detach(view: &View) -> ! {
+    if view.output == Output::Human {
+        mix_ui::note(&crate::controls::detached(), None);
+    }
+    mix_ui::restore_terminal();
+    std::process::exit(i32::try_from(crate::controls::FORCED_EXIT).unwrap_or(i32::MAX));
+}
+
+fn steer(controller: &Controller, control: Control, view: &View) -> bool {
+    match control {
+        Control::Cancel(Reason::Terminated) => controller.send(mix_rpc::Control::Terminate),
+        Control::Cancel(_) => controller.send(mix_rpc::Control::Interrupt),
+        Control::ForceStop => detach(view),
+        Control::Pause => {
+            controller.send(mix_rpc::Control::Pause);
+            return true;
+        }
+        Control::Resume => controller.send(mix_rpc::Control::Resume),
+    }
+    false
+}
+
 async fn replay(
-    envelopes: impl Stream<Item = Result<Envelope, mix_rpc::Error>>,
+    controller: Controller,
+    replies: impl Stream<Item = Result<Reply, mix_rpc::Error>>,
     view: &View,
 ) -> Result<Option<Fault>, mix_rpc::Error> {
-    let interrupts = tokio::spawn(async { while tokio::signal::ctrl_c().await.is_ok() {} });
+    let mut terminal = Terminal::listen();
     let mut sinks: Sinks = view
         .sinks(mix_ui::display())
-        .map_err(mix_rpc::Error::Spawn)?;
-    let mut envelopes = std::pin::pin!(envelopes);
+        .map_err(mix_rpc::Error::Spawn)?
+        .detaching();
+    let mut translator = Translator::default();
+    let mut pausing = false;
+    let mut replies = std::pin::pin!(replies);
     let mut ended = None;
-    while let Some(envelope) = envelopes.next().await {
-        let envelope = envelope?;
-        if let Some(finished) = root(&envelope) {
-            ended = Some(fault_of(finished));
+    loop {
+        tokio::select! {
+            reply = replies.next() => match reply.transpose()? {
+                None => break,
+                Some(Reply::Envelope(envelope)) => {
+                    if let Some(finished) = root(&envelope) {
+                        ended = Some(fault_of(finished));
+                    }
+                    sinks.envelope(envelope);
+                }
+                Some(Reply::Applied(mix_rpc::Control::Pause)) if std::mem::take(&mut pausing) => {
+                    let _ = nix::sys::signal::raise(Signal::SIGSTOP);
+                }
+                Some(Reply::Applied(_)) => {}
+            },
+            received = terminal.next() => {
+                pausing |= steer(&controller, translator.translate(received), view);
+            }
         }
-        sinks.envelope(envelope);
     }
-    interrupts.abort();
     ended.ok_or(mix_rpc::Error::Ended)
 }
 
@@ -81,7 +122,8 @@ async fn start(view: &View) -> anyhow::Result<Client> {
 pub async fn run(request: Request, view: &View) -> anyhow::Result<()> {
     let mut client = start(view).await?;
     let command = crate::root::command(request.clone());
-    let ended = replay(client.run(&command).await?, view).await?;
+    let (controller, replies) = client.run(&command).await?;
+    let ended = replay(controller, replies, view).await?;
     let _ = client.wait().await;
     match ended {
         None => Ok(()),
