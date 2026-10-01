@@ -8,10 +8,12 @@ pub mod activity;
 mod display;
 mod progress;
 mod status;
+pub mod text;
 
 pub use display::{Display, Silent, StepLine, display};
 pub use progress::{init, live_style};
 pub use status::Status;
+pub use text::{Help, Note, Phrase};
 
 use status::{GUTTER, Tone};
 
@@ -172,21 +174,37 @@ pub enum Severity {
     Warning,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Report<'a> {
     pub code: Option<&'a str>,
-    pub summary: &'a str,
+    pub summary: &'a Phrase,
+    pub notes: &'a [Note],
+    pub helps: &'a [Help],
     pub causes: Vec<String>,
-    pub helps: Vec<&'a str>,
 }
 
-fn write_help(out: &mut String, text: &str, colours: bool) {
+impl<'a> Report<'a> {
+    pub fn new(summary: &'a Phrase) -> Self {
+        Self {
+            code: None,
+            summary,
+            notes: &[],
+            helps: &[],
+            causes: Vec::new(),
+        }
+    }
+}
+
+fn write_label(out: &mut String, colour: &str, label: &str, text: &str, colours: bool) {
     let mut lines = text.lines();
-    painted(out, CYAN, "help", colours);
+    painted(out, colour, label, colours);
     out.push_str(": ");
     out.push_str(lines.next().unwrap_or_default());
     for line in lines {
-        out.push_str("\n      ");
+        out.push('\n');
+        for _ in 0..label.len() + 2 {
+            out.push(' ');
+        }
         out.push_str(line);
     }
 }
@@ -196,16 +214,21 @@ pub fn report_text(severity: Severity, report: &Report<'_>, colours: bool) -> St
         Severity::Error => ("error", RED),
         Severity::Warning => ("warning", YELLOW),
     };
-    let mut out = String::with_capacity(report.summary.len() + 64);
+    let mut out = String::with_capacity(report.summary.as_str().len() + 64);
     match report.code {
         Some(code) => painted(&mut out, colour, &format!("{label}[{code}]"), colours),
         None => painted(&mut out, colour, label, colours),
     }
     out.push_str(": ");
-    out.push_str(report.summary);
-    for (index, help) in report.helps.iter().enumerate() {
+    out.push_str(report.summary.as_str());
+    let subs = report
+        .notes
+        .iter()
+        .map(|note| ("note", note.as_str()))
+        .chain(report.helps.iter().map(|help| ("help", help.as_str())));
+    for (index, (label, text)) in subs.enumerate() {
         out.push_str(if index == 0 { "\n\n" } else { "\n" });
-        write_help(&mut out, help, colours);
+        write_label(&mut out, CYAN, label, text, colours);
     }
     for cause in &report.causes {
         out.push_str("\n\nCaused by:");
@@ -221,16 +244,6 @@ pub fn report_text(severity: Severity, report: &Report<'_>, colours: bool) -> St
     out
 }
 
-pub fn house_style(text: &str) -> bool {
-    let starts_lowercase = text
-        .chars()
-        .next()
-        .is_none_or(|first| !first.is_uppercase());
-    let unfinished = !text.trim_end().ends_with('.');
-    let one_phrase = !text.contains("; ") && !text.contains(". ");
-    starts_lowercase && unfinished && one_phrase
-}
-
 pub fn report_to(out: &dyn Out, severity: Severity, report: &Report<'_>) {
     out.line(&report_text(severity, report, out.colours()));
 }
@@ -239,21 +252,19 @@ pub fn report(severity: Severity, report: &Report<'_>) {
     report_to(&Stderr, severity, report);
 }
 
-pub fn note_to(out: &dyn Out, text: &str, help: Option<&str>) {
+pub fn note_to(out: &dyn Out, note: &Note, help: Option<&Help>) {
     let colours = out.colours();
     let mut line = String::new();
-    painted(&mut line, CYAN, "note", colours);
-    line.push_str(": ");
-    line.push_str(text);
+    write_label(&mut line, CYAN, "note", note.as_str(), colours);
     if let Some(help) = help {
         line.push('\n');
-        write_help(&mut line, help, colours);
+        write_label(&mut line, CYAN, "help", help.as_str(), colours);
     }
     out.line(&line);
 }
 
-pub fn note(text: &str, help: Option<&str>) {
-    note_to(&Stderr, text, help);
+pub fn note(note: &Note, help: Option<&Help>) {
+    note_to(&Stderr, note, help);
 }
 
 pub fn causes_of(first: Option<&dyn std::error::Error>, already: &str) -> Vec<String> {
@@ -349,35 +360,39 @@ mod tests {
     }
 
     #[test]
-    fn a_warning_names_its_code_and_its_help_follows_a_blank_line() {
+    fn a_warning_names_its_code_then_its_note_and_help_follow_a_blank_line() {
+        let summary = phrase!("the change was made but not recorded in git");
+        let note = note!("`git` failed while recording it");
+        let help = help!("run `mix repair` to record it");
         let text = report_text(
             Severity::Warning,
             &Report {
                 code: Some("git-record-failed"),
-                summary: "the change was made but not recorded in git",
-                helps: vec!["`mix repair` records it"],
-                ..Report::default()
+                notes: std::slice::from_ref(&note),
+                helps: std::slice::from_ref(&help),
+                ..Report::new(&summary)
             },
             false,
         );
         assert_eq!(
             text,
-            "warning[git-record-failed]: the change was made but not recorded in git\n\nhelp: `mix repair` records it"
+            "warning[git-record-failed]: the change was made but not recorded in git\n\nnote: `git` failed while recording it\nhelp: run `mix repair` to record it"
         );
     }
 
     #[test]
     fn an_error_gives_its_help_then_each_cause_in_its_own_block_as_cargo_does() {
+        let summary = phrase!("couldn't install ripgrep");
+        let help = help!("run it again with `-v`\nto see each step");
         let text = report_text(
             Severity::Error,
             &Report {
-                summary: "couldn't install ripgrep",
                 causes: vec![
                     "`nix build` exited with status 1".into(),
                     "error: \u{1b}[31mbuilder failed\u{1b}[0m\n\n  at home.nix:10".into(),
                 ],
-                helps: vec!["run it again with `-v`\nto see each step"],
-                ..Report::default()
+                helps: std::slice::from_ref(&help),
+                ..Report::new(&summary)
             },
             false,
         );
@@ -390,7 +405,11 @@ mod tests {
     #[test]
     fn a_note_carries_its_help_on_the_next_line() {
         let seen = Recorder::default();
-        note_to(&seen, "cancelling", Some("press Ctrl-C again to stop now"));
+        note_to(
+            &seen,
+            &note!("cancelling"),
+            Some(&help!("press Ctrl-C again to stop now")),
+        );
         assert_eq!(
             seen.0.lock().unwrap().as_slice(),
             ["note: cancelling\nhelp: press Ctrl-C again to stop now"]
@@ -407,17 +426,6 @@ mod tests {
             ),
             ["connection refused", "dns"]
         );
-    }
-
-    #[test]
-    fn text_after_a_label_starts_lowercase_and_has_no_full_stop() {
-        assert!(house_style("the change was made but not recorded in git"));
-        assert!(house_style("`mix repair` records it"));
-        assert!(house_style("run it again with sudo:\n  sudo mix bootstrap"));
-        assert!(!house_style("Run `mix repair` to fix them"));
-        assert!(!house_style("some checks failed."));
-        assert!(!house_style("stopped; everything was undone"));
-        assert!(!house_style("it stopped. Run it again"));
     }
 
     #[test]

@@ -7,7 +7,7 @@
     Building /nix/store/bbx79xgf89bvd25i1sivdcykhy39bz14-hello-2.12.drv
 warning[git-record-failed]: the change was made but not recorded in git
 
-help: `mix repair` records it
+help: run `mix repair` to record it
 
 Caused by:
   fatal: not a git repository

@@ -1,4 +1,14 @@
-the downloaded setup files are damaged
-run `mix install` again to download them again
+$ mix install ripgrep
+error: the downloaded setup files are damaged
 
-A downloaded file did not match the checksum `mix` has pinned for it, so it was thrown away unused. It was damaged in transit, or the mirror serves the wrong file. Running the command again downloads it again.
+help: run `mix install` again to download them again
+
+$ mix explain integrity
+INTEGRITY
+
+A downloaded file did not match the checksum `mix` has pinned for it.
+
+It was damaged in transit, or the mirror serves the wrong file. It was thrown away unused.
+
+To fix it:
+  - run the command again to download it again

@@ -98,7 +98,7 @@ impl Human {
                     if self.shows(Detail::Trace) {
                         mix_ui::note_to(
                             self.out.as_ref(),
-                            &format!("request {}", envelope.request),
+                            &mix_ui::note!("request {}", envelope.request),
                             None,
                         );
                     }
@@ -167,7 +167,6 @@ impl Human {
             Event::Diagnostic(diagnostic) => {
                 if self.shows(Detail::Step) {
                     let words = crate::explain::render::warning(&diagnostic);
-                    let (summary, hint) = words.parts();
                     let code = (self.shows(Detail::Action)
                         && diagnostic.code() != mix_events::v1::Code::Unspecified)
                         .then(|| crate::explain::codes::kebab(diagnostic.code()));
@@ -176,11 +175,10 @@ impl Human {
                         Severity::Warning,
                         &mix_ui::Report {
                             code: code.as_deref(),
-                            summary,
                             causes: crate::explain::evidence(&mix_events::Fault::Failed(
                                 diagnostic.clone(),
                             )),
-                            helps: hint.into_iter().collect(),
+                            ..words.report()
                         },
                     );
                 }
@@ -210,7 +208,6 @@ impl Human {
             Ended::Unspecified | Ended::Succeeded | Ended::AlreadySatisfied => return,
         };
         let words = crate::explain::outcome(self.request.as_ref(), &fault);
-        let (summary, hint) = words.parts();
         let code = self
             .shows(Detail::Action)
             .then(|| fault.code())
@@ -221,9 +218,8 @@ impl Human {
             Severity::Error,
             &mix_ui::Report {
                 code: code.as_deref(),
-                summary,
                 causes: crate::explain::evidence(&fault),
-                helps: hint.into_iter().collect(),
+                ..words.report()
             },
         );
     }
@@ -239,8 +235,8 @@ impl Human {
                 {
                     mix_ui::note_to(
                         self.out.as_ref(),
-                        stopping.first.text,
-                        Some(stopping.first.help),
+                        &stopping.first,
+                        Some(&stopping.first_help),
                     );
                 }
             }
@@ -314,9 +310,9 @@ impl Human {
 
 fn stopping_for(request: &Request) -> Option<Stopping> {
     match request {
-        Request::Bootstrap(_) => Some(controls::BOOTSTRAP),
-        Request::Repair(_) => Some(controls::REPAIR),
-        Request::Install(_) | Request::Remove(_) => Some(controls::CHANGE),
+        Request::Bootstrap(_) => Some(controls::bootstrap()),
+        Request::Repair(_) => Some(controls::repair()),
+        Request::Install(_) | Request::Remove(_) => Some(controls::change()),
         Request::Doctor(_) => None,
     }
 }

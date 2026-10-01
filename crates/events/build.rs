@@ -74,6 +74,22 @@ fn normalize(descriptors: &FileDescriptorSet) -> String {
         .map(|m| (format!("{PACKAGE}{}", m.name()), m))
         .collect();
     let mut out = String::new();
+    for enumeration in &file.enum_type {
+        let values: Vec<String> = enumeration
+            .value
+            .iter()
+            .map(|value| value.number())
+            .filter(|number| *number != 0)
+            .map(|number| number.to_string())
+            .collect();
+        writeln!(
+            out,
+            "impl {} {{ pub const DEFINED: &'static [i32] = &[{}]; }}",
+            enumeration.name(),
+            values.join(", ")
+        )
+        .expect("writing to a string");
+    }
     for message in &file.message_type {
         assert!(
             message.nested_type.is_empty() && message.enum_type.is_empty(),

@@ -11,7 +11,7 @@ note: request 01920000-0000-7000-8000-000000000001
              | building hello
 warning[git-record-failed]: the change was made but not recorded in git
 
-help: `mix repair` records it
+help: run `mix repair` to record it
 
 Caused by:
   fatal: not a git repository

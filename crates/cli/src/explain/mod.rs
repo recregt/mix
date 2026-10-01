@@ -2,15 +2,15 @@
 //!
 //! The crates underneath this one raise errors that state facts: a path, a command line, an
 //! errno, a list of derivations. None of them know which command is running, so none of them can
-//! know what a reader should be told to try — `already locked` asks a different question of
+//! know what a reader should be told to try. `already locked` asks a different question of
 //! someone running `mix install` than of someone running `mix repair`, and `root privileges are
 //! required` is advice to re-run with sudo in one command and a refusal in another.
 //!
-//! So the facts travel up untouched and the sentences are written here, one module per command.
-//! The work more than one command shares — activating a profile, reconciling a declared target —
-//! is written once in a module of its own and told which command to name.
-//! A [`Diagnostic`] is what comes out: what happened, and — when there is one worth giving — what
-//! to do about it on the line underneath.
+//! So the facts travel up untouched and the words are written here, one module per command.
+//! The work more than one command shares, such as activating a profile or reconciling a declared
+//! target, is written once in a module of its own and told which command to name.
+//! A [`Diagnostic`] is what comes out: a summary of what happened, a note with a fact the reader
+//! needs, and a help with what to do about it. Each is checked when `mix` is built.
 
 pub mod bootstrap;
 pub mod codes;
@@ -25,85 +25,67 @@ pub mod target;
 
 pub(crate) use render::{Context, render, rpc_fault};
 
-use std::borrow::Cow;
 use std::fmt::{self, Display};
 
-/// A failure in the words the reader should see: what happened, and what to do next.
-#[derive(Debug, PartialEq, Eq)]
+use mix_ui::{Help, Note, Phrase, help, phrase};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
-    text: Cow<'static, str>,
-    summary_len: usize,
+    summary: Phrase,
+    note: Option<Note>,
+    help: Option<Help>,
 }
 
 impl Diagnostic {
-    /// A failure that speaks for itself.
-    pub fn new(summary: impl Into<Cow<'static, str>>) -> Self {
-        let text = summary.into();
+    pub fn new(summary: Phrase) -> Self {
         Self {
-            summary_len: text.len(),
-            text,
+            summary,
+            note: None,
+            help: None,
         }
     }
 
-    /// A failure with the way out written under it.
-    pub fn hinting(
-        summary: impl Into<Cow<'static, str>>,
-        hint: impl Into<Cow<'static, str>>,
-    ) -> Self {
-        let hint = hint.into();
-        let mut text = match summary.into() {
-            Cow::Owned(mut summary) => {
-                summary.reserve_exact(1 + hint.len());
-                summary
-            }
-            Cow::Borrowed(summary) => {
-                let mut text = String::with_capacity(summary.len() + 1 + hint.len());
-                text.push_str(summary);
-                text
-            }
-        };
-        let summary_len = text.len();
-        text.push('\n');
-        text.push_str(&hint);
-        Self {
-            text: text.into(),
-            summary_len,
+    pub fn help(mut self, help: Help) -> Self {
+        self.help = Some(help);
+        self
+    }
+
+    pub fn note(mut self, note: Note) -> Self {
+        self.note = Some(note);
+        self
+    }
+
+    pub fn report(&self) -> mix_ui::Report<'_> {
+        mix_ui::Report {
+            notes: self.note.as_slice(),
+            helps: self.help.as_slice(),
+            ..mix_ui::Report::new(&self.summary)
         }
     }
 
-    pub(crate) fn hinting_parts(summary: &str, hint: &[&str]) -> Self {
-        let hint_len: usize = hint.iter().map(|part| part.len()).sum();
-        let mut text = String::with_capacity(summary.len() + 1 + hint_len);
-        text.push_str(summary);
-        text.push('\n');
-        hint.iter().for_each(|part| text.push_str(part));
-        Self {
-            text: text.into(),
-            summary_len: summary.len(),
+    pub fn summary_text(&self) -> &str {
+        self.summary.as_str()
+    }
+
+    pub fn message(&self) -> String {
+        let parts = [
+            self.note.as_ref().map(Note::as_str),
+            self.help.as_ref().map(Help::as_str),
+        ];
+        let extra: usize = parts.iter().flatten().map(|part| part.len() + 1).sum();
+        let mut text = String::with_capacity(self.summary.as_str().len() + extra);
+        text.push_str(self.summary.as_str());
+        for part in parts.into_iter().flatten() {
+            text.push('\n');
+            text.push_str(part);
         }
+        text
     }
 
-    pub fn parts(&self) -> (&str, Option<&str>) {
-        let (summary, rest) = self.text.split_at(self.summary_len);
-        (summary, rest.strip_prefix('\n'))
-    }
-
-    pub fn message(self) -> String {
-        self.text.into_owned()
-    }
-
-    pub(crate) fn summary(self) -> Cow<'static, str> {
-        match self.text {
-            Cow::Borrowed(text) => Cow::Borrowed(&text[..self.summary_len]),
-            Cow::Owned(mut text) => {
-                text.truncate(self.summary_len);
-                Cow::Owned(text)
-            }
-        }
+    pub(crate) fn summary(self) -> Phrase {
+        self.summary
     }
 }
-
-const REPORT_BUG: &str = "report this bug at https://github.com/recregt/mix/issues";
 
 pub(crate) fn core_error(
     error: &mix_core::Error,
@@ -259,14 +241,14 @@ pub fn outcome(
 }
 
 pub(crate) fn failed(action: &dyn Display) -> Diagnostic {
-    Diagnostic::hinting(
-        format!("couldn't {action}"),
-        "run it again with `-v` to see what went wrong",
-    )
+    Diagnostic::new(phrase!("couldn't {action}"))
+        .help(help!("run it again with `-v` to see what went wrong"))
 }
 
 pub(crate) fn bug() -> Diagnostic {
-    Diagnostic::hinting("something went wrong inside `mix`", REPORT_BUG)
+    Diagnostic::new(phrase!("something went wrong inside `mix`")).help(help!(
+        "report this bug at https://github.com/recregt/mix/issues"
+    ))
 }
 
 pub(crate) fn privileged(error: &mix_rpc::Error, action: &dyn Display) -> Diagnostic {
@@ -314,18 +296,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_hint_is_printed_on_the_line_under_the_summary() {
-        let diagnostic = Diagnostic::hinting("it failed", "try again");
+    fn a_message_lists_the_summary_then_the_note_then_the_help() {
+        let diagnostic = Diagnostic::new(phrase!("it failed"))
+            .help(help!("run it again"))
+            .note(mix_ui::note!("it was busy"));
 
-        assert_eq!(diagnostic.message(), "it failed\ntry again");
+        assert_eq!(diagnostic.message(), "it failed\nit was busy\nrun it again");
     }
 
     #[test]
-    fn a_failure_without_a_hint_is_left_as_it_was_written() {
-        assert_eq!(Diagnostic::new("it failed").message(), "it failed");
+    fn a_failure_without_a_note_or_help_is_its_summary() {
+        assert_eq!(Diagnostic::new(phrase!("it failed")).message(), "it failed");
     }
 
-    /// The same raw error, two commands: the lock is the fact, the command to retry is not.
     #[test]
     fn a_held_lock_names_the_command_the_reader_ran() {
         let error = mix_core::Error::Locked {

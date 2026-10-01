@@ -1,4 +1,15 @@
-`mix` couldn't clean up after an unfinished step
-`mix doctor` lists what is left, and `mix repair` puts back what it can
+$ mix install ripgrep
+error: `mix` couldn't clean up after an unfinished step
 
-Something `mix` set up for a step that did not finish could not be removed afterwards. `mix doctor` lists what is left; `mix repair` puts back what it can.
+help: run `mix doctor` to see what is left, and `mix repair` to put back what it can
+
+$ mix explain cleanup-incomplete
+CLEANUP_INCOMPLETE
+
+`mix` could not clean up after a step that did not finish.
+
+Something `mix` set up for the step could not be removed afterwards.
+
+To fix it:
+  - run `mix doctor` to see what is left
+  - run `mix repair` to put back what it can

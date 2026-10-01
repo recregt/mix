@@ -85,7 +85,7 @@ pub enum Error {
         summary: String,
     },
 
-    #[error("interrupted; rolled back any partially applied changes")]
+    #[error("interrupted")]
     Interrupted,
 }
 

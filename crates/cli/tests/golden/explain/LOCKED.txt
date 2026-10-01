@@ -1,4 +1,15 @@
-another `mix` command is already running
-wait for it to finish, then run `mix install` again
+$ mix install ripgrep
+error: another `mix` command is already running
 
-Another `mix` command is already changing the system, and two changes at once could leave it half done. Wait for the other command to finish, then run yours again.
+help: wait for it to finish, then run `mix install` again
+
+$ mix explain locked
+LOCKED
+
+Another `mix` command is already changing the system.
+
+Two changes at once could leave the system half done, so only one runs at a time.
+
+To fix it:
+  - wait for the other command to finish
+  - run the command again

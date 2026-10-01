@@ -2,7 +2,7 @@
   Installing hello
 warning: the change was made but not recorded in git
 
-help: `mix repair` records it
+help: run `mix repair` to record it
 
 Caused by:
   fatal: not a git repository

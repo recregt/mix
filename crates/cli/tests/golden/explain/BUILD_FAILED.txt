@@ -1,4 +1,15 @@
-something went wrong inside `mix`
-report this bug at https://github.com/recregt/mix/issues
+$ mix install ripgrep
+error: something went wrong inside `mix`
 
-A package could not be built from source, and nothing was changed. The build's own output is under `Caused by`; `-vv` shows all of it. A package that fails to build here usually fails for everyone, so trying a different version or package is often the way forward.
+help: report this bug at https://github.com/recregt/mix/issues
+
+$ mix explain build-failed
+BUILD_FAILED
+
+A package could not be built from source, and nothing was changed.
+
+The build's own output is under `Caused by`. A package that fails to build here usually fails for everyone.
+
+To fix it:
+  - run the command again with `-vv` to see the whole build
+  - use a different version or package

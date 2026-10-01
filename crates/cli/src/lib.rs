@@ -21,8 +21,12 @@ pub async fn run() -> ExitCode {
     if let Command::HomeFiles { request } = &cli.command {
         return home_files(request);
     }
-    if let Command::Explain { code } = &cli.command {
-        return explain_code(code);
+    if let Command::Explain { code, list } = &cli.command {
+        if *list {
+            mix_ui::data(&explain::codes::list_text());
+            return ExitCode::SUCCESS;
+        }
+        return explain_code(code.as_deref().unwrap_or_default());
     }
     if let Command::Events { command } = &cli.command {
         return match command {
@@ -100,14 +104,13 @@ pub async fn run() -> ExitCode {
         Err(e) => {
             if cli.output == cli::Output::Human && view.exit.code().is_none() {
                 let words = explain(&e);
-                let (summary, hint) = words.parts();
                 let fault = explain::fault_of(&e);
                 let code = (cli.verbose > 0)
                     .then(|| fault.code())
                     .flatten()
                     .map(explain::codes::kebab);
                 let mut causes = explain::evidence(&fault);
-                for cause in mix_ui::causes_of(e.chain().nth(1), summary) {
+                for cause in mix_ui::causes_of(e.chain().nth(1), words.summary_text()) {
                     if !causes.iter().any(|known| known.contains(&cause)) {
                         causes.push(cause);
                     }
@@ -116,9 +119,8 @@ pub async fn run() -> ExitCode {
                     mix_ui::Severity::Error,
                     &mix_ui::Report {
                         code: code.as_deref(),
-                        summary,
                         causes,
-                        helps: hint.into_iter().collect(),
+                        ..words.report()
                     },
                 );
             }
@@ -205,20 +207,17 @@ fn home_files(request: &str) -> ExitCode {
 fn explain_code(name: &str) -> ExitCode {
     match explain::codes::parse(name) {
         Some(code) => {
-            mix_ui::data(&format!(
-                "{}\n\n{}",
-                explain::codes::name(code),
-                explain::codes::long(code)
-            ));
+            mix_ui::data(&explain::codes::explanation_text(code));
             ExitCode::SUCCESS
         }
         None => {
             mix_ui::report(
                 mix_ui::Severity::Error,
                 &mix_ui::Report {
-                    summary: &format!("`{name}` isn't a code `mix` uses"),
-                    helps: vec!["codes look like `locked` or `network`"],
-                    ..mix_ui::Report::default()
+                    notes: std::slice::from_ref(&mix_ui::note!(
+                        "codes look like `locked` or `network`"
+                    )),
+                    ..mix_ui::Report::new(&mix_ui::phrase!("`{name}` isn't a code `mix` uses"))
                 },
             );
             ExitCode::from(2)
@@ -277,9 +276,11 @@ fn unreadable(path: &std::path::Path, reason: String) {
     mix_ui::report(
         mix_ui::Severity::Error,
         &mix_ui::Report {
-            summary: &format!("{} isn't a valid events file", path.display()),
             causes: vec![reason],
-            ..mix_ui::Report::default()
+            ..mix_ui::Report::new(&mix_ui::phrase!(
+                "{} isn't a valid events file",
+                path.display()
+            ))
         },
     );
 }

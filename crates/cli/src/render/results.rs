@@ -5,7 +5,6 @@ use std::time::Duration;
 use mix_core::health::wire;
 use mix_core::paths::PROFILE_SNIPPET_DEST;
 use mix_events::Detail;
-use mix_events::v1::diagnostic::Detail as Found;
 use mix_events::v1::node_finished::Result;
 use mix_events::v1::{InspectionReport, NodeFinished, RepairReport, Status as Ended};
 use mix_shell::ops::doctor::HealthReport;
@@ -13,7 +12,6 @@ use mix_shell::profile::state::Source;
 use mix_ui::{Out, Report, Severity, Status};
 
 use crate::explain::change;
-use crate::explain::target::unfixable;
 
 pub(crate) fn took(elapsed: Duration) -> String {
     let seconds = elapsed.as_secs();
@@ -25,16 +23,7 @@ pub(crate) fn took(elapsed: Duration) -> String {
 }
 
 fn words(out: &dyn Out, severity: Severity, words: &crate::explain::Diagnostic) {
-    let (summary, hint) = words.parts();
-    mix_ui::report_to(
-        out,
-        severity,
-        &Report {
-            summary,
-            helps: hint.into_iter().collect(),
-            ..Report::default()
-        },
-    );
+    mix_ui::report_to(out, severity, &words.report());
 }
 
 pub(super) fn finished(
@@ -58,10 +47,10 @@ pub(super) fn finished(
                 );
                 mix_ui::note_to(
                     out,
-                    &format!(
-                        "to use installed packages in this terminal session, run `source {PROFILE_SNIPPET_DEST}`"
-                    ),
-                    None,
+                    &mix_ui::note!("new terminal sessions see the installed packages"),
+                    Some(&mix_ui::help!(
+                        "run `source {PROFILE_SNIPPET_DEST}` to use them in this one"
+                    )),
                 );
             }
         }
@@ -155,20 +144,24 @@ fn repaired(
                 None => mix_ui::report_to(
                     out,
                     Severity::Warning,
-                    &Report {
-                        summary: &format!("couldn't repair {}", report.target),
-                        ..Report::default()
-                    },
+                    &Report::new(&mix_ui::phrase!("couldn't repair {}", report.target)),
                 ),
                 Some(failure) => {
-                    let why = why(failure);
+                    let fault = mix_events::Fault::Failed(failure.clone());
+                    let action = format!("repair {}", report.target);
+                    let words = crate::explain::render(
+                        &fault,
+                        &crate::explain::Context {
+                            command: crate::explain::repair::COMMAND,
+                            action: &action,
+                        },
+                    );
                     mix_ui::report_to(
                         out,
                         Severity::Warning,
                         &Report {
-                            summary: &format!("couldn't repair {}", report.target),
-                            helps: vec![&why],
-                            ..Report::default()
+                            causes: crate::explain::evidence(&fault),
+                            ..words.report()
                         },
                     );
                 }
@@ -180,10 +173,10 @@ fn repaired(
             words(
                 out,
                 Severity::Warning,
-                &crate::explain::Diagnostic::hinting(
-                    "the repair was stopped before it finished",
-                    "run `mix repair` again to finish it",
-                ),
+                &crate::explain::Diagnostic::new(mix_ui::phrase!(
+                    "the repair was stopped before it finished"
+                ))
+                .help(mix_ui::help!("run `mix repair` again to finish it")),
             );
         }
         return;
@@ -203,35 +196,10 @@ fn repaired(
         words(
             out,
             Severity::Error,
-            &crate::explain::Diagnostic::new("some problems couldn't be repaired automatically"),
+            &crate::explain::Diagnostic::new(mix_ui::phrase!(
+                "some problems couldn't be repaired automatically"
+            )),
         );
-    }
-}
-
-fn why(failure: &mix_events::v1::Diagnostic) -> String {
-    match &failure.detail {
-        Some(Found::Unrepairable(detail)) => {
-            match crate::explain::render::unfixable_of(detail.reason) {
-                Some(reason) => format!("{reason}\n{}", unfixable(reason)),
-                None => failure.message.clone(),
-            }
-        }
-        Some(
-            Found::Io(_)
-            | Found::Command(_)
-            | Found::Network(_)
-            | Found::Integrity(_)
-            | Found::Target(_)
-            | Found::Host(_)
-            | Found::Path(_)
-            | Found::Packages(_)
-            | Found::Format(_)
-            | Found::Lock(_)
-            | Found::Steps(_)
-            | Found::Conflict(_)
-            | Found::Unit(_),
-        )
-        | None => failure.message.clone(),
     }
 }
 
@@ -260,17 +228,10 @@ fn audited(out: &dyn Out, inspected: &[InspectionReport], level: Detail) {
         if !chatty {
             continue;
         }
-        let check = crate::explain::doctor::check(report);
-        let mut lines = check.splitn(2, '\n');
-        let found = lines.next().unwrap_or_default();
-        mix_ui::report_to(
+        words(
             out,
             Severity::Warning,
-            &Report {
-                summary: &format!("{}: {found}", report.name),
-                helps: lines.collect(),
-                ..Report::default()
-            },
+            &crate::explain::doctor::check(report),
         );
     }
     if reports.iter().all(HealthReport::healthy) {

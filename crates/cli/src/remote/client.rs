@@ -60,7 +60,10 @@ fn bootstrap_request(
 
 async fn start(view: &View) -> anyhow::Result<Client> {
     if view.output == Output::Human && view.level() >= Detail::Step {
-        mix_ui::note("root is required, re-running with sudo", None);
+        mix_ui::note(
+            &mix_ui::note!("root is required, re-running with sudo"),
+            None,
+        );
     }
     let program = std::env::current_exe()?;
     Ok(Client::start(&program, &[WORKER], Some(LAUNCHER)).await?)

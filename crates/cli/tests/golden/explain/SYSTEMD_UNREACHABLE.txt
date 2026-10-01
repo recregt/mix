@@ -1,4 +1,15 @@
-`mix` couldn't reach systemd
-check that the system bus is running with `systemctl status dbus`, then run `mix install` again
+$ mix install ripgrep
+error: `mix` couldn't reach systemd
 
-`mix` talks to systemd over the system bus, and nothing answered there. Check that D-Bus is running with `systemctl status dbus`.
+help: check that the system bus is running with `systemctl status dbus`, then run `mix install` again
+
+$ mix explain systemd-unreachable
+SYSTEMD_UNREACHABLE
+
+`mix` could not reach systemd.
+
+`mix` talks to systemd over the system bus, and nothing answered there.
+
+To fix it:
+  - check that D-Bus is running with `systemctl status dbus`
+  - run the command again

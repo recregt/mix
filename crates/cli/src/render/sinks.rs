@@ -188,9 +188,11 @@ impl Recorder {
             mix_ui::report(
                 mix_ui::Severity::Warning,
                 &mix_ui::Report {
-                    summary: &format!("couldn't record events to {}", self.path.display()),
                     causes: vec![error.to_string()],
-                    ..mix_ui::Report::default()
+                    ..mix_ui::Report::new(&mix_ui::phrase!(
+                        "couldn't record events to {}",
+                        self.path.display()
+                    ))
                 },
             );
         }

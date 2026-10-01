@@ -5,11 +5,11 @@ use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 #[derive(Parser)]
 #[command(name = "mix", version, about = "Reproducible systems, made effortless")]
 pub struct Cli {
-    /// Verbosity: -v commands and actions, -vv each program's output
+    /// Use verbose output (-vv also shows each program's output)
     #[arg(short, long, action = ArgAction::Count, global = true, conflicts_with = "quiet")]
     pub verbose: u8,
 
-    /// Print only results and errors
+    /// Print only errors
     #[arg(short, long, global = true)]
     pub quiet: bool,
 
@@ -19,13 +19,11 @@ pub struct Cli {
         global = true,
         env = "MIX_NO_PROGRESS",
         action = ArgAction::SetTrue,
-        // A script exporting MIX_NO_PROGRESS=1 means it, and an empty one means nothing, so the
-        // usual shell spellings are all accepted rather than just "true".
         value_parser = clap::builder::FalseyValueParser::new(),
     )]
     pub no_progress: bool,
 
-    /// How to report what happens: `human` for people, `json` for one event per line
+    /// Write output for people, or as one JSON event per line
     #[arg(long, global = true, value_enum, default_value_t = Output::Human)]
     pub output: Output,
 
@@ -56,7 +54,7 @@ pub enum EventsCommand {
         /// The file `--events-file` wrote
         file: PathBuf,
 
-        /// Only this node and what ran inside it, such as `install/activate`
+        /// Show only this node and what ran inside it, such as `install/activate`
         #[arg(long)]
         node: Option<String>,
     },
@@ -64,7 +62,7 @@ pub enum EventsCommand {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Initialize runtime and system dependencies
+    /// Set up `mix` and its runtime on this machine
     Bootstrap {
         /// Mirror for Nix and packages, used by every user [env: MIX_NIX_MIRROR]
         #[arg(long)]
@@ -93,7 +91,7 @@ pub enum Command {
         packages: Vec<String>,
     },
 
-    /// Inspect system health
+    /// Check the health of the system
     Doctor,
 
     /// Repair configuration drift
@@ -105,10 +103,15 @@ pub enum Command {
         command: EventsCommand,
     },
 
-    /// Describe a failure code, such as LOCKED
+    /// Describe a failure code, such as `locked`
     Explain {
         /// The code, as a failure prints it
-        code: String,
+        #[arg(required_unless_present = "list")]
+        code: Option<String>,
+
+        /// List every failure code
+        #[arg(long, conflicts_with = "code")]
+        list: bool,
     },
 
     #[command(
@@ -152,25 +155,37 @@ mod tests {
 
     const MAX_HELP_LEN: usize = 80;
 
+    fn cargo_style(text: &str) -> bool {
+        text.is_ascii()
+            && text.chars().count() <= MAX_HELP_LEN
+            && text
+                .chars()
+                .next()
+                .is_some_and(|first| !first.is_ascii_lowercase())
+            && !text.ends_with('.')
+            && !text.contains("; ")
+            && !text.contains(". ")
+            && !text.contains('\n')
+    }
+
     fn check_help(command: &clap::Command, path: &str) {
-        if let Some(about) = command.get_about() {
+        let abouts = [command.get_about(), command.get_long_about()];
+        for about in abouts.into_iter().flatten() {
             let text = about.to_string();
-            assert!(
-                text.chars().count() <= MAX_HELP_LEN,
-                "{path}: help text is {} chars (max {MAX_HELP_LEN}): {text:?}",
-                text.chars().count()
-            );
+            assert!(cargo_style(&text), "{path}: {text:?}");
         }
 
         for arg in command.get_arguments() {
-            if let Some(help) = arg.get_help() {
+            let helps = [arg.get_help(), arg.get_long_help()];
+            for help in helps.into_iter().flatten() {
                 let text = help.to_string();
-                assert!(
-                    text.chars().count() <= MAX_HELP_LEN,
-                    "{path} --{}: help text is {} chars (max {MAX_HELP_LEN}): {text:?}",
-                    arg.get_id(),
-                    text.chars().count()
-                );
+                assert!(cargo_style(&text), "{path} {}: {text:?}", arg.get_id());
+            }
+            for value in arg.get_possible_values() {
+                if let Some(help) = value.get_help() {
+                    let text = help.to_string();
+                    assert!(cargo_style(&text), "{path} {}: {text:?}", value.get_name());
+                }
             }
         }
 
@@ -180,7 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn help_text_stays_within_the_length_budget() {
+    fn every_help_text_reads_like_cargo_s() {
         check_help(&Cli::command(), "mix");
     }
 

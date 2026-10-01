@@ -1,4 +1,14 @@
-`mix install` can't be run as root
-run it again without sudo
+$ mix install ripgrep
+error: `mix install` can't be run as root
 
-Installing and removing packages changes your own profile, so it runs as you, not as root. Run the command again without sudo.
+help: run it again without sudo
+
+$ mix explain root-not-allowed
+ROOT_NOT_ALLOWED
+
+Installing and removing packages cannot run as root.
+
+These commands change your own profile, so they run as you.
+
+To fix it:
+  - run the command again without sudo

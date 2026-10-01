@@ -1,4 +1,14 @@
-the downloaded setup files aren't in the expected format
-if you use `--mirror`, check that it serves the right files
+$ mix install ripgrep
+error: the downloaded setup files aren't in the expected format
 
-A downloaded archive unpacked, but its contents are not laid out the way the Nix runtime is. If you use `--mirror`, check that it serves the official Nix release.
+help: check that the mirror given with `--mirror` serves the right files
+
+$ mix explain malformed-archive
+MALFORMED_ARCHIVE
+
+A downloaded archive is not laid out the way the Nix runtime is.
+
+The archive unpacked, but its contents are not what `mix` installs. This usually means the mirror serves a different file.
+
+To fix it:
+  - check that the mirror given with `--mirror` serves the official Nix release

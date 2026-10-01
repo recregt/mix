@@ -1523,6 +1523,7 @@ dependencies = [
  "console",
  "indicatif",
  "mix-core",
+ "trybuild",
 ]
 
 [[package]]

@@ -1,4 +1,16 @@
-this system already has Nix, set up by something other than `mix`, which needs to set up its own
-uninstall it, which removes everything you installed with it, then run `mix install` again
+$ mix install ripgrep
+error: this system already has Nix, set up by something other than `mix`
 
-Nix is already installed on this system, set up by something other than `mix`. `mix` needs to own its installation, so uninstall the existing one first. That removes everything installed with it.
+note: `mix` needs to set up its own, and uninstalling the existing one removes everything you installed with it
+help: uninstall it, then run `mix install` again
+
+$ mix explain already-managed
+ALREADY_MANAGED
+
+Nix is already installed here by something other than `mix`.
+
+`mix` needs to own its installation. Uninstalling the existing one removes everything installed with it.
+
+To fix it:
+  - uninstall the existing Nix
+  - run the command again

@@ -1,4 +1,14 @@
-couldn't install ripgrep
-run it again with `-v` to see what went wrong
+$ mix install ripgrep
+error: couldn't install ripgrep
 
-`mix` could not start a program it needs, such as `nix`. It may be missing, or not executable. `mix doctor` shows whether the runtime is installed.
+help: run it again with `-v` to see what went wrong
+
+$ mix explain spawn-failed
+SPAWN_FAILED
+
+`mix` could not start a program it needs, such as `nix`.
+
+The program is missing, or it is not executable.
+
+To fix it:
+  - run `mix doctor` to see whether the runtime is installed

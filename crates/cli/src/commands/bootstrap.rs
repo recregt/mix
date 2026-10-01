@@ -19,7 +19,7 @@ pub async fn run(
             .with_host(super::host_config());
         let _watch = crate::controls::watch(
             &ctx.scope,
-            view.notices(crate::controls::BOOTSTRAP),
+            view.notices(crate::controls::bootstrap()),
             std::future::pending(),
             crate::controls::Side::Client,
         );
