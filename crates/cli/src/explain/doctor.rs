@@ -6,7 +6,7 @@
 
 use mix_shell::ops::doctor::HealthReport;
 use mix_shell::target::Finding;
-use mix_ui::{help, phrase, write_phrase};
+use mix_ui::{help, note, phrase};
 
 use super::{Diagnostic, failed};
 
@@ -21,54 +21,58 @@ pub fn explain(error: &anyhow::Error) -> Diagnostic {
     }
 }
 
-pub struct Measured(pub Finding);
-
-impl std::fmt::Display for Measured {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
-            Finding::Missing => write_phrase!(f, "missing"),
-            Finding::Unreadable { kind } => {
-                write_phrase!(f, "cannot be read: {}", std::io::Error::from(kind))
-            }
-            Finding::NotADirectory => write_phrase!(f, "exists but is not a directory"),
-            Finding::Mode { actual, expected } => {
-                write_phrase!(f, "mode is {actual:o}, expected {expected:o}")
-            }
-            Finding::Owner {
-                actual: (uid, gid),
-                expected: (want_uid, want_gid),
-            } => write_phrase!(f, "owned by {uid}:{gid}, expected {want_uid}:{want_gid}"),
-            Finding::ContentDrift => write_phrase!(f, "was changed outside `mix`"),
-            Finding::GroupMissing => write_phrase!(f, "the group does not exist"),
-            Finding::GroupGid { actual, expected } => {
-                write_phrase!(f, "gid is {actual}, expected {expected}")
-            }
-            Finding::NotAMember { group } => write_phrase!(f, "not a member of the {group} group"),
-            Finding::NoSuchUser => write_phrase!(f, "the user no longer exists"),
-            Finding::UserMissing => write_phrase!(f, "the user does not exist"),
-            Finding::UserIds {
-                actual: (uid, gid),
-                expected: (want_uid, want_gid),
-            } => write_phrase!(f, "uid/gid is {uid}/{gid}, expected {want_uid}/{want_gid}"),
-            Finding::UnitMissing => write_phrase!(f, "unit file missing"),
-            Finding::UnitDrift => write_phrase!(f, "unit file was changed"),
-            Finding::UnitInactive => write_phrase!(f, "unit is not active"),
-            Finding::RuntimeMissing => {
-                write_phrase!(f, "missing, and `mix repair` can't restore it")
-            }
-        }
-    }
-}
-
-pub fn finding(finding: Finding) -> Measured {
-    Measured(finding)
-}
-
 pub fn check(report: &HealthReport) -> Diagnostic {
+    let name = report.name.as_str();
     let Some(found) = report.finding else {
-        return Diagnostic::new(phrase!("{}: unhealthy", report.name));
+        return Diagnostic::new(phrase!("{name} failed its check"));
     };
-    let words = Diagnostic::new(phrase!("{}: {}", report.name, finding(found)));
+    let words = match found {
+        Finding::Missing => Diagnostic::new(phrase!("{name} is missing"))
+            .note(note!("`mix` set it up, and it is no longer there")),
+        Finding::Unreadable { kind } => Diagnostic::new(phrase!("{name} can't be read"))
+            .note(note!("{}", std::io::Error::from(kind))),
+        Finding::NotADirectory => Diagnostic::new(phrase!("{name} is not a directory"))
+            .note(note!("something else is in its place")),
+        Finding::Mode { actual, expected } => {
+            Diagnostic::new(phrase!("{name} has the wrong permissions"))
+                .note(note!("its mode is {actual:o}, and `mix` set {expected:o}"))
+        }
+        Finding::Owner {
+            actual: (uid, gid),
+            expected: (want_uid, want_gid),
+        } => Diagnostic::new(phrase!("{name} has the wrong owner")).note(note!(
+            "it is owned by {uid}:{gid}, and `mix` set {want_uid}:{want_gid}"
+        )),
+        Finding::ContentDrift => Diagnostic::new(phrase!("{name} was changed outside `mix`"))
+            .note(note!("its contents differ from what `mix` wrote")),
+        Finding::GroupMissing => Diagnostic::new(phrase!("group {name} does not exist"))
+            .note(note!("`mix` creates it for the users that build packages")),
+        Finding::GroupGid { actual, expected } => {
+            Diagnostic::new(phrase!("group {name} has the wrong id"))
+                .note(note!("its gid is {actual}, and `mix` set {expected}"))
+        }
+        Finding::NotAMember { group } => Diagnostic::new(phrase!("{name} is not in group {group}"))
+            .note(note!("`mix` adds every user that builds packages to it")),
+        Finding::NoSuchUser => Diagnostic::new(phrase!("user {name} no longer exists")),
+        Finding::UserMissing => Diagnostic::new(phrase!("user {name} does not exist"))
+            .note(note!("`mix` creates it to build packages")),
+        Finding::UserIds {
+            actual: (uid, gid),
+            expected: (want_uid, want_gid),
+        } => Diagnostic::new(phrase!("user {name} has the wrong ids")).note(note!(
+            "its uid/gid is {uid}/{gid}, and `mix` set {want_uid}/{want_gid}"
+        )),
+        Finding::UnitMissing => Diagnostic::new(phrase!("the unit file for {name} is missing"))
+            .note(note!("`mix` installs it to run the Nix daemon")),
+        Finding::UnitDrift => Diagnostic::new(phrase!(
+            "the unit file for {name} was changed outside `mix`"
+        ))
+        .note(note!("its contents differ from what `mix` wrote")),
+        Finding::UnitInactive => Diagnostic::new(phrase!("{name} is not running"))
+            .note(note!("systemd reports it as inactive")),
+        Finding::RuntimeMissing => Diagnostic::new(phrase!("{name} is missing"))
+            .note(note!("`mix repair` can't restore it")),
+    };
     match found.unfixable() {
         Some(reason) => words.help(super::target::unfixable(reason)),
         None => words,
@@ -76,18 +80,21 @@ pub fn check(report: &HealthReport) -> Diagnostic {
 }
 
 pub fn unhealthy(reports: &[HealthReport]) -> Diagnostic {
-    let summary = phrase!("some checks failed");
-    let mut unfixable = None;
-    for report in reports.iter().filter(|report| !report.healthy()) {
-        match report.finding.and_then(Finding::unfixable) {
-            Some(reason) => unfixable = unfixable.or(Some(reason)),
-            None => return Diagnostic::new(summary).help(help!("run `mix repair` to fix them")),
-        }
-    }
-
-    match unfixable {
-        Some(reason) => Diagnostic::new(summary).help(super::target::unfixable(reason)),
-        None => Diagnostic::new(summary),
+    let problems: Vec<&HealthReport> = reports.iter().filter(|report| !report.healthy()).collect();
+    let fixable = problems
+        .iter()
+        .filter(|report| report.finding.and_then(Finding::unfixable).is_none())
+        .count();
+    let summary = match problems.len() {
+        1 => phrase!("found 1 problem"),
+        count => phrase!("found {count} problems"),
+    };
+    let words = Diagnostic::new(summary);
+    match (fixable, problems.len()) {
+        (0, _) => words,
+        (1, 1) => words.help(help!("run `mix repair` to fix it")),
+        (fixed, all) if fixed == all => words.help(help!("run `mix repair` to fix them")),
+        _ => words.help(help!("run `mix repair` to fix the ones it can")),
     }
 }
 
@@ -168,7 +175,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_check_is_the_measurement_the_audit_made() {
+    fn a_problem_names_the_item_and_notes_what_was_found_against_what_mix_set() {
         assert_eq!(
             check(&report(
                 "/nix",
@@ -178,20 +185,8 @@ mod tests {
                 })
             ))
             .message(),
-            "/nix: mode is 700, expected 755"
+            "/nix has the wrong permissions\nits mode is 700, and `mix` set 755"
         );
-    }
-
-    #[test]
-    fn a_check_with_nothing_to_say_still_says_it_failed() {
-        assert_eq!(
-            check(&report("nixbld1", None)).message(),
-            "nixbld1: unhealthy"
-        );
-    }
-
-    #[test]
-    fn an_identity_drift_names_both_pairs_of_ids() {
         assert_eq!(
             check(&report(
                 "nixbld1",
@@ -201,96 +196,74 @@ mod tests {
                 })
             ))
             .message(),
-            "nixbld1: uid/gid is 1000/1000, expected 30000/30000"
+            "user nixbld1 has the wrong ids\nits uid/gid is 1000/1000, and `mix` set 30000/30000"
         );
     }
 
     #[test]
-    fn a_check_repair_cannot_reconcile_is_listed_with_the_way_out() {
-        let line = check(&report("/nix", Some(Finding::NotADirectory))).message();
+    fn a_check_with_nothing_to_say_still_says_it_failed() {
+        assert_eq!(
+            check(&report("nixbld1", None)).message(),
+            "nixbld1 failed its check"
+        );
+    }
+
+    #[test]
+    fn a_problem_repair_cannot_fix_carries_its_own_way_out() {
+        let words = check(&report("/nix", Some(Finding::NotADirectory))).message();
 
         assert_eq!(
-            line,
-            "/nix: exists but is not a directory\nremove it, then run `mix repair` again"
+            words,
+            "/nix is not a directory\nsomething else is in its place\nremove it, then run `mix repair` again"
         );
     }
 
     #[test]
-    fn a_check_repair_reconciles_is_left_as_one_line() {
-        let line = check(&report("/nix", Some(Finding::ContentDrift))).message();
+    fn a_problem_repair_fixes_leaves_the_way_out_to_the_verdict() {
+        let words = check(&report("/nix", Some(Finding::ContentDrift)));
 
-        assert!(!line.contains('\n'));
+        assert!(words.report().helps.is_empty());
     }
 
     #[test]
-    fn a_verdict_offers_repair_when_something_can_be_repaired() {
-        let reports = [
+    fn a_verdict_offers_repair_for_the_problems_it_can_fix() {
+        let one = [report("/nix/var", Some(Finding::Missing))];
+        let mixed = [
             report("default profile", Some(Finding::RuntimeMissing)),
             report("/nix/var", Some(Finding::Missing)),
         ];
 
-        assert!(unhealthy(&reports).message().contains("mix repair"));
+        assert_eq!(
+            unhealthy(&one).message(),
+            "found 1 problem\nrun `mix repair` to fix it"
+        );
+        assert_eq!(
+            unhealthy(&mixed).message(),
+            "found 2 problems\nrun `mix repair` to fix the ones it can"
+        );
     }
 
-    /// Nothing here is repair's to fix, so sending the reader to `mix repair` would only have
-    /// them read the same list again.
     #[test]
-    fn a_verdict_of_nothing_but_unfixable_findings_sends_the_reader_elsewhere() {
+    fn a_verdict_of_nothing_repair_can_fix_offers_no_repair() {
         let reports = [
             report("nix-env", Some(Finding::RuntimeMissing)),
             report("default profile", Some(Finding::RuntimeMissing)),
         ];
 
-        let message = unhealthy(&reports).message();
-
-        assert!(message.contains("mix bootstrap"));
-        assert!(!message.contains("mix repair"));
+        assert_eq!(unhealthy(&reports).message(), "found 2 problems");
     }
 
     #[test]
-    fn a_healthy_report_is_not_read_as_a_finding() {
-        let reports = [report("/nix", None)];
+    fn a_healthy_item_is_not_counted_as_a_problem() {
+        let reports = [
+            report("/nix", None),
+            report("/nix/var", Some(Finding::Missing)),
+        ];
 
-        assert_eq!(unhealthy(&reports).message(), "some checks failed");
-    }
-
-    /// Every measurement the audit can make has words of its own.
-    #[test]
-    fn every_finding_is_written_out() {
-        for found in [
-            Finding::Missing,
-            Finding::Unreadable {
-                kind: std::io::ErrorKind::PermissionDenied,
-            },
-            Finding::NotADirectory,
-            Finding::Mode {
-                actual: 0o700,
-                expected: 0o755,
-            },
-            Finding::Owner {
-                actual: (0, 0),
-                expected: (1000, 1000),
-            },
-            Finding::ContentDrift,
-            Finding::GroupMissing,
-            Finding::GroupGid {
-                actual: 1,
-                expected: 30_000,
-            },
-            Finding::NotAMember { group: "mix-users" },
-            Finding::NoSuchUser,
-            Finding::UserMissing,
-            Finding::UserIds {
-                actual: (1, 1),
-                expected: (30_000, 30_000),
-            },
-            Finding::UnitMissing,
-            Finding::UnitDrift,
-            Finding::UnitInactive,
-            Finding::RuntimeMissing,
-        ] {
-            let words = finding(found).to_string();
-            assert!(mix_ui::text::is_phrase(&words), "{found:?}: {words}");
-        }
+        assert!(
+            unhealthy(&reports)
+                .message()
+                .starts_with("found 1 problem\n")
+        );
     }
 }

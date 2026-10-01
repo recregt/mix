@@ -15,7 +15,7 @@ use mix_core::{ActivityReporter, BuildProgress, DownloadProgress};
 use mix_events::v1::node_progress::Progress;
 use mix_events::v1::{
     BuildStarted, Builds, Bytes, Cancellation, Code, CommandFinished, CommandStarted, Diagnostic,
-    FetchStarted, Stream,
+    FetchStarted, Stream, SubstitutionStarted,
 };
 use mix_events::{NodeId, ROOT, Stopped, Tree, output};
 use mix_exec::Scope;
@@ -127,6 +127,12 @@ impl ActivityReporter for Activity {
     fn build_started(&self, derivation: &str) {
         self.send(Progress::Build(BuildStarted {
             derivation: derivation.to_string(),
+        }));
+    }
+
+    fn fetch_started(&self, path: &str) {
+        self.send(Progress::Substitution(SubstitutionStarted {
+            path: path.to_string(),
         }));
     }
 }

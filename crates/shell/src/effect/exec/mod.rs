@@ -265,9 +265,11 @@ mod tests {
     async fn stream_reports_structured_records_as_counters() {
         let recorder = Arc::new(Recorder::default());
         let records = concat!(
+            r#"@nix {"action":"msg","level":3,"msg":"these 5 derivations will be built:"}"#,
+            "\n",
             r#"@nix {"action":"start","id":1,"level":3,"text":"","type":104,"fields":[]}"#,
             "\n",
-            r#"@nix {"action":"result","id":1,"type":105,"fields":[2,5,1,0]}"#,
+            r#"@nix {"action":"result","id":1,"type":105,"fields":[2,9,1,0]}"#,
             "\n",
         );
 
@@ -280,9 +282,8 @@ mod tests {
         let progress = recorder.last_progress().expect("counters were reported");
         assert_eq!(progress.builds_done, 2);
         assert_eq!(progress.builds_expected, 5);
-        assert!(recorder.lines().is_empty(), "records are not shown as text");
-        // No diagnostic was decoded, and raw records would explain nothing to a reader.
-        assert!(bytes.is_empty());
+        assert_eq!(recorder.lines(), ["these 5 derivations will be built:"]);
+        assert_eq!(bytes, b"these 5 derivations will be built:\n");
     }
 
     #[tokio::test]
@@ -369,9 +370,10 @@ mod tests {
             .args([
             "-c",
             concat!(
+                r#"echo '@nix {"action":"msg","level":3,"msg":"these 37 paths will be fetched (91.0 MiB download, 300.0 MiB unpacked):"}' >&2;"#,
                 r#"echo '@nix {"action":"start","id":1,"level":3,"text":"","type":103,"fields":[]}' >&2;"#,
-                r#"echo '@nix {"action":"result","id":1,"type":105,"fields":[12,37,1,0]}' >&2;"#,
-                r#"echo '@nix {"action":"start","id":2,"level":3,"text":"","type":100,"fields":[]}' >&2;"#,
+                r#"echo '@nix {"action":"result","id":1,"type":105,"fields":[12,40,1,0]}' >&2;"#,
+                r#"echo '@nix {"action":"start","id":2,"level":3,"text":"","type":101,"fields":[]}' >&2;"#,
                 r#"echo '@nix {"action":"result","id":2,"type":105,"fields":[50525798,95420416,0,0]}' >&2"#,
             ),
         ])
@@ -387,9 +389,12 @@ mod tests {
         );
         assert_eq!(
             (progress.bytes_done, progress.bytes_expected),
-            (50_525_798, 95_420_416)
+            (50_525_798, 91 * 1024 * 1024)
         );
-        assert!(recorder.lines().is_empty());
+        assert_eq!(
+            recorder.lines(),
+            ["these 37 paths will be fetched (91.0 MiB download, 300.0 MiB unpacked):"]
+        );
     }
 
     #[tokio::test]

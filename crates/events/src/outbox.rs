@@ -26,6 +26,7 @@ fn slot(event: &Event) -> Option<Slot> {
                 | Progress::CommandFinished(_)
                 | Progress::Fetch(_)
                 | Progress::Build(_)
+                | Progress::Substitution(_)
                 | Progress::Stopping(_)
                 | Progress::Observed(_)
                 | Progress::Journaled(_),

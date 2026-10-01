@@ -69,8 +69,8 @@ mod tests {
         Action, BuildStarted, Builds, Bytes, Cancellation, Command, CommandFinished,
         CommandStarted, Download, FetchStarted, Inspection, InstallRequest, InstallResult,
         Journaled, LockWait, NixActivity, NotRunReason, Observation, Observed, Operation,
-        OutputLine, Plan, Process, Rollback, Sequenced, Step, Stopping, Stream, Verb, journaled,
-        node_finished, observation,
+        OutputLine, Plan, Process, Rollback, Sequenced, Step, Stopping, Stream,
+        SubstitutionStarted, Verb, journaled, node_finished, observation,
     };
     use mix_events::{Ending, Outbox, ROOT, Start, Tree};
 
@@ -259,6 +259,9 @@ mod tests {
         for progress in [
             Progress::Command(CommandStarted {
                 line: "/nix/var/nix/profiles/default/bin/nix build".into(),
+            }),
+            Progress::Substitution(SubstitutionStarted {
+                path: "/nix/store/xl1h9i29pgq2q5cszjhm5wpfxfbbqwyi-glibc-2.40".into(),
             }),
             Progress::Build(BuildStarted {
                 derivation: "/nix/store/bbx79xgf89bvd25i1sivdcykhy39bz14-hello-2.12.drv".into(),
@@ -493,6 +496,75 @@ mod tests {
         outbox.drain()
     }
 
+    fn doctored(findings: &[(&str, Option<mix_core::health::Finding>)]) -> Vec<Envelope> {
+        let outbox = Arc::new(Outbox::new("01920000-0000-7000-8000-000000000005", || {}));
+        let mut tree = Tree::new(
+            Arc::clone(&outbox),
+            Arc::new(|| None),
+            Start::command(
+                "doctor",
+                Command {
+                    mix_version: "0.1.0".into(),
+                    schema_minor: mix_events::SCHEMA_MINOR,
+                    request: Some(Request::Doctor(mix_events::v1::DoctorRequest::default())),
+                },
+            ),
+        );
+        let result = mix_events::v1::DoctorResult {
+            reports: findings
+                .iter()
+                .map(|(target, finding)| mix_events::v1::InspectionReport {
+                    target: (*target).into(),
+                    category: mix_events::v1::Category::Filesystem as i32,
+                    finding: finding.map(mix_core::health::wire::finding),
+                })
+                .collect(),
+        };
+        let problems = findings.iter().any(|(_, finding)| finding.is_some());
+        tree.finish(
+            ROOT,
+            Ending::succeeded()
+                .with_result(node_finished::Result::Doctor(result))
+                .for_root(problems),
+        )
+        .unwrap();
+        drop(tree);
+        outbox.drain()
+    }
+
+    #[test]
+    fn doctor_reads_at_every_level_as_recorded() {
+        use mix_core::health::Finding;
+
+        let healthy = doctored(&[("/nix", None), ("nix-daemon.service", None)]);
+        let problems = doctored(&[
+            ("/nix", None),
+            ("/etc/nix/nix.conf", Some(Finding::ContentDrift)),
+            (
+                "/nix/var/nix/profiles",
+                Some(Finding::Mode {
+                    actual: 0o700,
+                    expected: 0o755,
+                }),
+            ),
+            ("default profile", Some(Finding::RuntimeMissing)),
+        ]);
+        for (name, envelopes) in [("doctor-healthy", healthy), ("doctor-problems", problems)] {
+            mix_events::validate(envelopes.iter()).unwrap();
+            let (_, captured) = captured(&envelopes);
+            for (level, suffix) in [
+                (Detail::Outcome, "quiet"),
+                (Detail::Step, "default"),
+                (Detail::Action, "v"),
+            ] {
+                golden(
+                    &format!("{name}-{suffix}.txt"),
+                    rendered(&captured, level, None).as_bytes(),
+                );
+            }
+        }
+    }
+
     fn slot(envelope: &Envelope) -> Option<usize> {
         Some(match envelope.event.as_ref()? {
             Event::NodeStarted(started) => match started.kind.as_ref()? {
@@ -521,11 +593,12 @@ mod tests {
                 Progress::CommandFinished(_) => 20,
                 Progress::Observed(_) => 21,
                 Progress::Journaled(_) => 22,
+                Progress::Substitution(_) => 23,
             },
         })
     }
 
-    const SLOTS: usize = 23;
+    const SLOTS: usize = 24;
 
     fn captured(envelopes: &[Envelope]) -> (Vec<u8>, Captured) {
         let mut capture = Capture::start(

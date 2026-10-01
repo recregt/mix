@@ -61,7 +61,7 @@ pub(super) fn finished(
             chatty,
             elapsed,
         ),
-        Result::Doctor(doctor) => audited(out, &doctor.reports, level),
+        Result::Doctor(doctor) => audited(out, &doctor.reports, level, elapsed),
         Result::Install(install) => {
             reset(out, install.restored, level);
             if printed && chatty {
@@ -190,7 +190,11 @@ fn repaired(
     }
     if reports.is_empty() {
         if chatty {
-            mix_ui::status_to(out, Status::Checked, "system, nothing to repair");
+            mix_ui::status_to(
+                out,
+                Status::Checked,
+                &format!("system in {}", took(elapsed)),
+            );
         }
     } else if fixed.len() < reports.len() {
         words(
@@ -203,7 +207,7 @@ fn repaired(
     }
 }
 
-fn audited(out: &dyn Out, inspected: &[InspectionReport], level: Detail) {
+fn audited(out: &dyn Out, inspected: &[InspectionReport], level: Detail, elapsed: Duration) {
     let reports: Vec<HealthReport> = inspected
         .iter()
         .filter_map(|report| {
@@ -239,7 +243,7 @@ fn audited(out: &dyn Out, inspected: &[InspectionReport], level: Detail) {
             mix_ui::status_to(
                 out,
                 Status::Checked,
-                &format!("{} targets, no problems", reports.len()),
+                &format!("system in {}", took(elapsed)),
             );
         }
     } else {

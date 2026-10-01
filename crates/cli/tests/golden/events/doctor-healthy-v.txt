@@ -1,0 +1,3 @@
+     Checked /nix
+     Checked nix-daemon.service
+     Checked system in 1.00s

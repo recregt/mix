@@ -38,7 +38,7 @@ impl Human {
     pub fn new(display: Arc<dyn Display>) -> Self {
         Self {
             display,
-            out: Arc::new(mix_ui::Stderr),
+            out: Arc::new(mix_ui::Spaced::new(mix_ui::Stderr)),
             recorded: None,
             level: Detail::Step,
             results: true,
@@ -60,7 +60,7 @@ impl Human {
     }
 
     pub fn to(mut self, out: Arc<dyn Out>) -> Self {
-        self.out = out;
+        self.out = Arc::new(mix_ui::Spaced::new(out));
         self
     }
 
@@ -263,6 +263,15 @@ impl Human {
             Progress::Fetch(fetch) => self.status(Detail::Action, Status::Fetching, &fetch.url),
             Progress::Build(build) => {
                 self.status(Detail::Action, Status::Building, &build.derivation);
+                if let Some(line) = self.lines.get(&id) {
+                    line.item(mix_core::nix_log::package_name(&build.derivation));
+                }
+            }
+            Progress::Substitution(substitution) => {
+                self.status(Detail::Action, Status::Fetching, &substitution.path);
+                if let Some(line) = self.lines.get(&id) {
+                    line.item(mix_core::nix_log::package_name(&substitution.path));
+                }
             }
             Progress::Bytes(bytes) => {
                 if let Some(line) = self.lines.get(&id) {
@@ -370,6 +379,10 @@ mod tests {
                 "builds {}/{}",
                 progress.builds_done, progress.builds_expected
             ));
+        }
+
+        fn item(&self, name: &str) {
+            self.0.push(format!("item {name}"));
         }
 
         fn finish(&self) {

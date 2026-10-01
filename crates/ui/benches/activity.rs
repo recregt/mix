@@ -60,17 +60,17 @@ fn counters() -> BuildProgress {
 /// What a drawn frame costs once nix is reporting counters: a short, bounded string where only
 /// the numbers change, instead of a line of free-form output that has to be scanned and trimmed.
 ///
-/// Measured the way the frame is actually drawn — into the reporter's own buffer, reused from
-/// one frame to the next — so what is left is the digits and nothing else.
+/// Measured the way the frame is actually drawn, into the reporter's own buffer reused from one
+/// frame to the next, so what is left is the digits and nothing else.
 #[divan::bench]
 fn render_the_build_counters(bencher: divan::Bencher) {
     let progress = counters();
     let mut frame = String::with_capacity(128);
-    write_progress(&mut frame, &progress);
+    write_progress(&mut frame, &progress, "hello-2.12.3");
 
     bencher.bench_local(|| {
         frame.clear();
-        write_progress(&mut frame, divan::black_box(&progress));
+        write_progress(&mut frame, divan::black_box(&progress), "hello-2.12.3");
         frame.len()
     });
 }

@@ -182,6 +182,7 @@ message NodeProgress {
     CommandFinished command_finished = 9;
     Observed observed = 10;
     Journaled journaled = 11;
+    SubstitutionStarted substitution = 12;
   }
 }
 
@@ -316,6 +317,10 @@ message CommandStarted {
 
 message FetchStarted {
   string url = 1;
+}
+
+message SubstitutionStarted {
+  string path = 1;
 }
 
 message Bytes {

@@ -42,58 +42,71 @@ fn skip_escape(chars: &mut std::str::Chars<'_>) {
     }
 }
 
-/// Writes a snapshot of what the build is doing, e.g.
-/// `building 3/17, downloading 12/37, 48.2/91.0 MiB`.
-///
-/// Counters are cheaper to draw than free-form output: the text is short, bounded, and only the
-/// numbers in it change from one frame to the next. It is written into the caller's buffer, and
-/// the numbers are written digit by digit, so a drawn frame does no formatting and — once the
-/// buffer has been used once — no allocation either.
-///
-/// What is drawn is also stable from frame to frame: a counter is padded to the width of the
-/// total it is counting towards, and both byte counts share the unit of the larger one, so the
-/// text keeps its shape as the numbers grow instead of shuffling sideways under the reader.
-pub fn write_progress(out: &mut String, progress: &BuildProgress) {
-    if progress.builds_expected > 0 || progress.builds_done > 0 {
-        write_counter(
-            out,
-            "building ",
-            progress.builds_done,
-            progress.builds_expected,
-        );
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    Fetching,
+    Building,
+}
 
-    if progress.downloads_expected > 0 || progress.downloads_done > 0 {
-        separate(out);
-        write_counter(
-            out,
-            "downloading ",
+/// Which of nix's two kinds of work the live line shows: downloads while any are left, then
+/// builds, so one bar never switches between two counters.
+pub fn phase(progress: &BuildProgress) -> Option<(Phase, u64, u64)> {
+    if progress.downloads_expected > progress.downloads_done {
+        Some((
+            Phase::Fetching,
             progress.downloads_done,
             progress.downloads_expected,
-        );
-    }
-
-    if progress.bytes_expected > 0 || progress.bytes_done > 0 {
-        separate(out);
-        write_bytes(out, progress.bytes_done, progress.bytes_expected);
+        ))
+    } else if progress.builds_expected > 0 {
+        Some((
+            Phase::Building,
+            progress.builds_done,
+            progress.builds_expected,
+        ))
+    } else if progress.downloads_expected > 0 {
+        Some((
+            Phase::Fetching,
+            progress.downloads_done,
+            progress.downloads_expected,
+        ))
+    } else {
+        None
     }
 }
 
-/// [`write_progress`] into a buffer of its own, for a caller that has nothing to reuse.
-pub fn render_progress(progress: &BuildProgress) -> String {
-    let mut out = String::with_capacity(64);
-    write_progress(&mut out, progress);
+/// Writes the live line's text for the phase in hand, e.g. `2/3, 121.0/354.1 KiB: hello-2.12.3`.
+///
+/// The numbers are written digit by digit into the caller's buffer, so a drawn frame does no
+/// formatting and, once the buffer has been used once, no allocation either. A counter is padded
+/// to the width of its total and both byte counts share one unit, so the text keeps its shape.
+pub fn write_progress(out: &mut String, progress: &BuildProgress, item: &str) {
+    let Some((phase, done, expected)) = phase(progress) else {
+        return;
+    };
+    write_counter(out, done, expected);
+    if phase == Phase::Fetching && progress.bytes_expected > 0 {
+        out.push_str(", ");
+        write_bytes(out, progress.bytes_done, progress.bytes_expected);
+    }
+    if !item.is_empty() {
+        out.push_str(": ");
+        out.push_str(item);
+    }
+}
+
+pub fn render_bytes(done: u64, total: u64) -> String {
+    let mut out = String::with_capacity(24);
+    write_bytes(&mut out, done, total);
     out
 }
 
-fn separate(out: &mut String) {
-    if !out.is_empty() {
-        out.push_str(", ");
-    }
+pub fn render_progress(progress: &BuildProgress, item: &str) -> String {
+    let mut out = String::with_capacity(64);
+    write_progress(&mut out, progress, item);
+    out
 }
 
-fn write_counter(out: &mut String, label: &str, done: u64, expected: u64) {
-    out.push_str(label);
+fn write_counter(out: &mut String, done: u64, expected: u64) {
     // Hold the column the counter ends in steady as it rolls over a power of ten.
     for _ in digits(done)..digits(expected) {
         out.push(' ');
@@ -108,8 +121,8 @@ const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
 
 /// Writes both byte counts in the unit of the larger one, e.g. `48.2/91.0 MiB`.
 ///
-/// A shared unit is what makes the pair readable — `900.0 KiB/91.0 MiB` invites the reader to
-/// compare two numbers that are not on the same scale — and it is also the cheaper thing to
+/// A shared unit is what makes the pair readable (`900.0 KiB/91.0 MiB` invites the reader to
+/// compare two numbers that are not on the same scale), and it is also the cheaper thing to
 /// render: the unit is chosen once, and the unit's name is written once.
 fn write_bytes(out: &mut String, done: u64, expected: u64) {
     let (divisor, unit) = scale(done.max(expected));
@@ -237,23 +250,17 @@ mod tests {
     }
 
     #[test]
-    fn a_full_snapshot_renders_builds_downloads_and_bytes() {
+    fn downloads_are_shown_while_any_are_left_then_builds() {
         assert_eq!(
-            render_progress(&progress()),
-            "building  3/17, downloading 12/37, 48.2/91.0 MiB"
+            render_progress(&progress(), "hello-2.12.3"),
+            "12/37, 48.2/91.0 MiB: hello-2.12.3"
         );
-    }
-
-    #[test]
-    fn a_download_only_snapshot_leaves_the_build_counter_out() {
-        let progress = BuildProgress {
-            downloads_done: 1,
-            downloads_expected: 4,
-            bytes_done: 2_048,
-            bytes_expected: 8_192,
-            ..BuildProgress::default()
+        let fetched = BuildProgress {
+            downloads_done: 37,
+            ..progress()
         };
-        assert_eq!(render_progress(&progress), "downloading 1/4, 2.0/8.0 KiB");
+        assert_eq!(phase(&fetched), Some((Phase::Building, 3, 17)));
+        assert_eq!(render_progress(&fetched, "hello-2.12"), " 3/17: hello-2.12");
     }
 
     #[test]
@@ -263,79 +270,87 @@ mod tests {
             builds_expected: 2,
             ..BuildProgress::default()
         };
-        assert_eq!(render_progress(&progress), "building 1/2");
+        assert_eq!(render_progress(&progress, ""), "1/2");
+    }
+
+    #[test]
+    fn nothing_is_drawn_before_nix_has_a_plan() {
+        assert_eq!(phase(&BuildProgress::default()), None);
+        assert_eq!(render_progress(&BuildProgress::default(), "x"), "");
     }
 
     #[test]
     fn small_byte_counts_stay_in_bytes() {
         let progress = BuildProgress {
+            downloads_expected: 1,
             bytes_done: 12,
             bytes_expected: 900,
             ..BuildProgress::default()
         };
-        assert_eq!(render_progress(&progress), "12/900 B");
+        assert_eq!(render_progress(&progress, ""), "0/1, 12/900 B");
     }
 
-    /// 48.185… MiB: truncating would report a tenth less than it should.
     #[test]
     fn a_byte_count_is_rounded_rather_than_truncated() {
         let progress = BuildProgress {
+            downloads_expected: 1,
             bytes_done: 50_525_798,
             bytes_expected: 50_525_798,
             ..BuildProgress::default()
         };
-        assert_eq!(render_progress(&progress), "48.2/48.2 MiB");
+        assert_eq!(render_progress(&progress, ""), "0/1, 48.2/48.2 MiB");
     }
 
     #[test]
     fn large_byte_counts_reach_gibibytes() {
         let progress = BuildProgress {
+            downloads_expected: 1,
             bytes_done: 3_221_225_472,
             bytes_expected: 6_442_450_944,
             ..BuildProgress::default()
         };
-        assert_eq!(render_progress(&progress), "3.0/6.0 GiB");
+        assert_eq!(render_progress(&progress, ""), "0/1, 3.0/6.0 GiB");
     }
 
-    /// The counters are read while they move, so a digit rolling over must not shift the text
-    /// that follows it sideways.
     #[test]
     fn a_counter_keeps_its_width_as_it_rolls_over() {
         let at = |done| {
-            render_progress(&BuildProgress {
-                builds_done: done,
-                builds_expected: 120,
-                ..BuildProgress::default()
-            })
+            render_progress(
+                &BuildProgress {
+                    builds_done: done,
+                    builds_expected: 120,
+                    ..BuildProgress::default()
+                },
+                "",
+            )
         };
         assert_eq!(at(9).len(), at(10).len());
         assert_eq!(at(99).len(), at(100).len());
-        assert_eq!(at(9), "building   9/120");
+        assert_eq!(at(9), "  9/120");
     }
 
-    /// Two counts on different scales are not a comparison a reader should have to do in their
-    /// head, and the shared unit is what keeps the pair the same width as it grows.
     #[test]
     fn both_byte_counts_share_the_unit_of_the_larger_one() {
         let progress = BuildProgress {
+            downloads_expected: 1,
             bytes_done: 900 * 1024,
             bytes_expected: 91 * 1024 * 1024,
             ..BuildProgress::default()
         };
-        assert_eq!(render_progress(&progress), "0.9/91.0 MiB");
+        assert_eq!(render_progress(&progress, ""), "0/1, 0.9/91.0 MiB");
     }
 
     #[test]
     fn a_reused_buffer_renders_what_a_fresh_one_does() {
         let mut buffer = String::new();
-        write_progress(&mut buffer, &progress());
+        write_progress(&mut buffer, &progress(), "hello-2.12.3");
         buffer.clear();
-        write_progress(&mut buffer, &progress());
-        assert_eq!(buffer, render_progress(&progress()));
+        write_progress(&mut buffer, &progress(), "hello-2.12.3");
+        assert_eq!(buffer, render_progress(&progress(), "hello-2.12.3"));
     }
 
     #[test]
     fn an_idle_snapshot_renders_nothing() {
-        assert!(render_progress(&BuildProgress::default()).is_empty());
+        assert!(render_progress(&BuildProgress::default(), "").is_empty());
     }
 }

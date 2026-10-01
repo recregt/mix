@@ -69,6 +69,46 @@ impl Out for Stderr {
 
 pub struct Stdout;
 
+pub struct Spaced<O> {
+    inner: O,
+    gap: AtomicBool,
+}
+
+impl<O: Out> Spaced<O> {
+    pub fn new(inner: O) -> Self {
+        Self {
+            inner,
+            gap: AtomicBool::new(false),
+        }
+    }
+}
+
+impl<O: Out> Out for Spaced<O> {
+    fn line(&self, text: &str) {
+        if self.gap.swap(false, Ordering::Relaxed) {
+            self.inner.line("");
+        }
+        self.inner.line(text);
+        if text.contains("\n\n") {
+            self.gap.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn colours(&self) -> bool {
+        self.inner.colours()
+    }
+}
+
+impl<O: Out + ?Sized> Out for std::sync::Arc<O> {
+    fn line(&self, text: &str) {
+        (**self).line(text);
+    }
+
+    fn colours(&self) -> bool {
+        (**self).colours()
+    }
+}
+
 impl Out for Stdout {
     fn line(&self, text: &str) {
         data(text);
@@ -413,6 +453,25 @@ mod tests {
         assert_eq!(
             seen.0.lock().unwrap().as_slice(),
             ["note: cancelling\nhelp: press Ctrl-C again to stop now"]
+        );
+    }
+
+    #[test]
+    fn a_block_of_several_parts_is_set_apart_from_what_follows() {
+        let spaced = Spaced::new(Recorder::default());
+        spaced.line("  Installing hello");
+        spaced.line("warning: it was not recorded\n\nhelp: run `mix repair` to record it");
+        spaced.line("   Installed hello in 1.00s");
+        spaced.line("     Checked system in 1.00s");
+        assert_eq!(
+            spaced.inner.0.lock().unwrap().as_slice(),
+            [
+                "  Installing hello",
+                "warning: it was not recorded\n\nhelp: run `mix repair` to record it",
+                "",
+                "   Installed hello in 1.00s",
+                "     Checked system in 1.00s",
+            ]
         );
     }
 
