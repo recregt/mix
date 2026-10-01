@@ -31,8 +31,19 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     pub events_file: Option<PathBuf>,
 
+    /// Choose when to color the output
+    #[arg(long, global = true, value_enum, value_name = "WHEN", default_value_t = Color::Auto)]
+    pub color: Color,
+
     #[command(subcommand)]
     pub command: Command,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Color {
+    Auto,
+    Always,
+    Never,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

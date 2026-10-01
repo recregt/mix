@@ -1519,6 +1519,7 @@ dependencies = [
 name = "mix-ui"
 version = "0.1.0"
 dependencies = [
+ "anstyle-query",
  "codspeed-divan-compat",
  "console",
  "indicatif",

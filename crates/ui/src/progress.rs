@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use indicatif::{MultiProgress, ProgressDrawTarget, ProgressStyle};
 
-const WORKING: &str = "{prefix:>12.green.bold} {msg} ({elapsed})";
+const WORKING: &str = "{prefix:>12.green.bright.bold} {msg} ({elapsed})";
 
 const MAX_PRINT: usize = 50;
 
@@ -49,7 +49,7 @@ pub(crate) fn bar_width(columns: usize) -> Option<usize> {
 
 pub(crate) fn bar_style(width: usize) -> ProgressStyle {
     style(&format!(
-        "{{prefix:>12.green.bold}} [{{bar:{width}}}] {{wide_msg}}"
+        "{{prefix:>12.green.bright.bold}} [{{bar:{width}}}] {{wide_msg}}"
     ))
 }
 

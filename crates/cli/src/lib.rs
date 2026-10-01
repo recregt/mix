@@ -15,6 +15,11 @@ use explain::Diagnostic;
 
 pub async fn run() -> ExitCode {
     let cli = Cli::parse();
+    mix_ui::set_color(match cli.color {
+        cli::Color::Auto => mix_ui::ColorChoice::Auto,
+        cli::Color::Always => mix_ui::ColorChoice::Always,
+        cli::Color::Never => mix_ui::ColorChoice::Never,
+    });
     if matches!(cli.command, Command::Worker) {
         return remote::worker::run().await;
     }

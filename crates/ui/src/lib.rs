@@ -19,10 +19,10 @@ use status::{GUTTER, Tone};
 
 static PROGRESS: AtomicBool = AtomicBool::new(true);
 
-const GREEN: &str = "\u{1b}[32m";
-const RED: &str = "\u{1b}[31m";
+const GREEN: &str = "\u{1b}[92m";
+const RED: &str = "\u{1b}[91m";
 const YELLOW: &str = "\u{1b}[33m";
-const CYAN: &str = "\u{1b}[36m";
+const CYAN: &str = "\u{1b}[96m";
 const BOLD: &str = "\u{1b}[1m";
 const RESET: &str = "\u{1b}[0m";
 
@@ -36,8 +36,58 @@ pub fn progress_enabled() -> bool {
     PROGRESS.load(Ordering::Relaxed)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorChoice {
+    Auto,
+    Always,
+    Never,
+}
+
+static CHOICE: OnceLock<ColorChoice> = OnceLock::new();
+
+pub fn set_color(choice: ColorChoice) {
+    let _ = CHOICE.set(choice);
+    console::set_colors_enabled_stderr(stderr_colors());
+    console::set_colors_enabled(stdout_colors());
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct Environment {
+    no_color: bool,
+    clicolor_force: bool,
+    clicolor: Option<bool>,
+    term_supports_color: bool,
+    ci: bool,
+}
+
+impl Environment {
+    fn read() -> Self {
+        Self {
+            no_color: anstyle_query::no_color(),
+            clicolor_force: anstyle_query::clicolor_force(),
+            clicolor: anstyle_query::clicolor(),
+            term_supports_color: anstyle_query::term_supports_color(),
+            ci: anstyle_query::is_ci(),
+        }
+    }
+}
+
+fn decide(choice: ColorChoice, is_terminal: bool, env: Environment) -> bool {
+    match choice {
+        ColorChoice::Always => true,
+        ColorChoice::Never => false,
+        ColorChoice::Auto if env.no_color => false,
+        ColorChoice::Auto if env.clicolor_force => true,
+        ColorChoice::Auto if env.clicolor == Some(false) => false,
+        ColorChoice::Auto => {
+            is_terminal && (env.term_supports_color || env.clicolor == Some(true) || env.ci)
+        }
+    }
+}
+
 fn colors_enabled(is_terminal: bool) -> bool {
-    is_terminal && std::env::var_os("NO_COLOR").is_none()
+    let choice = CHOICE.get().copied().unwrap_or(ColorChoice::Auto);
+    decide(choice, is_terminal, Environment::read())
 }
 
 pub(crate) fn stderr_colors() -> bool {
@@ -264,11 +314,16 @@ pub fn report_text(severity: Severity, report: &Report<'_>, colours: bool) -> St
     let subs = report
         .notes
         .iter()
-        .map(|note| ("note", note.as_str()))
-        .chain(report.helps.iter().map(|help| ("help", help.as_str())));
-    for (index, (label, text)) in subs.enumerate() {
+        .map(|note| (GREEN, "note", note.as_str()))
+        .chain(
+            report
+                .helps
+                .iter()
+                .map(|help| (CYAN, "help", help.as_str())),
+        );
+    for (index, (colour, label, text)) in subs.enumerate() {
         out.push_str(if index == 0 { "\n\n" } else { "\n" });
-        write_label(&mut out, CYAN, label, text, colours);
+        write_label(&mut out, colour, label, text, colours);
     }
     for cause in &report.causes {
         out.push_str("\n\nCaused by:");
@@ -295,7 +350,7 @@ pub fn report(severity: Severity, report: &Report<'_>) {
 pub fn note_to(out: &dyn Out, note: &Note, help: Option<&Help>) {
     let colours = out.colours();
     let mut line = String::new();
-    write_label(&mut line, CYAN, "note", note.as_str(), colours);
+    write_label(&mut line, GREEN, "note", note.as_str(), colours);
     if let Some(help) = help {
         line.push('\n');
         write_label(&mut line, CYAN, "help", help.as_str(), colours);
@@ -335,6 +390,51 @@ pub fn restore_terminal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn color_follows_the_flag_then_the_environment_as_cargo_does() {
+        let terminal = Environment {
+            term_supports_color: true,
+            ..Environment::default()
+        };
+        assert!(decide(ColorChoice::Auto, true, terminal));
+        assert!(!decide(ColorChoice::Auto, false, terminal));
+        assert!(!decide(
+            ColorChoice::Auto,
+            true,
+            Environment {
+                no_color: true,
+                ..terminal
+            }
+        ));
+        assert!(decide(
+            ColorChoice::Auto,
+            false,
+            Environment {
+                clicolor_force: true,
+                ..Environment::default()
+            }
+        ));
+        assert!(!decide(
+            ColorChoice::Auto,
+            true,
+            Environment {
+                clicolor: Some(false),
+                ..terminal
+            }
+        ));
+        assert!(!decide(ColorChoice::Auto, true, Environment::default()));
+        assert!(decide(
+            ColorChoice::Auto,
+            true,
+            Environment {
+                ci: true,
+                ..Environment::default()
+            }
+        ));
+        assert!(decide(ColorChoice::Always, false, Environment::default()));
+        assert!(!decide(ColorChoice::Never, true, terminal));
+    }
 
     #[derive(Default)]
     struct Recorder(std::sync::Mutex<Vec<String>>);
