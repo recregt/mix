@@ -39,7 +39,7 @@ def require(tool: str) -> None:
 
 def build_mix() -> None:
     step("building mix (release)")
-    subprocess.run(["cargo", "build", "--release", "-p", "mix-bin"], cwd=REPO_ROOT, check=True)
+    subprocess.run(["cargo", "build", "--release", "-p", "mix-bin", "-p", "mix-daemon"], cwd=REPO_ROOT, check=True)
 
 
 def resolve_image(requested: str | None) -> str:
@@ -89,7 +89,10 @@ def container_exec(name: str, *args: str) -> None:
 
 def install_mix(name: str) -> None:
     step("copying mix into /usr/local/bin")
-    subprocess.run(["podman", "cp", str(MIX_BINARY), f"{name}:/usr/local/bin/mix"], check=True)
+    for binary in (MIX_BINARY, MIX_BINARY.with_name("mix-daemon")):
+        subprocess.run(
+            ["podman", "cp", str(binary), f"{name}:/usr/local/bin/{binary.name}"], check=True
+        )
 
 
 def export_env(name: str, env: dict[str, str]) -> None:

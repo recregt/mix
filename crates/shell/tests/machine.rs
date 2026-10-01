@@ -316,7 +316,7 @@ fn every_profile_action_and_its_undo_match_the_model() {
                 .map(|mirror| mirror.url().to_string()),
             host: HostConfig::default(),
         })
-        .with_agent_program("/usr/local/bin/mix".into());
+        .with_agent_program("/usr/local/bin/mix-daemon".into());
     let mut machine = Machine::with(World::default(), performer);
     let real = profile_of(machine.real(&Query::Profile(user.clone())));
     let world = &mut machine.world;

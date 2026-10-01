@@ -1,0 +1,26 @@
+[package]
+name = "mix-daemon"
+version.workspace = true
+edition = "2024"
+authors = ["Ömer Tekin"]
+license = "MPL-2.0"
+
+[[bin]]
+name = "mix-daemon"
+path = "src/main.rs"
+
+[features]
+embed-tarball = ["mix-shell/embed-tarball"]
+
+[dependencies]
+mix-core = { path = "../core" }
+mix-events = { path = "../events" }
+mix-exec = { path = "../exec" }
+mix-rpc = { path = "../rpc" }
+mix-shell = { path = "../shell" }
+mix-ui = { path = "../ui" }
+nix = { workspace = true, features = ["signal"] }
+tokio = { workspace = true, features = ["signal"] }
+
+[dev-dependencies]
+futures-util = { workspace = true }

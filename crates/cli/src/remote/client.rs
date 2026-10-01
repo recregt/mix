@@ -12,7 +12,8 @@ use crate::controls::{Control, Terminal, Translator};
 use crate::render::sinks::{Sinks, View};
 
 const LAUNCHER: &str = "sudo";
-const WORKER: &str = "worker";
+const DAEMON: &str = "mix-daemon";
+const SERVE_STDIN: &str = "serve-stdin";
 
 #[derive(Debug, thiserror::Error)]
 #[error("`{}` did not finish", crate::explain::command_of(Some(.request)))]
@@ -108,6 +109,10 @@ pub fn bootstrap_request(mirror: Option<&str>, mirror_key: Option<&str>, force: 
     }))
 }
 
+fn daemon_next_to(client: &std::path::Path) -> std::path::PathBuf {
+    client.with_file_name(DAEMON)
+}
+
 async fn start(view: &View) -> anyhow::Result<Client> {
     if view.output == Output::Human && view.level() >= Detail::Step {
         mix_ui::note(
@@ -115,10 +120,10 @@ async fn start(view: &View) -> anyhow::Result<Client> {
             None,
         );
     }
-    let program = std::env::current_exe()?;
+    let program = daemon_next_to(&std::env::current_exe()?);
     Ok(Client::start(
         &program,
-        &[WORKER],
+        &[SERVE_STDIN],
         Some(LAUNCHER),
         env!("CARGO_PKG_VERSION"),
     )
@@ -127,7 +132,7 @@ async fn start(view: &View) -> anyhow::Result<Client> {
 
 pub async fn run(request: Request, view: &View) -> anyhow::Result<()> {
     let mut client = start(view).await?;
-    let command = crate::root::command(request.clone());
+    let command = mix_shell::root::command(request.clone());
     let (controller, replies) = client.run(&command).await?;
     let ended = replay(controller, replies, view).await?;
     let _ = client.wait().await;

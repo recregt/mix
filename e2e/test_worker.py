@@ -5,7 +5,7 @@ from support.container import create_user
 from support.mirror import MIRROR_TEST_USERS, mirror_args
 
 USER = MIRROR_TEST_USERS[0]
-MIX = "/usr/local/bin/mix"
+DAEMON = "/usr/local/bin/mix-daemon"
 MIX_MANAGED_MARKER = "/nix/.mix-managed"
 UNUSABLE_PROXY = "http://127.0.0.1:9"
 
@@ -15,7 +15,7 @@ def _restricted_sudo(container, user: str) -> None:
     container.exec(
         "bash",
         "-c",
-        f"echo '{user} ALL=(ALL) NOPASSWD: {MIX}' > /etc/sudoers.d/{user} "
+        f"echo '{user} ALL=(ALL) NOPASSWD: {DAEMON}' > /etc/sudoers.d/{user} "
         f"&& chmod 440 /etc/sudoers.d/{user}",
         check=True,
     )
@@ -79,7 +79,7 @@ def test_ctrl_c_through_the_worker_rolls_back_and_says_so(
     bootstrap.wait_for_step("create-users-and-groups")
     client = bootstrap.pid()
     launcher = container.exec(
-        "pgrep", "-f", f"^sudo {MIX} worker", check=True
+        "pgrep", "-f", f"^sudo {DAEMON} serve-stdin", check=True
     ).stdout.split()[0]
     container.exec("kill", "-INT", client, launcher, check=True)
 
@@ -110,7 +110,7 @@ def test_a_killed_client_still_gets_its_changes_rolled_back(
         "bootstrap", *mirror_args(mock_nix_server, mirror_cache), user=USER
     )
     bootstrap.wait_for_step("create-users-and-groups")
-    worker = f"^sudo {MIX} worker"
+    worker = f"^sudo {DAEMON} serve-stdin"
     container.exec("pgrep", "-f", worker, check=True)
 
     container.exec("kill", "-KILL", bootstrap.pid(), check=True)

@@ -40,7 +40,7 @@ fn context(user: Option<mix_core::models::UserConfig>, forward: &Forward) -> mix
     mix_shell::Context::new(mix_exec::Scope::root())
         .with_user(user)
         .with_render(forward.clone())
-        .with_host(crate::commands::host_config())
+        .with_host(crate::settings::host_config())
 }
 
 async fn bootstrap(
@@ -51,7 +51,7 @@ async fn bootstrap(
 ) -> Result<(), Box<Fault>> {
     let _lock = mix_shell::effect::lock::acquire_exclusive(LOCK_FILE).map_err(fault)?;
     let policy =
-        crate::commands::requested_policy(request.mirror.as_deref(), request.mirror_key.as_deref())
+        crate::settings::requested_policy(request.mirror.as_deref(), request.mirror_key.as_deref())
             .map_err(fault)?;
     let user = mix_shell::effect::accounts::user_by_uid(caller.uid)
         .and_then(mix_shell::profile::user_config_for);
@@ -67,7 +67,7 @@ async fn repair(caller: Caller, controls: Controls, forward: &Forward) -> Result
     let _lock = mix_shell::effect::lock::acquire_exclusive(LOCK_FILE).map_err(fault)?;
     let user = mix_shell::effect::accounts::user_by_uid(caller.uid)
         .and_then(mix_shell::profile::existing_user_config_for);
-    let ctx = context(user, forward).with_policy(crate::commands::policy());
+    let ctx = context(user, forward).with_policy(crate::settings::policy());
     let _steer = controls::steer(&ctx.scope, controls, &forward.events);
     mix_shell::ops::repair::repair(&ctx).await;
     Ok(())
@@ -91,7 +91,7 @@ async fn change(
     let _lock = mix_shell::effect::lock::acquire_exclusive(LOCK_FILE).map_err(fault)?;
     let user = mix_shell::effect::accounts::user_by_uid(caller.uid)
         .and_then(mix_shell::profile::existing_user_config_for);
-    let ctx = context(user, forward).with_policy(crate::commands::policy());
+    let ctx = context(user, forward).with_policy(crate::settings::policy());
     let _steer = controls::steer(&ctx.scope, controls, &forward.events);
     match verb {
         Change::Install => mix_shell::ops::install::install(&ctx, packages)
@@ -108,7 +108,7 @@ async fn change(
 async fn doctor(caller: Caller, controls: Controls, forward: &Forward) -> Result<(), Box<Fault>> {
     let user = mix_shell::effect::accounts::user_by_uid(caller.uid)
         .and_then(mix_shell::profile::existing_user_config_for);
-    let ctx = context(user, forward).with_policy(crate::commands::policy());
+    let ctx = context(user, forward).with_policy(crate::settings::policy());
     let _steer = controls::steer(&ctx.scope, controls, &forward.events);
     mix_shell::ops::doctor::audit(&ctx).await;
     Ok(())
@@ -159,12 +159,12 @@ impl mix_rpc::Worker for CliWorker {
         if let Err(fault) = ran
             && !forward.started.load(Ordering::SeqCst)
         {
-            crate::root::fail(command, *fault, &mut forward);
+            mix_shell::root::fail(command, *fault, &mut forward);
         }
     }
 }
 
-pub async fn run() -> ExitCode {
+pub async fn serve_stdin() -> ExitCode {
     if !mix_shell::effect::accounts::is_root() {
         mix_ui::report(
             mix_ui::Severity::Error,
@@ -231,7 +231,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_doctor_request_ends_with_the_reports_in_its_root() {
-        let envelopes = served(crate::root::command(Request::Doctor(DoctorRequest {}))).await;
+        let envelopes = served(mix_shell::root::command(Request::Doctor(DoctorRequest {}))).await;
 
         assert!(matches!(
             root(&envelopes).result,

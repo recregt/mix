@@ -312,6 +312,8 @@ def _start_container(image: str, name: str, binary: pathlib.Path) -> str:
             "--pids-limit=-1",
             "--volume",
             f"{binary}:/usr/local/bin/mix:ro",
+            "--volume",
+            f"{binary.with_name('mix-daemon')}:/usr/local/bin/mix-daemon:ro",
             "--name",
             name,
             image,
@@ -368,7 +370,7 @@ def daemon_trusts(container: Container, user: str) -> bool:
 @pytest.fixture(scope="session")
 def mix_binary():
     subprocess.run(
-        ["cargo", "build", "--release", "-p", "mix-bin"],
+        ["cargo", "build", "--release", "-p", "mix-bin", "-p", "mix-daemon"],
         cwd=REPO_ROOT,
         check=True,
     )

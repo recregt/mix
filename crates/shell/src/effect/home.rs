@@ -12,7 +12,7 @@ use crate::effect::files::{Files, Prepared};
 
 pub const COMMAND: &str = "home-files";
 
-const PROGRAM: &str = "mix home-files";
+const PROGRAM: &str = "mix-daemon home-files";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
+use crate::render::Render;
 use mix_events::v1::{Command, command::Request};
 use mix_events::{Fault, Outbox, ROOT, Start, Tree};
-use mix_shell::render::Render;
 
 pub fn key_of(request: Option<&Request>) -> &'static str {
     match request {
@@ -24,7 +24,7 @@ pub fn command(request: Request) -> Command {
 }
 
 pub fn fail(command: Command, fault: Fault, render: &mut impl Render) {
-    let outbox = Arc::new(Outbox::new(mix_shell::request_id(), || {}));
+    let outbox = Arc::new(Outbox::new(crate::request_id(), || {}));
     let mut tree = Tree::new(
         Arc::clone(&outbox),
         Arc::new(|| None),

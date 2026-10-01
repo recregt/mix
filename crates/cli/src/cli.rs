@@ -140,19 +140,6 @@ pub enum Command {
         #[arg(long, conflicts_with = "code")]
         list: bool,
     },
-
-    #[command(
-        hide = true,
-        about = "Carry out privileged operations for another mix process"
-    )]
-    Worker,
-
-    #[command(
-        name = mix_shell::effect::home::COMMAND,
-        hide = true,
-        about = "Change files in your own directories for a privileged mix process"
-    )]
-    HomeFiles { request: String },
 }
 
 pub fn color_requested<I, S>(args: I) -> Color
