@@ -554,11 +554,12 @@ fn keep(journal: &mut dyn Journal, record: &Record, tree: &mut Tree, node: NodeI
 
 pub fn stopped_by(scope: &Scope) -> Stopped {
     let watched = scope.clone();
-    std::sync::Arc::new(move || match watched.reason()? {
-        mix_exec::Reason::Interrupted => Some(Cancellation::Interrupted),
-        mix_exec::Reason::Terminated => Some(Cancellation::Terminated),
-        mix_exec::Reason::ClientGone => Some(Cancellation::ClientGone),
-        mix_exec::Reason::Abandoned => None,
+    std::sync::Arc::new(move || {
+        watched.reason().map(|reason| match reason {
+            mix_exec::Reason::Interrupted => Cancellation::Interrupted,
+            mix_exec::Reason::Terminated => Cancellation::Terminated,
+            mix_exec::Reason::ClientGone => Cancellation::ClientGone,
+        })
     })
 }
 
