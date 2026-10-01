@@ -223,7 +223,7 @@ fn explain_code(name: &str) -> ExitCode {
                     ..mix_ui::Report::new(&mix_ui::phrase!("`{name}` isn't a code `mix` uses"))
                 },
             );
-            ExitCode::from(2)
+            ExitCode::from(u8::try_from(mix_events::exit::USAGE).unwrap_or(u8::MAX))
         }
     }
 }

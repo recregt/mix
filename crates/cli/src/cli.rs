@@ -190,12 +190,38 @@ impl Color {
     }
 }
 
+pub fn exit_status() -> clap::builder::StyledStr {
+    use mix_events::exit;
+
+    let header = STYLES.get_header();
+    let literal = STYLES.get_literal();
+    let rows = [
+        (exit::SUCCEEDED, "succeeded"),
+        (exit::FAILED, "failed"),
+        (exit::USAGE, "the arguments were not valid"),
+        (
+            exit::PROBLEMS_REMAIN,
+            "problems remain: `mix doctor` found some, or `mix repair` left some",
+        ),
+        (exit::INTERRUPTED, "interrupted"),
+    ];
+    let mut text = format!("{header}Exit status:{header:#}\n");
+    for (code, meaning) in rows {
+        text.push_str(&format!("  {literal}{code:<3}{literal:#}  {meaning}\n"));
+    }
+    text.push_str("\nSee 'mix help <command>' for more information on a specific command.");
+    text.into()
+}
+
 impl Cli {
     pub fn parse_with_color() -> Self {
         use clap::{CommandFactory, FromArgMatches};
 
         let color = color_requested(std::env::args_os().skip(1));
-        let matches = Self::command().color(color.clap()).get_matches();
+        let matches = Self::command()
+            .color(color.clap())
+            .after_long_help(exit_status())
+            .get_matches();
         Self::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
     }
 

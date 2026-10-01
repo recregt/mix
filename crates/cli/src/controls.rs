@@ -42,7 +42,7 @@ pub fn change() -> Stopping {
     }
 }
 
-const FORCED_EXIT: i32 = 130;
+const FORCED_EXIT: u32 = mix_events::exit::INTERRUPTED;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Received {
@@ -114,7 +114,7 @@ pub fn apply(scope: &Scope, notices: Option<&Stopping>, control: Control) {
             }
             scope.processes().kill();
             mix_ui::restore_terminal();
-            std::process::exit(FORCED_EXIT);
+            std::process::exit(i32::try_from(FORCED_EXIT).unwrap_or(i32::MAX));
         }
         Control::Pause => scope.processes().pause(),
         Control::Resume => scope.processes().resume(),
