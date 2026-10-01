@@ -98,12 +98,15 @@ pub(crate) fn observation(observation: &Observation) -> String {
 
 fn undo(out: &mut String, undo: &[Action]) {
     for (index, action) in undo.iter().enumerate() {
-        out.push_str(if index == 0 { ": undo " } else { ", " });
+        out.push_str(if index == 0 {
+            ", undone by "
+        } else {
+            ", then "
+        });
         out.push_str(
-            action
-                .operation()
-                .as_str_name()
-                .trim_start_matches("OPERATION_"),
+            &super::verbs::action(action.operation())
+                .text()
+                .to_lowercase(),
         );
         out.push(' ');
         out.push_str(&action.subject);
@@ -116,29 +119,29 @@ pub(crate) fn record(journaled: &Journaled) -> String {
     let mut out = String::new();
     match &journaled.record {
         Some(Record::Began(began)) => {
-            let _ = write!(out, "began {}", began.request);
+            let _ = write!(out, "request {} began", began.request);
         }
         Some(Record::Prepared(step)) => {
-            let _ = write!(out, "prepared {}", step.seq);
+            let _ = write!(out, "step {} prepared", step.seq);
             undo(&mut out, &step.undo);
         }
         Some(Record::Done(step)) => {
-            let _ = write!(out, "done {}", step.seq);
+            let _ = write!(out, "step {} done", step.seq);
         }
         Some(Record::Settled(step)) => {
-            let _ = write!(out, "settled {}", step.seq);
+            let _ = write!(out, "step {} settled", step.seq);
             undo(&mut out, &step.undo);
         }
         Some(Record::Failed(step)) => {
-            let _ = write!(out, "failed {}", step.seq);
+            let _ = write!(out, "step {} failed", step.seq);
         }
         Some(Record::Reverted(action)) => {
-            out.push_str("reverted");
+            out.push_str("a step was put back");
             undo(&mut out, std::slice::from_ref(action));
         }
-        Some(Record::Committing(_)) => out.push_str("committing"),
-        Some(Record::Ended(_)) => out.push_str("ended"),
-        None => out.push_str("unknown"),
+        Some(Record::Committing(_)) => out.push_str("the request is committing"),
+        Some(Record::Ended(_)) => out.push_str("the request ended"),
+        None => out.push_str("a record this version can't read"),
     }
     out
 }
@@ -186,7 +189,7 @@ mod tests {
         };
         assert_eq!(
             record(&prepared),
-            "prepared 3: undo REMOVE_CREATED /nix/var"
+            "step 3 prepared, undone by removing /nix/var"
         );
     }
 }

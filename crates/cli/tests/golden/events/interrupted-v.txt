@@ -1,7 +1,7 @@
-     Request 01920000-0000-7000-8000-000000000002
      Writing package list
      Writing /home/ciuser/.local/state/mix/state
-note: cancelling and putting the package list back; press Ctrl-C again to stop now
+note: cancelling and putting the package list back
+help: press Ctrl-C again to stop now
 Rolling back package list
    Restoring /home/ciuser/.local/state/mix/state
-error: stopped; everything it had changed was undone
+   Cancelled `mix install` in 16.00s

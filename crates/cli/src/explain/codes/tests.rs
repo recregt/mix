@@ -195,12 +195,10 @@ fn every_diagnostic_mix_prints_follows_the_house_style() {
         crate::controls::REPAIR,
         crate::controls::CHANGE,
     ] {
-        assert!(mix_ui::house_style(stopping.first), "{:?}", stopping.first);
-        assert!(
-            mix_ui::house_style(stopping.forced),
-            "{:?}",
-            stopping.forced
-        );
+        for notice in [stopping.first, stopping.forced] {
+            assert!(mix_ui::house_style(notice.text), "{notice:?}");
+            assert!(mix_ui::house_style(notice.help), "{notice:?}");
+        }
     }
 }
 

@@ -1,4 +1,4 @@
 stopped before it could install ripgrep
-run the same command again to finish; it picks up where it stopped
+run the same command again to pick up where it stopped
 
 The privileged helper `mix` started for this command stopped before it answered. Whatever it had changed is undone by the next command; run the same command again to finish.

@@ -1,8 +1,8 @@
-     Request 01920000-0000-7000-8000-000000000001
+note: request 01920000-0000-7000-8000-000000000001
      Writing package list
      Writing /home/ciuser/.local/state/mix/state
     Observed contents of /home/ciuser/.local/state/mix/state: 412 bytes
-   Journaled prepared 0: undo RESTORE /home/ciuser/.local/state/mix/state
+   Journaled step 0 prepared, undone by restoring /home/ciuser/.local/state/mix/state
   Installing hello
   Activating ciuser
     Fetching http://mirror.internal/hello.nar
@@ -11,7 +11,8 @@
              | building hello
 warning[git-record-failed]: the change was made but not recorded in git
 
+help: `mix repair` records it
+
 Caused by:
   fatal: not a git repository
-  help: `mix repair` records it
    Installed hello in 29.00s

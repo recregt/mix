@@ -103,8 +103,7 @@ impl Diagnostic {
     }
 }
 
-const REPORT_BUG: &str =
-    "this is a bug in `mix`; please report it at https://github.com/recregt/mix/issues";
+const REPORT_BUG: &str = "report this bug at https://github.com/recregt/mix/issues";
 
 pub(crate) fn core_error(
     error: &mix_core::Error,
@@ -138,13 +137,20 @@ pub(crate) fn fault_of(error: &anyhow::Error) -> mix_events::Fault {
     mix_core::diagnose::failed(mix_events::v1::Code::Internal, error.to_string(), None)
 }
 
+fn unworded(code: mix_events::v1::Code) -> bool {
+    matches!(
+        code,
+        mix_events::v1::Code::Internal | mix_events::v1::Code::Unspecified
+    )
+}
+
 pub fn evidence(fault: &mix_events::Fault) -> Vec<String> {
     fn collect(diagnostic: &mix_events::v1::Diagnostic, cause: bool, out: &mut Vec<String>) {
         let words = match &diagnostic.detail {
             Some(mix_events::v1::diagnostic::Detail::Command(command)) => {
                 command.output_tail.trim()
             }
-            _ if cause => diagnostic.message.trim(),
+            _ if cause || unworded(diagnostic.code()) => diagnostic.message.trim(),
             _ => "",
         };
         if !words.is_empty() && !out.iter().any(|known| known == words) {
@@ -171,6 +177,7 @@ mod evidence_tests {
     #[test]
     fn evidence_is_the_programs_own_words_and_each_causes_message() {
         let fault = mix_events::Fault::Failed(Wire {
+            code: mix_events::v1::Code::BuildFailed as i32,
             message: "the summary is worded elsewhere".into(),
             causes: vec![
                 Wire {
@@ -197,6 +204,35 @@ mod evidence_tests {
             ]
         );
     }
+
+    #[test]
+    fn a_failure_mix_has_no_words_for_keeps_its_producers_words() {
+        for code in [
+            mix_events::v1::Code::Internal,
+            mix_events::v1::Code::Unspecified,
+        ] {
+            let fault = mix_events::Fault::Failed(Wire {
+                code: code as i32,
+                message: "state file ended early".into(),
+                ..Wire::default()
+            });
+
+            assert_eq!(evidence(&fault), ["state file ended early"], "{code:?}");
+        }
+    }
+}
+
+pub fn command_of(request: Option<&mix_events::v1::command::Request>) -> &'static str {
+    use mix_events::v1::command::Request;
+
+    match request {
+        Some(Request::Install(_)) => install::COMMAND,
+        Some(Request::Remove(_)) => remove::COMMAND,
+        Some(Request::Bootstrap(_)) => bootstrap::COMMAND,
+        Some(Request::Repair(_)) => repair::COMMAND,
+        Some(Request::Doctor(_)) => doctor::COMMAND,
+        None => "mix",
+    }
 }
 
 pub fn outcome(
@@ -205,24 +241,18 @@ pub fn outcome(
 ) -> Diagnostic {
     use mix_events::v1::command::Request;
 
-    let (command, action): (&str, Box<dyn Display + '_>) = match request {
-        Some(Request::Install(install)) => (
-            install::COMMAND,
-            Box::new(packages_action("install", &install.packages)),
-        ),
-        Some(Request::Remove(remove)) => (
-            remove::COMMAND,
-            Box::new(packages_action("remove", &remove.packages)),
-        ),
-        Some(Request::Bootstrap(_)) => (bootstrap::COMMAND, Box::new(bootstrap::ACTION)),
-        Some(Request::Repair(_)) => (repair::COMMAND, Box::new(repair::ACTION)),
-        Some(Request::Doctor(_)) => (doctor::COMMAND, Box::new(doctor::ACTION)),
-        None => ("mix", Box::new("finish")),
+    let action: Box<dyn Display + '_> = match request {
+        Some(Request::Install(install)) => Box::new(packages_action("install", &install.packages)),
+        Some(Request::Remove(remove)) => Box::new(packages_action("remove", &remove.packages)),
+        Some(Request::Bootstrap(_)) => Box::new(bootstrap::ACTION),
+        Some(Request::Repair(_)) => Box::new(repair::ACTION),
+        Some(Request::Doctor(_)) => Box::new(doctor::ACTION),
+        None => Box::new("finish"),
     };
     render(
         fault,
         &Context {
-            command,
+            command: command_of(request),
             action: &*action,
         },
     )
@@ -347,7 +377,7 @@ mod tests {
         )
         .message();
 
-        assert!(message.contains("bug in `mix`"));
+        assert!(message.contains("report this bug"));
         assert!(message.contains("github.com/recregt/mix/issues"));
         assert!(!message.contains("oops"));
     }

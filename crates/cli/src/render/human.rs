@@ -27,7 +27,6 @@ pub struct Human {
     stopping: Option<Stopping>,
     stop_noticed: bool,
     request: Option<Request>,
-    rolled_back: bool,
     lines: HashMap<NodeId, Arc<dyn StepLine>>,
     subjects: HashMap<NodeId, String>,
     pending: HashMap<NodeId, Status>,
@@ -46,7 +45,6 @@ impl Human {
             stopping: None,
             stop_noticed: false,
             request: None,
-            rolled_back: false,
             lines: HashMap::new(),
             subjects: HashMap::new(),
             pending: HashMap::new(),
@@ -97,7 +95,13 @@ impl Human {
                 Some(node_started::Kind::Command(command)) => {
                     self.stopping = command.request.as_ref().and_then(stopping_for);
                     self.request = command.request;
-                    self.status(Detail::Action, Status::Request, &envelope.request);
+                    if self.shows(Detail::Trace) {
+                        mix_ui::note_to(
+                            self.out.as_ref(),
+                            &format!("request {}", envelope.request),
+                            None,
+                        );
+                    }
                 }
                 Some(node_started::Kind::Step(step)) => {
                     self.pending.insert(node.id, verbs::step(step.verb()));
@@ -109,7 +113,6 @@ impl Human {
                         .get(&rollback.undoes)
                         .cloned()
                         .unwrap_or_default();
-                    self.rolled_back = true;
                     self.announce(node.id, Status::RollingBack, &subject);
                 }
                 Some(node_started::Kind::Action(action)) => {
@@ -138,14 +141,15 @@ impl Human {
                 | None => {}
             },
             Event::NodeFinished(node) if node.id == ROOT => {
-                self.outcome(&node);
+                let elapsed = self.recorded.unwrap_or_else(|| self.started.elapsed());
                 super::results::finished(
                     self.out.as_ref(),
                     &node,
                     self.results,
                     self.level,
-                    self.recorded.unwrap_or_else(|| self.started.elapsed()),
+                    elapsed,
                 );
+                self.outcome(&node, elapsed);
             }
             Event::NodeFinished(node) if self.actions.remove(&node.id) => {
                 self.lines.remove(&node.id);
@@ -185,16 +189,24 @@ impl Human {
         }
     }
 
-    fn outcome(&self, node: &NodeFinished) {
+    fn outcome(&self, node: &NodeFinished, elapsed: std::time::Duration) {
         let fault = match node.status() {
             Ended::Failed => match &node.diagnostic {
                 Some(diagnostic) => Fault::Failed(diagnostic.as_ref().clone()),
                 None => Fault::Failed(mix_events::v1::Diagnostic::default()),
             },
-            Ended::Cancelled => Fault::Cancelled {
-                cause: node.cancellation(),
-                rolled_back: self.rolled_back,
-            },
+            Ended::Cancelled => {
+                self.status(
+                    Detail::Step,
+                    Status::Cancelled,
+                    &format!(
+                        "`{}` in {}",
+                        crate::explain::command_of(self.request.as_ref()),
+                        super::results::took(elapsed)
+                    ),
+                );
+                return;
+            }
             Ended::Unspecified | Ended::Succeeded | Ended::AlreadySatisfied => return,
         };
         let words = crate::explain::outcome(self.request.as_ref(), &fault);
@@ -225,7 +237,11 @@ impl Human {
                     && let Some(stopping) = &self.stopping
                     && !std::mem::replace(&mut self.stop_noticed, true)
                 {
-                    mix_ui::note_to(self.out.as_ref(), stopping.first);
+                    mix_ui::note_to(
+                        self.out.as_ref(),
+                        stopping.first.text,
+                        Some(stopping.first.help),
+                    );
                 }
             }
             Progress::Command(command) => {

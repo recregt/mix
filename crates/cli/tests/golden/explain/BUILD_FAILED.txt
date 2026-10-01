@@ -1,4 +1,4 @@
 something went wrong inside `mix`
-this is a bug in `mix`; please report it at https://github.com/recregt/mix/issues
+report this bug at https://github.com/recregt/mix/issues
 
 A package could not be built from source, and nothing was changed. The build's own output is under `Caused by`; `-vv` shows all of it. A package that fails to build here usually fails for everyone, so trying a different version or package is often the way forward.

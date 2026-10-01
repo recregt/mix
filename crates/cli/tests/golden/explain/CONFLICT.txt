@@ -1,4 +1,4 @@
 /etc/nix/nix.conf changed while mix was working, so mix left it alone
-run `mix install` again; it starts from what is there now
+run `mix install` again to start from what is there now
 
 A file or account changed while `mix` was working on it, so `mix` left it as it found it instead of overwriting someone else's change. Run the command again: it starts from what is there now.

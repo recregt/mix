@@ -72,7 +72,7 @@ mod tests {
 
     #[test]
     fn a_list_mix_built_wrong_is_reported_as_a_bug() {
-        assert!(message(&Error::InvalidState(Invalid::Missing("git"))).contains("bug in `mix`"));
+        assert!(message(&Error::InvalidState(Invalid::Missing("git"))).contains("report this bug"));
     }
 
     #[test]

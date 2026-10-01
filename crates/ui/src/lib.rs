@@ -182,12 +182,11 @@ pub struct Report<'a> {
 
 fn write_help(out: &mut String, text: &str, colours: bool) {
     let mut lines = text.lines();
-    out.push_str("\n  ");
     painted(out, CYAN, "help", colours);
     out.push_str(": ");
     out.push_str(lines.next().unwrap_or_default());
     for line in lines {
-        out.push_str("\n        ");
+        out.push_str("\n      ");
         out.push_str(line);
     }
 }
@@ -204,17 +203,20 @@ pub fn report_text(severity: Severity, report: &Report<'_>, colours: bool) -> St
     }
     out.push_str(": ");
     out.push_str(report.summary);
-    if !report.causes.is_empty() {
+    for (index, help) in report.helps.iter().enumerate() {
+        out.push_str(if index == 0 { "\n\n" } else { "\n" });
+        write_help(&mut out, help, colours);
+    }
+    for cause in &report.causes {
         out.push_str("\n\nCaused by:");
-        for cause in &report.causes {
-            for line in cause.lines() {
-                out.push_str("\n  ");
-                out.push_str(&activity::printable(line));
+        for line in cause.lines() {
+            let line = activity::printable(line);
+            out.push('\n');
+            if !line.is_empty() {
+                out.push_str("  ");
+                out.push_str(&line);
             }
         }
-    }
-    for help in &report.helps {
-        write_help(&mut out, help, colours);
     }
     out
 }
@@ -225,16 +227,11 @@ pub fn house_style(text: &str) -> bool {
         .next()
         .is_none_or(|first| !first.is_uppercase());
     let unfinished = !text.trim_end().ends_with('.');
-    starts_lowercase && unfinished
+    let one_phrase = !text.contains("; ") && !text.contains(". ");
+    starts_lowercase && unfinished && one_phrase
 }
 
 pub fn report_to(out: &dyn Out, severity: Severity, report: &Report<'_>) {
-    debug_assert!(house_style(report.summary), "{:?}", report.summary);
-    debug_assert!(
-        report.helps.iter().all(|help| house_style(help)),
-        "{:?}",
-        report.helps
-    );
     out.line(&report_text(severity, report, out.colours()));
 }
 
@@ -242,17 +239,21 @@ pub fn report(severity: Severity, report: &Report<'_>) {
     report_to(&Stderr, severity, report);
 }
 
-pub fn note_to(out: &dyn Out, text: &str) {
-    debug_assert!(house_style(text), "{text:?}");
+pub fn note_to(out: &dyn Out, text: &str, help: Option<&str>) {
+    let colours = out.colours();
     let mut line = String::new();
-    painted(&mut line, CYAN, "note", out.colours());
+    painted(&mut line, CYAN, "note", colours);
     line.push_str(": ");
     line.push_str(text);
+    if let Some(help) = help {
+        line.push('\n');
+        write_help(&mut line, help, colours);
+    }
     out.line(&line);
 }
 
-pub fn note(text: &str) {
-    note_to(&Stderr, text);
+pub fn note(text: &str, help: Option<&str>) {
+    note_to(&Stderr, text, help);
 }
 
 pub fn causes_of(first: Option<&dyn std::error::Error>, already: &str) -> Vec<String> {
@@ -283,6 +284,19 @@ pub fn restore_terminal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct Recorder(std::sync::Mutex<Vec<String>>);
+
+    impl Out for Recorder {
+        fn line(&self, text: &str) {
+            self.0.lock().unwrap().push(text.to_string());
+        }
+
+        fn colours(&self) -> bool {
+            false
+        }
+    }
 
     #[derive(Debug)]
     struct Chained {
@@ -335,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn a_warning_names_its_code_and_puts_the_help_under_it() {
+    fn a_warning_names_its_code_and_its_help_follows_a_blank_line() {
         let text = report_text(
             Severity::Warning,
             &Report {
@@ -348,28 +362,38 @@ mod tests {
         );
         assert_eq!(
             text,
-            "warning[git-record-failed]: the change was made but not recorded in git\n  help: `mix repair` records it"
+            "warning[git-record-failed]: the change was made but not recorded in git\n\nhelp: `mix repair` records it"
         );
     }
 
     #[test]
-    fn an_error_lists_its_causes_before_the_help() {
+    fn an_error_gives_its_help_then_each_cause_in_its_own_block_as_cargo_does() {
         let text = report_text(
             Severity::Error,
             &Report {
                 summary: "couldn't install ripgrep",
                 causes: vec![
                     "`nix build` exited with status 1".into(),
-                    "error: \u{1b}[31mbuilder failed\u{1b}[0m".into(),
+                    "error: \u{1b}[31mbuilder failed\u{1b}[0m\n\n  at home.nix:10".into(),
                 ],
-                helps: vec!["Run it again with `-v`\nto see each step"],
+                helps: vec!["run it again with `-v`\nto see each step"],
                 ..Report::default()
             },
             false,
         );
         assert_eq!(
             text,
-            "error: couldn't install ripgrep\n\nCaused by:\n  `nix build` exited with status 1\n  error: builder failed\n  help: Run it again with `-v`\n        to see each step"
+            "error: couldn't install ripgrep\n\nhelp: run it again with `-v`\n      to see each step\n\nCaused by:\n  `nix build` exited with status 1\n\nCaused by:\n  error: builder failed\n\n    at home.nix:10"
+        );
+    }
+
+    #[test]
+    fn a_note_carries_its_help_on_the_next_line() {
+        let seen = Recorder::default();
+        note_to(&seen, "cancelling", Some("press Ctrl-C again to stop now"));
+        assert_eq!(
+            seen.0.lock().unwrap().as_slice(),
+            ["note: cancelling\nhelp: press Ctrl-C again to stop now"]
         );
     }
 
@@ -392,6 +416,8 @@ mod tests {
         assert!(house_style("run it again with sudo:\n  sudo mix bootstrap"));
         assert!(!house_style("Run `mix repair` to fix them"));
         assert!(!house_style("some checks failed."));
+        assert!(!house_style("stopped; everything was undone"));
+        assert!(!house_style("it stopped. Run it again"));
     }
 
     #[test]

@@ -18,8 +18,8 @@ pub(crate) fn render(fault: &Fault, context: &Context<'_>) -> Diagnostic {
     match fault {
         Fault::Cancelled {
             rolled_back: true, ..
-        } => Diagnostic::new("stopped; everything it had changed was undone"),
-        Fault::Cancelled { .. } => Diagnostic::new("interrupted before it could finish"),
+        } => Diagnostic::new("cancelled, and everything it had changed was put back"),
+        Fault::Cancelled { .. } => Diagnostic::new("cancelled before it could finish"),
         Fault::Failed(diagnostic) => failure(diagnostic, context),
     }
 }
@@ -33,7 +33,7 @@ pub(crate) fn warning(diagnostic: &Wire) -> Diagnostic {
         Ok(code @ (Code::JournalUnwritable | Code::CleanupIncomplete | Code::GitRecordFailed)) => {
             plain(code, &context).unwrap_or_else(bug)
         }
-        _ => Diagnostic::new(diagnostic.message.clone()),
+        _ => bug(),
     }
 }
 
@@ -169,8 +169,8 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
         Code::AlreadyManaged => Some(Diagnostic::hinting(
             "this system already has Nix, set up by something other than `mix`, which needs to set up its own",
             format!(
-                "uninstall it first, then run `{command}` again; uninstalling removes everything \
-                 you installed with it"
+                "uninstall it, which removes everything you installed with it, then run \
+                 `{command}` again"
             ),
         )),
         Code::CrossDeviceStore => Some(Diagnostic::hinting(
@@ -196,7 +196,7 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
         )),
         Code::WorkerEnded => Some(Diagnostic::hinting(
             format!("stopped before it could {}", context.action),
-            "run the same command again to finish; it picks up where it stopped",
+            "run the same command again to pick up where it stopped",
         )),
         Code::PermissionDenied
         | Code::Conflict
@@ -231,7 +231,7 @@ fn detailed(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
                     "{} changed while mix was working, so mix left it alone",
                     conflict.subject
                 ),
-                format!("run `{command}` again; it starts from what is there now"),
+                format!("run `{command}` again to start from what is there now"),
             ),
             _ => failed(context.action),
         },
@@ -289,9 +289,9 @@ fn detailed(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
         Code::RollbackIncomplete => Diagnostic::hinting(
             match diagnostic.causes.first() {
                 Some(cause) => failure(cause, context).summary(),
-                None => "interrupted before it could finish".into(),
+                None => "couldn't undo every change".into(),
             },
-            "some changes couldn't be undone; run `mix doctor` to see what's left",
+            "run `mix doctor` to see the changes that couldn't be undone",
         ),
         Code::InvalidPackage => match packages(diagnostic) {
             [name, ..] => bad_name(name),

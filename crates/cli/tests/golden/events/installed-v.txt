@@ -1,4 +1,3 @@
-     Request 01920000-0000-7000-8000-000000000001
      Writing package list
      Writing /home/ciuser/.local/state/mix/state
   Installing hello
@@ -8,7 +7,8 @@
     Building /nix/store/bbx79xgf89bvd25i1sivdcykhy39bz14-hello-2.12.drv
 warning[git-record-failed]: the change was made but not recorded in git
 
+help: `mix repair` records it
+
 Caused by:
   fatal: not a git repository
-  help: `mix repair` records it
    Installed hello in 29.00s

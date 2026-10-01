@@ -47,30 +47,35 @@ pub(super) fn finished(
     let Some(result) = &node.result else {
         return;
     };
+    let chatty = level >= Detail::Step;
     match result {
         Result::Bootstrap(_) => {
-            mix_ui::status_to(
-                out,
-                Status::Finished,
-                &format!("setup in {}", took(elapsed)),
-            );
-            mix_ui::note_to(
-                out,
-                &format!(
-                    "to use installed packages in this terminal session, run `source {PROFILE_SNIPPET_DEST}`"
-                ),
-            );
+            if chatty {
+                mix_ui::status_to(
+                    out,
+                    Status::Finished,
+                    &format!("setup in {}", took(elapsed)),
+                );
+                mix_ui::note_to(
+                    out,
+                    &format!(
+                        "to use installed packages in this terminal session, run `source {PROFILE_SNIPPET_DEST}`"
+                    ),
+                    None,
+                );
+            }
         }
         Result::Repair(repair) => repaired(
             out,
             &repair.reports,
             node.status() == Ended::Cancelled,
+            chatty,
             elapsed,
         ),
         Result::Doctor(doctor) => audited(out, &doctor.reports, level),
         Result::Install(install) => {
             reset(out, install.restored, level);
-            if printed {
+            if printed && chatty {
                 changed(
                     out,
                     &install.added,
@@ -83,7 +88,7 @@ pub(super) fn finished(
         }
         Result::Remove(remove) => {
             reset(out, remove.restored, level);
-            if printed {
+            if printed && chatty {
                 changed(
                     out,
                     &remove.removed,
@@ -131,49 +136,59 @@ fn changed(
     }
 }
 
-fn repaired(out: &dyn Out, reports: &[RepairReport], interrupted: bool, elapsed: Duration) {
+fn repaired(
+    out: &dyn Out,
+    reports: &[RepairReport],
+    interrupted: bool,
+    chatty: bool,
+    elapsed: Duration,
+) {
     let fixed: Vec<&str> = reports
         .iter()
         .filter(|report| report.fixed)
         .map(|report| report.target.as_str())
         .collect();
-    for report in reports {
-        match &report.failure {
-            None if report.fixed => {}
-            None => mix_ui::report_to(
-                out,
-                Severity::Warning,
-                &Report {
-                    summary: &format!("couldn't repair {}", report.target),
-                    ..Report::default()
-                },
-            ),
-            Some(failure) => {
-                let why = why(failure);
-                mix_ui::report_to(
+    if chatty {
+        for report in reports {
+            match &report.failure {
+                None if report.fixed => {}
+                None => mix_ui::report_to(
                     out,
                     Severity::Warning,
                     &Report {
                         summary: &format!("couldn't repair {}", report.target),
-                        helps: vec![&why],
                         ..Report::default()
                     },
-                );
+                ),
+                Some(failure) => {
+                    let why = why(failure);
+                    mix_ui::report_to(
+                        out,
+                        Severity::Warning,
+                        &Report {
+                            summary: &format!("couldn't repair {}", report.target),
+                            helps: vec![&why],
+                            ..Report::default()
+                        },
+                    );
+                }
             }
         }
     }
     if interrupted {
-        words(
-            out,
-            Severity::Error,
-            &crate::explain::Diagnostic::hinting(
-                "the repair was stopped before it finished",
-                "run `mix repair` again to finish it",
-            ),
-        );
+        if chatty {
+            words(
+                out,
+                Severity::Warning,
+                &crate::explain::Diagnostic::hinting(
+                    "the repair was stopped before it finished",
+                    "run `mix repair` again to finish it",
+                ),
+            );
+        }
         return;
     }
-    if !fixed.is_empty() {
+    if chatty && !fixed.is_empty() {
         mix_ui::status_to(
             out,
             Status::Repaired,
@@ -181,7 +196,9 @@ fn repaired(out: &dyn Out, reports: &[RepairReport], interrupted: bool, elapsed:
         );
     }
     if reports.is_empty() {
-        mix_ui::status_to(out, Status::Checked, "system, nothing to repair");
+        if chatty {
+            mix_ui::status_to(out, Status::Checked, "system, nothing to repair");
+        }
     } else if fixed.len() < reports.len() {
         words(
             out,
@@ -232,11 +249,15 @@ fn audited(out: &dyn Out, inspected: &[InspectionReport], level: Detail) {
             })
         })
         .collect();
+    let chatty = level >= Detail::Step;
     for report in &reports {
         if report.healthy() {
             if level >= Detail::Action {
                 mix_ui::status_to(out, Status::Checked, &report.name);
             }
+            continue;
+        }
+        if !chatty {
             continue;
         }
         let check = crate::explain::doctor::check(report);
@@ -253,11 +274,13 @@ fn audited(out: &dyn Out, inspected: &[InspectionReport], level: Detail) {
         );
     }
     if reports.iter().all(HealthReport::healthy) {
-        mix_ui::status_to(
-            out,
-            Status::Checked,
-            &format!("{} targets, no problems", reports.len()),
-        );
+        if chatty {
+            mix_ui::status_to(
+                out,
+                Status::Checked,
+                &format!("{} targets, no problems", reports.len()),
+            );
+        }
     } else {
         words(
             out,

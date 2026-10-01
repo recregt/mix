@@ -7,24 +7,50 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::task::JoinHandle;
 
 #[derive(Debug, Clone, Copy)]
-pub struct Stopping {
-    pub first: &'static str,
-    pub forced: &'static str,
+pub struct Notice {
+    pub text: &'static str,
+    pub help: &'static str,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Stopping {
+    pub first: Notice,
+    pub forced: Notice,
+}
+
+const AGAIN_TO_STOP: &str = "press Ctrl-C again to stop now";
+
 pub const BOOTSTRAP: Stopping = Stopping {
-    first: "cancelling and cleaning up; press Ctrl-C again to stop now",
-    forced: "stopped before the cleanup finished; run `mix bootstrap` again to finish it",
+    first: Notice {
+        text: "cancelling and cleaning up",
+        help: AGAIN_TO_STOP,
+    },
+    forced: Notice {
+        text: "stopped before the cleanup finished",
+        help: "run `mix bootstrap` again to finish it",
+    },
 };
 
 pub const REPAIR: Stopping = Stopping {
-    first: "stopping after the current repair; press Ctrl-C again to stop now",
-    forced: "stopped in the middle of a repair; run `mix repair` again to finish it",
+    first: Notice {
+        text: "stopping after the current repair",
+        help: AGAIN_TO_STOP,
+    },
+    forced: Notice {
+        text: "stopped in the middle of a repair",
+        help: "run `mix repair` again to finish it",
+    },
 };
 
 pub const CHANGE: Stopping = Stopping {
-    first: "cancelling and putting the package list back; press Ctrl-C again to stop now",
-    forced: "stopped before the package list was put back; the next `mix` command puts it back",
+    first: Notice {
+        text: "cancelling and putting the package list back",
+        help: AGAIN_TO_STOP,
+    },
+    forced: Notice {
+        text: "stopped before the package list was put back",
+        help: "run any `mix` command to put it back",
+    },
 };
 
 const FORCED_EXIT: i32 = 130;
@@ -89,7 +115,14 @@ pub fn apply(scope: &Scope, notices: Option<&Stopping>, control: Control) {
         Control::Cancel(reason) => scope.cancel(reason),
         Control::ForceStop => {
             if let Some(notices) = notices {
-                mix_ui::note(notices.forced);
+                mix_ui::report(
+                    mix_ui::Severity::Error,
+                    &mix_ui::Report {
+                        summary: notices.forced.text,
+                        helps: vec![notices.forced.help],
+                        ..mix_ui::Report::default()
+                    },
+                );
             }
             scope.processes().kill();
             mix_ui::restore_terminal();
