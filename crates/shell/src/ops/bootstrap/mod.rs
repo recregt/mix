@@ -15,8 +15,7 @@ use mix_core::action::{Digest, Failure};
 use mix_core::bootstrap::{Runtime, Settings, steps};
 use mix_core::plan::{Report, Runner, Verdict, diagnostic};
 use mix_events::v1::{
-    BootstrapRequest, BootstrapResult, Command, Diagnostic, Severity, Step, command, node_finished,
-    node_started,
+    BootstrapRequest, BootstrapResult, Code, Command, Step, command, node_finished, node_started,
 };
 use mix_events::{Ending, ROOT, Start, Stopped, Tree};
 
@@ -32,13 +31,6 @@ pub struct Environment(());
 impl Environment {
     pub(crate) fn new() -> Self {
         Self(())
-    }
-}
-
-fn warning(failure: &Failure) -> Diagnostic {
-    Diagnostic {
-        severity: Severity::Warning as i32,
-        ..diagnostic(failure)
     }
 }
 
@@ -207,7 +199,14 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
             .expect("the root is open");
         let recovered = recover_all(journals, &mut performer, &scope.shielded()).await;
         for (_, failure) in &recovered.failures {
-            let _ = tree.warn(node, warning(failure));
+            let _ = tree.warn(
+                node,
+                mix_core::diagnose::warning(
+                    Code::CleanupIncomplete,
+                    "could not finish an interrupted request",
+                    failure,
+                ),
+            );
         }
         let _ = tree.finish(node, Ending::succeeded());
         bridge.flush();
@@ -232,7 +231,14 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
         Verdict::Cancelled(cause) => Ending::cancelled(*cause),
     };
     if let Err(failure) = journal.finish() {
-        let _ = tree.warn(ROOT, warning(&failure));
+        let _ = tree.warn(
+            ROOT,
+            mix_core::diagnose::warning(
+                Code::CleanupIncomplete,
+                "could not remove the finished journal",
+                &failure,
+            ),
+        );
     }
     let _ = tree.finish(ROOT, ending.for_root(false));
     drop(tree);
