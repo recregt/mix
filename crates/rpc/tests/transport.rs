@@ -4,57 +4,38 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use mix_rpc::{
-    BootstrapRequest, Caller, Client, Event, Events, Failure, Mirror, Outcome, RepairReport,
-    RepairRequest, TargetFailure, Unfixable, Worker, serve_connection,
+use mix_events::v1::{
+    BootstrapRequest, Command, Envelope, NodeStarted, RepairRequest, command, envelope,
+    node_started,
 };
+use mix_rpc::{Caller, Client, Events, Worker, serve_connection};
+
+fn marked(seq: u64, request: String) -> Envelope {
+    Envelope {
+        seq,
+        request,
+        event: None,
+    }
+}
+
+fn echo(command: Command) -> Envelope {
+    Envelope {
+        seq: 3,
+        request: String::new(),
+        event: Some(envelope::Event::NodeStarted(NodeStarted {
+            kind: Some(node_started::Kind::Command(command)),
+            ..NodeStarted::default()
+        })),
+    }
+}
 
 struct Scripted;
 
 impl Worker for Scripted {
-    async fn bootstrap(
-        &self,
-        caller: Caller,
-        request: BootstrapRequest,
-        events: Events,
-    ) -> Outcome {
-        let _ = events.send(Event::Envelope(vec![8, 1]));
-        let _ = events.send(Event::Envelope(
-            format!(
-                "caller {} mirror {:?} force {}",
-                caller.uid,
-                request.mirror.map(|mirror| mirror.url),
-                request.force
-            )
-            .into_bytes(),
-        ));
-        if request.force {
-            Outcome::Failure(Failure::Rollback {
-                cause: Box::new(Failure::Interrupted),
-                summary: "1 rollback step(s) failed".into(),
-            })
-        } else {
-            Outcome::BootstrapDone
-        }
-    }
-
-    async fn repair(&self, _caller: Caller, _request: RepairRequest, _events: Events) -> Outcome {
-        Outcome::RepairDone {
-            interrupted: false,
-            reports: vec![
-                RepairReport {
-                    name: "/nix".into(),
-                    failure: Some(TargetFailure::Unrepairable {
-                        artifact: "/nix".into(),
-                        reason: Unfixable::NotADirectory,
-                    }),
-                },
-                RepairReport {
-                    name: "/etc/nix/nix.conf".into(),
-                    failure: None,
-                },
-            ],
-        }
+    async fn run(&self, caller: Caller, command: Command, events: Events) {
+        let _ = events.send(marked(1, String::new()));
+        let _ = events.send(marked(2, format!("caller {}", caller.uid)));
+        let _ = events.send(echo(command));
     }
 }
 
@@ -68,116 +49,72 @@ async fn connected() -> (Client, tokio::task::JoinHandle<Result<(), mix_rpc::Err
     (Client::connect(ours).await.unwrap(), server)
 }
 
-fn request(force: bool) -> BootstrapRequest {
-    BootstrapRequest {
-        mirror: Some(Mirror {
-            url: "http://mirror.internal".into(),
-            key: None,
-        }),
-        force,
+fn bootstrap(force: bool) -> Command {
+    Command {
+        mix_version: "1.2.3".into(),
+        schema_minor: mix_events::SCHEMA_MINOR,
+        request: Some(command::Request::Bootstrap(BootstrapRequest {
+            force,
+            mirror: Some("http://mirror.internal".into()),
+            mirror_key: Some("mirror:KEY".into()),
+        })),
     }
 }
 
-#[tokio::test]
-async fn a_request_streams_its_events_in_order_and_ends_with_one_outcome() {
-    let (mut client, _server) = connected().await;
+fn repair() -> Command {
+    Command {
+        request: Some(command::Request::Repair(RepairRequest {})),
+        ..Command::default()
+    }
+}
 
-    let events: Vec<Event> = client
-        .bootstrap(&request(false))
+async fn every_envelope(client: &mut Client, command: &Command) -> Vec<Envelope> {
+    client
+        .run(command)
         .await
         .unwrap()
         .map(Result::unwrap)
         .collect()
-        .await;
+        .await
+}
 
-    assert_eq!(events.len(), 3, "{events:?}");
-    assert!(matches!(&events[0], Event::Envelope(bytes) if bytes == &[8, 1]));
-    assert!(matches!(&events[1], Event::Envelope(bytes) if bytes.starts_with(b"caller ")));
-    assert!(matches!(
-        &events[2],
-        Event::Finished(Outcome::BootstrapDone)
-    ));
+#[tokio::test]
+async fn a_request_streams_its_envelopes_in_order() {
+    let (mut client, _server) = connected().await;
+
+    let envelopes = every_envelope(&mut client, &bootstrap(false)).await;
+
+    assert_eq!(
+        envelopes
+            .iter()
+            .map(|envelope| envelope.seq)
+            .collect::<Vec<_>>(),
+        [1, 2, 3]
+    );
 }
 
 #[tokio::test]
 async fn the_worker_learns_who_called_from_the_kernel_not_the_request() {
     let (mut client, _server) = connected().await;
 
-    let events: Vec<Event> = client
-        .bootstrap(&request(false))
-        .await
-        .unwrap()
-        .map(Result::unwrap)
-        .collect()
-        .await;
+    let envelopes = every_envelope(&mut client, &bootstrap(false)).await;
 
-    let Event::Envelope(bytes) = &events[1] else {
-        panic!("expected an envelope, got {:?}", events[1]);
-    };
-    assert_eq!(
-        String::from_utf8_lossy(bytes),
-        format!(
-            "caller {} mirror Some(\"http://mirror.internal\") force false",
-            current_uid()
-        )
-    );
+    assert_eq!(envelopes[1].request, format!("caller {}", current_uid()));
 }
 
 #[tokio::test]
-async fn a_typed_failure_arrives_intact() {
+async fn the_command_reaches_the_worker_as_it_was_sent() {
     let (mut client, _server) = connected().await;
 
-    let last = client
-        .bootstrap(&request(true))
-        .await
-        .unwrap()
-        .map(Result::unwrap)
-        .collect::<Vec<_>>()
-        .await
-        .pop()
-        .unwrap();
+    let envelopes = every_envelope(&mut client, &bootstrap(true)).await;
 
-    assert_eq!(
-        format!("{last:?}"),
-        format!(
-            "{:?}",
-            Event::Finished(Outcome::Failure(Failure::Rollback {
-                cause: Box::new(Failure::Interrupted),
-                summary: "1 rollback step(s) failed".into(),
-            }))
-        )
-    );
-}
-
-#[tokio::test]
-async fn repair_reports_every_item_it_looked_at() {
-    let (mut client, _server) = connected().await;
-
-    let events: Vec<Event> = client
-        .repair(&RepairRequest)
-        .await
-        .unwrap()
-        .map(Result::unwrap)
-        .collect()
-        .await;
-
-    let [Event::Finished(Outcome::RepairDone { reports, .. })] = events.as_slice() else {
-        panic!("expected only the outcome, got {events:?}");
-    };
-    assert_eq!(reports.len(), 2);
-    assert!(reports[0].failure.is_some());
-    assert!(reports[1].failure.is_none());
+    assert_eq!(envelopes[2], echo(bootstrap(true)));
 }
 
 #[tokio::test]
 async fn the_worker_stops_once_its_client_is_gone() {
     let (mut client, server) = connected().await;
-    let _ = client
-        .bootstrap(&request(false))
-        .await
-        .unwrap()
-        .collect::<Vec<_>>()
-        .await;
+    let _ = every_envelope(&mut client, &bootstrap(false)).await;
 
     drop(client);
 
@@ -193,24 +130,11 @@ struct CleansUpWhenAbandoned {
 }
 
 impl Worker for CleansUpWhenAbandoned {
-    async fn bootstrap(
-        &self,
-        _caller: Caller,
-        _request: BootstrapRequest,
-        events: Events,
-    ) -> Outcome {
-        let _ = events.send(Event::Envelope(Vec::new()));
+    async fn run(&self, _caller: Caller, _command: Command, events: Events) {
+        let _ = events.send(marked(1, String::new()));
         events.closed().await;
         tokio::time::sleep(Duration::from_millis(200)).await;
         self.cleaned_up.store(true, Ordering::SeqCst);
-        Outcome::Failure(Failure::Interrupted)
-    }
-
-    async fn repair(&self, _caller: Caller, _request: RepairRequest, _events: Events) -> Outcome {
-        Outcome::RepairDone {
-            reports: Vec::new(),
-            interrupted: false,
-        }
     }
 }
 
@@ -225,10 +149,10 @@ async fn the_worker_waits_for_a_request_its_client_left() {
         theirs,
     ));
     let mut client = Client::connect(ours).await.unwrap();
-    let mut events = client.bootstrap(&request(false)).await.unwrap();
+    let mut events = client.run(&bootstrap(false)).await.unwrap();
     assert!(matches!(
         events.next().await,
-        Some(Ok(Event::Envelope(bytes))) if bytes.is_empty()
+        Some(Ok(envelope)) if envelope.seq == 1
     ));
 
     drop(events);
@@ -250,22 +174,10 @@ struct WaitsForRelease {
 }
 
 impl Worker for WaitsForRelease {
-    async fn bootstrap(
-        &self,
-        _caller: Caller,
-        _request: BootstrapRequest,
-        events: Events,
-    ) -> Outcome {
-        let _ = events.send(Event::Envelope(Vec::new()));
+    async fn run(&self, _caller: Caller, _command: Command, events: Events) {
+        let _ = events.send(marked(1, String::new()));
         self.release.notified().await;
-        Outcome::BootstrapDone
-    }
-
-    async fn repair(&self, _caller: Caller, _request: RepairRequest, _events: Events) -> Outcome {
-        Outcome::RepairDone {
-            reports: Vec::new(),
-            interrupted: false,
-        }
+        let _ = events.send(marked(2, String::new()));
     }
 }
 
@@ -280,13 +192,13 @@ async fn a_second_request_is_refused_while_the_first_is_running() {
         theirs,
     ));
     let mut client = Client::connect(ours).await.unwrap();
-    let mut first = client.bootstrap(&request(false)).await.unwrap();
+    let mut first = client.run(&bootstrap(false)).await.unwrap();
     assert!(matches!(
         first.next().await,
-        Some(Ok(Event::Envelope(bytes))) if bytes.is_empty()
+        Some(Ok(envelope)) if envelope.seq == 1
     ));
 
-    let second = client.repair(&RepairRequest).await;
+    let second = client.run(&repair()).await;
 
     let Err(mix_rpc::Error::Refused(reason)) = second else {
         panic!("a second request must be refused while the first is running");
@@ -295,7 +207,7 @@ async fn a_second_request_is_refused_while_the_first_is_running() {
     release.notify_one();
     assert!(matches!(
         first.next().await,
-        Some(Ok(Event::Finished(Outcome::BootstrapDone)))
+        Some(Ok(envelope)) if envelope.seq == 2
     ));
 }
 
@@ -316,8 +228,8 @@ async fn a_worker_that_dies_mid_request_reads_as_ended_not_refused() {
     let mut client = Client::connect(tokio::net::UnixStream::from_std(ours).unwrap())
         .await
         .unwrap();
-    let mut events = client.bootstrap(&request(false)).await.unwrap();
-    assert!(matches!(events.next().await, Some(Ok(Event::Envelope(_)))));
+    let mut events = client.run(&bootstrap(false)).await.unwrap();
+    assert!(matches!(events.next().await, Some(Ok(_))));
 
     worker_process.shutdown_background();
 

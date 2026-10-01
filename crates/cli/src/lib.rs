@@ -4,6 +4,7 @@ mod controls;
 pub mod explain;
 mod remote;
 pub mod render;
+mod root;
 
 use std::io::Write as _;
 use std::process::ExitCode;
@@ -138,56 +139,33 @@ fn stream_the_failure(command: &Command, error: &anyhow::Error, view: &render::s
         command::Request,
     };
 
-    let Ok(sinks) = view.sinks(std::sync::Arc::new(mix_ui::Silent)) else {
+    let Ok(mut sinks) = view.sinks(std::sync::Arc::new(mix_ui::Silent)) else {
         return;
     };
-    let (key, request) = match command {
-        Command::Bootstrap { mirror, force, .. } => (
-            "bootstrap",
-            Request::Bootstrap(BootstrapRequest {
-                force: *force,
-                mirror: mirror.clone(),
-            }),
-        ),
-        Command::Install { packages } => (
-            "install",
-            Request::Install(InstallRequest {
-                packages: packages.clone(),
-            }),
-        ),
-        Command::Remove { packages } => (
-            "remove",
-            Request::Remove(RemoveRequest {
-                packages: packages.clone(),
-            }),
-        ),
-        Command::Doctor => ("doctor", Request::Doctor(DoctorRequest {})),
+    let request = match command {
+        Command::Bootstrap {
+            mirror,
+            mirror_key,
+            force,
+        } => Request::Bootstrap(BootstrapRequest {
+            force: *force,
+            mirror: mirror.clone(),
+            mirror_key: mirror_key.clone(),
+        }),
+        Command::Install { packages } => Request::Install(InstallRequest {
+            packages: packages.clone(),
+        }),
+        Command::Remove { packages } => Request::Remove(RemoveRequest {
+            packages: packages.clone(),
+        }),
+        Command::Doctor => Request::Doctor(DoctorRequest {}),
         Command::Repair
         | Command::Worker
         | Command::HomeFiles { .. }
         | Command::Explain { .. }
-        | Command::Events { .. } => ("repair", Request::Repair(RepairRequest {})),
+        | Command::Events { .. } => Request::Repair(RepairRequest {}),
     };
-    let outbox = std::sync::Arc::new(mix_events::Outbox::new(mix_shell::request_id(), || {}));
-    let mut tree = mix_events::Tree::new(
-        std::sync::Arc::clone(&outbox),
-        std::sync::Arc::new(|| None),
-        mix_events::Start::command(
-            key,
-            mix_events::v1::Command {
-                mix_version: env!("CARGO_PKG_VERSION").to_string(),
-                schema_minor: mix_events::SCHEMA_MINOR,
-                request: Some(request),
-            },
-        ),
-    );
-    let ending: mix_events::Ending = explain::fault_of(error).into();
-    let _ = tree.finish(mix_events::ROOT, ending.for_root(false));
-    drop(tree);
-    let mut sinks = sinks;
-    for envelope in outbox.drain() {
-        mix_shell::render::Render::envelope(&mut sinks, envelope);
-    }
+    root::fail(root::command(request), explain::fault_of(error), &mut sinks);
 }
 
 #[allow(clippy::disallowed_methods)]

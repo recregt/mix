@@ -1423,6 +1423,7 @@ dependencies = [
  "prost",
  "serde_json",
  "tempfile",
+ "thiserror",
  "tokio",
 ]
 
@@ -1496,7 +1497,7 @@ version = "0.1.0"
 dependencies = [
  "futures-util",
  "hyper-util",
- "mix-core",
+ "mix-events",
  "mix-exec",
  "prost",
  "protox",

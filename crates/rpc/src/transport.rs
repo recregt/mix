@@ -7,38 +7,34 @@ use std::task::{Context, Poll};
 
 use futures_util::{Stream, StreamExt};
 use hyper_util::rt::TokioIo;
+use mix_events::Normalize;
+use mix_events::v1::{Command, Envelope};
+use prost::Message;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::UnixStream;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio_util::task::TaskTracker;
 use tonic::transport::server::{Connected, UdsConnectInfo};
 use tonic::transport::{Channel, Endpoint, Server, Uri};
-use tonic::{Request, Response, Status};
+use tonic::{Request, Response, Status, Streaming};
 
-use crate::convert::{self, Malformed};
 use crate::proto;
+use crate::proto::run_request::Call;
 use crate::proto::worker_service_client::WorkerServiceClient;
 use crate::proto::worker_service_server::WorkerServiceServer;
-use crate::types::{BootstrapRequest, Caller, Event, Outcome, RepairRequest};
+use crate::types::{Caller, Malformed};
 
 const WORKER_URI: &str = "http://worker";
 
-pub type Events = mpsc::UnboundedSender<Event>;
+pub type Events = mpsc::UnboundedSender<Envelope>;
 
 pub trait Worker: Send + Sync + 'static {
-    fn bootstrap(
+    fn run(
         &self,
         caller: Caller,
-        request: BootstrapRequest,
+        command: Command,
         events: Events,
-    ) -> impl Future<Output = Outcome> + Send;
-
-    fn repair(
-        &self,
-        caller: Caller,
-        request: RepairRequest,
-        events: Events,
-    ) -> impl Future<Output = Outcome> + Send;
+    ) -> impl Future<Output = ()> + Send;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -65,32 +61,12 @@ pub enum Error {
     NotAConnection(#[source] std::io::Error),
 }
 
-type Responses<R> = Pin<Box<dyn Stream<Item = Result<R, Status>> + Send>>;
+type Responses = Pin<Box<dyn Stream<Item = Result<proto::RunResponse, Status>> + Send>>;
 
 struct Service<W> {
     worker: Arc<W>,
     running: TaskTracker,
     one_at_a_time: Arc<Semaphore>,
-}
-
-impl<W: Worker> Service<W> {
-    fn run<F, Fut>(&self, work: F) -> Result<mpsc::UnboundedReceiver<Event>, Status>
-    where
-        F: FnOnce(Arc<W>, Events) -> Fut,
-        Fut: Future<Output = Outcome> + Send + 'static,
-    {
-        let permit = Arc::clone(&self.one_at_a_time)
-            .try_acquire_owned()
-            .map_err(|_| Status::resource_exhausted("the worker is already running a request"))?;
-        let (events, received) = mpsc::unbounded_channel();
-        let work = work(Arc::clone(&self.worker), events.clone());
-        self.running.spawn(async move {
-            let outcome = work.await;
-            drop(permit);
-            let _ = events.send(Event::Finished(outcome));
-        });
-        Ok(received)
-    }
 }
 
 fn caller<T>(request: &Request<T>) -> Result<Caller, Status> {
@@ -105,54 +81,50 @@ fn caller<T>(request: &Request<T>) -> Result<Caller, Status> {
         .ok_or_else(|| Status::unauthenticated("the caller could not be identified"))
 }
 
-fn stream<R: Send + 'static>(
-    events: mpsc::UnboundedReceiver<Event>,
-    to_wire: fn(Event) -> R,
-) -> Responses<R> {
-    Box::pin(
-        futures_util::stream::unfold(events, |mut events| async move {
-            events.recv().await.map(|event| (event, events))
-        })
-        .map(move |event| Ok(to_wire(event))),
-    )
-}
-
-fn malformed(error: Malformed) -> Status {
-    Status::invalid_argument(error.to_string())
+async fn command(calls: &mut Streaming<proto::RunRequest>) -> Result<Command, Status> {
+    match calls.message().await? {
+        Some(proto::RunRequest {
+            call: Some(Call::Command(bytes)),
+        }) => Command::decode(bytes.as_slice())
+            .map_err(|error| Status::invalid_argument(format!("the command: {error}"))),
+        Some(_) => Err(Status::invalid_argument(
+            "the first message of a request must be its command",
+        )),
+        None => Err(Status::invalid_argument(
+            "the request ended before its command",
+        )),
+    }
 }
 
 #[tonic::async_trait]
 impl<W: Worker> proto::worker_service_server::WorkerService for Service<W> {
-    type BootstrapStream = Responses<proto::BootstrapResponse>;
-    type RepairStream = Responses<proto::RepairResponse>;
+    type RunStream = Responses;
 
-    async fn bootstrap(
+    async fn run(
         &self,
-        request: Request<proto::BootstrapRequest>,
-    ) -> Result<Response<Self::BootstrapStream>, Status> {
+        request: Request<Streaming<proto::RunRequest>>,
+    ) -> Result<Response<Self::RunStream>, Status> {
         let caller = caller(&request)?;
-        let request =
-            convert::bootstrap_request_from_wire(request.into_inner()).map_err(malformed)?;
-        let received = self
-            .run(|worker, events| async move { worker.bootstrap(caller, request, events).await })?;
-        Ok(Response::new(stream(
-            received,
-            convert::bootstrap_response_to_wire,
-        )))
-    }
-
-    async fn repair(
-        &self,
-        request: Request<proto::RepairRequest>,
-    ) -> Result<Response<Self::RepairStream>, Status> {
-        let caller = caller(&request)?;
-        let request = convert::repair_request_from_wire(request.into_inner()).map_err(malformed)?;
-        let received =
-            self.run(|worker, events| async move { worker.repair(caller, request, events).await })?;
-        Ok(Response::new(stream(
-            received,
-            convert::repair_response_to_wire,
-        )))
+        let mut calls = request.into_inner();
+        let command = command(&mut calls).await?;
+        let permit = Arc::clone(&self.one_at_a_time)
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("the worker is already running a request"))?;
+        let (events, received) = mpsc::unbounded_channel();
+        let worker = Arc::clone(&self.worker);
+        self.running.spawn(async move {
+            worker.run(caller, command, events).await;
+            drop(permit);
+        });
+        let responses = futures_util::stream::unfold(received, |mut received| async move {
+            received.recv().await.map(|envelope| (envelope, received))
+        })
+        .map(|envelope: Envelope| {
+            Ok(proto::RunResponse {
+                envelope: envelope.encode_to_vec(),
+            })
+        });
+        Ok(Response::new(Box::pin(responses)))
     }
 }
 
@@ -286,30 +258,23 @@ impl Client {
         Ok(client)
     }
 
-    pub async fn bootstrap(
+    pub async fn run(
         &mut self,
-        request: &BootstrapRequest,
-    ) -> Result<impl Stream<Item = Result<Event, Error>> + use<>, Error> {
-        let events = self
+        command: &Command,
+    ) -> Result<impl Stream<Item = Result<Envelope, Error>> + use<>, Error> {
+        let call = proto::RunRequest {
+            call: Some(Call::Command(command.encode_to_vec())),
+        };
+        let responses = self
             .inner
-            .bootstrap(convert::bootstrap_request_to_wire(request))
+            .run(futures_util::stream::once(async move { call }))
             .await
             .map_err(refused)?
             .into_inner();
-        Ok(decode(events, convert::bootstrap_response_from_wire))
-    }
-
-    pub async fn repair(
-        &mut self,
-        request: &RepairRequest,
-    ) -> Result<impl Stream<Item = Result<Event, Error>> + use<>, Error> {
-        let events = self
-            .inner
-            .repair(convert::repair_request_to_wire(request))
-            .await
-            .map_err(refused)?
-            .into_inner();
-        Ok(decode(events, convert::repair_response_from_wire))
+        Ok(responses.map(|response| match response {
+            Ok(response) => envelope(&response.envelope),
+            Err(_) => Err(Error::Ended),
+        }))
     }
 
     pub async fn wait(mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
@@ -325,12 +290,9 @@ fn refused(status: Status) -> Error {
     Error::Refused(status.message().to_string())
 }
 
-fn decode<R>(
-    responses: tonic::Streaming<R>,
-    from_wire: fn(R) -> Result<Event, Malformed>,
-) -> impl Stream<Item = Result<Event, Error>> {
-    responses.map(move |response| match response {
-        Ok(response) => Ok(from_wire(response)?),
-        Err(_) => Err(Error::Ended),
-    })
+fn envelope(bytes: &[u8]) -> Result<Envelope, Error> {
+    let mut envelope = Envelope::decode(bytes)
+        .map_err(|error| Malformed(format!("an event envelope: {error}")))?;
+    envelope.normalize();
+    Ok(envelope)
 }

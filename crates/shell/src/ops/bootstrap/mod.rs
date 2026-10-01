@@ -178,6 +178,11 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
                 request: Some(command::Request::Bootstrap(BootstrapRequest {
                     force,
                     mirror: ctx.mirror().map(str::to_string),
+                    mirror_key: ctx
+                        .policy
+                        .mirror()
+                        .and_then(|mirror| mirror.key())
+                        .map(str::to_string),
                 })),
             },
         ),

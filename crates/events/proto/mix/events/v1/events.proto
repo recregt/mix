@@ -52,6 +52,7 @@ message Command {
 message BootstrapRequest {
   bool force = 1;
   optional string mirror = 2;
+  optional string mirror_key = 3;
 }
 
 message InstallRequest {

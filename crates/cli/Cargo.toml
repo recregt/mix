@@ -9,6 +9,7 @@ license = "MPL-2.0"
 embed-tarball = ["mix-shell/embed-tarball"]
 
 [dependencies]
+thiserror = { workspace = true }
 mix-shell = { path = "../shell" }
 mix-core = { path = "../core" }
 mix-exec = { path = "../exec" }

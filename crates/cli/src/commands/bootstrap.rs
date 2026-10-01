@@ -25,7 +25,8 @@ pub async fn run(
         );
         mix_shell::ops::bootstrap::bootstrap(&ctx, force).await?;
     } else {
-        crate::remote::client::bootstrap(mirror, mirror_key, force, view).await?;
+        let request = crate::remote::client::bootstrap_request(mirror, mirror_key, force);
+        crate::remote::client::run(request, view).await?;
     }
     Ok(ExitCode::SUCCESS)
 }
