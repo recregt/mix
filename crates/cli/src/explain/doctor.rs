@@ -7,7 +7,7 @@
 use mix_shell::ops::doctor::HealthReport;
 use mix_shell::target::Finding;
 use mix_ui::text::{decimal, octal};
-use mix_ui::{help, note, note_parts, phrase, phrase_parts};
+use mix_ui::{around, help, note, note_parts, phrase, phrase_parts};
 
 use super::{Diagnostic, failed};
 
@@ -23,94 +23,119 @@ pub fn explain(error: &anyhow::Error) -> Diagnostic {
 }
 
 pub fn check(report: &HealthReport) -> Diagnostic {
-    let name = report.name.as_str();
     let Some(found) = report.finding else {
-        return Diagnostic::new(phrase_parts!["", name, " failed its check"]);
+        return Diagnostic::new(around!("", " failed its check").around(&report.name));
     };
     let (mut a, mut b, mut c, mut d) = ([0u8; 22], [0u8; 22], [0u8; 22], [0u8; 22]);
-    let words = match found {
-        Finding::Missing => Diagnostic::new(phrase_parts!["", name, " is missing"])
-            .note(note!("`mix` set it up, and it is no longer there")),
-        Finding::Unreadable { kind } => Diagnostic::new(phrase_parts!["", name, " can't be read"])
-            .note(note!("{}", std::io::Error::from(kind))),
-        Finding::NotADirectory => Diagnostic::new(phrase_parts!["", name, " is not a directory"])
-            .note(note!("something else is in its place")),
-        Finding::Mode { actual, expected } => {
-            Diagnostic::new(phrase_parts!["", name, " has the wrong permissions"]).note(
-                note_parts![
-                    "its mode is ",
-                    octal(&mut a, u64::from(actual)),
-                    ", and `mix` set ",
-                    octal(&mut b, u64::from(expected)),
-                    ""
-                ],
-            )
-        }
+    let (summary, note) = match found {
+        Finding::Missing => (
+            around!("", " is missing"),
+            Some(note!("`mix` set it up, and it is no longer there")),
+        ),
+        Finding::Unreadable { kind } => (
+            around!("", " can't be read"),
+            Some(note!("{}", std::io::Error::from(kind))),
+        ),
+        Finding::NotADirectory => (
+            around!("", " is not a directory"),
+            Some(note!("something else is in its place")),
+        ),
+        Finding::Mode { actual, expected } => (
+            around!("", " has the wrong permissions"),
+            Some(note_parts![
+                "its mode is ",
+                octal(&mut a, u64::from(actual)),
+                ", and `mix` set ",
+                octal(&mut b, u64::from(expected)),
+                ""
+            ]),
+        ),
         Finding::Owner {
             actual: (uid, gid),
             expected: (want_uid, want_gid),
-        } => Diagnostic::new(phrase_parts!["", name, " has the wrong owner"]).note(note_parts![
-            "it is owned by ",
-            decimal(&mut a, u64::from(uid)),
-            ":",
-            decimal(&mut b, u64::from(gid)),
-            ", and `mix` set ",
-            decimal(&mut c, u64::from(want_uid)),
-            ":",
-            decimal(&mut d, u64::from(want_gid)),
-            ""
-        ]),
-        Finding::ContentDrift => {
-            Diagnostic::new(phrase_parts!["", name, " was changed outside `mix`"])
-                .note(note!("its contents differ from what `mix` wrote"))
-        }
-        Finding::GroupMissing => Diagnostic::new(phrase_parts!["group ", name, " does not exist"])
-            .note(note!("`mix` creates it for the users that build packages")),
-        Finding::GroupGid { actual, expected } => {
-            Diagnostic::new(phrase_parts!["group ", name, " has the wrong id"]).note(note_parts![
+        } => (
+            around!("", " has the wrong owner"),
+            Some(note_parts![
+                "it is owned by ",
+                decimal(&mut a, u64::from(uid)),
+                ":",
+                decimal(&mut b, u64::from(gid)),
+                ", and `mix` set ",
+                decimal(&mut c, u64::from(want_uid)),
+                ":",
+                decimal(&mut d, u64::from(want_gid)),
+                ""
+            ]),
+        ),
+        Finding::ContentDrift => (
+            around!("", " was changed outside `mix`"),
+            Some(note!("its contents differ from what `mix` wrote")),
+        ),
+        Finding::GroupMissing => (
+            around!("group ", " does not exist"),
+            Some(note!("`mix` creates it for the users that build packages")),
+        ),
+        Finding::GroupGid { actual, expected } => (
+            around!("group ", " has the wrong id"),
+            Some(note_parts![
                 "its gid is ",
                 decimal(&mut a, u64::from(actual)),
                 ", and `mix` set ",
                 decimal(&mut b, u64::from(expected)),
                 ""
-            ])
-        }
-        Finding::NotAMember { group } => {
-            Diagnostic::new(phrase_parts!["", name, " is not in group ", group, ""])
-                .note(note!("`mix` adds every user that builds packages to it"))
-        }
-        Finding::NoSuchUser => Diagnostic::new(phrase_parts!["user ", name, " no longer exists"]),
-        Finding::UserMissing => Diagnostic::new(phrase_parts!["user ", name, " does not exist"])
-            .note(note!("`mix` creates it to build packages")),
+            ]),
+        ),
+        Finding::NotAMember { group } => (
+            around!("", " is not in a group `mix` manages"),
+            Some(note_parts![
+                "`mix` adds every user that builds packages to ",
+                group,
+                ""
+            ]),
+        ),
+        Finding::NoSuchUser => (around!("user ", " no longer exists"), None),
+        Finding::UserMissing => (
+            around!("user ", " does not exist"),
+            Some(note!("`mix` creates it to build packages")),
+        ),
         Finding::UserIds {
             actual: (uid, gid),
             expected: (want_uid, want_gid),
-        } => Diagnostic::new(phrase_parts!["user ", name, " has the wrong ids"]).note(note_parts![
-            "its uid/gid is ",
-            decimal(&mut a, u64::from(uid)),
-            "/",
-            decimal(&mut b, u64::from(gid)),
-            ", and `mix` set ",
-            decimal(&mut c, u64::from(want_uid)),
-            "/",
-            decimal(&mut d, u64::from(want_gid)),
-            ""
-        ]),
-        Finding::UnitMissing => {
-            Diagnostic::new(phrase_parts!["the unit file for ", name, " is missing"])
-                .note(note!("`mix` installs it to run the Nix daemon"))
-        }
-        Finding::UnitDrift => Diagnostic::new(phrase_parts![
-            "the unit file for ",
-            name,
-            " was changed outside `mix`"
-        ])
-        .note(note!("its contents differ from what `mix` wrote")),
-        Finding::UnitInactive => Diagnostic::new(phrase_parts!["", name, " is not running"])
-            .note(note!("systemd reports it as inactive")),
-        Finding::RuntimeMissing => Diagnostic::new(phrase_parts!["", name, " is missing"])
-            .note(note!("`mix repair` can't restore it")),
+        } => (
+            around!("user ", " has the wrong ids"),
+            Some(note_parts![
+                "its uid/gid is ",
+                decimal(&mut a, u64::from(uid)),
+                "/",
+                decimal(&mut b, u64::from(gid)),
+                ", and `mix` set ",
+                decimal(&mut c, u64::from(want_uid)),
+                "/",
+                decimal(&mut d, u64::from(want_gid)),
+                ""
+            ]),
+        ),
+        Finding::UnitMissing => (
+            around!("the unit file for ", " is missing"),
+            Some(note!("`mix` installs it to run the Nix daemon")),
+        ),
+        Finding::UnitDrift => (
+            around!("the unit file for ", " was changed outside `mix`"),
+            Some(note!("its contents differ from what `mix` wrote")),
+        ),
+        Finding::UnitInactive => (
+            around!("", " is not running"),
+            Some(note!("systemd reports it as inactive")),
+        ),
+        Finding::RuntimeMissing => (
+            around!("", " is missing"),
+            Some(note!("`mix repair` can't restore it")),
+        ),
     };
+    let mut words = Diagnostic::new(summary.around(&report.name));
+    if let Some(note) = note {
+        words = words.note(note);
+    }
     match found.unfixable() {
         Some(reason) => words.help(super::target::unfixable(reason)),
         None => words,

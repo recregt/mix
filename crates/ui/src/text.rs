@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 pub const IMPERATIVES: &[&str] = &[
     "check",
     "install",
@@ -20,8 +18,25 @@ pub const IMPERATIVES: &[&str] = &[
     "wait",
 ];
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Phrase(Cow<'static, str>);
+const INLINE: usize = std::mem::size_of::<String>() - 2;
+
+#[derive(Debug, Clone)]
+enum Text {
+    Static(&'static str),
+    Inline { bytes: [u8; INLINE], len: u8 },
+    Owned(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct Phrase(Text);
+
+impl PartialEq for Phrase {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for Phrase {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Note(Phrase);
@@ -32,20 +47,22 @@ pub struct Help(Phrase);
 impl Phrase {
     #[doc(hidden)]
     pub fn checked_static(text: &'static str) -> Self {
-        Self(Cow::Borrowed(text))
+        Self(Text::Static(text))
     }
 
     #[doc(hidden)]
     pub fn checked_owned(text: String) -> Self {
-        Self(Cow::Owned(text))
+        Self(Text::Owned(text))
     }
 
     pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    pub fn into_cow(self) -> Cow<'static, str> {
-        self.0
+        match &self.0 {
+            Text::Static(text) => text,
+            Text::Inline { bytes, len } => {
+                std::str::from_utf8(&bytes[..usize::from(*len)]).unwrap_or_default()
+            }
+            Text::Owned(text) => text,
+        }
     }
 }
 
@@ -73,7 +90,7 @@ impl Help {
 
 impl std::fmt::Display for Phrase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(self.as_str())
     }
 }
 
@@ -188,11 +205,11 @@ macro_rules! phrase {
             $crate::text::is_phrase($text),
             "a phrase is ASCII, starts lowercase, has no `; ` or `. `, and no final `.`"
         );
-        match ::std::format_args!($text) {
-            args => match args.as_str() {
-                Some(text) => $crate::text::Phrase::checked_static(text),
-                None => $crate::text::Phrase::checked_owned(args.to_string()),
-            },
+        const PLAIN: bool = $crate::text::is_plain($text);
+        if PLAIN {
+            $crate::text::Phrase::checked_static($text)
+        } else {
+            $crate::text::Phrase::checked_owned(::std::format!($text))
         }
     }};
     ($text:literal, $($arg:tt)*) => {{
@@ -237,6 +254,45 @@ pub fn octal(buffer: &mut [u8; 22], value: u64) -> &str {
     digits(buffer, value, 8)
 }
 
+#[doc(hidden)]
+pub fn joined(parts: &[&str]) -> Phrase {
+    let total: usize = parts.iter().map(|part| part.len()).sum();
+    if total <= INLINE {
+        let mut bytes = [0u8; INLINE];
+        let mut at = 0;
+        for part in parts {
+            bytes[at..at + part.len()].copy_from_slice(part.as_bytes());
+            at += part.len();
+        }
+        return Phrase(Text::Inline {
+            bytes,
+            len: total as u8,
+        });
+    }
+    let mut text = String::with_capacity(total);
+    for part in parts {
+        text.push_str(part);
+    }
+    Phrase(Text::Owned(text))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Around {
+    before: &'static str,
+    after: &'static str,
+}
+
+impl Around {
+    #[doc(hidden)]
+    pub const fn checked(before: &'static str, after: &'static str) -> Self {
+        Self { before, after }
+    }
+
+    pub fn around(&self, value: &str) -> Phrase {
+        joined(&[self.before, value, self.after])
+    }
+}
+
 pub const fn starts_parts(first: &str) -> bool {
     first.is_empty() || (is_fragment(first) && is_phrase(first))
 }
@@ -249,12 +305,18 @@ macro_rules! phrase_parts {
                 $(&& $crate::text::is_fragment($next))*,
             "every part of a phrase is a fragment, and the first starts the phrase or is empty"
         );
-        let parts: &[&str] = &[$first $(, $arg, $next)*];
-        let mut text = String::with_capacity(parts.iter().map(|part| part.len()).sum());
-        for part in parts {
-            text.push_str(part);
-        }
-        $crate::text::Phrase::checked_owned(text)
+        $crate::text::joined(&[$first $(, $arg, $next)*])
+    }};
+}
+
+#[macro_export]
+macro_rules! around {
+    ($before:literal, $after:literal) => {{
+        const _: () = assert!(
+            $crate::text::starts_parts($before) && $crate::text::is_fragment($after),
+            "the text around a value starts a phrase or is empty, and ends as a fragment"
+        );
+        $crate::text::Around::checked($before, $after)
     }};
 }
 
@@ -278,12 +340,7 @@ macro_rules! help_parts {
                 $(&& $crate::text::is_fragment($next))*,
             "a help starts with an instruction, and every part is a phrase fragment"
         );
-        let parts: &[&str] = &[$first $(, $arg, $next)*];
-        let mut text = String::with_capacity(parts.iter().map(|part| part.len()).sum());
-        for part in parts {
-            text.push_str(part);
-        }
-        $crate::text::Help::checked($crate::text::Phrase::checked_owned(text))
+        $crate::text::Help::checked($crate::text::joined(&[$first $(, $arg, $next)*]))
     }};
 }
 
@@ -367,6 +424,20 @@ mod tests {
         assert!(is_note("`mix` needs it to work"));
         assert!(!is_note("run it again"));
         assert!(!is_help("runaway"));
+    }
+
+    #[test]
+    fn a_short_join_stays_inline_and_reads_as_a_long_one_does() {
+        let short = joined(&["found ", "8", " problems"]);
+        assert!(matches!(short.0, Text::Inline { .. }));
+        assert_eq!(short.as_str(), "found 8 problems");
+        let long = joined(&["/nix/var/nix/profiles", " has the wrong permissions"]);
+        assert!(matches!(long.0, Text::Owned(_)));
+        assert_eq!(
+            long.as_str(),
+            "/nix/var/nix/profiles has the wrong permissions"
+        );
+        assert_eq!(short, Phrase::checked_static("found 8 problems"));
     }
 
     #[test]
