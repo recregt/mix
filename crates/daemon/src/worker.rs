@@ -159,7 +159,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_doctor_request_ends_with_the_reports_in_its_root() {
-        let envelopes = served(mix_shell::root::command(Request::Doctor(DoctorRequest {}))).await;
+        let envelopes = served(mix_events::command(Request::Doctor(DoctorRequest {}))).await;
 
         assert!(matches!(
             root(&envelopes).result,

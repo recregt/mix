@@ -8,7 +8,6 @@ pub mod render;
 use std::process::ExitCode;
 
 use cli::{Cli, Command};
-use explain::Diagnostic;
 
 pub async fn run() -> ExitCode {
     let cli = Cli::parse_with_color();
@@ -43,24 +42,6 @@ pub async fn run() -> ExitCode {
         exit: render::sinks::Exit::default(),
     };
     mix_ui::init(cli.draws_progress());
-
-    // Which command was run is what decides how a failure should read, so the words are picked
-    // before it runs: every crate below this one raises facts, and this is where they are put
-    // into a sentence.
-    let explain: Box<dyn Fn(&anyhow::Error) -> Diagnostic + '_> = match &cli.command {
-        Command::Bootstrap { .. } => Box::new(explain::bootstrap::explain),
-        Command::Install { packages, .. } => {
-            Box::new(|error| explain::install::explain(error, packages))
-        }
-        Command::Remove { packages, .. } => {
-            Box::new(|error| explain::remove::explain(error, packages))
-        }
-        Command::Clean { .. } => Box::new(explain::clean::explain),
-        Command::Doctor => Box::new(explain::doctor::explain),
-        Command::Repair | Command::Explain { .. } | Command::Events { .. } => {
-            Box::new(explain::repair::explain)
-        }
-    };
 
     let result = match &cli.command {
         Command::Bootstrap {
@@ -97,7 +78,7 @@ pub async fn run() -> ExitCode {
         Ok(code) => from_root.unwrap_or(code),
         Err(e) => {
             if cli.output == cli::Output::Human && view.exit.code().is_none() {
-                let words = words_for(&e, &request_of(&cli.command), explain.as_ref());
+                let words = explain::words(&e, &request_of(&cli.command));
                 let fault = explain::fault_of(&e);
                 let code = (cli.verbose > 0)
                     .then(|| fault.code())
@@ -153,26 +134,12 @@ fn request_of(command: &Command) -> mix_events::v1::command::Request {
     }
 }
 
-fn words_for(
-    error: &anyhow::Error,
-    request: &mix_events::v1::command::Request,
-    local: &dyn Fn(&anyhow::Error) -> Diagnostic,
-) -> Diagnostic {
-    if let Some(failed) = error.downcast_ref::<remote::client::Failed>() {
-        return explain::outcome(Some(&failed.request), &failed.fault);
-    }
-    if let Some(error) = error.downcast_ref::<mix_rpc::Error>() {
-        return explain::outcome(Some(request), &explain::rpc_fault(error));
-    }
-    local(error)
-}
-
 fn stream_the_failure(command: &Command, error: &anyhow::Error, view: &render::sinks::View) {
     let Ok(mut sinks) = view.sinks(std::sync::Arc::new(mix_ui::Silent)) else {
         return;
     };
-    mix_shell::root::fail(
-        mix_shell::root::command(request_of(command)),
+    mix_events::fail(
+        mix_events::command(request_of(command)),
         explain::fault_of(error),
         &mut sinks,
     );
@@ -313,7 +280,7 @@ mod tests {
             mix_events::Start::command("repair", mix_events::v1::Command::default()),
         );
         for envelope in outbox.drain() {
-            mix_shell::render::Render::envelope(&mut sinks, envelope);
+            mix_events::Render::envelope(&mut sinks, envelope);
         }
 
         assert!(!unstreamed(&view));
@@ -332,7 +299,12 @@ mod tests {
             quiet: false,
             exit: render::sinks::Exit::default(),
         };
-        let refused = anyhow::Error::from(mix_shell::profile::change::Error::NotRoot);
+        let refused = anyhow::Error::from(remote::client::Failed {
+            request: request_of(&Command::Install {
+                packages: vec!["ripgrep".into()],
+            }),
+            fault: mix_events::Diagnose::fault(&mix_shell::profile::change::Error::NotRoot),
+        });
 
         stream_the_failure(
             &Command::Install {

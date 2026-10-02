@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use mix_events::Render;
 use mix_events::capture::Capture;
 use mix_events::capture::v1::Header;
 use mix_events::v1::{Envelope, envelope};
 use mix_events::{Detail, ROOT};
-use mix_shell::render::Render;
 
 use super::human::Human;
 use crate::cli::Output;

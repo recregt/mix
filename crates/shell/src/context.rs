@@ -13,9 +13,7 @@ pub struct HostConfig {
     pub git_binary: Option<PathBuf>,
 }
 
-pub fn request_id() -> String {
-    uuid::Uuid::now_v7().to_string()
-}
+pub use mix_events::request_id;
 
 pub struct Request {
     pub id: String,

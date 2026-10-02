@@ -8,8 +8,7 @@
 use std::path::Path;
 
 use mix_core::action::Failure;
-use mix_core::health::{self, Drift, wire};
-use mix_core::models::Category;
+use mix_core::health::{self, wire};
 use mix_events::v1::{
     DoctorResult, Inspection, InspectionReport, InspectionResult, Plan, node_finished, node_started,
 };
@@ -21,18 +20,7 @@ use crate::effect::files::Files;
 use crate::request::{Concluded, Root};
 use crate::target::Finding;
 
-pub struct HealthReport {
-    pub name: String,
-    pub category: Category,
-    pub finding: Option<Finding>,
-    pub drift: Option<Drift>,
-}
-
-impl HealthReport {
-    pub fn healthy(&self) -> bool {
-        self.finding.is_none()
-    }
-}
+pub use mix_core::health::HealthReport;
 
 pub(crate) async fn audit(ctx: &Context, root: &mut Root) -> Concluded<Vec<HealthReport>> {
     let items = mix_core::models::targets(ctx.user.as_ref(), &ctx.policy);

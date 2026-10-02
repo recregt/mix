@@ -17,6 +17,19 @@ const FILE_MODE: u32 = 0o644;
 /// The reason is a value rather than a sentence: what a reader should do about it differs per
 /// command — `mix repair` offers a way out, the health gate in front of the other commands only
 /// says why it stopped — so the words are chosen where the command is known.
+pub struct HealthReport {
+    pub name: String,
+    pub category: crate::models::Category,
+    pub finding: Option<Finding>,
+    pub drift: Option<Drift>,
+}
+
+impl HealthReport {
+    pub fn healthy(&self) -> bool {
+        self.finding.is_none()
+    }
+}
+
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, serde::Serialize, serde::Deserialize,
 )]

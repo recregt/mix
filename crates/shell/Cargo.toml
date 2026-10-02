@@ -29,7 +29,6 @@ tar = "0.4.46"
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-uuid = { version = "1.26.1", features = ["v7"] }
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 
 [build-dependencies]

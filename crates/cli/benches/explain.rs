@@ -1,6 +1,9 @@
 use mix_cli::explain;
 use mix_core::Category;
-use mix_shell::ops::doctor::HealthReport;
+use mix_core::health::HealthReport;
+use mix_events::Diagnose;
+use mix_events::v1::command::Request;
+use mix_events::v1::{InstallRequest, RepairRequest};
 use mix_shell::profile::change::Error as InstallError;
 use mix_shell::target::{Error as TargetError, Finding, Unfixable};
 
@@ -13,19 +16,21 @@ fn shown(words: explain::Diagnostic) -> explain::Diagnostic {
     words
 }
 
-/// The cheapest shape: a raw error from the bottom of the tool, named for the command that hit
-/// it.
+/// The cheapest shape: a raw error from the bottom of the tool, worded for the command it ended.
 #[divan::bench]
-fn explain_a_missing_lock(bencher: divan::Bencher) {
-    let error = anyhow::Error::from(InstallError::Core(mix_core::Error::LockMissing {
+fn word_a_missing_lock(bencher: divan::Bencher) {
+    let request = Request::Install(InstallRequest {
+        packages: vec!["package".to_string()],
+    });
+    let fault = InstallError::Core(mix_core::Error::LockMissing {
         path: "/var/lib/mix/lock".into(),
-    }));
-    let packages = vec!["package".to_string()];
+    })
+    .fault();
 
     bencher.bench(|| {
-        shown(explain::install::explain(
-            divan::black_box(&error),
-            &packages,
+        shown(explain::outcome(
+            Some(divan::black_box(&request)),
+            divan::black_box(&fault),
         ))
     });
 }
@@ -33,13 +38,20 @@ fn explain_a_missing_lock(bencher: divan::Bencher) {
 /// A target `mix repair` will not change, named with its reason and the way out, as repair prints
 /// it for every target it could not put back.
 #[divan::bench]
-fn explain_an_unrepairable_target(bencher: divan::Bencher) {
-    let error = TargetError::Unrepairable {
+fn word_an_unrepairable_target(bencher: divan::Bencher) {
+    let request = Request::Repair(RepairRequest {});
+    let fault = TargetError::Unrepairable {
         artifact: "default profile".to_string(),
         reason: Unfixable::MissingRuntime,
-    };
+    }
+    .fault();
 
-    bencher.bench(|| shown(explain::target::report(divan::black_box(&error))));
+    bencher.bench(|| {
+        shown(explain::outcome(
+            Some(divan::black_box(&request)),
+            divan::black_box(&fault),
+        ))
+    });
 }
 
 fn report(name: &str, finding: Finding) -> HealthReport {

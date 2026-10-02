@@ -1,9 +1,9 @@
 use std::fmt::Display;
 
+use mix_core::health::Unfixable;
 use mix_events::Fault;
 use mix_events::v1::diagnostic::Detail;
 use mix_events::v1::{Code, Diagnostic as Wire, Host, Unfixable as WireUnfixable};
-use mix_shell::target::Unfixable;
 use mix_ui::{Help, help, help_around, note, phrase, phrase_parts};
 
 use super::{Diagnostic, bug, failed};
@@ -116,16 +116,6 @@ fn failure(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
     match plain(diagnostic.code(), context) {
         Some(words) => words,
         None => detailed(diagnostic, context),
-    }
-}
-
-pub(crate) fn render_error<E: mix_events::Diagnose + ?Sized>(
-    error: &E,
-    context: &Context<'_>,
-) -> Diagnostic {
-    match error.code().and_then(|code| plain(code, context)) {
-        Some(words) => words,
-        None => render(&error.fault(), context),
     }
 }
 

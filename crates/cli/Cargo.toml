@@ -7,7 +7,6 @@ license = "MPL-2.0"
 
 [dependencies]
 thiserror = { workspace = true }
-mix-shell = { path = "../shell" }
 mix-core = { path = "../core" }
 mix-exec = { path = "../exec" }
 mix-rpc = { path = "../rpc" }
@@ -22,6 +21,7 @@ pbjson-types = "0.9.0"
 serde_json = { workspace = true }
 
 [dev-dependencies]
+mix-shell = { path = "../shell" }
 mix-nixgen = { path = "../nixgen" }
 divan = { workspace = true }
 tempfile = { workspace = true }

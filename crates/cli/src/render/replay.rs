@@ -3,10 +3,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use mix_events::Render;
 use mix_events::capture::Captured;
 use mix_events::v1::{Envelope, envelope::Event};
 use mix_events::{Detail, NodeId};
-use mix_shell::render::Render;
 use mix_ui::Out;
 
 use super::human::Human;

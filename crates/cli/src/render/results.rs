@@ -2,16 +2,14 @@
 
 use std::time::Duration;
 
+use mix_core::change::Source;
+use mix_core::health::HealthReport;
 use mix_core::health::wire;
 use mix_core::paths::PROFILE_SNIPPET_DEST;
 use mix_events::Detail;
 use mix_events::v1::node_finished::Result;
 use mix_events::v1::{CleanResult, InspectionReport, NodeFinished, RepairReport, Status as Ended};
-use mix_shell::ops::doctor::HealthReport;
-use mix_shell::profile::state::Source;
 use mix_ui::{Out, Report, Severity, Status};
-
-use crate::explain::change;
 
 pub(crate) fn took(elapsed: Duration) -> String {
     let seconds = elapsed.as_secs();
@@ -128,7 +126,7 @@ fn size(bytes: u64) -> String {
 fn reset(out: &dyn Out, was_reset: bool, level: Detail) {
     if was_reset
         && level >= Detail::Step
-        && let Some(note) = change::restored(Source::Fresh)
+        && let Some(note) = crate::explain::restored(Source::Fresh)
     {
         words(out, Severity::Warning, &note);
     }
@@ -185,7 +183,7 @@ fn repaired(
                     let words = crate::explain::render(
                         &fault,
                         &crate::explain::Context {
-                            command: crate::explain::repair::COMMAND,
+                            command: "mix repair",
                             action: &action,
                         },
                     );

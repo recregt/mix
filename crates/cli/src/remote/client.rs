@@ -1,10 +1,10 @@
 use futures_util::{Stream, StreamExt};
+use mix_events::Render;
 use mix_events::v1::command::Request;
 use mix_events::v1::{BootstrapRequest, Envelope, NodeFinished, Status, envelope};
 use mix_events::{Detail, Fault, ROOT};
 use mix_exec::Reason;
 use mix_rpc::{Client, Controller, Reply};
-use mix_shell::render::Render;
 use nix::sys::signal::Signal;
 
 use mix_core::paths::MIX_DAEMON_SOCKET_PATH;
@@ -174,7 +174,7 @@ pub async fn run(request: Request, route: Route, view: &View) -> anyhow::Result<
         Route::OneShot => one_shot(view).await?,
         Route::Socket => socket(&request).await?,
     };
-    let command = mix_shell::root::command(request.clone());
+    let command = mix_events::command(request.clone());
     let (controller, replies) = client.run(&command).await?;
     let ended = replay(controller, replies, view).await?;
     let _ = client.wait().await;
@@ -228,65 +228,5 @@ mod tests {
             fault_of(&finished(Status::Cancelled)),
             Some(Fault::Cancelled { .. })
         ));
-    }
-
-    fn same_words<E>(errors: Vec<E>, request: Request, explain: fn(&anyhow::Error) -> String)
-    where
-        E: mix_events::Diagnose + std::error::Error + Send + Sync + 'static,
-    {
-        for error in errors {
-            let fault = error.fault();
-            let local = explain(&anyhow::Error::from(error));
-            let remote = crate::explain::outcome(Some(&request), &fault).message();
-            assert_eq!(remote, local);
-        }
-    }
-
-    #[test]
-    fn a_failure_from_the_worker_reads_as_it_would_have_in_process() {
-        use mix_shell::ops::bootstrap::{Error, Host};
-
-        same_words(
-            vec![
-                Error::NotRoot("bootstrap the managed environment"),
-                Error::Network("connection reset".into()),
-                Error::Integrity {
-                    artifact: "nix archive".into(),
-                    detail: "sha256 mismatch".into(),
-                },
-                Error::SystemdNotReady { host: Host::Wsl },
-                Error::Unit {
-                    operation: "start".into(),
-                    unit: "nix-daemon.socket".into(),
-                    detail: "job failed".into(),
-                    invocation: Some("ab12".into()),
-                },
-                Error::SystemdUnreachable,
-                Error::AlreadyManaged,
-                Error::CrossDeviceStore {
-                    path: "/nix/store/pkg-a".into(),
-                },
-                Error::Rollback {
-                    cause: Box::new(Error::UnsupportedHost),
-                    summary: "1 rollback step(s) failed".into(),
-                },
-                Error::InvalidMirror("no scheme".into()),
-            ],
-            bootstrap_request(None, None, false),
-            |error| crate::explain::bootstrap::explain(error).message(),
-        );
-        same_words(
-            vec![
-                mix_shell::target::Error::Unrepairable {
-                    artifact: "/nix".into(),
-                    reason: mix_shell::target::Unfixable::NotADirectory,
-                },
-                mix_shell::target::Error::Core(mix_core::Error::LockMissing {
-                    path: "/var/lib/mix/lock".into(),
-                }),
-            ],
-            Request::Repair(mix_events::v1::RepairRequest {}),
-            |error| crate::explain::repair::explain(error).message(),
-        );
     }
 }

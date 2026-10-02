@@ -4,23 +4,11 @@
 //! running, and every one of them is written here. The match is exhaustive on purpose: a new
 //! inspection cannot reach a terminal without someone deciding how it reads.
 
-use mix_shell::ops::doctor::HealthReport;
-use mix_shell::target::Finding;
+use mix_core::health::{Finding, HealthReport};
 use mix_ui::text::{decimal, octal};
 use mix_ui::{Labels, around, help, note, note_around, note_parts, phrase, phrase_parts};
 
-use super::{Diagnostic, failed};
-
-pub(crate) const COMMAND: &str = "mix doctor";
-
-pub(crate) const ACTION: &str = "finish the health check";
-
-pub fn explain(error: &anyhow::Error) -> Diagnostic {
-    match error.downcast_ref::<mix_core::Error>() {
-        Some(error) => super::core_error(error, COMMAND, &ACTION),
-        None => failed(&ACTION),
-    }
-}
+use super::Diagnostic;
 
 pub fn check(report: &HealthReport) -> Diagnostic {
     let Some(found) = report.finding else {
@@ -137,7 +125,7 @@ pub fn check(report: &HealthReport) -> Diagnostic {
         words = words.note(note);
     }
     match found.unfixable() {
-        Some(reason) => words.help(super::target::unfixable(reason)),
+        Some(reason) => words.help(super::render::unfixable(reason)),
         None => words,
     }
 }

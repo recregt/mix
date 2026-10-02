@@ -5,11 +5,7 @@ use mix_events::v1::Envelope;
 
 use crate::drive::Observer;
 
-pub trait Render: Send {
-    fn envelope(&mut self, envelope: Envelope);
-
-    fn detail(&self) -> Detail;
-}
+pub use mix_events::Render;
 
 pub struct Quiet;
 

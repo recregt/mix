@@ -5,14 +5,6 @@ pub mod install;
 pub mod remove;
 pub mod repair;
 
-pub fn requested_policy(
-    mirror: Option<&str>,
-    mirror_key: Option<&str>,
-) -> Result<mix_core::policy::Policy, mix_shell::ops::bootstrap::Error> {
-    mix_core::policy::Policy::new(mirror, mirror_key)
-        .map_err(|invalid| mix_shell::ops::bootstrap::Error::InvalidMirror(invalid.to_string()))
-}
-
 pub const MIRROR_VAR: &str = "MIX_NIX_MIRROR";
 pub const MIRROR_KEY_VAR: &str = "MIX_NIX_MIRROR_KEY";
 

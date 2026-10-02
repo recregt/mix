@@ -16,7 +16,6 @@ pub mod ops;
 pub mod profile;
 pub mod render;
 pub mod request;
-pub mod root;
 pub mod target;
 
 pub use context::{Context, HostConfig, Request, request_id};

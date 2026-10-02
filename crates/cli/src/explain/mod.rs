@@ -12,17 +12,11 @@
 //! A [`Diagnostic`] is what comes out: a summary of what happened, a note with a fact the reader
 //! needs, and a help with what to do about it. Each is checked when `mix` is built.
 
-pub mod bootstrap;
-pub mod clean;
 pub mod codes;
 pub mod doctor;
-pub mod install;
-pub mod remove;
-pub mod repair;
-
-pub(crate) mod change;
 pub(crate) mod render;
-pub mod target;
+#[cfg(test)]
+mod tests;
 
 pub(crate) use render::{Context, render, rpc_fault};
 
@@ -147,39 +141,36 @@ impl Diagnostic {
     }
 }
 
-pub(crate) fn core_error(
-    error: &mix_core::Error,
-    command: &str,
-    action: &dyn Display,
-) -> Diagnostic {
-    render::render_error(error, &Context { command, action })
+pub fn words(error: &anyhow::Error, request: &mix_events::v1::command::Request) -> Diagnostic {
+    if let Some(failed) = error.downcast_ref::<crate::remote::client::Failed>() {
+        return outcome(Some(&failed.request), &failed.fault);
+    }
+    if let Some(error) = error.downcast_ref::<mix_rpc::Error>() {
+        return outcome(Some(request), &rpc_fault(error));
+    }
+    failed(&*action_of(Some(request)))
 }
 
 pub(crate) fn fault_of(error: &anyhow::Error) -> mix_events::Fault {
-    use mix_events::Diagnose;
-
-    if let Some(error) = error.downcast_ref::<mix_rpc::Error>() {
-        return rpc_fault(error);
-    }
     if let Some(failed) = error.downcast_ref::<crate::remote::client::Failed>() {
         return failed.fault.clone();
     }
-    if let Some(error) = error.downcast_ref::<mix_shell::ops::bootstrap::Error>() {
-        return error.fault();
-    }
-    if let Some(error) = error.downcast_ref::<mix_shell::ops::remove::Error>() {
-        return error.fault();
-    }
-    if let Some(error) = error.downcast_ref::<mix_shell::profile::change::Error>() {
-        return error.fault();
-    }
-    if let Some(error) = error.downcast_ref::<mix_shell::target::Error>() {
-        return error.fault();
-    }
-    if let Some(error) = error.downcast_ref::<mix_core::Error>() {
-        return error.fault();
+    if let Some(error) = error.downcast_ref::<mix_rpc::Error>() {
+        return rpc_fault(error);
     }
     mix_core::diagnose::failed(mix_events::v1::Code::Internal, error.to_string(), None)
+}
+
+pub fn restored(source: mix_core::change::Source) -> Option<Diagnostic> {
+    match source {
+        mix_core::change::Source::File | mix_core::change::Source::Generation => None,
+        mix_core::change::Source::Fresh => Some(
+            Diagnostic::new(phrase!(
+                "your package list was damaged and couldn't be recovered, so it was reset"
+            ))
+            .help(help!("reinstall your packages with `mix install`")),
+        ),
+    }
 }
 
 fn unworded(code: mix_events::v1::Code) -> bool {
@@ -213,71 +204,31 @@ pub fn evidence(fault: &mix_events::Fault) -> Vec<String> {
     out
 }
 
-#[cfg(test)]
-mod evidence_tests {
-    use mix_events::v1::{CommandDetail, Diagnostic as Wire, diagnostic::Detail};
-
-    use super::evidence;
-
-    #[test]
-    fn evidence_is_the_programs_own_words_and_each_causes_message() {
-        let fault = mix_events::Fault::Failed(Wire {
-            code: mix_events::v1::Code::BuildFailed as i32,
-            message: "the summary is worded elsewhere".into(),
-            causes: vec![
-                Wire {
-                    message: "`nix build` failed".into(),
-                    detail: Some(Detail::Command(CommandDetail {
-                        output_tail: "error: Cannot build 'hello'.\n".into(),
-                        ..CommandDetail::default()
-                    })),
-                    ..Wire::default()
-                },
-                Wire {
-                    message: "/var/lib/mix/journal/r1: PermissionDenied".into(),
-                    ..Wire::default()
-                },
-            ],
-            ..Wire::default()
-        });
-
-        assert_eq!(
-            evidence(&fault),
-            [
-                "error: Cannot build 'hello'.",
-                "/var/lib/mix/journal/r1: PermissionDenied"
-            ]
-        );
-    }
-
-    #[test]
-    fn a_failure_mix_has_no_words_for_keeps_its_producers_words() {
-        for code in [
-            mix_events::v1::Code::Internal,
-            mix_events::v1::Code::Unspecified,
-        ] {
-            let fault = mix_events::Fault::Failed(Wire {
-                code: code as i32,
-                message: "state file ended early".into(),
-                ..Wire::default()
-            });
-
-            assert_eq!(evidence(&fault), ["state file ended early"], "{code:?}");
-        }
-    }
-}
-
 pub fn command_of(request: Option<&mix_events::v1::command::Request>) -> &'static str {
     use mix_events::v1::command::Request;
 
     match request {
-        Some(Request::Install(_)) => install::COMMAND,
-        Some(Request::Remove(_)) => remove::COMMAND,
-        Some(Request::Bootstrap(_)) => bootstrap::COMMAND,
-        Some(Request::Repair(_)) => repair::COMMAND,
-        Some(Request::Doctor(_)) => doctor::COMMAND,
-        Some(Request::Clean(_)) => clean::COMMAND,
+        Some(Request::Install(_)) => "mix install",
+        Some(Request::Remove(_)) => "mix remove",
+        Some(Request::Bootstrap(_)) => "mix bootstrap",
+        Some(Request::Repair(_)) => "mix repair",
+        Some(Request::Doctor(_)) => "mix doctor",
+        Some(Request::Clean(_)) => "mix clean",
         None => "mix",
+    }
+}
+
+fn action_of(request: Option<&mix_events::v1::command::Request>) -> Box<dyn Display + '_> {
+    use mix_events::v1::command::Request;
+
+    match request {
+        Some(Request::Install(install)) => Box::new(packages_action("install", &install.packages)),
+        Some(Request::Remove(remove)) => Box::new(packages_action("remove", &remove.packages)),
+        Some(Request::Bootstrap(_)) => Box::new("finish setting up `mix`"),
+        Some(Request::Repair(_)) => Box::new("finish the repair"),
+        Some(Request::Doctor(_)) => Box::new("finish the health check"),
+        Some(Request::Clean(_)) => Box::new("clean up your profile"),
+        None => Box::new("finish"),
     }
 }
 
@@ -285,22 +236,11 @@ pub fn outcome(
     request: Option<&mix_events::v1::command::Request>,
     fault: &mix_events::Fault,
 ) -> Diagnostic {
-    use mix_events::v1::command::Request;
-
-    let action: Box<dyn Display + '_> = match request {
-        Some(Request::Install(install)) => Box::new(packages_action("install", &install.packages)),
-        Some(Request::Remove(remove)) => Box::new(packages_action("remove", &remove.packages)),
-        Some(Request::Bootstrap(_)) => Box::new(bootstrap::ACTION),
-        Some(Request::Repair(_)) => Box::new(repair::ACTION),
-        Some(Request::Doctor(_)) => Box::new(doctor::ACTION),
-        Some(Request::Clean(_)) => Box::new(clean::ACTION),
-        None => Box::new("finish"),
-    };
     render(
         fault,
         &Context {
             command: command_of(request),
-            action: &*action,
+            action: &*action_of(request),
         },
     )
 }
@@ -314,16 +254,6 @@ pub(crate) fn bug() -> Diagnostic {
     Diagnostic::new(phrase!("something went wrong inside `mix`")).help(help!(
         "report this bug at https://github.com/recregt/mix/issues"
     ))
-}
-
-pub(crate) fn privileged(error: &mix_rpc::Error, action: &dyn Display) -> Diagnostic {
-    render(
-        &rpc_fault(error),
-        &Context {
-            command: "",
-            action,
-        },
-    )
 }
 
 pub(crate) struct PackagesAction<'a> {
@@ -354,120 +284,4 @@ pub(crate) fn packages_action<'a>(
     packages: &'a [String],
 ) -> PackagesAction<'a> {
     PackagesAction { verb, packages }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_message_lists_the_summary_then_the_note_then_the_help() {
-        let diagnostic = Diagnostic::new(phrase!("it failed"))
-            .help(help!("run it again"))
-            .note(mix_ui::note!("it was busy"));
-
-        assert_eq!(diagnostic.message(), "it failed\nit was busy\nrun it again");
-    }
-
-    #[test]
-    fn a_failure_without_a_note_or_help_is_its_summary() {
-        assert_eq!(Diagnostic::new(phrase!("it failed")).message(), "it failed");
-    }
-
-    #[test]
-    fn a_refused_path_says_whose_permission_is_missing() {
-        let error = mix_core::Error::Io {
-            path: "/nix/store".into(),
-            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
-        };
-
-        let message = core_error(&error, "mix doctor", &"finish the health check").message();
-
-        assert!(message.starts_with("no permission to use /nix/store"));
-        assert!(message.contains("check who owns it"));
-    }
-
-    #[test]
-    fn a_failed_step_says_what_could_not_be_done_and_keeps_the_internals_out() {
-        let error = mix_core::Error::Command {
-            command: "/nix/var/nix/profiles/default/bin/nix build path:/home/ada".to_string(),
-            detail: "error: out of disk space".to_string(),
-        };
-
-        let message = core_error(&error, "mix install", &"install ripgrep").message();
-
-        assert_eq!(
-            message,
-            "couldn't install ripgrep\nrun it again with `-v` to see what went wrong"
-        );
-    }
-
-    #[test]
-    fn a_bug_is_called_a_bug_and_says_where_to_report_it() {
-        let message = render(
-            &mix_core::diagnose::failed(mix_events::v1::Code::Internal, "oops", None),
-            &Context {
-                command: "mix install",
-                action: &"install ripgrep",
-            },
-        )
-        .message();
-
-        assert!(message.contains("report this bug"));
-        assert!(message.contains("github.com/recregt/mix/issues"));
-        assert!(!message.contains("oops"));
-    }
-
-    #[test]
-    fn a_long_list_of_packages_is_counted() {
-        let packages: Vec<String> = ["a", "b", "c", "d"].map(String::from).to_vec();
-
-        assert_eq!(
-            packages_action("install", &packages[..1]).to_string(),
-            "install a"
-        );
-        assert_eq!(
-            packages_action("install", &packages[..3]).to_string(),
-            "install a, b, c"
-        );
-        assert_eq!(
-            packages_action("install", &packages).to_string(),
-            "install 4 packages"
-        );
-    }
-
-    #[test]
-    fn a_missing_lock_sends_the_reader_to_bootstrap() {
-        let error = mix_core::Error::LockMissing {
-            path: "/var/lib/mix/lock".into(),
-        };
-
-        assert_eq!(
-            core_error(&error, "mix install", &"install ripgrep").message(),
-            "`mix` isn't set up yet\nrun `mix bootstrap` first"
-        );
-    }
-
-    #[test]
-    fn a_refused_sudo_is_about_administrator_rights() {
-        let message = privileged(
-            &mix_rpc::Error::Refused("connection closed".into()),
-            &"finish the repair",
-        )
-        .message();
-
-        assert_eq!(
-            message,
-            "couldn't get administrator rights to finish the repair\n\
-             make sure your account can use sudo, then try again"
-        );
-    }
-
-    #[test]
-    fn a_worker_that_stopped_mid_way_says_to_run_the_command_again() {
-        let message = privileged(&mix_rpc::Error::Ended, &"finish the repair").message();
-
-        assert!(message.contains("stopped before it could finish the repair"));
-        assert!(message.contains("run the same command again"));
-    }
 }

@@ -5,13 +5,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use mix_core::BuildProgress;
+use mix_events::Render;
 use mix_events::v1::command::Request;
 use mix_events::v1::{
     Envelope, NodeFinished, NodeProgress, Status as Ended, envelope::Event, node_progress,
     node_started,
 };
 use mix_events::{Detail, Fault, NodeId, ROOT};
-use mix_shell::render::Render;
 use mix_ui::{Display, Out, Severity, Status, StepLine};
 
 use super::{trace, verbs};
