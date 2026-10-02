@@ -6,25 +6,23 @@
 //! nix-daemon and for the git-tracked state, and what it hands the caller to print.
 
 use std::path::Path;
-use std::sync::Arc;
 
 use mix_core::action::Failure;
 use mix_core::health;
 use mix_core::models::{Target, UserConfig, targets};
 use mix_core::paths::mix_state_dir;
 use mix_core::plan::{Runner, StepOutcome, Verdict};
-use mix_events::v1::{
-    Cancellation, Code, Command, RepairRequest, RepairResult, command, node_finished,
-};
-use mix_events::{Diagnose, Ending, Fault, ROOT, Start, Stopped, Tree};
+use mix_events::v1::{Cancellation, Code, RepairResult, node_finished};
+use mix_events::{Diagnose, Ending, Fault, ROOT, Stopped, Tree};
 use mix_exec::Scope;
 
-use crate::drive::{Journal, Observer, Performer, drive, stopped_by};
+use crate::drive::{Journal, Observer, Performer, drive};
 use crate::effect::files::Files;
 use crate::effect::git;
 use crate::effect::home::core_error;
 use crate::effect::journal::{FileJournal, JOURNAL_DIR, recover_all};
 use crate::render::Relay;
+use crate::request::{Concluded, Root};
 use crate::target::Error;
 use crate::{Context, HostConfig};
 
@@ -56,7 +54,7 @@ impl RepairReport {
         }
     }
 
-    fn failed(name: impl Into<String>, error: impl Into<Error>) -> Self {
+    pub(crate) fn failed(name: impl Into<String>, error: impl Into<Error>) -> Self {
         Self {
             name: name.into(),
             fixed: false,
@@ -70,36 +68,26 @@ pub struct Repair {
     pub interrupted: bool,
 }
 
-pub async fn repair(ctx: &Context) -> Repair {
-    let request = ctx.request.id.clone();
+pub(crate) async fn repair(ctx: &Context, root: &mut Root) -> Concluded<Repair> {
     let mut observer = ctx.relay();
-    let stopped = stopped_by(&ctx.scope);
-    let mut tree = Tree::new(
-        Arc::clone(&ctx.request.outbox),
-        Arc::clone(&stopped),
-        Start::command(
-            "repair",
-            Command {
-                mix_version: env!("CARGO_PKG_VERSION").to_string(),
-                schema_minor: mix_events::SCHEMA_MINOR,
-                request: Some(command::Request::Repair(RepairRequest {})),
-            },
-        ),
-    );
-    let repair = repaired(ctx, &request, &mut tree, &stopped, &mut observer).await;
+    let repair = repaired(
+        ctx,
+        &ctx.request.id,
+        &mut root.tree,
+        &root.stopped,
+        &mut observer,
+    )
+    .await;
     let result = node_finished::Result::Repair(RepairResult {
         reports: repair.reports.iter().map(RepairReport::wire).collect(),
     });
     let ending = if repair.interrupted {
-        Ending::cancelled(Cancellation::Interrupted)
+        Ending::cancelled((root.stopped)().unwrap_or(Cancellation::Interrupted))
     } else {
         Ending::succeeded()
     };
     let problems_remain = !repair.reports.iter().all(|report| report.fixed);
-    let _ = tree.finish(ROOT, ending.with_result(result).for_root(problems_remain));
-    drop(tree);
-    observer.flush();
-    repair
+    root.conclude_with_problems(ending.with_result(result), problems_remain, repair)
 }
 
 async fn repaired(
@@ -267,7 +255,13 @@ async fn commit_the_tracked_state(
 mod tests {
     use mix_core::journal::Record;
 
+    use std::sync::Arc;
+
+    use mix_events::v1::Command;
+    use mix_events::{Start, Tree};
+
     use super::*;
+    use crate::drive::stopped_by;
 
     #[test]
     fn a_report_carries_either_a_repair_or_the_reason_there_was_none() {

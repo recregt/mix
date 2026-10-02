@@ -125,6 +125,7 @@ message Inspection {
 message LockWait {
   string lock = 1;
   optional string holder = 2;
+  optional string command = 3;
 }
 
 enum Operation {
@@ -522,7 +523,8 @@ enum Code {
   CODE_PERMISSION_DENIED = 3;
   CODE_COMMAND_FAILED = 4;
   CODE_SPAWN_FAILED = 5;
-  CODE_LOCKED = 6;
+  reserved 6;
+  reserved "CODE_LOCKED";
   CODE_LOCK_MISSING = 7;
   CODE_CONFLICT = 8;
   CODE_UNIT_FAILED = 9;

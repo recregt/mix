@@ -375,20 +375,6 @@ mod tests {
     }
 
     #[test]
-    fn a_held_lock_names_the_command_the_reader_ran() {
-        let error = mix_core::Error::Locked {
-            path: "/var/lib/mix/lock".into(),
-        };
-
-        let install = core_error(&error, "mix install", &"install ripgrep").message();
-        let repair = core_error(&error, "mix repair", &"finish the repair").message();
-
-        assert!(!install.contains("/var/lib/mix/lock"));
-        assert!(install.contains("run `mix install` again"));
-        assert!(repair.contains("run `mix repair` again"));
-    }
-
-    #[test]
     fn a_refused_path_says_whose_permission_is_missing() {
         let error = mix_core::Error::Io {
             path: "/nix/store".into(),

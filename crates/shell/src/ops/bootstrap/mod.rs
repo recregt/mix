@@ -9,22 +9,20 @@ pub mod tarball;
 pub use error::{Error, Host, Result};
 
 use std::path::Path;
-use std::sync::Arc;
 
 use mix_core::action::{Digest, Failure};
 use mix_core::bootstrap::{Runtime, Settings, steps};
 use mix_core::plan::{Report, Runner, Verdict, diagnostic};
-use mix_events::v1::{
-    BootstrapRequest, BootstrapResult, Code, Command, Step, command, node_finished, node_started,
-};
-use mix_events::{Ending, ROOT, Start, Stopped, Tree};
+use mix_events::v1::{BootstrapResult, Code, Step, node_finished, node_started};
+use mix_events::{Ending, ROOT, Start};
 
 use crate::Context;
-use crate::drive::{Observer, Performer, drive, stopped_by};
+use crate::drive::{Performer, drive};
 use crate::effect::files::Files;
 use crate::effect::generations::ProfileContext;
 use crate::effect::journal::{FileJournal, JOURNAL_DIR, recover_all, unfinished};
 use crate::effect::mirror::{filter_mirror, mirror_url};
+use crate::request::{Concluded, Root};
 
 pub struct Environment(());
 
@@ -136,19 +134,16 @@ fn outcome(report: &Report) -> Result<Environment> {
     })
 }
 
-pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
-    let scope = &ctx.scope;
+async fn prepare(ctx: &Context, force: bool) -> Result<(Settings, Performer)> {
     if !crate::effect::accounts::is_root() {
         return Err(Error::NotRoot("bootstrap the managed environment"));
     }
-
     preflight::check_not_nixos().await?;
     preflight::check_not_wsl1().await?;
     preflight::check_systemd_ready().await?;
     if !force {
-        preflight::check_nix_not_installed(scope).await?;
+        preflight::check_nix_not_installed(&ctx.scope).await?;
     }
-
     let request = ctx.request.id.clone();
     let settings = Settings {
         policy: ctx.policy.clone(),
@@ -165,32 +160,24 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
         path: "/".into(),
         source,
     })?;
-    let mut performer = Performer::new(files).with_profile(ProfileContext {
+    let performer = Performer::new(files).with_profile(ProfileContext {
         mirror: ctx.mirror().map(str::to_string),
         host: ctx.host.clone(),
     });
-    let mut bridge = ctx.relay();
-    let stopped: Stopped = stopped_by(scope);
-    let mut tree = Tree::new(
-        Arc::clone(&ctx.request.outbox),
-        Arc::clone(&stopped),
-        Start::command(
-            "bootstrap",
-            Command {
-                mix_version: env!("CARGO_PKG_VERSION").to_string(),
-                schema_minor: mix_events::SCHEMA_MINOR,
-                request: Some(command::Request::Bootstrap(Box::new(BootstrapRequest {
-                    force,
-                    mirror: ctx.mirror().map(str::to_string),
-                    mirror_key: ctx
-                        .policy
-                        .mirror()
-                        .and_then(|mirror| mirror.key())
-                        .map(str::to_string),
-                }))),
-            },
-        ),
-    );
+    Ok((settings, performer))
+}
+
+pub(crate) async fn bootstrap(
+    ctx: &Context,
+    root: &mut Root,
+    force: bool,
+) -> Concluded<Result<Environment>> {
+    let (settings, mut performer) = match prepare(ctx, force).await {
+        Ok(prepared) => prepared,
+        Err(error) => return root.refuse(error),
+    };
+    let scope = &ctx.scope;
+    let tree = &mut root.tree;
     let journals = Path::new(JOURNAL_DIR);
     if !unfinished(journals).is_empty() {
         let node = tree
@@ -218,18 +205,20 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
             );
         }
         let _ = tree.finish(node, Ending::succeeded());
-        bridge.flush();
     }
-    let mut journal = FileJournal::create(journals, &request).map_err(error_from)?;
+    let mut journal = match FileJournal::create(journals, &ctx.request.id) {
+        Ok(journal) => journal,
+        Err(failure) => return root.refuse(error_from(failure)),
+    };
     let mut runner = Runner::new(ROOT, steps(&settings));
     let report = drive(
         &mut runner,
-        &mut tree,
+        &mut root.tree,
         &mut performer,
         scope,
-        &stopped,
+        &root.stopped,
         &mut journal,
-        &mut bridge,
+        &mut ctx.relay(),
     )
     .await;
     let ending = match &report.verdict {
@@ -240,7 +229,7 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
         Verdict::Cancelled(cause) => Ending::cancelled(*cause),
     };
     if let Err(failure) = journal.finish() {
-        let _ = tree.warn(
+        let _ = root.tree.warn(
             ROOT,
             mix_core::diagnose::warning(
                 Code::CleanupIncomplete,
@@ -249,8 +238,5 @@ pub async fn bootstrap(ctx: &Context, force: bool) -> Result<Environment> {
             ),
         );
     }
-    let _ = tree.finish(ROOT, ending.for_root(false));
-    drop(tree);
-    bridge.flush();
-    outcome(report)
+    root.conclude(ending, outcome(report))
 }

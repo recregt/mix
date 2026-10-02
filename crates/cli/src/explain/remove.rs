@@ -63,17 +63,13 @@ mod tests {
     }
 
     #[test]
-    fn a_held_lock_tells_the_reader_to_run_remove_again() {
-        let error = anyhow::Error::from(Error::Change(change::Error::Core(
-            mix_core::Error::Locked {
-                path: "/var/lib/mix/lock".into(),
-            },
-        )));
+    fn a_root_caller_is_told_which_command_refused() {
+        let error = anyhow::Error::from(Error::Change(change::Error::NotRoot));
 
         assert!(
             explain(&error, &["git".to_string()])
                 .message()
-                .contains("run `mix remove` again")
+                .contains("`mix remove` can't be run as root")
         );
     }
 

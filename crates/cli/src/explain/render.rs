@@ -136,11 +136,6 @@ pub(crate) fn damaged() -> mix_ui::Phrase {
 fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
     let command = context.command;
     let words = match code {
-        Code::Locked => Diagnostic::hinting(
-            phrase!("another `mix` command is already running"),
-            help_around!("wait for it to finish, then run `", "` again"),
-            command,
-        ),
         Code::LockMissing => Diagnostic::new(phrase!("`mix` isn't set up yet"))
             .help(help!("run `mix bootstrap` first")),
         Code::Io | Code::CommandFailed | Code::SpawnFailed => failed(context.action),

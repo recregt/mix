@@ -13,7 +13,6 @@ fn every_error() -> Vec<Error> {
         | Error::Exec { .. }
         | Error::TaskPanicked(_)
         | Error::Cancelled { .. }
-        | Error::Locked { .. }
         | Error::LockMissing { .. } => {}
     };
     let errors = vec![
@@ -32,9 +31,6 @@ fn every_error() -> Vec<Error> {
         Error::TaskPanicked("boom".into()),
         Error::Cancelled {
             command: "mix install".into(),
-        },
-        Error::Locked {
-            path: "/var/lib/mix/lock".into(),
         },
         Error::LockMissing {
             path: "/var/lib/mix/lock".into(),
@@ -188,22 +184,18 @@ fn a_lock_message_reads_as_the_error_does() {
 
     let odd = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(b"/var/lib/mix/\xFFlock"));
     for path in [std::path::PathBuf::from("/var/lib/mix/lock"), odd] {
-        for error in [
-            Error::Locked { path: path.clone() },
-            Error::LockMissing { path: path.clone() },
-        ] {
-            let Fault::Failed(diagnostic) = error.fault() else {
-                panic!("a lock error is a failure");
-            };
-            assert_eq!(diagnostic.message, error.to_string());
-            assert_eq!(
-                diagnostic.detail,
-                Some(Detail::Lock(LockDetail {
-                    path: path.display().to_string(),
-                    holder: None,
-                }))
-            );
-        }
+        let error = Error::LockMissing { path: path.clone() };
+        let Fault::Failed(diagnostic) = error.fault() else {
+            panic!("a lock error is a failure");
+        };
+        assert_eq!(diagnostic.message, error.to_string());
+        assert_eq!(
+            diagnostic.detail,
+            Some(Detail::Lock(LockDetail {
+                path: path.display().to_string(),
+                holder: None,
+            }))
+        );
     }
 }
 

@@ -16,8 +16,8 @@ fn shown(words: explain::Diagnostic) -> explain::Diagnostic {
 /// The cheapest shape: a raw error from the bottom of the tool, named for the command that hit
 /// it.
 #[divan::bench]
-fn explain_a_held_lock(bencher: divan::Bencher) {
-    let error = anyhow::Error::from(InstallError::Core(mix_core::Error::Locked {
+fn explain_a_missing_lock(bencher: divan::Bencher) {
+    let error = anyhow::Error::from(InstallError::Core(mix_core::Error::LockMissing {
         path: "/var/lib/mix/lock".into(),
     }));
     let packages = vec!["package".to_string()];

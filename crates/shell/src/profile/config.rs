@@ -44,12 +44,12 @@ fn nix_system(arch: Arch, os: Os) -> System {
     }
 }
 
-pub fn user_config_for(user: InvokingUser) -> Option<UserConfig> {
+pub fn user_config_for(user: InvokingUser, locked: &crate::request::Locked) -> Option<UserConfig> {
     let system = nix_system(Arch::current()?, Os::current()?);
     let flake = FlakeConfig::new(system, &user.name, NIXPKGS, HOME_MANAGER)
         .expect("a real username cannot contain a null byte")
         .render();
-    let (home, restored_state) = match settle(&user.home) {
+    let (home, restored_state) = match settle(&user.home, locked) {
         Settled::Current { manifest, source } => (
             render_home(&user, &manifest.packages)
                 .expect("a settled package list only holds valid names"),
@@ -74,9 +74,12 @@ pub fn user_config_for(user: InvokingUser) -> Option<UserConfig> {
     })
 }
 
-pub fn existing_user_config_for(user: InvokingUser) -> Option<UserConfig> {
+pub fn existing_user_config_for(
+    user: InvokingUser,
+    locked: &crate::request::Locked,
+) -> Option<UserConfig> {
     managed(
-        user_config_for(user)?,
+        user_config_for(user, locked)?,
         crate::effect::accounts::group_has_member,
     )
 }

@@ -155,7 +155,6 @@ impl Diagnose for Error {
             Error::Exec { .. } => Code::SpawnFailed,
             Error::TaskPanicked(_) => Code::Internal,
             Error::Cancelled { .. } => return None,
-            Error::Locked { .. } => Code::Locked,
             Error::LockMissing { .. } => Code::LockMissing,
         })
     }
@@ -191,9 +190,6 @@ impl Diagnose for Error {
                 cause: Cancellation::Interrupted,
                 rolled_back: false,
             },
-            Error::Locked { path } => lock(Code::Locked, path, |path| {
-                joined(&["already locked: ", path])
-            }),
             Error::LockMissing { path } => lock(Code::LockMissing, path, |path| {
                 joined(&[
                     "the lock at ",

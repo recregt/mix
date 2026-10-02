@@ -1,6 +1,7 @@
 use mix_core::change::Refusal;
 
 use crate::Context;
+use crate::request::{Concluded, Root};
 
 use crate::profile::change;
 use crate::profile::state::Source;
@@ -15,6 +16,12 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl From<mix_core::Error> for Error {
+    fn from(error: mix_core::Error) -> Self {
+        Error::Change(change::Error::Core(error))
+    }
+}
 
 impl From<Refusal> for Error {
     fn from(refusal: Refusal) -> Self {
@@ -38,25 +45,38 @@ impl Removed {
     }
 }
 
-pub async fn remove(ctx: &Context, packages: &[String]) -> Result<Removed> {
-    let cfg = ctx.user.as_ref().ok_or(change::Error::NotBootstrapped)?;
-    let settled = change::settled(cfg);
-    let decided = mix_core::change::remove(packages, settled.clone())?;
+pub(crate) async fn remove(
+    ctx: &Context,
+    root: &mut Root,
+    packages: &[String],
+) -> Concluded<Result<Removed>> {
+    if ctx.caller_is_root {
+        return root.refuse(Error::Change(change::Error::NotRoot));
+    }
+    let Some(cfg) = ctx.user.as_ref() else {
+        return root.refuse(Error::Change(change::Error::NotBootstrapped));
+    };
+    let decided = match mix_core::change::remove(packages, change::settled(cfg, &ctx.locked)) {
+        Ok(decided) => decided,
+        Err(refused) => return root.refuse(Error::from(refused)),
+    };
     let restored = (decided.source != Source::File).then_some(decided.source);
     change::run(
         ctx,
+        root,
         cfg,
         change::Verb::Remove,
-        packages,
         &decided,
         &mut Vec::new(),
     )
-    .await?;
-
-    Ok(Removed {
-        removed: decided.changed,
-        skipped: decided.skipped,
-        restored,
+    .await
+    .map(|ran| {
+        ran.map(|()| Removed {
+            removed: decided.changed,
+            skipped: decided.skipped,
+            restored,
+        })
+        .map_err(Error::from)
     })
 }
 
@@ -84,8 +104,8 @@ mod tests {
         home
     }
 
-    fn context(home: &std::path::Path) -> Context {
-        Context::new(mix_exec::Scope::root()).with_user(Some(user_config(home)))
+    fn context(home: &std::path::Path) -> crate::Session {
+        crate::Session::new(mix_exec::Scope::root()).with_user(Some(user_config(home)))
     }
 
     fn user_config(home: &std::path::Path) -> mix_core::models::UserConfig {
@@ -109,7 +129,7 @@ mod tests {
 
     async fn remove_from(home: &std::path::Path, packages: &[&str]) -> Result<Removed> {
         let packages: Vec<String> = packages.iter().map(|p| p.to_string()).collect();
-        remove(&context(home), &packages).await
+        crate::request::remove(&context(home), &packages).await
     }
 
     #[tokio::test]

@@ -97,16 +97,9 @@ mod tests {
     #[test]
     fn a_shared_failure_names_the_command_the_reader_ran() {
         for command in ["mix install", "mix remove"] {
-            let message = describe(
-                &Error::Core(mix_core::Error::Locked {
-                    path: "/var/lib/mix/lock".into(),
-                }),
-                command,
-                &"install ripgrep",
-            )
-            .message();
+            let message = describe(&Error::NotRoot, command, &"install ripgrep").message();
 
-            assert!(message.contains(&format!("run `{command}` again")));
+            assert!(message.contains(&format!("`{command}` can't be run as root")));
         }
     }
 }

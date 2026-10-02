@@ -6,7 +6,7 @@ use mix_events::{Diagnose, Fault};
 use super::*;
 
 fn locked() -> mix_core::Error {
-    mix_core::Error::Locked {
+    mix_core::Error::LockMissing {
         path: "/var/lib/mix/lock".into(),
     }
 }

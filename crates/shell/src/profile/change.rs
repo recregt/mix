@@ -1,18 +1,18 @@
 use std::path::Path;
-use std::sync::Arc;
 
 use mix_core::action::Failure;
 use mix_core::change::{Change, NewerList, Unrenderable};
 use mix_core::models::UserConfig;
 use mix_core::plan::{Runner, StepSpec, Verdict, diagnostic};
-use mix_events::v1::{Command, InstallResult, RemoveResult, command, node_finished};
-use mix_events::{Ending, ROOT, Start, Tree};
+use mix_events::v1::{InstallResult, RemoveResult, node_finished};
+use mix_events::{Ending, ROOT};
 
 use crate::Context;
-use crate::drive::{Journal, Observer, Performer, drive, stopped_by};
+use crate::drive::{Journal, Performer, drive};
 use crate::effect::files::Files;
 use crate::effect::generations::ProfileContext;
 use crate::profile::state::{self, Invalid, Settled, Source};
+use crate::request::{Concluded, Root};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -52,8 +52,8 @@ impl From<NewerList> for Error {
     }
 }
 
-pub fn settled(cfg: &UserConfig) -> Settled {
-    state::settle(&cfg.user.home)
+pub fn settled(cfg: &UserConfig, locked: &crate::request::Locked) -> Settled {
+    state::settle(&cfg.user.home, locked)
 }
 
 pub enum Verb {
@@ -66,14 +66,6 @@ impl Verb {
         match self {
             Verb::Install => mix_events::v1::Verb::Installing,
             Verb::Remove => mix_events::v1::Verb::Removing,
-        }
-    }
-
-    fn request(&self, packages: &[String]) -> command::Request {
-        let packages = packages.to_vec();
-        match self {
-            Verb::Install => command::Request::Install(mix_events::v1::InstallRequest { packages }),
-            Verb::Remove => command::Request::Remove(mix_events::v1::RemoveRequest { packages }),
         }
     }
 
@@ -93,7 +85,7 @@ impl Verb {
         }
     }
 
-    fn key(&self) -> &'static str {
+    pub(crate) fn key(&self) -> &'static str {
         match self {
             Verb::Install => "install",
             Verb::Remove => "remove",
@@ -103,17 +95,20 @@ impl Verb {
 
 pub async fn run(
     ctx: &Context,
+    root: &mut Root,
     cfg: &UserConfig,
     verb: Verb,
-    requested: &[String],
     change: &Change,
     journal: &mut dyn Journal,
-) -> Result<()> {
-    let steps = mix_core::change::steps(&cfg.user, change, verb.doing())?;
+) -> Concluded<Result<()>> {
+    let steps = match mix_core::change::steps(&cfg.user, change, verb.doing()) {
+        Ok(steps) => steps,
+        Err(error) => return root.refuse(Error::from(error)),
+    };
     perform(
         ctx,
+        root,
         verb.key(),
-        verb.request(requested),
         steps,
         || verb.result(change),
         journal,
@@ -123,36 +118,24 @@ pub async fn run(
 
 pub async fn perform(
     ctx: &Context,
-    key: &'static str,
-    request: command::Request,
+    root: &mut Root,
+    key: &str,
     steps: Vec<Box<dyn StepSpec>>,
     result: impl FnOnce() -> node_finished::Result,
     journal: &mut dyn Journal,
-) -> Result<()> {
-    let scope = &ctx.scope;
-    let request_id = ctx.request.id.clone();
-    let mut observer = ctx.relay();
-    let stopped = stopped_by(scope);
-    let mut tree = Tree::new(
-        Arc::clone(&ctx.request.outbox),
-        Arc::clone(&stopped),
-        Start::command(
-            key,
-            Command {
-                mix_version: env!("CARGO_PKG_VERSION").to_string(),
-                schema_minor: mix_events::SCHEMA_MINOR,
-                request: Some(request),
-            },
-        ),
-    );
+) -> Concluded<Result<()>> {
     let verdict = if steps.is_empty() {
         Verdict::Succeeded
     } else {
-        let files =
-            Files::open(Path::new("/"), &request_id).map_err(|source| mix_core::Error::Io {
-                path: "/".into(),
-                source,
-            })?;
+        let files = match Files::open(Path::new("/"), &ctx.request.id) {
+            Ok(files) => files,
+            Err(source) => {
+                return root.refuse(Error::Core(mix_core::Error::Io {
+                    path: "/".into(),
+                    source,
+                }));
+            }
+        };
         let mut performer = Performer::new(files).with_profile(ProfileContext {
             mirror: ctx.mirror().map(str::to_string),
             host: ctx.host.clone(),
@@ -160,33 +143,29 @@ pub async fn perform(
         let mut runner = Runner::new(ROOT, steps);
         drive(
             &mut runner,
-            &mut tree,
+            &mut root.tree,
             &mut performer,
-            scope,
-            &stopped,
+            &ctx.scope,
+            &root.stopped,
             journal,
-            &mut observer,
+            &mut ctx.relay(),
         )
         .await
         .verdict
         .clone()
     };
-    let (ending, outcome) = match verdict {
-        Verdict::Succeeded => (Ending::succeeded().with_result(result()), Ok(())),
+    match verdict {
+        Verdict::Succeeded => root.conclude(Ending::succeeded().with_result(result()), Ok(())),
         Verdict::Failed { failure, .. } => {
-            (Ending::failed(diagnostic(&failure)), Err(error_of(failure)))
+            root.conclude(Ending::failed(diagnostic(&failure)), Err(error_of(failure)))
         }
-        Verdict::Cancelled(cause) => (
+        Verdict::Cancelled(cause) => root.conclude(
             Ending::cancelled(cause),
             Err(Error::Core(mix_core::Error::Cancelled {
                 command: format!("mix {key}"),
             })),
         ),
-    };
-    let _ = tree.finish(ROOT, ending.for_root(false));
-    drop(tree);
-    observer.flush();
-    outcome
+    }
 }
 
 fn error_of(failure: Failure) -> Error {

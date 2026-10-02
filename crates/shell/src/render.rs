@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
+use mix_events::Detail;
 use mix_events::v1::Envelope;
-use mix_events::{Detail, Outbox};
 
 use crate::drive::Observer;
 
@@ -28,13 +28,12 @@ pub fn shared(render: impl Render + 'static) -> Shared {
 }
 
 pub(crate) struct Relay {
-    outbox: Arc<Outbox>,
     render: Shared,
 }
 
 impl Relay {
-    pub(crate) fn new(outbox: Arc<Outbox>, render: Shared) -> Self {
-        Self { outbox, render }
+    pub(crate) fn new(render: Shared) -> Self {
+        Self { render }
     }
 }
 
@@ -45,12 +44,5 @@ impl Observer for Relay {
             .unwrap_or_else(PoisonError::into_inner)
             .detail()
             >= detail
-    }
-
-    fn flush(&mut self) {
-        let mut render = self.render.lock().unwrap_or_else(PoisonError::into_inner);
-        for envelope in self.outbox.drain() {
-            render.envelope(envelope);
-        }
     }
 }

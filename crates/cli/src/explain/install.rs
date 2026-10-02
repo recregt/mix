@@ -31,15 +31,12 @@ mod tests {
     }
 
     #[test]
-    fn a_held_lock_tells_the_reader_to_run_install_again() {
-        let error = anyhow::Error::from(Error::Core(mix_core::Error::Locked {
-            path: "/var/lib/mix/lock".into(),
-        }));
+    fn a_root_caller_is_told_which_command_refused() {
+        let error = anyhow::Error::from(Error::NotRoot);
 
         let message = explain(&error, &["x".to_string()]).message();
 
-        assert!(message.contains("another `mix` command is already running"));
-        assert!(message.contains("run `mix install` again"));
+        assert!(message.contains("`mix install` can't be run as root"));
     }
 
     #[test]

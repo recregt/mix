@@ -7,6 +7,7 @@ pub mod diagnose;
 pub mod error;
 pub mod health;
 pub mod journal;
+pub mod locks;
 #[cfg(any(test, feature = "model"))]
 pub mod model;
 pub mod models;

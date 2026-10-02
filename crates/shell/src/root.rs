@@ -24,7 +24,7 @@ pub fn command(request: Request) -> Command {
     }
 }
 
-pub fn fail(command: Command, fault: Fault, render: &mut impl Render) {
+pub fn fail(command: Command, fault: Fault, render: &mut (impl Render + ?Sized)) {
     let outbox = Arc::new(Outbox::new(crate::request_id(), || {}));
     let mut tree = Tree::new(
         Arc::clone(&outbox),

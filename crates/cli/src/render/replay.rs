@@ -129,7 +129,8 @@ mod tests {
                 start(
                     Kind::LockWait(LockWait {
                         lock: "/var/lib/mix/lock".into(),
-                        holder: None,
+                        holder: Some("alice".into()),
+                        command: Some("install".into()),
                     }),
                     "lock",
                 ),

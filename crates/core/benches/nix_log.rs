@@ -67,11 +67,21 @@ fn fold_a_progress_record(bencher: divan::Bencher) {
     bencher.bench_local(|| log.observe(divan::black_box(record)));
 }
 
-/// A line that is not a record at all: what the activation script's output costs to look at.
+/// Lines that are not records at all: what the activation script's output costs to look at.
 #[divan::bench]
 fn pass_through_a_plain_line(bencher: divan::Bencher) {
     let mut log = NixLog::new();
-    let line = "Activating home-manager generation 42";
+    let lines: Vec<String> = (0..256)
+        .map(|n| format!("Activating home-manager generation {n}"))
+        .collect();
 
-    bencher.bench_local(|| log.observe(divan::black_box(line)));
+    bencher.bench_local(|| {
+        let mut plain = 0usize;
+        for line in &lines {
+            if let Event::Plain(_) = log.observe(divan::black_box(line)) {
+                plain += 1;
+            }
+        }
+        plain
+    });
 }

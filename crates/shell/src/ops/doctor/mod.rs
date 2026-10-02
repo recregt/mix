@@ -6,20 +6,19 @@
 //! two commands cannot drift apart. The words are `mix-cli`'s.
 
 use std::path::Path;
-use std::sync::Arc;
 
 use mix_core::action::Failure;
 use mix_core::health::{self, Drift, wire};
 use mix_core::models::Category;
 use mix_events::v1::{
-    Command, DoctorRequest, DoctorResult, Inspection, InspectionReport, InspectionResult, command,
-    node_finished, node_started,
+    DoctorResult, Inspection, InspectionReport, InspectionResult, Plan, node_finished, node_started,
 };
-use mix_events::{Ending, ROOT, Start, Tree};
+use mix_events::{Ending, ROOT, Start};
 
 use crate::Context;
-use crate::drive::{Observer, Performer, stopped_by};
+use crate::drive::Performer;
 use crate::effect::files::Files;
+use crate::request::{Concluded, Root};
 use crate::target::Finding;
 
 pub struct HealthReport {
@@ -35,22 +34,16 @@ impl HealthReport {
     }
 }
 
-pub async fn audit(ctx: &Context) -> Vec<HealthReport> {
+pub(crate) async fn audit(ctx: &Context, root: &mut Root) -> Concluded<Vec<HealthReport>> {
     let items = mix_core::models::targets(ctx.user.as_ref(), &ctx.policy);
-    let mut observer = ctx.relay();
-    let mut tree = Tree::new(
-        Arc::clone(&ctx.request.outbox),
-        stopped_by(&ctx.scope),
-        Start::command(
-            "doctor",
-            Command {
-                mix_version: env!("CARGO_PKG_VERSION").to_string(),
-                schema_minor: mix_events::SCHEMA_MINOR,
-                request: Some(command::Request::Doctor(DoctorRequest {})),
-            },
+    let tree = &mut root.tree;
+    let plan = tree
+        .start(
+            ROOT,
+            Start::new("audit", node_started::Kind::Plan(Plan::default()))
+                .planned(items.iter().map(|target| target.label().into_owned())),
         )
-        .planned(items.iter().map(|target| target.label().into_owned())),
-    );
+        .expect("the root is open");
     let mut performer = Files::open(Path::new("/"), "audit").map(Performer::new);
     let mut reports = Vec::with_capacity(items.len());
     for target in &items {
@@ -71,7 +64,7 @@ pub async fn audit(ctx: &Context) -> Vec<HealthReport> {
         };
         let name = target.label().into_owned();
         if let Ok(node) = tree.start(
-            ROOT,
+            plan,
             Start::new(
                 name.clone(),
                 node_started::Kind::Inspection(Inspection {
@@ -108,15 +101,13 @@ pub async fn audit(ctx: &Context) -> Vec<HealthReport> {
             })
             .collect(),
     };
-    let _ = tree.finish(
-        ROOT,
-        Ending::succeeded()
-            .with_result(node_finished::Result::Doctor(result))
-            .for_root(!reports.iter().all(HealthReport::healthy)),
-    );
-    drop(tree);
-    observer.flush();
-    reports
+    let _ = tree.finish(plan, Ending::succeeded());
+    let healthy = reports.iter().all(HealthReport::healthy);
+    root.conclude_with_problems(
+        Ending::succeeded().with_result(node_finished::Result::Doctor(result)),
+        !healthy,
+        reports,
+    )
 }
 
 fn kind_of(failure: &Failure) -> std::io::ErrorKind {
@@ -149,9 +140,14 @@ mod tests {
         }
     }
 
+    fn session() -> crate::Session {
+        crate::Session::new(mix_exec::Scope::root())
+            .with_policy(mix_core::policy::Policy::default())
+    }
+
     #[tokio::test]
     async fn audit_reports_one_entry_per_target() {
-        let reports = audit(&Context::new(mix_exec::Scope::root())).await;
+        let reports = crate::request::doctor(&session()).await;
         assert_eq!(
             reports.len(),
             mix_core::models::targets(None, &mix_core::policy::Policy::default()).len()
@@ -162,15 +158,14 @@ mod tests {
     async fn audit_covers_the_per_user_targets_of_the_config_it_is_given() {
         let cfg = user_config();
 
-        let reports =
-            audit(&Context::new(mix_exec::Scope::root()).with_user(Some(cfg.clone()))).await;
+        let reports = crate::request::doctor(&session().with_user(Some(cfg.clone()))).await;
 
         assert_eq!(
             reports.len(),
             mix_core::models::targets(Some(&cfg), &mix_core::policy::Policy::default()).len(),
             "every target of the injected config must be reported"
         );
-        assert!(reports.len() > audit(&Context::new(mix_exec::Scope::root())).await.len());
+        assert!(reports.len() > crate::request::doctor(&session()).await.len());
         assert!(
             reports
                 .iter()
@@ -182,9 +177,7 @@ mod tests {
     async fn a_report_is_healthy_exactly_when_nothing_was_found() {
         let cfg = user_config();
 
-        for report in
-            audit(&Context::new(mix_exec::Scope::root()).with_user(Some(cfg.clone()))).await
-        {
+        for report in crate::request::doctor(&session().with_user(Some(cfg.clone()))).await {
             assert_eq!(report.healthy(), report.finding.is_none());
         }
     }
@@ -205,11 +198,11 @@ mod tests {
     async fn the_audit_is_one_valid_tree_with_a_node_per_target() {
         let cfg = user_config();
         let recorded = std::sync::Arc::default();
-        let ctx = Context::new(mix_exec::Scope::root())
+        let ctx = session()
             .with_user(Some(cfg.clone()))
             .with_render(Recorded(std::sync::Arc::clone(&recorded)));
 
-        let reports = audit(&ctx).await;
+        let reports = crate::request::doctor(&ctx).await;
 
         let envelopes = recorded.lock().unwrap();
         assert!(mix_events::validate(envelopes.iter()).is_ok());

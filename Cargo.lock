@@ -1454,6 +1454,7 @@ dependencies = [
  "mix-shell",
  "mix-ui",
  "nix",
+ "tempfile",
  "tokio",
 ]
 
