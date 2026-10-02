@@ -39,15 +39,27 @@ pub async fn serve() -> ExitCode {
         Err(reason) => return stopped(reason),
     };
     let mut terminate = controls::listen(Signal::SIGTERM);
+    let host = Host::new(Gate::Members);
+    match mix_shell::request::recover(&host.locks, &mix_exec::Scope::root()).await {
+        Ok(recovered) => {
+            for (action, failure) in recovered.failures {
+                mix_ui::report(
+                    mix_ui::Severity::Warning,
+                    &mix_ui::Report::new(&mix_ui::phrase!(
+                        "could not finish an interrupted request"
+                    ))
+                    .causes(vec![format!("{action:?}: {failure:?}")]),
+                );
+            }
+        }
+        Err(error) => return stopped(error.to_string()),
+    }
     let mut connections = tokio::task::JoinSet::new();
     let ended = loop {
         tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => {
-                    connections.spawn(mix_rpc::serve_connection(
-                        Host { gate: Gate::Members },
-                        stream,
-                    ));
+                    connections.spawn(mix_rpc::serve_connection(host.clone(), stream));
                 }
                 Err(error) => break Some(format!("accepting a connection failed: {error}")),
             },

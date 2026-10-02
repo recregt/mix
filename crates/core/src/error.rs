@@ -32,9 +32,6 @@ pub enum Error {
     #[error("command `{command}` was interrupted")]
     Cancelled { command: String },
 
-    #[error("already locked: {}", path.display())]
-    Locked { path: PathBuf },
-
     #[error("the lock at {} does not exist and cannot be created", path.display())]
     LockMissing { path: PathBuf },
 }
@@ -61,10 +58,13 @@ mod tests {
     /// whether waiting is even the right advice, is not known here.
     #[test]
     fn a_raw_error_states_the_fact_without_advising_anything() {
-        let err = Error::Locked {
+        let err = Error::LockMissing {
             path: "/var/lib/mix/lock".into(),
         };
 
-        assert_eq!(err.to_string(), "already locked: /var/lib/mix/lock");
+        assert_eq!(
+            err.to_string(),
+            "the lock at /var/lib/mix/lock does not exist and cannot be created"
+        );
     }
 }

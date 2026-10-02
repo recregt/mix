@@ -134,12 +134,20 @@ impl Human {
                         self.lines.insert(node.id, line);
                     }
                 }
+                Some(node_started::Kind::LockWait(wait)) => {
+                    let subject = match (&wait.holder, &wait.command) {
+                        (Some(holder), Some(command)) => {
+                            format!("waiting for {holder}'s `mix {command}` to finish")
+                        }
+                        _ => "waiting for another `mix` command to finish".to_string(),
+                    };
+                    self.status(Detail::Step, Status::Blocking, &subject);
+                }
                 Some(
                     node_started::Kind::Plan(_)
                     | node_started::Kind::Process(_)
                     | node_started::Kind::Download(_)
                     | node_started::Kind::Inspection(_)
-                    | node_started::Kind::LockWait(_)
                     | node_started::Kind::NixActivity(_),
                 )
                 | None => {}

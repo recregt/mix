@@ -6,6 +6,8 @@ use mix_core::policy::{Mirror, Policy};
 use mix_events::Outbox;
 use mix_exec::Scope;
 
+use crate::request::Locked;
+
 #[derive(Debug, Clone, Default)]
 pub struct HostConfig {
     pub git_binary: Option<PathBuf>,
@@ -20,59 +22,20 @@ pub struct Request {
     pub outbox: Arc<Outbox>,
 }
 
-impl Request {
-    fn new() -> Self {
-        let id = request_id();
-        Self {
-            outbox: Arc::new(Outbox::new(id.clone(), || {})),
-            id,
-        }
-    }
-}
-
 pub struct Context {
     pub request: Request,
     pub user: Option<UserConfig>,
+    pub caller_is_root: bool,
     pub scope: Scope,
     pub policy: Policy,
     pub host: HostConfig,
     pub render: crate::render::Shared,
+    pub locked: Locked,
 }
 
 impl Context {
-    pub fn new(scope: Scope) -> Self {
-        Self {
-            request: Request::new(),
-            user: None,
-            scope,
-            policy: Policy::default(),
-            host: HostConfig::default(),
-            render: crate::render::shared(crate::render::Quiet),
-        }
-    }
-
-    pub fn with_user(mut self, user: Option<UserConfig>) -> Self {
-        self.user = user;
-        self
-    }
-
-    pub fn with_render(mut self, render: impl crate::render::Render + 'static) -> Self {
-        self.render = crate::render::shared(render);
-        self
-    }
-
-    pub fn with_policy(mut self, policy: Policy) -> Self {
-        self.policy = policy;
-        self
-    }
-
-    pub fn with_host(mut self, host: HostConfig) -> Self {
-        self.host = host;
-        self
-    }
-
     pub(crate) fn relay(&self) -> crate::render::Relay {
-        crate::render::Relay::new(Arc::clone(&self.request.outbox), Arc::clone(&self.render))
+        crate::render::Relay::new(Arc::clone(&self.render))
     }
 
     pub(crate) fn mirror(&self) -> Option<&str> {

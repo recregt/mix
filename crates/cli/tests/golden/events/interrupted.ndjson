@@ -1,5 +1,5 @@
 {"header":{"format":"mix.capture.v1","mixVersion":"0.1.0","request":"01920000-0000-7000-8000-000000000002"}}
-{"record":{"offset":"0s","envelope":{"seq":"1","request":"01920000-0000-7000-8000-000000000002","nodeStarted":{"id":"1","key":"install","command":{"mixVersion":"0.1.0","schemaMinor":1,"install":{"packages":["hello"]}}}}}}
+{"record":{"offset":"0s","envelope":{"seq":"1","request":"01920000-0000-7000-8000-000000000002","nodeStarted":{"id":"1","key":"install","command":{"mixVersion":"0.1.0","schemaMinor":2,"install":{"packages":["hello"]}}}}}}
 {"record":{"offset":"1s","envelope":{"seq":"2","request":"01920000-0000-7000-8000-000000000002","nodeStarted":{"id":"2","parent":"1","key":"plan","planned":["write-config","activate"],"plan":{"title":"install"}}}}}
 {"record":{"offset":"2s","envelope":{"seq":"3","request":"01920000-0000-7000-8000-000000000002","nodeStarted":{"id":"3","parent":"2","key":"i1","inspection":{"target":"/nix","category":"CATEGORY_FILESYSTEM"}}}}}
 {"record":{"offset":"3s","envelope":{"seq":"4","request":"01920000-0000-7000-8000-000000000002","nodeFinished":{"id":"3","status":"STATUS_SUCCEEDED"}}}}

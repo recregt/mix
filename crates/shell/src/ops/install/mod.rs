@@ -1,4 +1,5 @@
 use crate::Context;
+use crate::request::{Concluded, Root};
 
 use crate::profile::change::{self, Result};
 use crate::profile::state::Source;
@@ -20,25 +21,37 @@ impl Installed {
     }
 }
 
-pub async fn install(ctx: &Context, packages: &[String]) -> Result<Installed> {
-    let cfg = ctx.user.as_ref().ok_or(change::Error::NotBootstrapped)?;
-    let settled = change::settled(cfg);
-    let decided = mix_core::change::install(packages, settled.clone())?;
+pub(crate) async fn install(
+    ctx: &Context,
+    root: &mut Root,
+    packages: &[String],
+) -> Concluded<Result<Installed>> {
+    if ctx.caller_is_root {
+        return root.refuse(change::Error::NotRoot);
+    }
+    let Some(cfg) = ctx.user.as_ref() else {
+        return root.refuse(change::Error::NotBootstrapped);
+    };
+    let decided = match mix_core::change::install(packages, change::settled(cfg, &ctx.locked)) {
+        Ok(decided) => decided,
+        Err(refused) => return root.refuse(change::Error::from(refused)),
+    };
     let restored = (decided.source != Source::File).then_some(decided.source);
     change::run(
         ctx,
+        root,
         cfg,
         change::Verb::Install,
-        packages,
         &decided,
         &mut Vec::new(),
     )
-    .await?;
-
-    Ok(Installed {
-        added: decided.changed,
-        skipped: decided.skipped,
-        restored,
+    .await
+    .map(|ran| {
+        ran.map(|()| Installed {
+            added: decided.changed,
+            skipped: decided.skipped,
+            restored,
+        })
     })
 }
 
@@ -49,7 +62,6 @@ mod tests {
     use mix_core::privilege::InvokingUser;
     use mix_core::state::StateManifest;
 
-    use super::*;
     use crate::profile::change::Error;
 
     fn seeded_home() -> tempfile::TempDir {
@@ -63,8 +75,8 @@ mod tests {
         home
     }
 
-    fn context(home: &std::path::Path) -> Context {
-        Context::new(mix_exec::Scope::root()).with_user(Some(user_config(home)))
+    fn context(home: &std::path::Path) -> crate::Session {
+        crate::Session::new(mix_exec::Scope::root()).with_user(Some(user_config(home)))
     }
 
     fn user_config(home: &std::path::Path) -> mix_core::models::UserConfig {
@@ -86,7 +98,7 @@ mod tests {
     async fn install_skips_a_package_that_is_already_present() {
         let home = seeded_home();
 
-        let installed = install(&context(home.path()), &["git".to_string()])
+        let installed = crate::request::install(&context(home.path()), &["git".to_string()])
             .await
             .unwrap();
 
@@ -100,7 +112,7 @@ mod tests {
         let state_before =
             std::fs::read_to_string(mix_state_dir(home.path()).join(STATE_FILE)).unwrap();
 
-        install(&context(home.path()), &["git".to_string()])
+        crate::request::install(&context(home.path()), &["git".to_string()])
             .await
             .unwrap();
 
@@ -115,7 +127,7 @@ mod tests {
     async fn install_reports_a_repeated_package_once() {
         let home = seeded_home();
 
-        let installed = install(
+        let installed = crate::request::install(
             &context(home.path()),
             &["git".to_string(), "git".to_string()],
         )
@@ -130,9 +142,10 @@ mod tests {
     async fn install_leaves_nothing_written_for_an_invalid_package_name() {
         let home = seeded_home();
 
-        let err = install(&context(home.path()), &["not a valid ident".to_string()])
-            .await
-            .unwrap_err();
+        let err =
+            crate::request::install(&context(home.path()), &["not a valid ident".to_string()])
+                .await
+                .unwrap_err();
 
         assert!(matches!(err, Error::InvalidPackage(_)));
         assert!(!mix_state_dir(home.path()).join(HOME_NIX).exists());

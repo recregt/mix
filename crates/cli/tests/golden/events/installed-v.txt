@@ -1,3 +1,4 @@
+    Blocking waiting for alice's `mix install` to finish
      Writing package list
      Writing /home/ciuser/.local/state/mix/state
   Installing hello

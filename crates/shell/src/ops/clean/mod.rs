@@ -1,10 +1,11 @@
 use mix_core::action::{Fact, Query};
 use mix_core::paths::NIX_STORE;
-use mix_events::v1::{CleanRequest, CleanResult, command, node_finished};
+use mix_events::v1::{CleanResult, node_finished};
 
 use crate::Context;
 use crate::effect::generations;
 use crate::profile::change::{self, Result};
+use crate::request::{Concluded, Root};
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Cleaned {
@@ -17,18 +18,23 @@ fn available() -> Option<u64> {
     Some(stat.f_bavail.saturating_mul(stat.f_frsize))
 }
 
-pub async fn clean(ctx: &Context, all: bool) -> Result<Cleaned> {
-    let cfg = ctx.user.as_ref().ok_or(change::Error::NotBootstrapped)?;
+pub(crate) async fn clean(ctx: &Context, root: &mut Root, all: bool) -> Concluded<Result<Cleaned>> {
+    if ctx.caller_is_root {
+        return root.refuse(change::Error::NotRoot);
+    }
+    let Some(cfg) = ctx.user.as_ref() else {
+        return root.refuse(change::Error::NotBootstrapped);
+    };
     let old = match generations::observe(&Query::Profile(cfg.user.clone())) {
         Some(Fact::Profile(profile)) => mix_core::change::old_generations(&profile),
         _ => Vec::new(),
     };
     let before = all.then(available).flatten();
     let mut freed = None;
-    change::perform(
+    let concluded = change::perform(
         ctx,
+        root,
         "clean",
-        command::Request::Clean(CleanRequest { all }),
         mix_core::change::clean_steps(&cfg.user, all),
         || {
             freed = before.zip(available()).map(|(b, a)| a.saturating_sub(b));
@@ -39,10 +45,12 @@ pub async fn clean(ctx: &Context, all: bool) -> Result<Cleaned> {
         },
         &mut Vec::new(),
     )
-    .await?;
-    Ok(Cleaned {
-        generations: old,
-        freed_bytes: freed,
+    .await;
+    concluded.map(|ran| {
+        ran.map(|()| Cleaned {
+            generations: old,
+            freed_bytes: freed,
+        })
     })
 }
 
@@ -53,8 +61,8 @@ mod tests {
 
     use super::*;
 
-    fn context(home: &std::path::Path) -> Context {
-        Context::new(mix_exec::Scope::root()).with_user(Some(mix_core::models::UserConfig {
+    fn context(home: &std::path::Path) -> crate::Session {
+        crate::Session::new(mix_exec::Scope::root()).with_user(Some(mix_core::models::UserConfig {
             user: InvokingUser {
                 uid: 1000,
                 gid: 1000,
@@ -72,16 +80,18 @@ mod tests {
     async fn a_profile_with_no_generations_has_nothing_to_clean() {
         let home = tempfile::tempdir().unwrap();
 
-        let cleaned = clean(&context(home.path()), false).await.unwrap();
+        let cleaned = crate::request::clean(&context(home.path()), false)
+            .await
+            .unwrap();
 
         assert_eq!(cleaned, Cleaned::default());
     }
 
     #[tokio::test]
     async fn clean_needs_a_bootstrapped_user() {
-        let ctx = Context::new(mix_exec::Scope::root());
+        let ctx = crate::Session::new(mix_exec::Scope::root());
 
-        let refused = clean(&ctx, false).await.unwrap_err();
+        let refused = crate::request::clean(&ctx, false).await.unwrap_err();
 
         assert!(matches!(refused, change::Error::NotBootstrapped));
     }

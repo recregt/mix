@@ -5,7 +5,6 @@ Failure codes:
     permission-denied      `mix` was not allowed to use a file or directory
     command-failed         A program `mix` ran, such as `nix` or `git`, exited with an error
     spawn-failed           `mix` could not start a program it needs, such as `nix`
-    locked                 Another `mix` command is already changing the system
     lock-missing           `mix` has not been set up on this machine
     conflict               A file or account changed while `mix` was working on it
     unit-failed            A unit `mix` manages could not be started, stopped, enabled or reloaded

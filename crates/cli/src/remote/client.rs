@@ -281,7 +281,7 @@ mod tests {
                     artifact: "/nix".into(),
                     reason: mix_shell::target::Unfixable::NotADirectory,
                 },
-                mix_shell::target::Error::Core(mix_core::Error::Locked {
+                mix_shell::target::Error::Core(mix_core::Error::LockMissing {
                     path: "/var/lib/mix/lock".into(),
                 }),
             ],

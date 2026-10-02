@@ -529,16 +529,12 @@ impl Performer {
 }
 
 pub trait Observer: Send {
-    fn flush(&mut self);
-
     fn wants(&self, _detail: mix_events::Detail) -> bool {
         false
     }
 }
 
-impl Observer for () {
-    fn flush(&mut self) {}
-}
+impl Observer for () {}
 
 pub trait Journal: Send {
     fn append(&mut self, record: &Record) -> Result<(), Failure>;
@@ -616,7 +612,6 @@ pub async fn drive<'r>(
             runner.stop(cause);
         }
         let next = runner.step(tree, input.take());
-        observer.flush();
         match next {
             Next::Observe(queries) => {
                 let facts = performer.observe(&queries).await;
@@ -675,11 +670,9 @@ pub async fn drive<'r>(
                             outcome = &mut performing => break outcome,
                             Some(signal) = receiver.recv() => {
                                 apply(tree, node.unwrap_or(ROOT), signal);
-                                observer.flush();
                             }
                             _ = scope.stopped(), if !stopping => {
                                 announce(&mut stopping, tree, stopped());
-                                observer.flush();
                             }
                         }
                     }
@@ -688,7 +681,6 @@ pub async fn drive<'r>(
                 while let Ok(signal) = receiver.try_recv() {
                     apply(tree, acting, signal);
                 }
-                observer.flush();
                 match (&outcome, reverting, committing) {
                     (Ok(_), true, _) => {
                         keep(journal, &Record::Reverted { action }, tree, acting, traced)
@@ -907,8 +899,6 @@ mod tests {
     struct Everything;
 
     impl Observer for Everything {
-        fn flush(&mut self) {}
-
         fn wants(&self, _detail: mix_events::Detail) -> bool {
             true
         }

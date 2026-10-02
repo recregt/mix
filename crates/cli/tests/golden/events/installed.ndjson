@@ -1,6 +1,6 @@
 {"header":{"format":"mix.capture.v1","mixVersion":"0.1.0","request":"01920000-0000-7000-8000-000000000001"}}
-{"record":{"offset":"0s","envelope":{"seq":"1","request":"01920000-0000-7000-8000-000000000001","nodeStarted":{"id":"1","key":"install","command":{"mixVersion":"0.1.0","schemaMinor":1,"install":{"packages":["hello"]}}}}}}
-{"record":{"offset":"1s","envelope":{"seq":"2","request":"01920000-0000-7000-8000-000000000001","nodeStarted":{"id":"2","parent":"1","key":"lock","lockWait":{"lock":"/var/lib/mix/lock"}}}}}
+{"record":{"offset":"0s","envelope":{"seq":"1","request":"01920000-0000-7000-8000-000000000001","nodeStarted":{"id":"1","key":"install","command":{"mixVersion":"0.1.0","schemaMinor":2,"install":{"packages":["hello"]}}}}}}
+{"record":{"offset":"1s","envelope":{"seq":"2","request":"01920000-0000-7000-8000-000000000001","nodeStarted":{"id":"2","parent":"1","key":"lock","lockWait":{"lock":"/var/lib/mix/lock","holder":"alice","command":"install"}}}}}
 {"record":{"offset":"2s","envelope":{"seq":"3","request":"01920000-0000-7000-8000-000000000001","nodeFinished":{"id":"2","status":"STATUS_SUCCEEDED"}}}}
 {"record":{"offset":"3s","envelope":{"seq":"4","request":"01920000-0000-7000-8000-000000000001","nodeStarted":{"id":"3","parent":"1","key":"plan","plan":{"title":"install"}}}}}
 {"record":{"offset":"4s","envelope":{"seq":"5","request":"01920000-0000-7000-8000-000000000001","nodeStarted":{"id":"4","parent":"3","key":"write-config","step":{"verb":"VERB_WRITING","subject":"package list"}}}}}

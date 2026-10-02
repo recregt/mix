@@ -38,6 +38,7 @@ pub enum Status {
     Running,
     Fetching,
     Building,
+    Blocking,
     Observed,
     Journaled,
     Exited,
@@ -87,6 +88,7 @@ impl Status {
             Status::Running => verb!("Running"),
             Status::Fetching => verb!("Fetching"),
             Status::Building => verb!("Building"),
+            Status::Blocking => verb!("Blocking"),
             Status::Observed => verb!("Observed"),
             Status::Journaled => verb!("Journaled"),
             Status::Exited => verb!("Exited"),
@@ -130,6 +132,7 @@ impl Status {
             | Status::Running
             | Status::Fetching
             | Status::Building
+            | Status::Blocking
             | Status::Observed
             | Status::Journaled
             | Status::Installed

@@ -103,14 +103,6 @@ pub fn explanation(code: Code) -> Explanation {
             "The program is missing, or it is not executable.",
             ["run `mix doctor` to see whether the runtime is installed"]
         ),
-        Code::Locked => explained!(
-            "Another `mix` command is already changing the system.",
-            "Two changes at once could leave the system half done, so only one runs at a time.",
-            [
-                "wait for the other command to finish",
-                "run the command again"
-            ]
-        ),
         Code::LockMissing => explained!(
             "`mix` has not been set up on this machine.",
             "The lock file `mix` uses to keep commands apart does not exist yet.",

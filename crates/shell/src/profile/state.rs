@@ -7,7 +7,7 @@ use mix_core::paths::{
 
 pub use mix_core::change::{Invalid, STATE_VERSION, Settled, Source, validate};
 
-pub fn settle(home: &Path) -> Settled {
+pub fn settle(home: &Path, _locked: &crate::request::Locked) -> Settled {
     mix_core::change::settle(
         read(&mix_state_dir(home).join(STATE_FILE)).as_deref(),
         read(&active_generation_state(home)).as_deref(),
@@ -78,7 +78,7 @@ mod tests {
         write_generation(home.path(), &manifest(&["git"]).render());
 
         assert_eq!(
-            settle(home.path()),
+            settle(home.path(), &crate::request::Locked::for_tests()),
             Settled::Current {
                 manifest: manifest(&["git"]),
                 source: Source::Generation,
@@ -142,7 +142,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
 
         assert_eq!(
-            settle(home.path()),
+            settle(home.path(), &crate::request::Locked::for_tests()),
             Settled::Current {
                 manifest: StateManifest::seed(),
                 source: Source::Fresh,

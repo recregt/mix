@@ -7,7 +7,6 @@ pub(crate) mod git;
 pub mod home;
 pub mod identity;
 pub mod journal;
-pub mod lock;
 pub(crate) mod mirror;
 pub mod runtime;
 pub mod tools;
