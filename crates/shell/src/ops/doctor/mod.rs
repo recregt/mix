@@ -1,9 +1,6 @@
-//! The audit behind `mix doctor`: every declared target inspected, once each.
-//!
-//! What was measured travels as a [`Finding`](crate::target::Finding) — the mode that was read
-//! and the mode that was wanted, the ids an account carries, the unit file that is not there.
-//! The measuring itself belongs to [`crate::target`], which `mix repair` reconciles from, so the
-//! two commands cannot drift apart. The words are `mix-cli`'s.
+//! `mix doctor` checks every declared target, the system's and the caller's, against what
+//! it should be, and reports what it finds. `mix repair` uses the same checks to fix those
+//! targets. Because both rely on the same logic, detection and repair never go out of sync.
 
 use std::path::Path;
 
