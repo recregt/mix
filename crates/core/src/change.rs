@@ -146,7 +146,8 @@ pub fn install(packages: &[String], settled: Settled) -> Result<Change, NewerLis
         manifest: StateManifest {
             version: settled.version,
             packages: listed,
-        },
+        }
+        .sorted(),
         source,
     })
 }
@@ -162,7 +163,7 @@ pub fn remove(packages: &[String], settled: Settled) -> Result<Change, Refusal> 
     let partition = settled.partition(packages);
     let changed: Vec<String> = partition.installed.iter().map(|p| p.to_string()).collect();
     let skipped = partition.missing.iter().map(|p| p.to_string()).collect();
-    let manifest = settled.without(&changed);
+    let manifest = settled.without(&changed).sorted();
     Ok(Change {
         changed,
         skipped,

@@ -218,7 +218,7 @@ fn a_repeated_package_is_counted_once() {
 
     assert_eq!(change.changed, names(&["fd"]));
     assert_eq!(change.skipped, names(&["git"]));
-    assert_eq!(change.manifest, manifest(&["git", "fd"]));
+    assert_eq!(change.manifest, manifest(&["fd", "git"]));
 }
 
 #[test]
@@ -668,14 +668,14 @@ fn scenarios() -> Vec<Scenario> {
             base: bootstrapped(),
             decide: installing,
             requested: names(&["ripgrep", "fd"]),
-            wanted: names(&["git", "ripgrep", "fd"]),
+            wanted: names(&["fd", "git", "ripgrep"]),
         },
         Scenario {
             name: "remove",
             base: installed,
             decide: removing,
             requested: names(&["ripgrep"]),
-            wanted: names(&["git", "fd"]),
+            wanted: names(&["fd", "git"]),
         },
     ]
 }
@@ -862,7 +862,7 @@ fn an_install_over_a_broken_list_restores_it_and_adds_the_package() {
 
     assert_eq!(report.verdict, Verdict::Succeeded);
     assert_eq!(change.source, Source::Generation);
-    assert_eq!(listed(&world), names(&["git", "fd", "ripgrep"]));
+    assert_eq!(listed(&world), names(&["fd", "git", "ripgrep"]));
     assert!(actions.contains(&Action::ActivateProfile { user: user() }));
 }
 
@@ -983,7 +983,7 @@ proptest::proptest! {
                 before.push(package);
             }
         }
-        let before = StateManifest { version: STATE_VERSION, packages: before };
+        let before = StateManifest { version: STATE_VERSION, packages: before }.sorted();
         let installed = install(&requested, current(before.clone(), Source::File)).unwrap();
         let added = installed.changed.clone();
         let removed = remove(&added, current(installed.manifest, Source::File)).unwrap();
@@ -991,4 +991,30 @@ proptest::proptest! {
         proptest::prop_assert_eq!(removed.changed, added);
         proptest::prop_assert_eq!(removed.manifest, before);
     }
+}
+
+#[test]
+fn the_same_packages_requested_in_any_order_render_the_same_files() {
+    let render_of = |requested: &[&str]| {
+        let change = install(
+            &names(requested),
+            current(StateManifest::seed(), Source::File),
+        )
+        .unwrap();
+        render(&user(), &change.manifest).unwrap()
+    };
+
+    assert_eq!(render_of(&["jq", "hello"]), render_of(&["hello", "jq"]));
+}
+
+#[test]
+fn a_list_written_in_another_order_returns_to_the_generation_already_built() {
+    let mut world = bootstrapped();
+    command(&mut world, installing, &names(&["hello", "jq"]));
+    let built = active(&world);
+    command(&mut world, removing, &names(&["hello", "jq"]));
+
+    command(&mut world, installing, &names(&["jq", "hello"]));
+
+    assert_eq!(active(&world), built);
 }

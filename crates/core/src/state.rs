@@ -43,6 +43,13 @@ impl StateManifest {
         serde_json::from_str(raw)
     }
 
+    /// The same packages in one canonical order, so equal sets render to equal bytes.
+    pub fn sorted(mut self) -> Self {
+        self.packages.sort_unstable();
+        self.packages.dedup();
+        self
+    }
+
     pub fn protected<S: AsRef<str>>(requested: &[S]) -> Vec<&str> {
         let mut seen: HashSet<&str> = HashSet::new();
         requested
@@ -246,6 +253,14 @@ mod tests {
             remaining.packages,
             vec!["ripgrep".to_string(), "bat".to_string()]
         );
+    }
+
+    #[test]
+    fn sorted_lists_a_set_of_packages_in_one_order() {
+        let sorted = manifest(&["jq", "git", "hello", "jq"]).sorted();
+
+        assert_eq!(sorted, manifest(&["git", "hello", "jq"]));
+        assert_eq!(sorted, manifest(&["hello", "git", "jq"]).sorted());
     }
 
     #[test]
