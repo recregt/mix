@@ -29,7 +29,10 @@ const HOME_MANAGER_LOCK: LockedInput = LockedInput {
 };
 
 fn render_lock() -> String {
-    lock::render(NIXPKGS_LOCK, HOME_MANAGER_LOCK)
+    lock::render(mix_nixgen::Pins {
+        home_manager: HOME_MANAGER_LOCK,
+        nixpkgs: NIXPKGS_LOCK,
+    })
 }
 
 fn nix_system(arch: Arch, os: Os) -> System {
