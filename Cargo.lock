@@ -1416,6 +1416,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -1466,7 +1467,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
- "uuid",
 ]
 
 [[package]]
@@ -1543,6 +1543,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "uuid",
  "zbus",
 ]
 

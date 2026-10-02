@@ -139,6 +139,7 @@ fn stream_the_failure(command: &Command, error: &anyhow::Error, view: &render::s
         return;
     };
     mix_events::fail(
+        uuid::Uuid::now_v7().to_string(),
         mix_events::command(request_of(command)),
         explain::fault_of(error),
         &mut sinks,

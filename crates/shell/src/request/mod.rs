@@ -465,6 +465,7 @@ pub async fn run(session: &Session, command: Command) {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             mix_events::fail(
+                crate::request::context::request_id(),
                 Command::default(),
                 mix_core::diagnose::failed(Code::Internal, "the request names no command", None),
                 &mut **render,

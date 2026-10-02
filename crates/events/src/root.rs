@@ -10,10 +10,6 @@ pub trait Render: Send {
     fn detail(&self) -> Detail;
 }
 
-pub fn request_id() -> String {
-    uuid::Uuid::now_v7().to_string()
-}
-
 pub fn key_of(request: Option<&Request>) -> &'static str {
     match request {
         Some(Request::Bootstrap(_)) => "bootstrap",
@@ -34,8 +30,8 @@ pub fn command(request: Request) -> Command {
     }
 }
 
-pub fn fail(command: Command, fault: Fault, render: &mut (impl Render + ?Sized)) {
-    let outbox = Arc::new(Outbox::new(request_id(), || {}));
+pub fn fail(request: String, command: Command, fault: Fault, render: &mut (impl Render + ?Sized)) {
+    let outbox = Arc::new(Outbox::new(request, || {}));
     let mut tree = Tree::new(
         Arc::clone(&outbox),
         Arc::new(|| None),

@@ -10,6 +10,7 @@ name = "mix"
 path = "src/main.rs"
 
 [dependencies]
+uuid = { version = "1.26.1", features = ["v7"] }
 thiserror = { workspace = true }
 mix-core = { path = "../core" }
 mix-exec = { path = "../exec" }
