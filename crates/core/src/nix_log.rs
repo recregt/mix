@@ -216,7 +216,6 @@ impl NixLog {
         }
     }
 
-    /// Kept out of line so the plain-line check above stays small enough to inline.
     #[inline(never)]
     fn observe_record<'a>(&mut self, line: &'a str, payload: &'a str) -> Event<'a> {
         let Ok(record) = serde_json::from_str::<Record>(payload) else {

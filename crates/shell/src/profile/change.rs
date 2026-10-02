@@ -121,7 +121,6 @@ pub async fn run(
     .await
 }
 
-/// Runs a command's steps against the profile under one root node.
 pub async fn perform(
     ctx: &Context,
     key: &'static str,

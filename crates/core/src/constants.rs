@@ -61,7 +61,6 @@ pub mod paths {
 
     pub const GENERATION_STATE_FILE: &str = "mix-state";
 
-    /// Each file a generation is built from, and the name its copy has inside the generation.
     pub const GENERATION_INPUTS: [(&str, &str); 4] = [
         (STATE_FILE, GENERATION_STATE_FILE),
         (FLAKE_NIX, "mix-flake.nix"),

@@ -13,7 +13,6 @@ fn main() {
 
 const VERSION: &str = "1.2.3";
 
-/// A worker that replays a fixed list of envelopes, so only the transport is measured.
 struct Replay(Arc<[Envelope]>);
 
 impl Worker for Replay {
@@ -30,7 +29,6 @@ impl Worker for Replay {
     }
 }
 
-/// The output of a build: one envelope per line it printed.
 fn lines(count: usize) -> Vec<Envelope> {
     (0..count)
         .map(|line| Envelope {
@@ -56,7 +54,6 @@ fn repair() -> Command {
     }
 }
 
-/// One whole request through the daemon: connect, say hello, run, and read every reply.
 #[divan::bench(args = [16, 256, 2048])]
 fn stream_a_request(bencher: divan::Bencher, count: usize) {
     let runtime = tokio::runtime::Builder::new_current_thread()

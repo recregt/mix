@@ -228,7 +228,6 @@ async fn apply(
         .map_err(core_failure)
 }
 
-/// Activates a generation already built from the current files: nix has nothing to evaluate.
 async fn reuse(
     user: &InvokingUser,
     previous: Option<u64>,

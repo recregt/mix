@@ -88,7 +88,6 @@ struct Service<W> {
 
 impl<W: Worker> Service<W> {
     fn admits(&self, caller: Caller) -> bool {
-        // One connection has one peer, so its hello and run share a single check.
         match *self
             .admitted
             .get_or_init(|| (caller, self.worker.admits(caller)))

@@ -306,7 +306,6 @@ impl StepSpec for Record {
     }
 }
 
-/// Every generation except the active one.
 pub fn old_generations(profile: &ProfileFacts) -> Vec<u64> {
     profile
         .generations
@@ -367,7 +366,6 @@ impl StepSpec for Collect {
     }
 }
 
-/// Deletes every old generation and, with `all`, the store paths nothing uses any more.
 pub fn clean_steps(user: &InvokingUser, all: bool) -> Vec<Box<dyn StepSpec>> {
     let mut steps: Vec<Box<dyn StepSpec>> = vec![Box::new(Prune(user.clone()))];
     if all {

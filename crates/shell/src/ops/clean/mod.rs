@@ -9,7 +9,6 @@ use crate::profile::change::{self, Result};
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Cleaned {
     pub generations: Vec<u64>,
-    /// Space the store gained, when `all` collected it.
     pub freed_bytes: Option<u64>,
 }
 

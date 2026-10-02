@@ -1,10 +1,7 @@
-//! What `mix clean` says when it cannot finish.
-
 use mix_shell::profile::change::Error;
 
 use super::{Diagnostic, change, failed};
 
-/// How the command is spelled when the reader is told to run it again.
 pub(crate) const COMMAND: &str = "mix clean";
 
 pub(crate) const ACTION: &str = "clean up your profile";

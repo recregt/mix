@@ -43,7 +43,6 @@ impl StateManifest {
         serde_json::from_str(raw)
     }
 
-    /// The same packages in one canonical order, so equal sets render to equal bytes.
     pub fn sorted(mut self) -> Self {
         self.packages.sort_unstable();
         self.packages.dedup();

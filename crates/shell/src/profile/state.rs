@@ -20,7 +20,6 @@ pub fn active_generation_state(home: &Path) -> std::path::PathBuf {
         .join(GENERATION_STATE_FILE)
 }
 
-/// The newest of `generations` built from exactly the files now in the state directory.
 pub fn built_generation(home: &Path, generations: &[u64]) -> Option<u64> {
     let state = mix_state_dir(home);
     let inputs: Vec<Vec<u8>> = GENERATION_INPUTS

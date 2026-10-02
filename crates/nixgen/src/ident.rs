@@ -58,7 +58,6 @@ const fn is_file_name_bytes(bytes: &[u8]) -> bool {
     let mut i = 0;
     while i < bytes.len() {
         let b = bytes[i];
-        // A dot only between two other characters, so `.`, `..` and `a.` stay out.
         let dot = b == b'.' && i > 0 && i + 1 < bytes.len() && bytes[i - 1] != b'.';
         if !(b.is_ascii_lowercase() || b.is_ascii_digit() || (b == b'-' && i > 0) || dot) {
             return false;

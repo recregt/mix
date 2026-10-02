@@ -67,7 +67,6 @@ pub fn group_has_gid(name: &str, gid: u32) -> bool {
     group_gid(name) == Some(gid)
 }
 
-/// Like `group_has_member`, for a user already looked up: saves resolving them again.
 pub fn user_in_group(name: &str, user: &InvokingUser) -> bool {
     nix::unistd::Group::from_name(name)
         .ok()
