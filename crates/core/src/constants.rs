@@ -60,6 +60,14 @@ pub mod paths {
 
     pub const GENERATION_STATE_FILE: &str = "mix-state";
 
+    /// Each file a generation is built from, and the name its copy has inside the generation.
+    pub const GENERATION_INPUTS: [(&str, &str); 4] = [
+        (STATE_FILE, GENERATION_STATE_FILE),
+        (FLAKE_NIX, "mix-flake.nix"),
+        (FLAKE_LOCK, "mix-flake.lock"),
+        (HOME_NIX, "mix-home.nix"),
+    ];
+
     pub const NIX_PROFILES_DIR: &str = ".local/state/nix/profiles";
     pub const NIX_PROFILES_DIR_MODE: u32 = 0o755;
     pub const HOME_MANAGER_PROFILE_NAME: &str = "home-manager";

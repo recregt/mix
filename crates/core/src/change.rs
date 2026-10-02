@@ -5,7 +5,7 @@ use mix_nixgen::{CopyIntoGeneration, FileName, HomeModule, InvalidInput, StateVe
 
 use crate::action::{Action, Fact, Failure, Query};
 use crate::bootstrap::{FILE_MODE, Facts, ensure_file};
-use crate::paths::{GENERATION_STATE_FILE, HOME_NIX, STATE_FILE, mix_state_dir};
+use crate::paths::{GENERATION_INPUTS, HOME_NIX, STATE_FILE, mix_state_dir};
 use crate::plan::{StepSpec, Title};
 use crate::privilege::InvokingUser;
 use crate::state::{REQUIRED_PACKAGES, StateManifest};
@@ -15,10 +15,17 @@ pub const STATE_VERSION: u32 = 1;
 
 pub const HOME_MANAGER_STATE_VERSION: StateVersion = StateVersion::new_static("24.05");
 
-const STATE_INTO_GENERATION: CopyIntoGeneration = CopyIntoGeneration {
-    source: FileName::new_static(STATE_FILE),
-    target: FileName::new_static(GENERATION_STATE_FILE),
+const INPUTS_INTO_GENERATION: [CopyIntoGeneration; 4] = {
+    let [a, b, c, d] = GENERATION_INPUTS;
+    [copy(a), copy(b), copy(c), copy(d)]
 };
+
+const fn copy((source, target): (&'static str, &'static str)) -> CopyIntoGeneration {
+    CopyIntoGeneration {
+        source: FileName::new_static(source),
+        target: FileName::new_static(target),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Invalid {
@@ -183,12 +190,11 @@ pub fn render_home<S: AsRef<str>>(
     user: &InvokingUser,
     packages: impl IntoIterator<Item = S>,
 ) -> Result<String, InvalidInput> {
-    Ok(
-        HomeModule::new(&user.name, &user.home, HOME_MANAGER_STATE_VERSION)?
-            .copy_into_generation(STATE_INTO_GENERATION)
-            .packages(packages)?
-            .render(),
-    )
+    let mut module = HomeModule::new(&user.name, &user.home, HOME_MANAGER_STATE_VERSION)?;
+    for copy in INPUTS_INTO_GENERATION {
+        module = module.copy_into_generation(copy);
+    }
+    Ok(module.packages(packages)?.render())
 }
 
 pub fn render(user: &InvokingUser, manifest: &StateManifest) -> Result<Rendered, Unrenderable> {

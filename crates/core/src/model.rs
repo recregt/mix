@@ -831,18 +831,22 @@ impl World {
                 let profile = self.profiles.entry(user.uid).or_default();
                 let previous = profile.active;
                 let last = profile.generations.iter().max().copied();
-                if let Some(last) = last
-                    && profile.built.get(&last) == Some(&config)
-                {
-                    profile.active = Some(last);
-                    return done(if previous == Some(last) {
+                let built = profile
+                    .generations
+                    .iter()
+                    .copied()
+                    .filter(|generation| profile.built.get(generation) == Some(&config))
+                    .max();
+                if let Some(built) = built {
+                    profile.active = Some(built);
+                    return done(if previous == Some(built) {
                         Vec::new()
                     } else {
                         vec![
                             Action::SwitchGeneration {
                                 user: user.clone(),
                                 generation: previous,
-                                expect: Some(last),
+                                expect: Some(built),
                             },
                             Action::ApplyGeneration { user: user.clone() },
                         ]

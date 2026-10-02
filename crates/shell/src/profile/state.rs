@@ -1,7 +1,8 @@
 use std::path::Path;
 
 use mix_core::paths::{
-    GENERATION_STATE_FILE, HOME_MANAGER_PROFILE_NAME, STATE_FILE, mix_state_dir, nix_profiles_dir,
+    GENERATION_INPUTS, GENERATION_STATE_FILE, HOME_MANAGER_PROFILE_NAME, STATE_FILE, mix_state_dir,
+    nix_profiles_dir,
 };
 
 pub use mix_core::change::{Invalid, STATE_VERSION, Settled, Source, validate};
@@ -17,6 +18,25 @@ pub fn active_generation_state(home: &Path) -> std::path::PathBuf {
     nix_profiles_dir(home)
         .join(HOME_MANAGER_PROFILE_NAME)
         .join(GENERATION_STATE_FILE)
+}
+
+/// The newest of `generations` built from exactly the files now in the state directory.
+pub fn built_generation(home: &Path, generations: &[u64]) -> Option<u64> {
+    let state = mix_state_dir(home);
+    let inputs: Vec<Vec<u8>> = GENERATION_INPUTS
+        .iter()
+        .map(|(file, _)| std::fs::read(state.join(file)).ok())
+        .collect::<Option<_>>()?;
+    let mut generations = generations.to_vec();
+    generations.sort_unstable_by(|a, b| b.cmp(a));
+    generations.into_iter().find(|generation| {
+        let dir =
+            nix_profiles_dir(home).join(format!("{HOME_MANAGER_PROFILE_NAME}-{generation}-link"));
+        GENERATION_INPUTS
+            .iter()
+            .zip(&inputs)
+            .all(|((_, copy), wanted)| std::fs::read(dir.join(copy)).ok().as_ref() == Some(wanted))
+    })
 }
 
 fn read(path: &Path) -> Option<String> {
@@ -65,6 +85,57 @@ mod tests {
                 source: Source::Generation,
             }
         );
+    }
+
+    fn write_inputs(dir: &Path, names: impl Fn(usize) -> &'static str, packages: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        for (index, _) in GENERATION_INPUTS.iter().enumerate() {
+            std::fs::write(dir.join(names(index)), format!("{index} {packages}")).unwrap();
+        }
+    }
+
+    fn write_built(home: &Path, generation: u64, packages: &str) {
+        let out = home.join(format!("store-{generation}"));
+        write_inputs(&out, |index| GENERATION_INPUTS[index].1, packages);
+        std::fs::create_dir_all(nix_profiles_dir(home)).unwrap();
+        std::os::unix::fs::symlink(
+            &out,
+            nix_profiles_dir(home).join(format!("{HOME_MANAGER_PROFILE_NAME}-{generation}-link")),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn the_newest_generation_built_from_the_same_files_is_found() {
+        let home = tempfile::tempdir().unwrap();
+        write_inputs(
+            &mix_state_dir(home.path()),
+            |index| GENERATION_INPUTS[index].0,
+            "git",
+        );
+        write_built(home.path(), 1, "git");
+        write_built(home.path(), 2, "git hello");
+        write_built(home.path(), 3, "git");
+        write_built(home.path(), 4, "git hello");
+
+        assert_eq!(built_generation(home.path(), &[1, 2, 3, 4]), Some(3));
+        assert_eq!(built_generation(home.path(), &[1, 2, 4]), Some(1));
+        assert_eq!(built_generation(home.path(), &[2, 4]), None);
+    }
+
+    #[test]
+    fn a_generation_without_copied_inputs_is_never_reused() {
+        let home = tempfile::tempdir().unwrap();
+        write_inputs(
+            &mix_state_dir(home.path()),
+            |index| GENERATION_INPUTS[index].0,
+            "git",
+        );
+        write_built(home.path(), 1, "git");
+        let out = home.path().join("store-1");
+        std::fs::remove_file(out.join(GENERATION_INPUTS[3].1)).unwrap();
+
+        assert_eq!(built_generation(home.path(), &[1]), None);
     }
 
     #[test]

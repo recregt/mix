@@ -290,14 +290,15 @@ fn rendering_writes_every_package_into_the_list_and_home_nix() {
 }
 
 #[test]
-fn rendering_copies_the_package_list_into_the_generation() {
+fn rendering_copies_every_input_into_the_generation() {
     let rendered = render(&user(), &manifest(&["git"])).unwrap();
 
-    assert!(
-        rendered
-            .home_nix
-            .contains(r#"extraBuilderCommands = "cp ${./state} $out/mix-state";"#)
-    );
+    assert!(rendered.home_nix.contains(
+        "extraBuilderCommands = \"cp ${./state} $out/mix-state\n\
+         cp ${./flake.nix} $out/mix-flake.nix\n\
+         cp ${./flake.lock} $out/mix-flake.lock\n\
+         cp ${./home.nix} $out/mix-home.nix\";"
+    ));
 }
 
 #[test]

@@ -213,6 +213,43 @@ async fn apply(
         .map_err(core_failure)
 }
 
+/// Activates a generation already built from the current files: nix has nothing to evaluate.
+async fn reuse(
+    user: &InvokingUser,
+    previous: Option<u64>,
+    built: u64,
+    activity: &Arc<dyn ActivityReporter>,
+    scope: &Scope,
+    prepared: &mut Prepared<'_>,
+) -> Outcome {
+    let moved = previous != Some(built);
+    let undo = if moved {
+        vec![
+            Action::SwitchGeneration {
+                user: user.clone(),
+                generation: previous,
+                expect: Some(built),
+            },
+            Action::ApplyGeneration { user: user.clone() },
+        ]
+    } else {
+        Vec::new()
+    };
+    prepared(&undo)?;
+    if moved {
+        switch_to(user, Some(built), scope).await?;
+    }
+    if let Err(failure) = apply(user, activity, &scope.shielded()).await {
+        if moved {
+            let shielded = scope.shielded();
+            let _ = switch_to(user, previous, &shielded).await;
+            let _ = apply(user, activity, &shielded).await;
+        }
+        return Err(failure);
+    }
+    Ok(Performed { undo })
+}
+
 async fn activate(
     user: &InvokingUser,
     context: &ProfileContext,
@@ -222,6 +259,9 @@ async fn activate(
 ) -> Outcome {
     let previous = current(user);
     let before = existing(user);
+    if let Some(built) = profile::state::built_generation(&user.home, &before) {
+        return reuse(user, previous, built, activity, scope, prepared).await;
+    }
     let predicted = before.iter().max().map_or(1, |last| last + 1);
     prepared(&undo_activation(user, previous, predicted))?;
     let generation = profile::switch(user, context.mirror.as_deref(), activity, scope)
