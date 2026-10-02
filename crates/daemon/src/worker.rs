@@ -40,7 +40,7 @@ fn context(user: Option<mix_core::models::UserConfig>, forward: &Forward) -> mix
     mix_shell::Context::new(mix_exec::Scope::root())
         .with_user(user)
         .with_render(forward.clone())
-        .with_host(crate::commands::host_config())
+        .with_host(crate::settings::host_config())
 }
 
 async fn bootstrap(
@@ -51,10 +51,14 @@ async fn bootstrap(
 ) -> Result<(), Box<Fault>> {
     let _lock = mix_shell::effect::lock::acquire_exclusive(LOCK_FILE).map_err(fault)?;
     let policy =
-        crate::commands::requested_policy(request.mirror.as_deref(), request.mirror_key.as_deref())
+        crate::settings::requested_policy(request.mirror.as_deref(), request.mirror_key.as_deref())
             .map_err(fault)?;
-    let user = mix_shell::effect::accounts::user_by_uid(caller.uid)
-        .and_then(mix_shell::profile::user_config_for);
+    let account = if caller.uid == 0 {
+        mix_shell::effect::accounts::invoking_user()
+    } else {
+        mix_shell::effect::accounts::user_by_uid(caller.uid)
+    };
+    let user = account.and_then(mix_shell::profile::user_config_for);
     let ctx = context(user, forward).with_policy(policy);
     let _steer = controls::steer(&ctx.scope, controls, &forward.events);
     mix_shell::ops::bootstrap::bootstrap(&ctx, request.force)
@@ -67,7 +71,7 @@ async fn repair(caller: Caller, controls: Controls, forward: &Forward) -> Result
     let _lock = mix_shell::effect::lock::acquire_exclusive(LOCK_FILE).map_err(fault)?;
     let user = mix_shell::effect::accounts::user_by_uid(caller.uid)
         .and_then(mix_shell::profile::existing_user_config_for);
-    let ctx = context(user, forward).with_policy(crate::commands::policy());
+    let ctx = context(user, forward).with_policy(crate::settings::policy());
     let _steer = controls::steer(&ctx.scope, controls, &forward.events);
     mix_shell::ops::repair::repair(&ctx).await;
     Ok(())
@@ -91,7 +95,7 @@ async fn change(
     let _lock = mix_shell::effect::lock::acquire_exclusive(LOCK_FILE).map_err(fault)?;
     let user = mix_shell::effect::accounts::user_by_uid(caller.uid)
         .and_then(mix_shell::profile::existing_user_config_for);
-    let ctx = context(user, forward).with_policy(crate::commands::policy());
+    let ctx = context(user, forward).with_policy(crate::settings::policy());
     let _steer = controls::steer(&ctx.scope, controls, &forward.events);
     match verb {
         Change::Install => mix_shell::ops::install::install(&ctx, packages)
@@ -105,10 +109,30 @@ async fn change(
     }
 }
 
+async fn clean(
+    caller: Caller,
+    all: bool,
+    controls: Controls,
+    forward: &Forward,
+) -> Result<(), Box<Fault>> {
+    if caller.uid == 0 {
+        return Err(fault(mix_shell::profile::change::Error::NotRoot));
+    }
+    let _lock = mix_shell::effect::lock::acquire_exclusive(LOCK_FILE).map_err(fault)?;
+    let user = mix_shell::effect::accounts::user_by_uid(caller.uid)
+        .and_then(mix_shell::profile::existing_user_config_for);
+    let ctx = context(user, forward).with_policy(crate::settings::policy());
+    let _steer = controls::steer(&ctx.scope, controls, &forward.events);
+    mix_shell::ops::clean::clean(&ctx, all)
+        .await
+        .map(drop)
+        .map_err(fault)
+}
+
 async fn doctor(caller: Caller, controls: Controls, forward: &Forward) -> Result<(), Box<Fault>> {
     let user = mix_shell::effect::accounts::user_by_uid(caller.uid)
         .and_then(mix_shell::profile::existing_user_config_for);
-    let ctx = context(user, forward).with_policy(crate::commands::policy());
+    let ctx = context(user, forward).with_policy(crate::settings::policy());
     let _steer = controls::steer(&ctx.scope, controls, &forward.events);
     mix_shell::ops::doctor::audit(&ctx).await;
     Ok(())
@@ -118,10 +142,33 @@ fn unserved() -> Fault {
     mix_core::diagnose::failed(Code::Internal, "the request names no command", None)
 }
 
-struct CliWorker;
+#[derive(Clone, Copy)]
+pub enum Gate {
+    Sudo,
+    Members,
+}
 
-impl mix_rpc::Worker for CliWorker {
+#[derive(Clone, Copy)]
+pub struct Host {
+    pub gate: Gate,
+}
+
+fn enrolled(uid: u32) -> bool {
+    uid == 0
+        || mix_shell::effect::accounts::user_by_uid(uid).is_some_and(|user| {
+            mix_shell::effect::accounts::user_in_group(mix_core::identity::MIX_USERS_GROUP, &user)
+        })
+}
+
+impl mix_rpc::Worker for Host {
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+
+    fn admits(&self, caller: Caller) -> bool {
+        match self.gate {
+            Gate::Sudo => true,
+            Gate::Members => enrolled(caller.uid),
+        }
+    }
 
     async fn run(&self, caller: Caller, command: Command, controls: Controls, events: Events) {
         let mut forward = Forward {
@@ -154,17 +201,18 @@ impl mix_rpc::Worker for CliWorker {
                 .await
             }
             Some(Request::Doctor(_)) => doctor(caller, controls, &forward).await,
+            Some(Request::Clean(request)) => clean(caller, request.all, controls, &forward).await,
             None => Err(Box::new(unserved())),
         };
         if let Err(fault) = ran
             && !forward.started.load(Ordering::SeqCst)
         {
-            crate::root::fail(command, *fault, &mut forward);
+            mix_shell::root::fail(command, *fault, &mut forward);
         }
     }
 }
 
-pub async fn run() -> ExitCode {
+pub async fn serve_stdin() -> ExitCode {
     if !mix_shell::effect::accounts::is_root() {
         mix_ui::report(
             mix_ui::Severity::Error,
@@ -175,7 +223,7 @@ pub async fn run() -> ExitCode {
         return ExitCode::FAILURE;
     }
     tokio::spawn(controls::ignore_the_terminal());
-    match mix_rpc::serve_stdin(CliWorker).await {
+    match mix_rpc::serve_stdin(Host { gate: Gate::Sudo }).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             mix_ui::report(
@@ -197,7 +245,7 @@ mod tests {
 
     async fn served(command: Command) -> Vec<Envelope> {
         let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
-        let server = tokio::spawn(mix_rpc::serve_connection(CliWorker, theirs));
+        let server = tokio::spawn(mix_rpc::serve_connection(Host { gate: Gate::Sudo }, theirs));
         let mut client = mix_rpc::Client::connect(ours, env!("CARGO_PKG_VERSION"))
             .await
             .unwrap();
@@ -231,7 +279,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_doctor_request_ends_with_the_reports_in_its_root() {
-        let envelopes = served(crate::root::command(Request::Doctor(DoctorRequest {}))).await;
+        let envelopes = served(mix_shell::root::command(Request::Doctor(DoctorRequest {}))).await;
 
         assert!(matches!(
             root(&envelopes).result,
@@ -276,5 +324,55 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(refused.code(), Some(Code::RootNotAllowed));
+    }
+
+    #[tokio::test]
+    async fn root_is_refused_a_clean_before_anything_is_locked() {
+        let (events, _received) = tokio::sync::mpsc::unbounded_channel();
+        let forward = Forward {
+            events,
+            started: Arc::new(AtomicBool::new(false)),
+        };
+
+        let refused = clean(
+            Caller { uid: 0, gid: 0 },
+            true,
+            tokio::sync::mpsc::unbounded_channel().1,
+            &forward,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(refused.code(), Some(Code::RootNotAllowed));
+    }
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use mix_rpc::Worker;
+
+    use super::*;
+
+    #[test]
+    fn the_socket_admits_root_and_refuses_a_user_outside_mix_users() {
+        let host = Host {
+            gate: Gate::Members,
+        };
+
+        assert!(host.admits(Caller { uid: 0, gid: 0 }));
+        assert!(!host.admits(Caller {
+            uid: u32::MAX - 1,
+            gid: u32::MAX - 1
+        }));
+    }
+
+    #[test]
+    fn the_one_shot_worker_admits_whoever_sudo_let_through() {
+        let host = Host { gate: Gate::Sudo };
+
+        assert!(host.admits(Caller {
+            uid: u32::MAX - 1,
+            gid: u32::MAX - 1
+        }));
     }
 }

@@ -5,7 +5,7 @@ from support.container import create_user
 from support.mirror import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS, mirror_args
 
 USER = MIRROR_TEST_USERS[0]
-MIX = "/usr/local/bin/mix"
+DAEMON = "/usr/local/bin/mix-daemon"
 STATE_DIR = f"/home/{USER}/.local/state/mix"
 NIX_BUILD = "bin/nix build .*--print-out-paths"
 JOURNAL_DIR = "/var/lib/mix/journal"
@@ -85,7 +85,7 @@ def test_a_second_ctrl_c_leaves_the_worker_to_finish_the_rollback(
     bootstrap = container.mix_background("bootstrap", *mirror, user=USER)
     build = _pid_of(container, NIX_BUILD, timeout=180)
     container.exec("kill", "-STOP", build, check=True)
-    worker = _pid_of(container, f"^{MIX} worker")
+    worker = _pid_of(container, f"^{DAEMON} serve-stdin")
     client = bootstrap.pid()
     assert _pgid(container, build) != _pgid(container, worker)
 

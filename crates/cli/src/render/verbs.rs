@@ -55,7 +55,8 @@ pub(crate) fn action(operation: Operation) -> Status {
         | Operation::DeleteUser
         | Operation::RemoveMember
         | Operation::RemoveRuntime
-        | Operation::DeleteGeneration => Status::Removing,
+        | Operation::DeleteGeneration
+        | Operation::CollectGarbage => Status::Removing,
         Operation::InstallUnit | Operation::InstallRuntime => Status::Installing,
         Operation::EnableUnit => Status::Enabling,
         Operation::DisableUnit => Status::Disabling,

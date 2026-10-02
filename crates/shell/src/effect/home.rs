@@ -12,7 +12,7 @@ use crate::effect::files::{Files, Prepared};
 
 pub const COMMAND: &str = "home-files";
 
-const PROGRAM: &str = "mix home-files";
+const PROGRAM: &str = "mix-daemon home-files";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
@@ -20,12 +20,17 @@ pub enum Request {
     Proceed,
     Refuse(Failure),
     Adopt(Vec<PathBuf>),
+    FindBuilt {
+        home: PathBuf,
+        generations: Vec<u64>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Reply {
     Prepared(Vec<Action>),
     Done(Outcome),
+    Built(Option<u64>),
 }
 
 pub fn path_of(action: &Action) -> Option<&Path> {
@@ -82,6 +87,11 @@ pub fn serve(
         let action = match request {
             Request::Adopt(pending) => {
                 files.adopt(pending);
+                continue;
+            }
+            Request::FindBuilt { home, generations } => {
+                let built = crate::profile::state::built_generation(&home, &generations);
+                send(&mut output, &Reply::Built(built))?;
                 continue;
             }
             Request::Perform(action) => action,
@@ -181,7 +191,24 @@ impl Agent {
                     self.send(&answer).await?;
                 }
                 Reply::Done(outcome) => return outcome,
+                Reply::Built(_) => return Err(broken("an answer to a question not asked")),
             }
+        }
+    }
+
+    pub async fn find_built(
+        &mut self,
+        home: &Path,
+        generations: &[u64],
+    ) -> Result<Option<u64>, Failure> {
+        self.send(&Request::FindBuilt {
+            home: home.to_path_buf(),
+            generations: generations.to_vec(),
+        })
+        .await?;
+        match self.receive().await? {
+            Reply::Built(built) => Ok(built),
+            other => Err(broken(format!("{other:?} in place of a generation"))),
         }
     }
 

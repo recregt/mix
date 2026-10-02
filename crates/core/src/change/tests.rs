@@ -218,7 +218,7 @@ fn a_repeated_package_is_counted_once() {
 
     assert_eq!(change.changed, names(&["fd"]));
     assert_eq!(change.skipped, names(&["git"]));
-    assert_eq!(change.manifest, manifest(&["git", "fd"]));
+    assert_eq!(change.manifest, manifest(&["fd", "git"]));
 }
 
 #[test]
@@ -290,14 +290,15 @@ fn rendering_writes_every_package_into_the_list_and_home_nix() {
 }
 
 #[test]
-fn rendering_copies_the_package_list_into_the_generation() {
+fn rendering_copies_every_input_into_the_generation() {
     let rendered = render(&user(), &manifest(&["git"])).unwrap();
 
-    assert!(
-        rendered
-            .home_nix
-            .contains(r#"extraBuilderCommands = "cp ${./state} $out/mix-state";"#)
-    );
+    assert!(rendered.home_nix.contains(
+        "extraBuilderCommands = \"cp ${./state} $out/mix-state\n\
+         cp ${./flake.nix} $out/mix-flake.nix\n\
+         cp ${./flake.lock} $out/mix-flake.lock\n\
+         cp ${./home.nix} $out/mix-home.nix\";"
+    ));
 }
 
 #[test]
@@ -383,6 +384,7 @@ fn drive(world: &mut World, mut runner: Runner, fail: impl Fn(&Action) -> bool) 
 
 fn bootstrapped() -> World {
     let mut world = World::default();
+    world.with_file("/usr/local/bin/mix-daemon", b"mix-daemon", 0o755, (0, 0));
     let config = config();
     world.with_dir(&config.user.home, 0o700, (config.user.uid, config.user.gid));
     world.users.insert(
@@ -405,6 +407,7 @@ fn bootstrapped() -> World {
             size: 1,
         },
         request: "bootstrap".into(),
+        daemon: "/usr/local/bin/mix-daemon".into(),
     };
     let report = drive(
         &mut world,
@@ -665,14 +668,14 @@ fn scenarios() -> Vec<Scenario> {
             base: bootstrapped(),
             decide: installing,
             requested: names(&["ripgrep", "fd"]),
-            wanted: names(&["git", "ripgrep", "fd"]),
+            wanted: names(&["fd", "git", "ripgrep"]),
         },
         Scenario {
             name: "remove",
             base: installed,
             decide: removing,
             requested: names(&["ripgrep"]),
-            wanted: names(&["git", "fd"]),
+            wanted: names(&["fd", "git"]),
         },
     ]
 }
@@ -827,7 +830,10 @@ fn an_install_performs_exactly_the_writes_the_activation_the_record_and_the_comm
                 owner: Some((1000, 1000)),
                 expect: Expect::Present(home_id),
             },
-            Action::ActivateProfile { user: user() },
+            Action::ActivateProfile {
+                user: user(),
+                source: crate::action::FlakeSource::Git,
+            },
             Action::RecordState { user: user() },
             Action::Commit,
         ]
@@ -859,8 +865,11 @@ fn an_install_over_a_broken_list_restores_it_and_adds_the_package() {
 
     assert_eq!(report.verdict, Verdict::Succeeded);
     assert_eq!(change.source, Source::Generation);
-    assert_eq!(listed(&world), names(&["git", "fd", "ripgrep"]));
-    assert!(actions.contains(&Action::ActivateProfile { user: user() }));
+    assert_eq!(listed(&world), names(&["fd", "git", "ripgrep"]));
+    assert!(actions.contains(&Action::ActivateProfile {
+        user: user(),
+        source: crate::action::FlakeSource::Git,
+    }));
 }
 
 #[test]
@@ -980,7 +989,7 @@ proptest::proptest! {
                 before.push(package);
             }
         }
-        let before = StateManifest { version: STATE_VERSION, packages: before };
+        let before = StateManifest { version: STATE_VERSION, packages: before }.sorted();
         let installed = install(&requested, current(before.clone(), Source::File)).unwrap();
         let added = installed.changed.clone();
         let removed = remove(&added, current(installed.manifest, Source::File)).unwrap();
@@ -988,4 +997,88 @@ proptest::proptest! {
         proptest::prop_assert_eq!(removed.changed, added);
         proptest::prop_assert_eq!(removed.manifest, before);
     }
+}
+
+#[test]
+fn the_same_packages_requested_in_any_order_render_the_same_files() {
+    let render_of = |requested: &[&str]| {
+        let change = install(
+            &names(requested),
+            current(StateManifest::seed(), Source::File),
+        )
+        .unwrap();
+        render(&user(), &change.manifest).unwrap()
+    };
+
+    assert_eq!(render_of(&["jq", "hello"]), render_of(&["hello", "jq"]));
+}
+
+#[test]
+fn a_list_written_in_another_order_returns_to_the_generation_already_built() {
+    let mut world = bootstrapped();
+    command(&mut world, installing, &names(&["hello", "jq"]));
+    let built = active(&world);
+    command(&mut world, removing, &names(&["hello", "jq"]));
+
+    command(&mut world, installing, &names(&["jq", "hello"]));
+
+    assert_eq!(active(&world), built);
+}
+
+fn clean(world: &mut World, all: bool) -> Vec<Action> {
+    let performed = std::cell::RefCell::new(Vec::new());
+    let report = drive(
+        world,
+        Runner::new(ROOT, clean_steps(&user(), all)),
+        |action| {
+            performed.borrow_mut().push(action.clone());
+            false
+        },
+    );
+    assert_eq!(report.verdict, Verdict::Succeeded);
+    performed.into_inner()
+}
+
+#[test]
+fn changes_keep_every_generation_until_a_clean() {
+    let mut world = bootstrapped();
+    for package in ["fd", "jq", "bat"] {
+        command(&mut world, installing, &names(&[package]));
+    }
+    let before = world.profile(&user()).unwrap().generations.len();
+    assert!(before >= 4);
+
+    let performed = clean(&mut world, false);
+
+    let profile = world.profile(&user()).unwrap();
+    assert_eq!(
+        profile.generations,
+        profile.active.into_iter().collect::<Vec<_>>()
+    );
+    assert_eq!(listed(&world), names(&["bat", "fd", "git", "jq"]));
+    assert!(
+        !performed
+            .iter()
+            .any(|action| matches!(action, Action::CollectGarbage { .. }))
+    );
+}
+
+#[test]
+fn a_clean_with_all_also_collects_the_store() {
+    let mut world = bootstrapped();
+
+    let performed = clean(&mut world, true);
+
+    assert!(performed.contains(&Action::CollectGarbage { user: user() }));
+}
+
+#[test]
+fn old_generations_are_all_but_the_active_one() {
+    let profile = ProfileFacts {
+        generations: vec![1, 2, 3, 4],
+        active: Some(3),
+    };
+
+    assert_eq!(old_generations(&profile), vec![1, 2, 4]);
+    assert_eq!(old_generations(&ProfileFacts::default()), Vec::<u64>::new());
 }

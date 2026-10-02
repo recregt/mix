@@ -63,12 +63,13 @@ const fn is_rev(bytes: &[u8]) -> bool {
     true
 }
 
+use crate::inputs::{Pin, Pins};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FlakeHole {
     Username,
     System,
-    NixpkgsRev,
-    HomeManagerRev,
+    Rev(Pin),
 }
 
 include!(concat!(env!("OUT_DIR"), "/flake_template.rs"));
@@ -77,8 +78,7 @@ include!(concat!(env!("OUT_DIR"), "/flake_template.rs"));
 pub struct FlakeConfig {
     system: System,
     username: Key,
-    nixpkgs_rev: Rev,
-    home_manager_rev: Rev,
+    revs: Pins<Rev>,
 }
 
 impl FlakeConfig {
@@ -91,8 +91,10 @@ impl FlakeConfig {
         Ok(Self {
             system,
             username: Key::new(username)?,
-            nixpkgs_rev,
-            home_manager_rev,
+            revs: Pins {
+                home_manager: home_manager_rev,
+                nixpkgs: nixpkgs_rev,
+            },
         })
     }
 
@@ -109,8 +111,7 @@ impl FlakeConfig {
             match FLAKE_HOLES.get(index) {
                 Some(FlakeHole::Username) => print::write_key(&self.username, &mut out),
                 Some(FlakeHole::System) => print::write_key(self.system.key(), &mut out),
-                Some(FlakeHole::NixpkgsRev) => out.push_str(self.nixpkgs_rev.as_str()),
-                Some(FlakeHole::HomeManagerRev) => out.push_str(self.home_manager_rev.as_str()),
+                Some(FlakeHole::Rev(pin)) => out.push_str(self.revs.of(*pin).as_str()),
                 None => {}
             }
         }
@@ -126,6 +127,7 @@ mod tests {
     use crate::GENERATED_HEADER;
     use crate::ast::Verbatim;
     use crate::flake_write::write_flake;
+    use crate::inputs::Pins;
     use crate::print::Writer;
 
     const SYSTEMS: [System; 4] = [
@@ -141,8 +143,10 @@ mod tests {
             &mut Writer::new(&mut out),
             &flake.username,
             flake.system.key(),
-            Verbatim::unchecked(flake.nixpkgs_rev.as_str()),
-            Verbatim::unchecked(flake.home_manager_rev.as_str()),
+            Pins {
+                home_manager: Verbatim::unchecked(flake.revs.home_manager.as_str()),
+                nixpkgs: Verbatim::unchecked(flake.revs.nixpkgs.as_str()),
+            },
         );
         out.push('\n');
         out

@@ -58,7 +58,8 @@ const fn is_file_name_bytes(bytes: &[u8]) -> bool {
     let mut i = 0;
     while i < bytes.len() {
         let b = bytes[i];
-        if !(b.is_ascii_lowercase() || b.is_ascii_digit() || (b == b'-' && i > 0)) {
+        let dot = b == b'.' && i > 0 && i + 1 < bytes.len() && bytes[i - 1] != b'.';
+        if !(b.is_ascii_lowercase() || b.is_ascii_digit() || (b == b'-' && i > 0) || dot) {
             return false;
         }
         i += 1;
@@ -133,12 +134,19 @@ mod tests {
     use proptest::prelude::*;
 
     #[test]
-    fn a_file_name_is_lowercase_letters_digits_and_dashes() {
-        for name in ["state", "mix-state", "a1", "9"] {
+    fn a_file_name_is_lowercase_letters_digits_dashes_and_inner_dots() {
+        for name in [
+            "state",
+            "mix-state",
+            "a1",
+            "9",
+            "home.nix",
+            "mix-flake.lock",
+        ] {
             assert!(FileName::new(name).is_ok(), "{name}");
         }
         for name in [
-            "", "-state", "State", "a b", "a/b", "a$b", "a'b", "..", "a.b", "a}",
+            "", "-state", "State", "a b", "a/b", "a$b", "a'b", ".", "..", ".a", "a.", "a..b", "a}",
         ] {
             assert!(FileName::new(name).is_err(), "{name:?}");
         }
@@ -148,8 +156,10 @@ mod tests {
         #[test]
         fn a_file_name_never_holds_a_character_nix_or_a_shell_would_read(s in ".*") {
             if let Ok(name) = FileName::new(s) {
-                prop_assert!(name.as_str().bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'));
-                prop_assert!(!name.as_str().starts_with('-'));
+                prop_assert!(name.as_str().bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.'));
+                prop_assert!(!name.as_str().starts_with(['-', '.']));
+                prop_assert!(!name.as_str().ends_with('.'));
+                prop_assert!(!name.as_str().contains(".."));
             }
         }
     }

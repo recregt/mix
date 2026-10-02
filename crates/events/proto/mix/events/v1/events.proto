@@ -46,6 +46,7 @@ message Command {
     RemoveRequest remove = 12;
     RepairRequest repair = 13;
     DoctorRequest doctor = 14;
+    CleanRequest clean = 15;
   }
 }
 
@@ -66,6 +67,10 @@ message RemoveRequest {
 message RepairRequest {}
 
 message DoctorRequest {}
+
+message CleanRequest {
+  bool all = 1;
+}
 
 message Plan {
   string title = 1;
@@ -158,6 +163,7 @@ enum Operation {
   OPERATION_COMMIT = 32;
   OPERATION_APPLY_GENERATION = 33;
   OPERATION_CREATE_DIRS = 34;
+  OPERATION_COLLECT_GARBAGE = 35;
 }
 
 message Action {
@@ -380,6 +386,7 @@ message NodeFinished {
     DoctorResult doctor = 14;
     InspectionResult inspection = 15;
     ProcessResult process = 16;
+    CleanResult clean = 17;
   }
 }
 
@@ -400,6 +407,11 @@ message RemoveResult {
   repeated string removed = 1;
   repeated string skipped = 2;
   bool restored = 3;
+}
+
+message CleanResult {
+  repeated uint64 generations = 1;
+  optional uint64 freed_bytes = 2;
 }
 
 message RepairResult {

@@ -1,3 +1,4 @@
+import contextlib
 import fcntl
 import hashlib
 import functools
@@ -214,6 +215,47 @@ class Container:
         calls = self.exec("cat", output, check=True).stdout
         return run, trace.writes(calls, int(account[2]), set(setuid_root))
 
+    @contextlib.contextmanager
+    def traced_daemon(self, unit: str = "mix-daemon.service"):
+        output = f"/tmp/{unit}.strace"
+        writes: list[trace.Write] = []
+        self.exec("systemctl", "start", unit, check=True)
+        pid = self.exec(
+            "systemctl", "show", "--property", "MainPID", "--value", unit, check=True
+        ).stdout.strip()
+        tracer = self.start_background(
+            "strace",
+            "-f",
+            "-qq",
+            "-y",
+            "-o",
+            output,
+            "-e",
+            f"trace={trace.SYSCALLS}",
+            "-p",
+            pid,
+        )
+        deadline = time.time() + 30
+        while self._tracer_of(pid) == "0":
+            if time.time() > deadline:
+                raise TimeoutError(f"strace never attached to {unit} ({pid})")
+            time.sleep(0.05)
+        try:
+            yield writes
+        finally:
+            self.exec("kill", "-INT", tracer.pid(), check=True)
+            tracer.wait(timeout=30)
+            calls = self.exec("cat", output, check=True).stdout
+            writes.extend(trace.writes(calls, 0, set()))
+
+    def _tracer_of(self, pid: str) -> str:
+        status = self.exec("cat", f"/proc/{pid}/status", check=True).stdout
+        return next(
+            line.split()[1]
+            for line in status.splitlines()
+            if line.startswith("TracerPid:")
+        )
+
     def mix_background(self, *args, env=None, user=None) -> BackgroundRun:
         capture = self.capture()
         process = self.start_background(
@@ -312,6 +354,8 @@ def _start_container(image: str, name: str, binary: pathlib.Path) -> str:
             "--pids-limit=-1",
             "--volume",
             f"{binary}:/usr/local/bin/mix:ro",
+            "--volume",
+            f"{binary.with_name('mix-daemon')}:/usr/local/bin/mix-daemon:ro",
             "--name",
             name,
             image,
@@ -368,7 +412,7 @@ def daemon_trusts(container: Container, user: str) -> bool:
 @pytest.fixture(scope="session")
 def mix_binary():
     subprocess.run(
-        ["cargo", "build", "--release", "-p", "mix-bin"],
+        ["cargo", "build", "--release", "-p", "mix-bin", "-p", "mix-daemon"],
         cwd=REPO_ROOT,
         check=True,
     )

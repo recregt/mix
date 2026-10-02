@@ -208,10 +208,16 @@ impl NixLog {
     ///
     /// A line that is not a record, or a record that does not parse, is handed back untouched so
     /// a plain-text stream flows through unchanged.
+    #[inline]
     pub fn observe<'a>(&mut self, line: &'a str) -> Event<'a> {
-        let Some(payload) = line.strip_prefix(RECORD_PREFIX) else {
-            return Event::Plain(line);
-        };
+        match line.strip_prefix(RECORD_PREFIX) {
+            Some(payload) => self.observe_record(line, payload),
+            None => Event::Plain(line),
+        }
+    }
+
+    #[inline(never)]
+    fn observe_record<'a>(&mut self, line: &'a str, payload: &'a str) -> Event<'a> {
         let Ok(record) = serde_json::from_str::<Record>(payload) else {
             return Event::Plain(line);
         };

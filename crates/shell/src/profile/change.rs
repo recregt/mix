@@ -4,7 +4,7 @@ use std::sync::Arc;
 use mix_core::action::Failure;
 use mix_core::change::{Change, NewerList, Unrenderable};
 use mix_core::models::UserConfig;
-use mix_core::plan::{Runner, Verdict, diagnostic};
+use mix_core::plan::{Runner, StepSpec, Verdict, diagnostic};
 use mix_events::v1::{Command, InstallResult, RemoveResult, command, node_finished};
 use mix_events::{Ending, ROOT, Start, Tree};
 
@@ -110,19 +110,38 @@ pub async fn run(
     journal: &mut dyn Journal,
 ) -> Result<()> {
     let steps = mix_core::change::steps(&cfg.user, change, verb.doing())?;
+    perform(
+        ctx,
+        verb.key(),
+        verb.request(requested),
+        steps,
+        || verb.result(change),
+        journal,
+    )
+    .await
+}
+
+pub async fn perform(
+    ctx: &Context,
+    key: &'static str,
+    request: command::Request,
+    steps: Vec<Box<dyn StepSpec>>,
+    result: impl FnOnce() -> node_finished::Result,
+    journal: &mut dyn Journal,
+) -> Result<()> {
     let scope = &ctx.scope;
-    let request = ctx.request.id.clone();
+    let request_id = ctx.request.id.clone();
     let mut observer = ctx.relay();
     let stopped = stopped_by(scope);
     let mut tree = Tree::new(
         Arc::clone(&ctx.request.outbox),
         Arc::clone(&stopped),
         Start::command(
-            verb.key(),
+            key,
             Command {
                 mix_version: env!("CARGO_PKG_VERSION").to_string(),
                 schema_minor: mix_events::SCHEMA_MINOR,
-                request: Some(verb.request(requested)),
+                request: Some(request),
             },
         ),
     );
@@ -130,7 +149,7 @@ pub async fn run(
         Verdict::Succeeded
     } else {
         let files =
-            Files::open(Path::new("/"), &request).map_err(|source| mix_core::Error::Io {
+            Files::open(Path::new("/"), &request_id).map_err(|source| mix_core::Error::Io {
                 path: "/".into(),
                 source,
             })?;
@@ -153,14 +172,14 @@ pub async fn run(
         .clone()
     };
     let (ending, outcome) = match verdict {
-        Verdict::Succeeded => (Ending::succeeded().with_result(verb.result(change)), Ok(())),
+        Verdict::Succeeded => (Ending::succeeded().with_result(result()), Ok(())),
         Verdict::Failed { failure, .. } => {
             (Ending::failed(diagnostic(&failure)), Err(error_of(failure)))
         }
         Verdict::Cancelled(cause) => (
             Ending::cancelled(cause),
             Err(Error::Core(mix_core::Error::Cancelled {
-                command: format!("mix {}", verb.key()),
+                command: format!("mix {key}"),
             })),
         ),
     };

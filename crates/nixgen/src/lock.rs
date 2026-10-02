@@ -1,4 +1,5 @@
 use crate::flake::Rev;
+use crate::inputs::{INPUTS, Pins};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NarHash(&'static str);
@@ -45,65 +46,38 @@ pub struct LockedInput {
     pub last_modified: u64,
 }
 
-pub fn render(nixpkgs: LockedInput, home_manager: LockedInput) -> String {
-    format!(
-        r#"{{
-  "nodes": {{
-    "home-manager": {{
-      "inputs": {{
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      }},
-      "locked": {{
-        "lastModified": {hm_last_modified},
-        "narHash": "{hm_nar_hash}",
-        "owner": "nix-community",
-        "repo": "home-manager",
-        "rev": "{hm_rev}",
-        "type": "github"
-      }},
-      "original": {{
-        "owner": "nix-community",
-        "repo": "home-manager",
-        "rev": "{hm_rev}",
-        "type": "github"
-      }}
-    }},
-    "nixpkgs": {{
-      "locked": {{
-        "lastModified": {nixpkgs_last_modified},
-        "narHash": "{nixpkgs_nar_hash}",
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "{nixpkgs_rev}",
-        "type": "github"
-      }},
-      "original": {{
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "{nixpkgs_rev}",
-        "type": "github"
-      }}
-    }},
-    "root": {{
-      "inputs": {{
-        "home-manager": "home-manager",
-        "nixpkgs": "nixpkgs"
-      }}
-    }}
-  }},
-  "root": "root",
-  "version": 7
-}}
-"#,
-        hm_last_modified = home_manager.last_modified,
-        hm_nar_hash = home_manager.nar_hash.as_str(),
-        hm_rev = home_manager.rev.as_str(),
-        nixpkgs_last_modified = nixpkgs.last_modified,
-        nixpkgs_nar_hash = nixpkgs.nar_hash.as_str(),
-        nixpkgs_rev = nixpkgs.rev.as_str(),
-    )
+pub fn render(locked: Pins<LockedInput>) -> String {
+    let mut out = String::from("{\n  \"nodes\": {\n");
+    for input in &INPUTS {
+        let pin = locked.of(input.pin);
+        out.push_str(&format!("    \"{}\": {{\n", input.name));
+        if let Some(follows) = input.follows {
+            out.push_str(&format!(
+                "      \"inputs\": {{\n        \"{follows}\": [\n          \"{follows}\"\n        ]\n      }},\n"
+            ));
+        }
+        out.push_str(&format!(
+            "      \"locked\": {{\n        \"lastModified\": {},\n        \"narHash\": \"{}\",\n        \"owner\": \"{}\",\n        \"repo\": \"{}\",\n        \"rev\": \"{}\",\n        \"type\": \"github\"\n      }},\n",
+            pin.last_modified,
+            pin.nar_hash.as_str(),
+            input.owner,
+            input.repo,
+            pin.rev.as_str(),
+        ));
+        out.push_str(&format!(
+            "      \"original\": {{\n        \"owner\": \"{}\",\n        \"repo\": \"{}\",\n        \"rev\": \"{}\",\n        \"type\": \"github\"\n      }}\n    }},\n",
+            input.owner,
+            input.repo,
+            pin.rev.as_str(),
+        ));
+    }
+    out.push_str("    \"root\": {\n      \"inputs\": {\n");
+    for (index, input) in INPUTS.iter().enumerate() {
+        let comma = if index + 1 < INPUTS.len() { "," } else { "" };
+        out.push_str(&format!("        \"{0}\": \"{0}\"{comma}\n", input.name));
+    }
+    out.push_str("      }\n    }\n  },\n  \"root\": \"root\",\n  \"version\": 7\n}\n");
+    out
 }
 
 #[cfg(test)]

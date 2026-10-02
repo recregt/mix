@@ -678,7 +678,7 @@ pub fn describe(action: &Action) -> (Operation, String) {
         Action::DaemonReload => (Operation::DaemonReload, String::new()),
         Action::InstallRuntime { url, .. } => (Operation::InstallRuntime, url.clone()),
         Action::RemoveRuntime { .. } => (Operation::RemoveRuntime, String::new()),
-        Action::ActivateProfile { user } => (
+        Action::ActivateProfile { user, .. } => (
             Operation::ActivateProfile,
             format!("{}'s profile", user.name),
         ),
@@ -710,6 +710,9 @@ pub fn describe(action: &Action) -> (Operation, String) {
             Operation::ApplyGeneration,
             format!("{}'s current generation", user.name),
         ),
+        Action::CollectGarbage { .. } => {
+            (Operation::CollectGarbage, "unused store paths".to_string())
+        }
         Action::Commit => (Operation::Commit, "changes".to_string()),
     }
 }

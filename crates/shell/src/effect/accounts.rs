@@ -67,6 +67,13 @@ pub fn group_has_gid(name: &str, gid: u32) -> bool {
     group_gid(name) == Some(gid)
 }
 
+pub fn user_in_group(name: &str, user: &InvokingUser) -> bool {
+    nix::unistd::Group::from_name(name)
+        .ok()
+        .flatten()
+        .is_some_and(|group| group.gid.as_raw() == user.gid || group.mem.contains(&user.name))
+}
+
 pub fn group_has_member(name: &str, user: &str) -> bool {
     let Some(group) = nix::unistd::Group::from_name(name).ok().flatten() else {
         return false;
@@ -244,6 +251,18 @@ mod tests {
     #[test]
     fn group_has_member_counts_a_primary_group_as_membership() {
         assert!(group_has_member("root", "root"));
+    }
+
+    #[test]
+    fn user_in_group_counts_a_primary_group_as_membership() {
+        let root = InvokingUser {
+            uid: 0,
+            gid: 0,
+            name: "root".into(),
+            home: "/root".into(),
+        };
+        assert!(user_in_group("root", &root));
+        assert!(!user_in_group("mix-test-nonexistent-group-xyz", &root));
     }
 
     #[test]

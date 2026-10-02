@@ -1443,6 +1443,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mix-daemon"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "mix-core",
+ "mix-events",
+ "mix-exec",
+ "mix-rpc",
+ "mix-shell",
+ "mix-ui",
+ "nix",
+ "tokio",
+]
+
+[[package]]
 name = "mix-events"
 version = "0.1.0"
 dependencies = [
@@ -1494,6 +1509,7 @@ dependencies = [
 name = "mix-rpc"
 version = "0.1.0"
 dependencies = [
+ "codspeed-divan-compat",
  "futures-util",
  "hyper-util",
  "mix-events",

@@ -4,9 +4,7 @@ mod controls;
 pub mod explain;
 mod remote;
 pub mod render;
-mod root;
 
-use std::io::Write as _;
 use std::process::ExitCode;
 
 use cli::{Cli, Command};
@@ -19,12 +17,6 @@ pub async fn run() -> ExitCode {
         cli::Color::Always => mix_ui::ColorChoice::Always,
         cli::Color::Never => mix_ui::ColorChoice::Never,
     });
-    if matches!(cli.command, Command::Worker) {
-        return remote::worker::run().await;
-    }
-    if let Command::HomeFiles { request } = &cli.command {
-        return home_files(request);
-    }
     if let Command::Explain { code, list } = &cli.command {
         if *list {
             mix_ui::data(&explain::codes::list_text());
@@ -63,12 +55,11 @@ pub async fn run() -> ExitCode {
         Command::Remove { packages, .. } => {
             Box::new(|error| explain::remove::explain(error, packages))
         }
+        Command::Clean { .. } => Box::new(explain::clean::explain),
         Command::Doctor => Box::new(explain::doctor::explain),
-        Command::Repair
-        | Command::Worker
-        | Command::HomeFiles { .. }
-        | Command::Explain { .. }
-        | Command::Events { .. } => Box::new(explain::repair::explain),
+        Command::Repair | Command::Explain { .. } | Command::Events { .. } => {
+            Box::new(explain::repair::explain)
+        }
     };
 
     let result = match &cli.command {
@@ -86,12 +77,11 @@ pub async fn run() -> ExitCode {
         }
         Command::Install { packages } => commands::install::run(packages, &view).await,
         Command::Remove { packages } => commands::remove::run(packages, &view).await,
+        Command::Clean { all } => commands::clean::run(*all, &view).await,
         Command::Doctor => commands::doctor::run(&view).await,
-        Command::Repair
-        | Command::Worker
-        | Command::HomeFiles { .. }
-        | Command::Explain { .. }
-        | Command::Events { .. } => commands::repair::run(&view).await,
+        Command::Repair | Command::Explain { .. } | Command::Events { .. } => {
+            commands::repair::run(&view).await
+        }
     };
 
     if let Err(error) = &result
@@ -107,7 +97,7 @@ pub async fn run() -> ExitCode {
         Ok(code) => from_root.unwrap_or(code),
         Err(e) => {
             if cli.output == cli::Output::Human && view.exit.code().is_none() {
-                let words = explain(&e);
+                let words = words_for(&e, &request_of(&cli.command), explain.as_ref());
                 let fault = explain::fault_of(&e);
                 let code = (cli.verbose > 0)
                     .then(|| fault.code())
@@ -133,16 +123,13 @@ fn unstreamed(view: &render::sinks::View) -> bool {
     view.streams() && !view.exit.started()
 }
 
-fn stream_the_failure(command: &Command, error: &anyhow::Error, view: &render::sinks::View) {
+fn request_of(command: &Command) -> mix_events::v1::command::Request {
     use mix_events::v1::{
-        BootstrapRequest, DoctorRequest, InstallRequest, RemoveRequest, RepairRequest,
-        command::Request,
+        BootstrapRequest, CleanRequest, DoctorRequest, InstallRequest, RemoveRequest,
+        RepairRequest, command::Request,
     };
 
-    let Ok(mut sinks) = view.sinks(std::sync::Arc::new(mix_ui::Silent)) else {
-        return;
-    };
-    let request = match command {
+    match command {
         Command::Bootstrap {
             mirror,
             mirror_key,
@@ -158,27 +145,37 @@ fn stream_the_failure(command: &Command, error: &anyhow::Error, view: &render::s
         Command::Remove { packages } => Request::Remove(RemoveRequest {
             packages: packages.clone(),
         }),
+        Command::Clean { all } => Request::Clean(CleanRequest { all: *all }),
         Command::Doctor => Request::Doctor(DoctorRequest {}),
-        Command::Repair
-        | Command::Worker
-        | Command::HomeFiles { .. }
-        | Command::Explain { .. }
-        | Command::Events { .. } => Request::Repair(RepairRequest {}),
-    };
-    root::fail(root::command(request), explain::fault_of(error), &mut sinks);
-}
-
-#[allow(clippy::disallowed_methods)]
-fn home_files(request: &str) -> ExitCode {
-    let input = std::io::BufReader::new(std::io::stdin());
-    let output = std::io::BufWriter::new(std::io::stdout());
-    match mix_shell::effect::home::serve(request, input, output) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(failure) => {
-            let _ = writeln!(std::io::stderr(), "{failure:?}");
-            ExitCode::FAILURE
+        Command::Repair | Command::Explain { .. } | Command::Events { .. } => {
+            Request::Repair(RepairRequest {})
         }
     }
+}
+
+fn words_for(
+    error: &anyhow::Error,
+    request: &mix_events::v1::command::Request,
+    local: &dyn Fn(&anyhow::Error) -> Diagnostic,
+) -> Diagnostic {
+    if let Some(failed) = error.downcast_ref::<remote::client::Failed>() {
+        return explain::outcome(Some(&failed.request), &failed.fault);
+    }
+    if let Some(error) = error.downcast_ref::<mix_rpc::Error>() {
+        return explain::outcome(Some(request), &explain::rpc_fault(error));
+    }
+    local(error)
+}
+
+fn stream_the_failure(command: &Command, error: &anyhow::Error, view: &render::sinks::View) {
+    let Ok(mut sinks) = view.sinks(std::sync::Arc::new(mix_ui::Silent)) else {
+        return;
+    };
+    mix_shell::root::fail(
+        mix_shell::root::command(request_of(command)),
+        explain::fault_of(error),
+        &mut sinks,
+    );
 }
 
 fn explain_code(name: &str) -> ExitCode {

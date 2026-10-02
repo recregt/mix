@@ -118,6 +118,13 @@ pub enum Command {
         packages: Vec<String>,
     },
 
+    /// Remove old generations of your profile
+    Clean {
+        /// Also remove store paths nothing uses any more
+        #[arg(short, long)]
+        all: bool,
+    },
+
     /// Check the health of the system
     Doctor,
 
@@ -140,19 +147,6 @@ pub enum Command {
         #[arg(long, conflicts_with = "code")]
         list: bool,
     },
-
-    #[command(
-        hide = true,
-        about = "Carry out privileged operations for another mix process"
-    )]
-    Worker,
-
-    #[command(
-        name = mix_shell::effect::home::COMMAND,
-        hide = true,
-        about = "Change files in your own directories for a privileged mix process"
-    )]
-    HomeFiles { request: String },
 }
 
 pub fn color_requested<I, S>(args: I) -> Color
@@ -402,6 +396,18 @@ mod tests {
         assert!(matches!(
             cli.command,
             Command::Remove { ref packages } if packages == &["ripgrep", "fd"]
+        ));
+    }
+
+    #[test]
+    fn clean_keeps_the_store_unless_asked_for_all() {
+        assert!(matches!(
+            parse(&["mix", "clean"]).command,
+            Command::Clean { all: false }
+        ));
+        assert!(matches!(
+            parse(&["mix", "clean", "--all"]).command,
+            Command::Clean { all: true }
         ));
     }
 

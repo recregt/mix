@@ -3,9 +3,9 @@ use std::path::PathBuf;
 
 use mix_nixgen::{CopyIntoGeneration, FileName, HomeModule, InvalidInput, StateVersion};
 
-use crate::action::{Action, Fact, Failure, Query};
+use crate::action::{Action, Fact, Failure, ProfileFacts, Query};
 use crate::bootstrap::{FILE_MODE, Facts, ensure_file};
-use crate::paths::{GENERATION_STATE_FILE, HOME_NIX, STATE_FILE, mix_state_dir};
+use crate::paths::{GENERATION_INPUTS, HOME_NIX, STATE_FILE, mix_state_dir};
 use crate::plan::{StepSpec, Title};
 use crate::privilege::InvokingUser;
 use crate::state::{REQUIRED_PACKAGES, StateManifest};
@@ -15,10 +15,17 @@ pub const STATE_VERSION: u32 = 1;
 
 pub const HOME_MANAGER_STATE_VERSION: StateVersion = StateVersion::new_static("24.05");
 
-const STATE_INTO_GENERATION: CopyIntoGeneration = CopyIntoGeneration {
-    source: FileName::new_static(STATE_FILE),
-    target: FileName::new_static(GENERATION_STATE_FILE),
+const INPUTS_INTO_GENERATION: [CopyIntoGeneration; 4] = {
+    let [a, b, c, d] = GENERATION_INPUTS;
+    [copy(a), copy(b), copy(c), copy(d)]
 };
+
+const fn copy((source, target): (&'static str, &'static str)) -> CopyIntoGeneration {
+    CopyIntoGeneration {
+        source: FileName::new_static(source),
+        target: FileName::new_static(target),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Invalid {
@@ -139,7 +146,8 @@ pub fn install(packages: &[String], settled: Settled) -> Result<Change, NewerLis
         manifest: StateManifest {
             version: settled.version,
             packages: listed,
-        },
+        }
+        .sorted(),
         source,
     })
 }
@@ -155,7 +163,7 @@ pub fn remove(packages: &[String], settled: Settled) -> Result<Change, Refusal> 
     let partition = settled.partition(packages);
     let changed: Vec<String> = partition.installed.iter().map(|p| p.to_string()).collect();
     let skipped = partition.missing.iter().map(|p| p.to_string()).collect();
-    let manifest = settled.without(&changed);
+    let manifest = settled.without(&changed).sorted();
     Ok(Change {
         changed,
         skipped,
@@ -183,12 +191,11 @@ pub fn render_home<S: AsRef<str>>(
     user: &InvokingUser,
     packages: impl IntoIterator<Item = S>,
 ) -> Result<String, InvalidInput> {
-    Ok(
-        HomeModule::new(&user.name, &user.home, HOME_MANAGER_STATE_VERSION)?
-            .copy_into_generation(STATE_INTO_GENERATION)
-            .packages(packages)?
-            .render(),
-    )
+    let mut module = HomeModule::new(&user.name, &user.home, HOME_MANAGER_STATE_VERSION)?;
+    for copy in INPUTS_INTO_GENERATION {
+        module = module.copy_into_generation(copy);
+    }
+    Ok(module.packages(packages)?.render())
 }
 
 pub fn render(user: &InvokingUser, manifest: &StateManifest) -> Result<Rendered, Unrenderable> {
@@ -269,6 +276,7 @@ impl StepSpec for Activate {
     fn actions(&self, _: &[Fact]) -> Result<Vec<Action>, Failure> {
         Ok(vec![Action::ActivateProfile {
             user: self.user.clone(),
+            source: crate::action::FlakeSource::Git,
         }])
     }
 }
@@ -297,6 +305,74 @@ impl StepSpec for Record {
             user: self.0.clone(),
         }])
     }
+}
+
+pub fn old_generations(profile: &ProfileFacts) -> Vec<u64> {
+    profile
+        .generations
+        .iter()
+        .copied()
+        .filter(|generation| Some(*generation) != profile.active)
+        .collect()
+}
+
+struct Prune(InvokingUser);
+
+impl StepSpec for Prune {
+    fn key(&self) -> Cow<'static, str> {
+        "prune".into()
+    }
+
+    fn title(&self) -> Title {
+        Title::new(Verb::Removing, "old generations")
+    }
+
+    fn queries(&self) -> Vec<Query> {
+        vec![Query::Profile(self.0.clone())]
+    }
+
+    fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
+        let [Fact::Profile(profile)] = facts else {
+            unreachable!("a profile query was answered with {facts:?}");
+        };
+        Ok(old_generations(profile)
+            .into_iter()
+            .map(|generation| Action::DeleteGeneration {
+                user: self.0.clone(),
+                generation,
+            })
+            .collect())
+    }
+}
+
+struct Collect(InvokingUser);
+
+impl StepSpec for Collect {
+    fn key(&self) -> Cow<'static, str> {
+        "collect".into()
+    }
+
+    fn title(&self) -> Title {
+        Title::new(Verb::Removing, "unused store paths")
+    }
+
+    fn queries(&self) -> Vec<Query> {
+        Vec::new()
+    }
+
+    fn actions(&self, _: &[Fact]) -> Result<Vec<Action>, Failure> {
+        Ok(vec![Action::CollectGarbage {
+            user: self.0.clone(),
+        }])
+    }
+}
+
+pub fn clean_steps(user: &InvokingUser, all: bool) -> Vec<Box<dyn StepSpec>> {
+    let mut steps: Vec<Box<dyn StepSpec>> = vec![Box::new(Prune(user.clone()))];
+    if all {
+        steps.push(Box::new(Collect(user.clone())));
+    }
+    steps
 }
 
 pub fn subject(packages: &[String]) -> String {

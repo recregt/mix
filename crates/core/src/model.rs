@@ -132,6 +132,7 @@ impl Default for World {
             UNIT_DIR,
             "/home",
             "/var",
+            "/var/lib",
             "/var/empty",
         ] {
             world.with_dir(dir, 0o755, ROOT);
@@ -810,7 +811,7 @@ impl World {
                 }
                 done(Vec::new())
             }
-            Action::ActivateProfile { user } => {
+            Action::ActivateProfile { user, .. } => {
                 if self.contents(DEFAULT_PROFILE_NIX_ENV).is_none() {
                     return Err(Failure::SpawnFailed {
                         program: DEFAULT_PROFILE_NIX_ENV.to_string(),
@@ -830,18 +831,22 @@ impl World {
                 let profile = self.profiles.entry(user.uid).or_default();
                 let previous = profile.active;
                 let last = profile.generations.iter().max().copied();
-                if let Some(last) = last
-                    && profile.built.get(&last) == Some(&config)
-                {
-                    profile.active = Some(last);
-                    return done(if previous == Some(last) {
+                let built = profile
+                    .generations
+                    .iter()
+                    .copied()
+                    .filter(|generation| profile.built.get(generation) == Some(&config))
+                    .max();
+                if let Some(built) = built {
+                    profile.active = Some(built);
+                    return done(if previous == Some(built) {
                         Vec::new()
                     } else {
                         vec![
                             Action::SwitchGeneration {
                                 user: user.clone(),
                                 generation: previous,
-                                expect: Some(last),
+                                expect: Some(built),
                             },
                             Action::ApplyGeneration { user: user.clone() },
                         ]
@@ -910,6 +915,7 @@ impl World {
             Action::ApplyGeneration { user } => {
                 done(vec![Action::ApplyGeneration { user: user.clone() }])
             }
+            Action::CollectGarbage { .. } => done(Vec::new()),
             Action::RecordState { user } => {
                 let git = crate::paths::mix_state_dir(&user.home).join(".git");
                 if self.files.contains_key(&git) {
@@ -1587,7 +1593,10 @@ mod tests {
             name: "alice".into(),
             home: "/home/alice".into(),
         };
-        let activate = Action::ActivateProfile { user: user.clone() };
+        let activate = Action::ActivateProfile {
+            user: user.clone(),
+            source: crate::action::FlakeSource::Git,
+        };
         run(
             &mut world,
             &[Action::InstallRuntime {
@@ -1652,7 +1661,10 @@ mod tests {
                     sha256: crate::action::Digest([0; 32]),
                     size: 1,
                 },
-                Action::ActivateProfile { user: user.clone() },
+                Action::ActivateProfile {
+                    user: user.clone(),
+                    source: crate::action::FlakeSource::Git,
+                },
             ],
         );
         assert_eq!(world.profile(&user).and_then(|p| p.active), Some(1));

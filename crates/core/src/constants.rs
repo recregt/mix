@@ -35,12 +35,22 @@ pub mod paths {
     pub const DEFAULT_PROFILE_BIN: &str = "/nix/var/nix/profiles/default/bin";
     pub const DEFAULT_PROFILE_NIX_ENV: &str = "/nix/var/nix/profiles/default/bin/nix-env";
     pub const DEFAULT_PROFILE_NIX: &str = "/nix/var/nix/profiles/default/bin/nix";
+    pub const DEFAULT_PROFILE_NIX_STORE: &str = "/nix/var/nix/profiles/default/bin/nix-store";
 
     pub const NIX_CONF_DEST: &str = "/etc/nix/nix.conf";
     pub const PROFILE_SNIPPET_DEST: &str = "/etc/profile.d/mix-nix.sh";
     pub const POLICY_FILE: &str = "/etc/mix/policy.json";
 
     pub const LOCK_FILE: &str = "/var/lib/mix/lock";
+    pub const MIX_VAR_DIR: &str = "/var/lib/mix";
+    pub const MIX_BIN_DIR: &str = "/var/lib/mix/bin";
+    pub const MIX_DAEMON_BIN: &str = "/var/lib/mix/bin/mix-daemon";
+    pub const MIX_DAEMON_BIN_MODE: u32 = 0o755;
+    pub const MIX_DAEMON_SOCKET_PATH: &str = "/run/mix/daemon.sock";
+    pub const MIX_DAEMON_SOCKET_UNIT: &str = "mix-daemon.socket";
+    pub const MIX_DAEMON_SERVICE_UNIT: &str = "mix-daemon.service";
+    pub const MIX_DAEMON_SOCKET_DEST: &str = "/etc/systemd/system/mix-daemon.socket";
+    pub const MIX_DAEMON_SERVICE_DEST: &str = "/etc/systemd/system/mix-daemon.service";
 
     pub const MIX_STATE_DIR: &str = ".local/state/mix";
     pub const MIX_STATE_DIR_MODE: u32 = 0o700;
@@ -50,6 +60,13 @@ pub mod paths {
     pub const STATE_FILE: &str = "state";
 
     pub const GENERATION_STATE_FILE: &str = "mix-state";
+
+    pub const GENERATION_INPUTS: [(&str, &str); 4] = [
+        (STATE_FILE, GENERATION_STATE_FILE),
+        (FLAKE_NIX, "mix-flake.nix"),
+        (FLAKE_LOCK, "mix-flake.lock"),
+        (HOME_NIX, "mix-home.nix"),
+    ];
 
     pub const NIX_PROFILES_DIR: &str = ".local/state/nix/profiles";
     pub const NIX_PROFILES_DIR_MODE: u32 = 0o755;

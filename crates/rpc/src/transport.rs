@@ -2,7 +2,7 @@ use std::future::Future;
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 
 use futures_util::{Stream, StreamExt};
@@ -36,6 +36,8 @@ pub type Controls = mpsc::UnboundedReceiver<Control>;
 pub trait Worker: Send + Sync + 'static {
     const VERSION: &'static str;
 
+    fn admits(&self, caller: Caller) -> bool;
+
     fn run(
         &self,
         caller: Caller,
@@ -62,6 +64,9 @@ pub enum Error {
     #[error("the privileged worker stopped before it finished")]
     Ended,
 
+    #[error("the mix daemon does not serve this user: {0}")]
+    Denied(String),
+
     #[error("the privileged worker is mix {theirs}, but this is mix {ours}")]
     VersionMismatch { ours: String, theirs: String },
 
@@ -78,6 +83,31 @@ struct Service<W> {
     worker: Arc<W>,
     running: TaskTracker,
     one_at_a_time: Arc<Semaphore>,
+    admitted: OnceLock<(Caller, bool)>,
+}
+
+impl<W: Worker> Service<W> {
+    fn admits(&self, caller: Caller) -> bool {
+        match *self
+            .admitted
+            .get_or_init(|| (caller, self.worker.admits(caller)))
+        {
+            (checked, admitted) if checked == caller => admitted,
+            _ => self.worker.admits(caller),
+        }
+    }
+
+    fn admit<T>(&self, request: &Request<T>) -> Result<Caller, Status> {
+        let caller = caller(request)?;
+        if self.admits(caller) {
+            Ok(caller)
+        } else {
+            Err(Status::permission_denied(format!(
+                "uid {} is not root and not a member of mix-users",
+                caller.uid
+            )))
+        }
+    }
 }
 
 fn caller<T>(request: &Request<T>) -> Result<Caller, Status> {
@@ -175,8 +205,9 @@ impl<W: Worker> proto::worker_service_server::WorkerService for Service<W> {
 
     async fn hello(
         &self,
-        _request: Request<proto::HelloRequest>,
+        request: Request<proto::HelloRequest>,
     ) -> Result<Response<proto::HelloResponse>, Status> {
+        self.admit(&request)?;
         Ok(Response::new(proto::HelloResponse {
             version: W::VERSION.to_string(),
             protocol: PROTOCOL,
@@ -187,7 +218,7 @@ impl<W: Worker> proto::worker_service_server::WorkerService for Service<W> {
         &self,
         request: Request<Streaming<proto::RunRequest>>,
     ) -> Result<Response<Self::RunStream>, Status> {
-        let caller = caller(&request)?;
+        let caller = self.admit(&request)?;
         let mut calls = request.into_inner();
         let command = command(&mut calls).await?;
         let permit = Arc::clone(&self.one_at_a_time)
@@ -272,6 +303,7 @@ pub async fn serve_connection<W: Worker>(worker: W, connection: UnixStream) -> R
             worker: Arc::new(worker),
             running: running.clone(),
             one_at_a_time: Arc::new(Semaphore::new(1)),
+            admitted: OnceLock::new(),
         }))
         .serve_with_incoming_shutdown(incoming, async {
             let _ = on_close.await;
@@ -398,7 +430,10 @@ impl Client {
 }
 
 fn refused(status: Status) -> Error {
-    Error::Refused(status.message().to_string())
+    match status.code() {
+        tonic::Code::PermissionDenied => Error::Denied(status.message().to_string()),
+        _ => Error::Refused(status.message().to_string()),
+    }
 }
 
 fn envelope(bytes: &[u8]) -> Result<Envelope, Error> {

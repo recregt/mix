@@ -5,6 +5,7 @@
 //! *when* a profile is activated and what a failure should read like, and neither has to reach
 //! into the other to do it.
 
+use mix_core::action::FlakeSource;
 use std::sync::Arc;
 
 use mix_core::ActivityReporter;
@@ -58,15 +59,24 @@ fn as_refs(args: &[String]) -> Vec<&str> {
     args.iter().map(String::as_str).collect()
 }
 
+pub fn flake(user: &InvokingUser, source: FlakeSource) -> FlakeRef {
+    let dir = mix_state_dir(&user.home);
+    match source {
+        FlakeSource::Path => FlakeRef::path(dir),
+        FlakeSource::Git => FlakeRef::git_file(dir, None),
+    }
+    .expect("an invoking user always has an absolute home")
+}
+
 pub async fn switch(
     user: &InvokingUser,
+    source: FlakeSource,
     mirror: Option<&str>,
     activity: &Arc<dyn ActivityReporter>,
     scope: &Scope,
 ) -> Result<String> {
     let flake_attr = Installable::new(
-        FlakeRef::path(mix_state_dir(&user.home))
-            .expect("an invoking user always has an absolute home"),
+        flake(user, source),
         AttrPath::new(["homeConfigurations", &user.name, "activationPackage"])
             .expect("an invoking user's name never holds a quote"),
     )
@@ -112,6 +122,26 @@ mod tests {
     use super::*;
 
     const MIRROR: &str = "http://mirror.internal";
+
+    #[test]
+    fn only_the_first_build_reads_the_state_directory_as_a_path() {
+        let user = InvokingUser {
+            uid: 1000,
+            gid: 1000,
+            name: "alice".into(),
+            home: "/home/alice".into(),
+        };
+        let attr = || AttrPath::new(["x"]).unwrap();
+
+        assert_eq!(
+            Installable::new(flake(&user, FlakeSource::Path), attr()).render(),
+            "path:/home/alice/.local/state/mix#x"
+        );
+        assert_eq!(
+            Installable::new(flake(&user, FlakeSource::Git), attr()).render(),
+            "git+file:///home/alice/.local/state/mix#x"
+        );
+    }
 
     #[test]
     fn nix_options_are_empty_when_no_mirror_is_set() {

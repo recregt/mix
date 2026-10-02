@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use mix_core::ActivityReporter;
 use mix_core::action::{Action, Fact, Failure, Outcome, Performed, ProfileFacts, Query};
-use mix_core::paths::{DEFAULT_PROFILE_NIX_ENV, HOME_MANAGER_PROFILE_NAME, nix_profiles_dir};
+use mix_core::paths::{
+    DEFAULT_PROFILE_NIX_ENV, DEFAULT_PROFILE_NIX_STORE, HOME_MANAGER_PROFILE_NAME, nix_profiles_dir,
+};
 use mix_core::privilege::InvokingUser;
 use mix_exec::Scope;
 
@@ -48,7 +50,7 @@ fn current(user: &InvokingUser) -> Option<u64> {
     generation_of(target.file_name()?.to_str()?)
 }
 
-fn existing(user: &InvokingUser) -> Vec<u64> {
+pub(crate) fn existing(user: &InvokingUser) -> Vec<u64> {
     let Ok(entries) = std::fs::read_dir(nix_profiles_dir(&user.home)) else {
         return Vec::new();
     };
@@ -129,14 +131,15 @@ async fn switch_to(
 
 pub async fn perform(
     action: &Action,
+    built: Option<u64>,
     context: &ProfileContext,
     activity: &Arc<dyn ActivityReporter>,
     scope: &Scope,
     prepared: &mut Prepared<'_>,
 ) -> Option<Outcome> {
     Some(match action {
-        Action::ActivateProfile { user } => {
-            activate(user, context, activity, scope, prepared).await
+        Action::ActivateProfile { user, source } => {
+            activate(user, *source, built, context, activity, scope, prepared).await
         }
         Action::SwitchGeneration {
             user,
@@ -196,6 +199,19 @@ pub async fn perform(
                 .map_err(core_failure),
             }
         }
+        Action::CollectGarbage { user } => match prepared(&[]) {
+            Err(failure) => Err(failure),
+            Ok(()) => run_as_reporting(
+                user,
+                DEFAULT_PROFILE_NIX_STORE,
+                &["--gc"],
+                scope,
+                Some(Arc::clone(activity)),
+            )
+            .await
+            .map(|_| Performed { undo: Vec::new() })
+            .map_err(core_failure),
+        },
         _ => return None,
     })
 }
@@ -213,8 +229,46 @@ async fn apply(
         .map_err(core_failure)
 }
 
+async fn reuse(
+    user: &InvokingUser,
+    previous: Option<u64>,
+    built: u64,
+    activity: &Arc<dyn ActivityReporter>,
+    scope: &Scope,
+    prepared: &mut Prepared<'_>,
+) -> Outcome {
+    let moved = previous != Some(built);
+    let undo = if moved {
+        vec![
+            Action::SwitchGeneration {
+                user: user.clone(),
+                generation: previous,
+                expect: Some(built),
+            },
+            Action::ApplyGeneration { user: user.clone() },
+        ]
+    } else {
+        Vec::new()
+    };
+    prepared(&undo)?;
+    if moved {
+        switch_to(user, Some(built), scope).await?;
+    }
+    if let Err(failure) = apply(user, activity, &scope.shielded()).await {
+        if moved {
+            let shielded = scope.shielded();
+            let _ = switch_to(user, previous, &shielded).await;
+            let _ = apply(user, activity, &shielded).await;
+        }
+        return Err(failure);
+    }
+    Ok(Performed { undo })
+}
+
 async fn activate(
     user: &InvokingUser,
+    source: mix_core::action::FlakeSource,
+    built: Option<u64>,
     context: &ProfileContext,
     activity: &Arc<dyn ActivityReporter>,
     scope: &Scope,
@@ -222,9 +276,12 @@ async fn activate(
 ) -> Outcome {
     let previous = current(user);
     let before = existing(user);
+    if let Some(built) = built.filter(|built| before.contains(built)) {
+        return reuse(user, previous, built, activity, scope, prepared).await;
+    }
     let predicted = before.iter().max().map_or(1, |last| last + 1);
     prepared(&undo_activation(user, previous, predicted))?;
-    let generation = profile::switch(user, context.mirror.as_deref(), activity, scope)
+    let generation = profile::switch(user, source, context.mirror.as_deref(), activity, scope)
         .await
         .map_err(core_failure)?;
     let new = current(user).unwrap_or(predicted);

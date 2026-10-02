@@ -15,7 +15,6 @@ pub enum Reason {
     Interrupted,
     Terminated,
     ClientGone,
-    Abandoned,
 }
 
 #[derive(Debug, Default)]
@@ -169,12 +168,12 @@ mod tests {
         let root = Scope::root();
         let child = root.child();
 
-        child.cancel(Reason::Abandoned);
+        child.cancel(Reason::Interrupted);
         root.cancel(Reason::Terminated);
         root.cancel(Reason::ClientGone);
 
         assert_eq!(root.reason(), Some(Reason::Terminated));
-        assert_eq!(child.reason(), Some(Reason::Abandoned));
+        assert_eq!(child.reason(), Some(Reason::Interrupted));
         assert_eq!(root.child().reason(), Some(Reason::Terminated));
         assert_eq!(root.shielded().reason(), None);
     }
