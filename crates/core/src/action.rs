@@ -237,6 +237,9 @@ pub enum Action {
     RecordState {
         user: InvokingUser,
     },
+    CollectGarbage {
+        user: InvokingUser,
+    },
     Commit,
 }
 

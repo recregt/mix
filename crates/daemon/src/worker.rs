@@ -109,6 +109,26 @@ async fn change(
     }
 }
 
+async fn clean(
+    caller: Caller,
+    all: bool,
+    controls: Controls,
+    forward: &Forward,
+) -> Result<(), Box<Fault>> {
+    if caller.uid == 0 {
+        return Err(fault(mix_shell::profile::change::Error::NotRoot));
+    }
+    let _lock = mix_shell::effect::lock::acquire_exclusive(LOCK_FILE).map_err(fault)?;
+    let user = mix_shell::effect::accounts::user_by_uid(caller.uid)
+        .and_then(mix_shell::profile::existing_user_config_for);
+    let ctx = context(user, forward).with_policy(crate::settings::policy());
+    let _steer = controls::steer(&ctx.scope, controls, &forward.events);
+    mix_shell::ops::clean::clean(&ctx, all)
+        .await
+        .map(drop)
+        .map_err(fault)
+}
+
 async fn doctor(caller: Caller, controls: Controls, forward: &Forward) -> Result<(), Box<Fault>> {
     let user = mix_shell::effect::accounts::user_by_uid(caller.uid)
         .and_then(mix_shell::profile::existing_user_config_for);
@@ -181,6 +201,7 @@ impl mix_rpc::Worker for Host {
                 .await
             }
             Some(Request::Doctor(_)) => doctor(caller, controls, &forward).await,
+            Some(Request::Clean(request)) => clean(caller, request.all, controls, &forward).await,
             None => Err(Box::new(unserved())),
         };
         if let Err(fault) = ran
@@ -296,6 +317,26 @@ mod tests {
             Caller { uid: 0, gid: 0 },
             Change::Install,
             &["hello".to_string()],
+            tokio::sync::mpsc::unbounded_channel().1,
+            &forward,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(refused.code(), Some(Code::RootNotAllowed));
+    }
+
+    #[tokio::test]
+    async fn root_is_refused_a_clean_before_anything_is_locked() {
+        let (events, _received) = tokio::sync::mpsc::unbounded_channel();
+        let forward = Forward {
+            events,
+            started: Arc::new(AtomicBool::new(false)),
+        };
+
+        let refused = clean(
+            Caller { uid: 0, gid: 0 },
+            true,
             tokio::sync::mpsc::unbounded_channel().1,
             &forward,
         )

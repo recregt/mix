@@ -324,6 +324,7 @@ fn stopping_for(request: &Request) -> Option<Stopping> {
         Request::Bootstrap(_) => Some(controls::bootstrap()),
         Request::Repair(_) => Some(controls::repair()),
         Request::Install(_) | Request::Remove(_) => Some(controls::change()),
+        Request::Clean(_) => Some(controls::clean()),
         Request::Doctor(_) => None,
     }
 }

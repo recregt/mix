@@ -915,6 +915,7 @@ impl World {
             Action::ApplyGeneration { user } => {
                 done(vec![Action::ApplyGeneration { user: user.clone() }])
             }
+            Action::CollectGarbage { .. } => done(Vec::new()),
             Action::RecordState { user } => {
                 let git = crate::paths::mix_state_dir(&user.home).join(".git");
                 if self.files.contains_key(&git) {

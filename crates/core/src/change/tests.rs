@@ -1018,3 +1018,61 @@ fn a_list_written_in_another_order_returns_to_the_generation_already_built() {
 
     assert_eq!(active(&world), built);
 }
+
+fn clean(world: &mut World, all: bool) -> Vec<Action> {
+    let performed = std::cell::RefCell::new(Vec::new());
+    let report = drive(
+        world,
+        Runner::new(ROOT, clean_steps(&user(), all)),
+        |action| {
+            performed.borrow_mut().push(action.clone());
+            false
+        },
+    );
+    assert_eq!(report.verdict, Verdict::Succeeded);
+    performed.into_inner()
+}
+
+#[test]
+fn changes_keep_every_generation_until_a_clean() {
+    let mut world = bootstrapped();
+    for package in ["fd", "jq", "bat"] {
+        command(&mut world, installing, &names(&[package]));
+    }
+    let before = world.profile(&user()).unwrap().generations.len();
+    assert!(before >= 4);
+
+    let performed = clean(&mut world, false);
+
+    let profile = world.profile(&user()).unwrap();
+    assert_eq!(
+        profile.generations,
+        profile.active.into_iter().collect::<Vec<_>>()
+    );
+    assert_eq!(listed(&world), names(&["bat", "fd", "git", "jq"]));
+    assert!(
+        !performed
+            .iter()
+            .any(|action| matches!(action, Action::CollectGarbage { .. }))
+    );
+}
+
+#[test]
+fn a_clean_with_all_also_collects_the_store() {
+    let mut world = bootstrapped();
+
+    let performed = clean(&mut world, true);
+
+    assert!(performed.contains(&Action::CollectGarbage { user: user() }));
+}
+
+#[test]
+fn old_generations_are_all_but_the_active_one() {
+    let profile = ProfileFacts {
+        generations: vec![1, 2, 3, 4],
+        active: Some(3),
+    };
+
+    assert_eq!(old_generations(&profile), vec![1, 2, 4]);
+    assert_eq!(old_generations(&ProfileFacts::default()), Vec::<u64>::new());
+}

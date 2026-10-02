@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use mix_core::ActivityReporter;
 use mix_core::action::{Action, Fact, Failure, Outcome, Performed, ProfileFacts, Query};
-use mix_core::paths::{DEFAULT_PROFILE_NIX_ENV, HOME_MANAGER_PROFILE_NAME, nix_profiles_dir};
+use mix_core::paths::{
+    DEFAULT_PROFILE_NIX_ENV, DEFAULT_PROFILE_NIX_STORE, HOME_MANAGER_PROFILE_NAME, nix_profiles_dir,
+};
 use mix_core::privilege::InvokingUser;
 use mix_exec::Scope;
 
@@ -196,6 +198,19 @@ pub async fn perform(
                 .map_err(core_failure),
             }
         }
+        Action::CollectGarbage { user } => match prepared(&[]) {
+            Err(failure) => Err(failure),
+            Ok(()) => run_as_reporting(
+                user,
+                DEFAULT_PROFILE_NIX_STORE,
+                &["--gc"],
+                scope,
+                Some(Arc::clone(activity)),
+            )
+            .await
+            .map(|_| Performed { undo: Vec::new() })
+            .map_err(core_failure),
+        },
         _ => return None,
     })
 }

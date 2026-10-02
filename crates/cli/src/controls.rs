@@ -32,6 +32,12 @@ pub fn change() -> Stopping {
     }
 }
 
+pub fn clean() -> Stopping {
+    Stopping {
+        first: note!("stopping after the current removal"),
+    }
+}
+
 pub fn detached() -> Note {
     note!("`mix` is finishing the cleanup in the background")
 }

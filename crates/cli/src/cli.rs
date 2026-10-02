@@ -118,6 +118,13 @@ pub enum Command {
         packages: Vec<String>,
     },
 
+    /// Remove old generations of your profile
+    Clean {
+        /// Also remove store paths nothing uses any more
+        #[arg(short, long)]
+        all: bool,
+    },
+
     /// Check the health of the system
     Doctor,
 
@@ -389,6 +396,18 @@ mod tests {
         assert!(matches!(
             cli.command,
             Command::Remove { ref packages } if packages == &["ripgrep", "fd"]
+        ));
+    }
+
+    #[test]
+    fn clean_keeps_the_store_unless_asked_for_all() {
+        assert!(matches!(
+            parse(&["mix", "clean"]).command,
+            Command::Clean { all: false }
+        ));
+        assert!(matches!(
+            parse(&["mix", "clean", "--all"]).command,
+            Command::Clean { all: true }
         ));
     }
 

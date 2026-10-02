@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use mix_nixgen::{CopyIntoGeneration, FileName, HomeModule, InvalidInput, StateVersion};
 
-use crate::action::{Action, Fact, Failure, Query};
+use crate::action::{Action, Fact, Failure, ProfileFacts, Query};
 use crate::bootstrap::{FILE_MODE, Facts, ensure_file};
 use crate::paths::{GENERATION_INPUTS, HOME_NIX, STATE_FILE, mix_state_dir};
 use crate::plan::{StepSpec, Title};
@@ -304,6 +304,76 @@ impl StepSpec for Record {
             user: self.0.clone(),
         }])
     }
+}
+
+/// Every generation except the active one.
+pub fn old_generations(profile: &ProfileFacts) -> Vec<u64> {
+    profile
+        .generations
+        .iter()
+        .copied()
+        .filter(|generation| Some(*generation) != profile.active)
+        .collect()
+}
+
+struct Prune(InvokingUser);
+
+impl StepSpec for Prune {
+    fn key(&self) -> Cow<'static, str> {
+        "prune".into()
+    }
+
+    fn title(&self) -> Title {
+        Title::new(Verb::Removing, "old generations")
+    }
+
+    fn queries(&self) -> Vec<Query> {
+        vec![Query::Profile(self.0.clone())]
+    }
+
+    fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
+        let [Fact::Profile(profile)] = facts else {
+            unreachable!("a profile query was answered with {facts:?}");
+        };
+        Ok(old_generations(profile)
+            .into_iter()
+            .map(|generation| Action::DeleteGeneration {
+                user: self.0.clone(),
+                generation,
+            })
+            .collect())
+    }
+}
+
+struct Collect(InvokingUser);
+
+impl StepSpec for Collect {
+    fn key(&self) -> Cow<'static, str> {
+        "collect".into()
+    }
+
+    fn title(&self) -> Title {
+        Title::new(Verb::Removing, "unused store paths")
+    }
+
+    fn queries(&self) -> Vec<Query> {
+        Vec::new()
+    }
+
+    fn actions(&self, _: &[Fact]) -> Result<Vec<Action>, Failure> {
+        Ok(vec![Action::CollectGarbage {
+            user: self.0.clone(),
+        }])
+    }
+}
+
+/// Deletes every old generation and, with `all`, the store paths nothing uses any more.
+pub fn clean_steps(user: &InvokingUser, all: bool) -> Vec<Box<dyn StepSpec>> {
+    let mut steps: Vec<Box<dyn StepSpec>> = vec![Box::new(Prune(user.clone()))];
+    if all {
+        steps.push(Box::new(Collect(user.clone())));
+    }
+    steps
 }
 
 pub fn subject(packages: &[String]) -> String {

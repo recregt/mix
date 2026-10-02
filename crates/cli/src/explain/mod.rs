@@ -13,6 +13,7 @@
 //! needs, and a help with what to do about it. Each is checked when `mix` is built.
 
 pub mod bootstrap;
+pub mod clean;
 pub mod codes;
 pub mod doctor;
 pub mod install;
@@ -275,6 +276,7 @@ pub fn command_of(request: Option<&mix_events::v1::command::Request>) -> &'stati
         Some(Request::Bootstrap(_)) => bootstrap::COMMAND,
         Some(Request::Repair(_)) => repair::COMMAND,
         Some(Request::Doctor(_)) => doctor::COMMAND,
+        Some(Request::Clean(_)) => clean::COMMAND,
         None => "mix",
     }
 }
@@ -291,6 +293,7 @@ pub fn outcome(
         Some(Request::Bootstrap(_)) => Box::new(bootstrap::ACTION),
         Some(Request::Repair(_)) => Box::new(repair::ACTION),
         Some(Request::Doctor(_)) => Box::new(doctor::ACTION),
+        Some(Request::Clean(_)) => Box::new(clean::ACTION),
         None => Box::new("finish"),
     };
     render(

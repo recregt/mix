@@ -710,6 +710,9 @@ pub fn describe(action: &Action) -> (Operation, String) {
             Operation::ApplyGeneration,
             format!("{}'s current generation", user.name),
         ),
+        Action::CollectGarbage { .. } => {
+            (Operation::CollectGarbage, "unused store paths".to_string())
+        }
         Action::Commit => (Operation::Commit, "changes".to_string()),
     }
 }

@@ -130,7 +130,8 @@ impl Shape {
             | node_finished::Result::Install(_)
             | node_finished::Result::Remove(_)
             | node_finished::Result::Repair(_)
-            | node_finished::Result::Doctor(_) => self == Shape::Command,
+            | node_finished::Result::Doctor(_)
+            | node_finished::Result::Clean(_) => self == Shape::Command,
         }
     }
 }

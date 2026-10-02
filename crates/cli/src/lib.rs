@@ -55,6 +55,7 @@ pub async fn run() -> ExitCode {
         Command::Remove { packages, .. } => {
             Box::new(|error| explain::remove::explain(error, packages))
         }
+        Command::Clean { .. } => Box::new(explain::clean::explain),
         Command::Doctor => Box::new(explain::doctor::explain),
         Command::Repair | Command::Explain { .. } | Command::Events { .. } => {
             Box::new(explain::repair::explain)
@@ -76,6 +77,7 @@ pub async fn run() -> ExitCode {
         }
         Command::Install { packages } => commands::install::run(packages, &view).await,
         Command::Remove { packages } => commands::remove::run(packages, &view).await,
+        Command::Clean { all } => commands::clean::run(*all, &view).await,
         Command::Doctor => commands::doctor::run(&view).await,
         Command::Repair | Command::Explain { .. } | Command::Events { .. } => {
             commands::repair::run(&view).await
@@ -123,8 +125,8 @@ fn unstreamed(view: &render::sinks::View) -> bool {
 
 fn request_of(command: &Command) -> mix_events::v1::command::Request {
     use mix_events::v1::{
-        BootstrapRequest, DoctorRequest, InstallRequest, RemoveRequest, RepairRequest,
-        command::Request,
+        BootstrapRequest, CleanRequest, DoctorRequest, InstallRequest, RemoveRequest,
+        RepairRequest, command::Request,
     };
 
     match command {
@@ -143,6 +145,7 @@ fn request_of(command: &Command) -> mix_events::v1::command::Request {
         Command::Remove { packages } => Request::Remove(RemoveRequest {
             packages: packages.clone(),
         }),
+        Command::Clean { all } => Request::Clean(CleanRequest { all: *all }),
         Command::Doctor => Request::Doctor(DoctorRequest {}),
         Command::Repair | Command::Explain { .. } | Command::Events { .. } => {
             Request::Repair(RepairRequest {})

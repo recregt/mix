@@ -6,7 +6,7 @@ use mix_core::health::wire;
 use mix_core::paths::PROFILE_SNIPPET_DEST;
 use mix_events::Detail;
 use mix_events::v1::node_finished::Result;
-use mix_events::v1::{InspectionReport, NodeFinished, RepairReport, Status as Ended};
+use mix_events::v1::{CleanResult, InspectionReport, NodeFinished, RepairReport, Status as Ended};
 use mix_shell::ops::doctor::HealthReport;
 use mix_shell::profile::state::Source;
 use mix_ui::{Out, Report, Severity, Status};
@@ -88,7 +88,40 @@ pub(super) fn finished(
                 );
             }
         }
+        Result::Clean(clean) => {
+            if chatty {
+                mix_ui::status_to(
+                    out,
+                    Status::Removed,
+                    &format!("{} in {}", cleaned(clean), took(elapsed)),
+                );
+            }
+        }
         Result::Inspection(_) | Result::Process(_) => {}
+    }
+}
+
+fn cleaned(clean: &CleanResult) -> String {
+    let count = clean.generations.len();
+    let generations = format!("{count} generation{}", if count == 1 { "" } else { "s" });
+    match clean.freed_bytes {
+        Some(freed) => format!("{generations}, {} freed", size(freed)),
+        None => generations,
+    }
+}
+
+fn size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes}B")
+    } else {
+        format!("{value:.1}{}", UNITS[unit])
     }
 }
 
@@ -265,5 +298,21 @@ mod tests {
     fn a_short_run_reads_in_seconds_and_a_long_one_in_minutes() {
         assert_eq!(took(Duration::from_millis(14_230)), "14.23s");
         assert_eq!(took(Duration::from_secs(72)), "1m 12s");
+    }
+
+    #[test]
+    fn a_clean_counts_its_generations_and_what_the_store_freed() {
+        let clean = |generations: Vec<u64>, freed_bytes| CleanResult {
+            generations,
+            freed_bytes,
+        };
+
+        assert_eq!(cleaned(&clean(vec![], None)), "0 generations");
+        assert_eq!(cleaned(&clean(vec![4], None)), "1 generation");
+        assert_eq!(
+            cleaned(&clean(vec![1, 2, 3], Some(1_288_490_189))),
+            "3 generations, 1.2GiB freed"
+        );
+        assert_eq!(size(512), "512B");
     }
 }

@@ -35,6 +35,7 @@ pub mod paths {
     pub const DEFAULT_PROFILE_BIN: &str = "/nix/var/nix/profiles/default/bin";
     pub const DEFAULT_PROFILE_NIX_ENV: &str = "/nix/var/nix/profiles/default/bin/nix-env";
     pub const DEFAULT_PROFILE_NIX: &str = "/nix/var/nix/profiles/default/bin/nix";
+    pub const DEFAULT_PROFILE_NIX_STORE: &str = "/nix/var/nix/profiles/default/bin/nix-store";
 
     pub const NIX_CONF_DEST: &str = "/etc/nix/nix.conf";
     pub const PROFILE_SNIPPET_DEST: &str = "/etc/profile.d/mix-nix.sh";
