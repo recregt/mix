@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use mix_core::NoopActivity;
 use mix_core::action::{
     Action, Expect, Fact, Kind as PathKind, Owner, PathFacts, ProfileFacts, Query, UserSpec,
     rollback_order,
@@ -366,7 +365,10 @@ fn every_profile_action_and_its_undo_match_the_model() {
     };
     let activate = {
         let user = user.clone();
-        move |_: &mut Machine, _: bool| Action::ActivateProfile { user: user.clone() }
+        move |_: &mut Machine, _: bool| Action::ActivateProfile {
+            user: user.clone(),
+            source: mix_core::action::FlakeSource::Git,
+        }
     };
     let change = {
         let home_nix = home_nix.clone();
