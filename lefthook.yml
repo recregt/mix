@@ -9,6 +9,9 @@ pre-commit:
     fmt:
       glob: "*.rs"
       run: cargo fmt --all -- --check
+    dependencies:
+      glob: "{Cargo.toml,Cargo.lock,**/Cargo.toml}"
+      run: scripts/check_dependencies.py
 
 pre-push:
   commands:

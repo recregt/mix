@@ -37,10 +37,7 @@ jobs:
 
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      - run: scripts/check-core-purity.sh
-
-      - name: Keep mix-cli free of mix-shell
-        run: test -z "$(cargo tree --locked -p mix-cli -e normal -i mix-shell 2>/dev/null)"
+      - run: scripts/check_dependencies.py
 
   machete:
     name: Unused Dependencies (machete)
