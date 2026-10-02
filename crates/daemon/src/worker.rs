@@ -136,10 +136,7 @@ pub struct Host {
 fn enrolled(uid: u32) -> bool {
     uid == 0
         || mix_shell::effect::accounts::user_by_uid(uid).is_some_and(|user| {
-            mix_shell::effect::accounts::group_has_member(
-                mix_core::identity::MIX_USERS_GROUP,
-                &user.name,
-            )
+            mix_shell::effect::accounts::user_in_group(mix_core::identity::MIX_USERS_GROUP, &user)
         })
 }
 

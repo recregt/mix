@@ -387,3 +387,31 @@ async fn a_caller_the_worker_does_not_admit_is_denied_before_any_request() {
         "{denied:?}"
     );
 }
+
+struct CountsAdmissions(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Worker for CountsAdmissions {
+    const VERSION: &'static str = VERSION;
+
+    fn admits(&self, _caller: Caller) -> bool {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        true
+    }
+
+    async fn run(&self, _caller: Caller, _command: Command, _controls: Controls, _events: Events) {}
+}
+
+#[tokio::test]
+async fn a_connection_checks_its_caller_once() {
+    let admissions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
+    let _server = tokio::spawn(serve_connection(
+        CountsAdmissions(Arc::clone(&admissions)),
+        theirs,
+    ));
+    let mut client = Client::connect(ours, VERSION).await.unwrap();
+
+    every_envelope(&mut client, &repair()).await;
+
+    assert_eq!(admissions.load(Ordering::SeqCst), 1);
+}

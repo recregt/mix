@@ -2,7 +2,7 @@ use std::future::Future;
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 
 use futures_util::{Stream, StreamExt};
@@ -83,12 +83,24 @@ struct Service<W> {
     worker: Arc<W>,
     running: TaskTracker,
     one_at_a_time: Arc<Semaphore>,
+    admitted: OnceLock<(Caller, bool)>,
 }
 
 impl<W: Worker> Service<W> {
+    fn admits(&self, caller: Caller) -> bool {
+        // One connection has one peer, so its hello and run share a single check.
+        match *self
+            .admitted
+            .get_or_init(|| (caller, self.worker.admits(caller)))
+        {
+            (checked, admitted) if checked == caller => admitted,
+            _ => self.worker.admits(caller),
+        }
+    }
+
     fn admit<T>(&self, request: &Request<T>) -> Result<Caller, Status> {
         let caller = caller(request)?;
-        if self.worker.admits(caller) {
+        if self.admits(caller) {
             Ok(caller)
         } else {
             Err(Status::permission_denied(format!(
@@ -292,6 +304,7 @@ pub async fn serve_connection<W: Worker>(worker: W, connection: UnixStream) -> R
             worker: Arc::new(worker),
             running: running.clone(),
             one_at_a_time: Arc::new(Semaphore::new(1)),
+            admitted: OnceLock::new(),
         }))
         .serve_with_incoming_shutdown(incoming, async {
             let _ = on_close.await;
