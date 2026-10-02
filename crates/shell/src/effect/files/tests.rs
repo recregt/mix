@@ -577,14 +577,3 @@ fn a_reclaim_is_only_carried_out_by_the_new_owner() {
     assert!(matches!(refused, Err(Failure::Conflict { .. })));
     assert_eq!(root.tree(), before);
 }
-
-#[test]
-fn the_owner_of_a_tree_is_its_highest_ancestor_root_does_not_own() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join("a/b")).unwrap();
-    let expected = (me() != 0).then_some(me());
-
-    assert_eq!(tree_owner_of(&dir.path().join("a/b/c")), expected);
-    assert_eq!(tree_owner_of(Path::new("/etc/passwd")), None);
-    assert_eq!(owner_at(&dir.path().join("a")), Some(me()));
-}

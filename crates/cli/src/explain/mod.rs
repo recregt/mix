@@ -404,10 +404,12 @@ mod tests {
 
     #[test]
     fn a_bug_is_called_a_bug_and_says_where_to_report_it() {
-        let message = core_error(
-            &mix_core::Error::TaskPanicked("oops".to_string()),
-            "mix install",
-            &"install ripgrep",
+        let message = render(
+            &mix_core::diagnose::failed(mix_events::v1::Code::Internal, "oops", None),
+            &Context {
+                command: "mix install",
+                action: &"install ripgrep",
+            },
         )
         .message();
 

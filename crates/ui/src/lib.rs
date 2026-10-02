@@ -310,10 +310,6 @@ impl<'a> Report<'a> {
         self.causes = causes;
         self
     }
-
-    pub fn has_help(&self) -> bool {
-        self.help.is_some()
-    }
 }
 
 fn write_label(out: &mut String, colour: &str, label: &str, text: &str, colours: bool) {

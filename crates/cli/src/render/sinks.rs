@@ -13,7 +13,6 @@ use mix_shell::render::Render;
 
 use super::human::Human;
 use crate::cli::Output;
-use crate::controls::Stopping;
 
 #[derive(Debug, Clone, Copy, Default)]
 struct Seen {
@@ -73,10 +72,6 @@ impl View {
 
     pub fn level(&self) -> Detail {
         level(self.quiet, self.verbose)
-    }
-
-    pub fn notices(&self, stopping: Stopping) -> Option<Stopping> {
-        (self.output == Output::Human).then_some(stopping)
     }
 }
 

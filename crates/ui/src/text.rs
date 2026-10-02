@@ -169,10 +169,6 @@ pub const fn is_help(text: &str) -> bool {
     is_phrase(text) && starts_with_imperative(text)
 }
 
-pub const fn is_note(text: &str) -> bool {
-    is_phrase(text) && !starts_with_imperative(text)
-}
-
 pub const fn is_sentences(text: &str) -> bool {
     let bytes = text.as_bytes();
     !bytes.is_empty()
@@ -445,16 +441,6 @@ mod tests {
         assert!(!is_phrase("it stopped \u{2014} run it again"));
         assert!(!is_phrase(""));
     }
-
-    #[test]
-    fn a_help_is_an_instruction_and_a_note_is_not() {
-        assert!(is_help("run `mix repair` to record it"));
-        assert!(!is_help("`mix repair` records it"));
-        assert!(is_note("`mix` needs it to work"));
-        assert!(!is_note("run it again"));
-        assert!(!is_help("runaway"));
-    }
-
     #[test]
     fn a_joined_phrase_reads_as_its_parts_and_equals_the_same_words() {
         let joined = joined(&["found ", "8", " problems"]);

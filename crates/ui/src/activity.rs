@@ -100,12 +100,6 @@ pub fn render_bytes(done: u64, total: u64) -> String {
     out
 }
 
-pub fn render_progress(progress: &BuildProgress, item: &str) -> String {
-    let mut out = String::with_capacity(64);
-    write_progress(&mut out, progress, item);
-    out
-}
-
 fn write_counter(out: &mut String, done: u64, expected: u64) {
     // Hold the column the counter ends in steady as it rolls over a power of ten.
     for _ in digits(done)..digits(expected) {
@@ -189,6 +183,12 @@ fn digits(value: u64) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn render_progress(progress: &BuildProgress, item: &str) -> String {
+        let mut out = String::new();
+        write_progress(&mut out, progress, item);
+        out
+    }
 
     #[test]
     fn a_plain_line_is_passed_through_without_copying() {

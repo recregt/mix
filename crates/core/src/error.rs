@@ -26,9 +26,6 @@ pub enum Error {
         source: std::io::Error,
     },
 
-    #[error("background task panicked: {0}")]
-    TaskPanicked(String),
-
     #[error("command `{command}` was interrupted")]
     Cancelled { command: String },
 

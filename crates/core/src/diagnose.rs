@@ -153,7 +153,6 @@ impl Diagnose for Error {
             Error::Io { .. } => Code::Io,
             Error::Command { detail, .. } => command_code(detail),
             Error::Exec { .. } => Code::SpawnFailed,
-            Error::TaskPanicked(_) => Code::Internal,
             Error::Cancelled { .. } => return None,
             Error::LockMissing { .. } => Code::LockMissing,
         })
@@ -185,7 +184,6 @@ impl Diagnose for Error {
                     output_tail: String::new(),
                 })),
             ),
-            Error::TaskPanicked(_) => failed(Code::Internal, self.to_string(), None),
             Error::Cancelled { .. } => Fault::Cancelled {
                 cause: Cancellation::Interrupted,
                 rolled_back: false,

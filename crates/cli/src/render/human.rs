@@ -68,11 +68,6 @@ impl Human {
         self.recorded = Some(offset);
     }
 
-    pub fn without_results(mut self) -> Self {
-        self.results = false;
-        self
-    }
-
     fn shows(&self, detail: Detail) -> bool {
         self.level >= detail
     }

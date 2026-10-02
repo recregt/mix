@@ -1307,26 +1307,6 @@ fn copy_tree_at(
     }
 }
 
-pub fn owner_at(path: &Path) -> Option<u32> {
-    sys::statx(sys::CWD, path, AtFlags::SYMLINK_NOFOLLOW, StatxFlags::UID)
-        .ok()
-        .map(|stat| stat.stx_uid)
-}
-
-pub fn tree_owner_of(path: &Path) -> Option<u32> {
-    let bytes = path.as_os_str().as_bytes();
-    for (at, byte) in bytes.iter().enumerate().skip(1) {
-        if *byte != b'/' {
-            continue;
-        }
-        match owner_at(Path::new(OsStr::from_bytes(&bytes[..at])))? {
-            0 => {}
-            uid => return Some(uid),
-        }
-    }
-    None
-}
-
 fn walk(root: &OwnedFd, path: &Path) -> Option<u32> {
     let mut parts = path
         .components()

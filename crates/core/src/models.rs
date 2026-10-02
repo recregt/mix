@@ -57,7 +57,8 @@ pub enum Category {
 }
 
 impl Category {
-    pub const ALL: [Category; 4] = [
+    #[cfg(test)]
+    pub(crate) const ALL: [Category; 4] = [
         Category::Filesystem,
         Category::Identity,
         Category::Services,
