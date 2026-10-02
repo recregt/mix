@@ -50,7 +50,7 @@ fn current(user: &InvokingUser) -> Option<u64> {
     generation_of(target.file_name()?.to_str()?)
 }
 
-fn existing(user: &InvokingUser) -> Vec<u64> {
+pub(crate) fn existing(user: &InvokingUser) -> Vec<u64> {
     let Ok(entries) = std::fs::read_dir(nix_profiles_dir(&user.home)) else {
         return Vec::new();
     };
@@ -131,6 +131,7 @@ async fn switch_to(
 
 pub async fn perform(
     action: &Action,
+    built: Option<u64>,
     context: &ProfileContext,
     activity: &Arc<dyn ActivityReporter>,
     scope: &Scope,
@@ -138,7 +139,7 @@ pub async fn perform(
 ) -> Option<Outcome> {
     Some(match action {
         Action::ActivateProfile { user } => {
-            activate(user, context, activity, scope, prepared).await
+            activate(user, built, context, activity, scope, prepared).await
         }
         Action::SwitchGeneration {
             user,
@@ -266,6 +267,7 @@ async fn reuse(
 
 async fn activate(
     user: &InvokingUser,
+    built: Option<u64>,
     context: &ProfileContext,
     activity: &Arc<dyn ActivityReporter>,
     scope: &Scope,
@@ -273,7 +275,7 @@ async fn activate(
 ) -> Outcome {
     let previous = current(user);
     let before = existing(user);
-    if let Some(built) = profile::state::built_generation(&user.home, &before) {
+    if let Some(built) = built.filter(|built| before.contains(built)) {
         return reuse(user, previous, built, activity, scope, prepared).await;
     }
     let predicted = before.iter().max().map_or(1, |last| last + 1);

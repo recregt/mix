@@ -140,3 +140,21 @@ fn a_set_aside_file_is_removed_on_commit() {
         .collect();
     assert_eq!(left, ["config"]);
 }
+
+#[test]
+fn the_agent_answers_which_generation_was_built_from_the_current_files() {
+    let home = tempfile::tempdir().unwrap();
+    let mut output = Vec::new();
+
+    serve(
+        "r1",
+        lines(&[Request::FindBuilt {
+            home: home.path().to_path_buf(),
+            generations: vec![1, 2],
+        }]),
+        &mut output,
+    )
+    .unwrap();
+
+    assert!(matches!(replies(&output).as_slice(), [Reply::Built(None)]));
+}

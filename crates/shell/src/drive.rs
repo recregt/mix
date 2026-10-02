@@ -221,6 +221,23 @@ impl Performer {
         Ok(self.agents.get_mut(&uid).expect("inserted above"))
     }
 
+    async fn find_built(
+        &mut self,
+        user: &mix_core::privilege::InvokingUser,
+        scope: &Scope,
+    ) -> Result<Option<u64>, Failure> {
+        let generations = generations::existing(user);
+        if user.uid == nix::unistd::geteuid().as_raw() {
+            return Ok(crate::profile::state::built_generation(
+                &user.home,
+                &generations,
+            ));
+        }
+        self.agent(user.uid, &user.home, scope)?
+            .find_built(&user.home, &generations)
+            .await
+    }
+
     async fn perform_file(
         &mut self,
         action: &Action,
@@ -462,10 +479,15 @@ impl Performer {
         if let Some(outcome) = Box::pin(identity::perform(action, scope, prepared)).await {
             return outcome;
         }
-        if let Some(profile) = &self.profile {
+        if self.profile.is_some() {
+            let built = match action {
+                Action::ActivateProfile { user } => self.find_built(user, scope).await?,
+                _ => None,
+            };
+            let profile = self.profile.as_ref().expect("checked above");
             let activity: std::sync::Arc<dyn ActivityReporter> = self.activity.clone();
             if let Some(outcome) = Box::pin(generations::perform(
-                action, profile, &activity, scope, prepared,
+                action, built, profile, &activity, scope, prepared,
             ))
             .await
             {
