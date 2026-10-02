@@ -774,6 +774,7 @@ dependencies = [
  "mix-core",
  "mix-events",
  "mix-exec",
+ "mix-explain",
  "mix-rpc",
  "mix-ui",
  "nix",
@@ -834,6 +835,15 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "mix-explain"
+version = "0.1.0"
+dependencies = [
+ "mix-core",
+ "mix-events",
+ "mix-ui",
 ]
 
 [[package]]

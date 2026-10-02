@@ -28,6 +28,11 @@ RULES = [
         {"mix-shell"},
         "is the privileged code the client reaches only through mix-rpc",
     ),
+    (
+        "mix-explain",
+        {"mix-shell", "mix-rpc", "mix-exec", "tokio"},
+        "is not words: mix-explain turns a fault into text and nothing else",
+    ),
 ]
 
 

@@ -1,5 +1,11 @@
 #![cfg_attr(not(test), deny(clippy::wildcard_enum_match_arm))]
 
+pub mod human;
+pub mod replay;
+mod results;
+mod trace;
+mod verbs;
+
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -11,8 +17,8 @@ use mix_events::capture::v1::Header;
 use mix_events::v1::{Envelope, envelope};
 use mix_events::{Detail, ROOT};
 
-use super::human::Human;
-use crate::cli::Output;
+use crate::args::Output;
+use human::Human;
 
 #[derive(Debug, Clone, Copy, Default)]
 struct Seen {

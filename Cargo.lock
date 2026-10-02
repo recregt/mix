@@ -1406,6 +1406,7 @@ dependencies = [
  "mix-core",
  "mix-events",
  "mix-exec",
+ "mix-explain",
  "mix-nixgen",
  "mix-rpc",
  "mix-shell",
@@ -1477,6 +1478,18 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "mix-explain"
+version = "0.1.0"
+dependencies = [
+ "codspeed-divan-compat",
+ "mix-core",
+ "mix-events",
+ "mix-nixgen",
+ "mix-shell",
+ "mix-ui",
 ]
 
 [[package]]

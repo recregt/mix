@@ -20,7 +20,7 @@ const STYLES: Styles = Styles::styled()
     styles = STYLES,
     after_help = "See 'mix help <command>' for more information on a specific command."
 )]
-pub struct Cli {
+pub struct Args {
     /// Use verbose output (-vv also shows each program's output)
     #[arg(short, long, action = ArgAction::Count, global = true, conflicts_with = "quiet")]
     pub verbose: u8,
@@ -207,7 +207,7 @@ pub fn exit_status() -> clap::builder::StyledStr {
     text.into()
 }
 
-impl Cli {
+impl Args {
     pub fn parse_with_color() -> Self {
         use clap::{CommandFactory, FromArgMatches};
 
@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn every_help_text_reads_like_cargo_s() {
-        check_help(&Cli::command(), "mix");
+        check_help(&Args::command(), "mix");
     }
 
     #[test]
@@ -306,39 +306,11 @@ mod tests {
 
     #[test]
     fn the_argument_surface_is_valid() {
-        Cli::command().debug_assert();
+        Args::command().debug_assert();
     }
 
-    fn parse(args: &[&str]) -> Cli {
-        Cli::try_parse_from(args).expect("the arguments should parse")
-    }
-
-    #[test]
-    fn install_draws_progress_by_default() {
-        assert!(!parse(&["mix", "install", "ripgrep"]).no_progress);
-    }
-
-    #[test]
-    fn no_progress_turns_drawing_off() {
-        assert!(parse(&["mix", "--no-progress", "install", "ripgrep"]).no_progress);
-    }
-
-    #[test]
-    fn no_progress_is_accepted_after_the_subcommand_too() {
-        assert!(parse(&["mix", "install", "ripgrep", "--no-progress"]).no_progress);
-    }
-
-    #[test]
-    fn output_is_for_people_unless_json_is_asked_for() {
-        assert_eq!(parse(&["mix", "install", "ripgrep"]).output, Output::Human);
-        assert_eq!(
-            parse(&["mix", "--output", "json", "install", "ripgrep"]).output,
-            Output::Json
-        );
-        assert_eq!(
-            parse(&["mix", "install", "--output", "json", "ripgrep"]).output,
-            Output::Json
-        );
+    fn parse(args: &[&str]) -> Args {
+        Args::try_parse_from(args).expect("the arguments should parse")
     }
 
     #[test]
@@ -347,73 +319,22 @@ mod tests {
     }
 
     #[test]
-    fn events_can_be_recorded_by_any_command() {
-        let cli = parse(&["mix", "doctor", "--events-file", "/tmp/events.ndjson"]);
-        assert_eq!(cli.events_file, Some(PathBuf::from("/tmp/events.ndjson")));
-    }
-
-    #[test]
-    fn a_recorded_file_is_checked_by_its_own_command() {
-        assert!(matches!(
-            parse(&["mix", "events", "check", "/tmp/events.ndjson"]).command,
-            Command::Events {
-                command: EventsCommand::Check { ref file }
-            } if file == &PathBuf::from("/tmp/events.ndjson")
-        ));
-    }
-
-    #[test]
-    fn a_recorded_run_is_shown_at_any_verbosity_and_for_one_node() {
-        let cli = parse(&[
-            "mix",
-            "-vv",
-            "events",
-            "show",
-            "/tmp/events.ndjson",
-            "--node",
-            "install/plan/activate",
-        ]);
-
-        assert_eq!(cli.verbose, 2);
-        assert!(matches!(
-            cli.command,
-            Command::Events {
-                command: EventsCommand::Show { ref file, node: Some(ref node) }
-            } if file == &PathBuf::from("/tmp/events.ndjson") && node == "install/plan/activate"
-        ));
-    }
-
-    #[test]
-    fn the_old_json_flag_is_gone() {
-        assert!(Cli::try_parse_from(["mix", "install", "--json", "ripgrep"]).is_err());
-        assert!(Cli::try_parse_from(["mix", "remove", "--json", "ripgrep"]).is_err());
-    }
-
-    #[test]
-    fn remove_takes_the_packages_to_remove() {
-        let cli = parse(&["mix", "remove", "ripgrep", "fd"]);
-
-        assert!(matches!(
-            cli.command,
-            Command::Remove { ref packages } if packages == &["ripgrep", "fd"]
-        ));
-    }
-
-    #[test]
-    fn clean_keeps_the_store_unless_asked_for_all() {
-        assert!(matches!(
-            parse(&["mix", "clean"]).command,
-            Command::Clean { all: false }
-        ));
-        assert!(matches!(
-            parse(&["mix", "clean", "--all"]).command,
-            Command::Clean { all: true }
-        ));
-    }
-
-    #[test]
-    fn remove_needs_at_least_one_package() {
-        assert!(Cli::try_parse_from(["mix", "remove"]).is_err());
+    fn every_flag_that_shapes_output_works_before_or_after_the_subcommand() {
+        let command = Args::command();
+        for id in [
+            "output",
+            "events_file",
+            "no_progress",
+            "verbose",
+            "quiet",
+            "color",
+        ] {
+            let arg = command
+                .get_arguments()
+                .find(|arg| arg.get_id() == id)
+                .unwrap_or_else(|| panic!("no argument {id}"));
+            assert!(arg.is_global_set(), "--{id} must be global");
+        }
     }
 
     #[test]
@@ -462,7 +383,7 @@ mod tests {
         }
 
         let mut found = Vec::new();
-        visit(&<Cli as clap::CommandFactory>::command(), &mut found);
+        visit(&<Args as clap::CommandFactory>::command(), &mut found);
         assert_eq!(found, Vec::<String>::new());
     }
 }

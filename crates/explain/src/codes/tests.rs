@@ -10,7 +10,7 @@ use mix_events::v1::{
 };
 
 use super::*;
-use crate::explain::{Context, render, rpc_fault};
+use crate::{Context, render};
 
 fn every_code() -> Vec<Code> {
     super::defined().collect()
@@ -154,44 +154,8 @@ fn every_code_reads_as_its_golden_file() {
 }
 
 #[test]
-fn every_worker_failure_has_a_code_unless_it_is_a_protocol_violation() {
-    use mix_rpc::Error;
-
-    let errors = vec![
-        Error::Spawn(std::io::ErrorKind::NotFound.into()),
-        Error::Connect("refused".into()),
-        Error::Refused("not allowed".into()),
-        Error::Ended,
-        Error::VersionMismatch {
-            ours: "1.0.0".into(),
-            theirs: "1.1.0".into(),
-        },
-        Error::Denied("uid 1001 is not root and not a member of mix-users".into()),
-        Error::NotAConnection(std::io::ErrorKind::InvalidInput.into()),
-    ];
-    for error in &errors {
-        let code = rpc_fault(error).code();
-        match error {
-            Error::Malformed(_) | Error::NotAConnection(_) => {
-                assert_eq!(code, Some(Code::Internal))
-            }
-            Error::VersionMismatch { .. } => assert_eq!(code, Some(Code::VersionMismatch)),
-            Error::Denied(_) => assert_eq!(code, Some(Code::NotBootstrapped)),
-            Error::Spawn(_)
-            | Error::Launch(_)
-            | Error::Connect(_)
-            | Error::Refused(_)
-            | Error::Ended => assert!(
-                matches!(code, Some(Code::PrivilegesUnavailable | Code::WorkerEnded)),
-                "{error:?}: {code:?}"
-            ),
-        }
-    }
-}
-
-#[test]
 fn nothing_mix_says_by_default_names_nix_mechanics() {
-    let context = crate::explain::render::Context {
+    let context = crate::render::Context {
         command: "mix install ripgrep",
         action: &"install ripgrep",
     };
@@ -206,8 +170,7 @@ fn nothing_mix_says_by_default_names_nix_mechanics() {
             )),
             ..mix_events::v1::Diagnostic::default()
         };
-        let words =
-            crate::explain::render::render(&mix_events::Fault::Failed(wire), &context).message();
+        let words = crate::render::render(&mix_events::Fault::Failed(wire), &context).message();
         for text in [words.as_str(), explanation_text(code).as_str()] {
             assert_eq!(
                 mix_core::vocabulary::nix_mechanics_in(text),

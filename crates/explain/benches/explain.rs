@@ -1,9 +1,7 @@
-use mix_cli::explain;
 use mix_core::Category;
 use mix_core::health::HealthReport;
 use mix_events::Diagnose;
-use mix_events::v1::command::Request;
-use mix_events::v1::{InstallRequest, RepairRequest};
+use mix_explain as explain;
 use mix_shell::profile::change::Error as InstallError;
 use mix_shell::target::{Error as TargetError, Finding, Unfixable};
 
@@ -19,9 +17,6 @@ fn shown(words: explain::Diagnostic) -> explain::Diagnostic {
 /// The cheapest shape: a raw error from the bottom of the tool, worded for the command it ended.
 #[divan::bench]
 fn word_a_missing_lock(bencher: divan::Bencher) {
-    let request = Request::Install(InstallRequest {
-        packages: vec!["package".to_string()],
-    });
     let fault = InstallError::Core(mix_core::Error::LockMissing {
         path: "/var/lib/mix/lock".into(),
     })
@@ -29,7 +24,8 @@ fn word_a_missing_lock(bencher: divan::Bencher) {
 
     bencher.bench(|| {
         shown(explain::outcome(
-            Some(divan::black_box(&request)),
+            divan::black_box("mix install"),
+            &divan::black_box("install package"),
             divan::black_box(&fault),
         ))
     });
@@ -39,7 +35,6 @@ fn word_a_missing_lock(bencher: divan::Bencher) {
 /// it for every target it could not put back.
 #[divan::bench]
 fn word_an_unrepairable_target(bencher: divan::Bencher) {
-    let request = Request::Repair(RepairRequest {});
     let fault = TargetError::Unrepairable {
         artifact: "default profile".to_string(),
         reason: Unfixable::MissingRuntime,
@@ -48,7 +43,8 @@ fn word_an_unrepairable_target(bencher: divan::Bencher) {
 
     bencher.bench(|| {
         shown(explain::outcome(
-            Some(divan::black_box(&request)),
+            divan::black_box("mix repair"),
+            &divan::black_box("finish the repair"),
             divan::black_box(&fault),
         ))
     });

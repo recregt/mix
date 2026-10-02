@@ -1,7 +1,7 @@
 use futures_util::{Stream, StreamExt};
 use mix_events::Render;
 use mix_events::v1::command::Request;
-use mix_events::v1::{BootstrapRequest, Envelope, NodeFinished, Status, envelope};
+use mix_events::v1::{Envelope, NodeFinished, Status, envelope};
 use mix_events::{Detail, Fault, ROOT};
 use mix_exec::Reason;
 use mix_rpc::{Client, Controller, Reply};
@@ -9,16 +9,17 @@ use nix::sys::signal::Signal;
 
 use mix_core::paths::MIX_DAEMON_SOCKET_PATH;
 
-use crate::cli::Output;
-use crate::controls::{Control, Terminal, Translator};
-use crate::render::sinks::{Sinks, View};
+use crate::args::Output;
+use crate::output::{Sinks, View};
+use crate::request::Route;
+use crate::session::controls::{Control, Terminal, Translator};
 
 const LAUNCHER: &str = "sudo";
 const DAEMON: &str = "mix-daemon";
 const SERVE_STDIN: &str = "serve-stdin";
 
 #[derive(Debug, thiserror::Error)]
-#[error("`{}` did not finish", crate::explain::command_of(Some(.request)))]
+#[error("`{}` did not finish", crate::request::name(.request))]
 pub struct Failed {
     pub request: Request,
     pub fault: Fault,
@@ -46,10 +47,10 @@ fn fault_of(root: &NodeFinished) -> Option<Fault> {
 
 fn detach(view: &View) -> ! {
     if view.output == Output::Human {
-        mix_ui::note(&crate::controls::detached(), None);
+        mix_ui::note(&crate::session::controls::detached(), None);
     }
     mix_ui::restore_terminal();
-    std::process::exit(i32::try_from(crate::controls::DETACHED_EXIT).unwrap_or(i32::MAX));
+    std::process::exit(i32::try_from(crate::session::controls::DETACHED_EXIT).unwrap_or(i32::MAX));
 }
 
 fn steer(controller: &Controller, control: Control, view: &View) -> bool {
@@ -102,22 +103,8 @@ async fn replay(
     ended.ok_or(mix_rpc::Error::Ended)
 }
 
-pub fn bootstrap_request(mirror: Option<&str>, mirror_key: Option<&str>, force: bool) -> Request {
-    Request::Bootstrap(Box::new(BootstrapRequest {
-        force,
-        mirror: mirror.map(str::to_string),
-        mirror_key: mirror.and(mirror_key).map(str::to_string),
-    }))
-}
-
 fn daemon_next_to(client: &std::path::Path) -> std::path::PathBuf {
     client.with_file_name(DAEMON)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Route {
-    OneShot,
-    Socket,
 }
 
 async fn one_shot(view: &View) -> anyhow::Result<Client> {
@@ -187,26 +174,6 @@ pub async fn run(request: Request, route: Route, view: &View) -> anyhow::Result<
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_mirror_this_process_resolved_crosses_sudo_in_the_request() {
-        assert_eq!(
-            bootstrap_request(Some("http://env.internal"), Some("env:KEY"), false),
-            Request::Bootstrap(Box::new(BootstrapRequest {
-                force: false,
-                mirror: Some("http://env.internal".into()),
-                mirror_key: Some("env:KEY".into()),
-            }))
-        );
-        assert_eq!(
-            bootstrap_request(None, Some("stray:KEY"), true),
-            Request::Bootstrap(Box::new(BootstrapRequest {
-                force: true,
-                mirror: None,
-                mirror_key: None,
-            }))
-        );
-    }
 
     fn finished(status: Status) -> NodeFinished {
         NodeFinished {

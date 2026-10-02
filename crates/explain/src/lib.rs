@@ -1,26 +1,19 @@
-//! Turning a failure into the words the person who ran the command should read.
-//!
-//! The crates underneath this one raise errors that state facts: a path, a command line, an
-//! errno, a list of derivations. None of them know which command is running, so none of them can
-//! know what a reader should be told to try. `already locked` asks a different question of
-//! someone running `mix install` than of someone running `mix repair`, and `root privileges are
-//! required` is advice to re-run with sudo in one command and a refusal in another.
-//!
-//! So the facts travel up untouched and the words are written here, one module per command.
-//! The work more than one command shares, such as activating a profile or reconciling a declared
-//! target, is written once in a module of its own and told which command to name.
-//! A [`Diagnostic`] is what comes out: a summary of what happened, a note with a fact the reader
-//! needs, and a help with what to do about it. Each is checked when `mix` is built.
+//! `mix-explain` turns a failure into the words the person who ran the command reads. The code
+//! underneath reports facts as a coded diagnostic, but only the command knows what the reader
+//! should try next, so the caller passes the command's name and action, and the words are
+//! chosen here from the code and its details. `mix explain` prints the longer text for a code.
 
 pub mod codes;
+pub mod command;
 pub mod doctor;
 pub(crate) mod render;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use render::{Context, render, rpc_fault};
+pub use render::warning;
+pub(crate) use render::{Context, render};
 
-use std::fmt::{self, Display};
+use std::fmt::Display;
 
 use std::borrow::Cow;
 
@@ -141,26 +134,6 @@ impl Diagnostic {
     }
 }
 
-pub fn words(error: &anyhow::Error, request: &mix_events::v1::command::Request) -> Diagnostic {
-    if let Some(failed) = error.downcast_ref::<crate::client::Failed>() {
-        return outcome(Some(&failed.request), &failed.fault);
-    }
-    if let Some(error) = error.downcast_ref::<mix_rpc::Error>() {
-        return outcome(Some(request), &rpc_fault(error));
-    }
-    failed(&*action_of(Some(request)))
-}
-
-pub(crate) fn fault_of(error: &anyhow::Error) -> mix_events::Fault {
-    if let Some(failed) = error.downcast_ref::<crate::client::Failed>() {
-        return failed.fault.clone();
-    }
-    if let Some(error) = error.downcast_ref::<mix_rpc::Error>() {
-        return rpc_fault(error);
-    }
-    mix_core::diagnose::failed(mix_events::v1::Code::Internal, error.to_string(), None)
-}
-
 pub fn restored(source: mix_core::change::Source) -> Option<Diagnostic> {
     match source {
         mix_core::change::Source::File | mix_core::change::Source::Generation => None,
@@ -204,48 +177,11 @@ pub fn evidence(fault: &mix_events::Fault) -> Vec<String> {
     out
 }
 
-pub fn command_of(request: Option<&mix_events::v1::command::Request>) -> &'static str {
-    use mix_events::v1::command::Request;
-
-    match request {
-        Some(Request::Install(_)) => "mix install",
-        Some(Request::Remove(_)) => "mix remove",
-        Some(Request::Bootstrap(_)) => "mix bootstrap",
-        Some(Request::Repair(_)) => "mix repair",
-        Some(Request::Doctor(_)) => "mix doctor",
-        Some(Request::Clean(_)) => "mix clean",
-        None => "mix",
-    }
+pub fn outcome(command: &str, action: &dyn Display, fault: &mix_events::Fault) -> Diagnostic {
+    render(fault, &Context { command, action })
 }
 
-fn action_of(request: Option<&mix_events::v1::command::Request>) -> Box<dyn Display + '_> {
-    use mix_events::v1::command::Request;
-
-    match request {
-        Some(Request::Install(install)) => Box::new(packages_action("install", &install.packages)),
-        Some(Request::Remove(remove)) => Box::new(packages_action("remove", &remove.packages)),
-        Some(Request::Bootstrap(_)) => Box::new("finish setting up `mix`"),
-        Some(Request::Repair(_)) => Box::new("finish the repair"),
-        Some(Request::Doctor(_)) => Box::new("finish the health check"),
-        Some(Request::Clean(_)) => Box::new("clean up your profile"),
-        None => Box::new("finish"),
-    }
-}
-
-pub fn outcome(
-    request: Option<&mix_events::v1::command::Request>,
-    fault: &mix_events::Fault,
-) -> Diagnostic {
-    render(
-        fault,
-        &Context {
-            command: command_of(request),
-            action: &*action_of(request),
-        },
-    )
-}
-
-pub(crate) fn failed(action: &dyn Display) -> Diagnostic {
+pub fn failed(action: &dyn Display) -> Diagnostic {
     Diagnostic::new(phrase!("couldn't {action}"))
         .help(help!("run it again with `-v` to see what went wrong"))
 }
@@ -254,34 +190,4 @@ pub(crate) fn bug() -> Diagnostic {
     Diagnostic::new(phrase!("something went wrong inside `mix`")).help(help!(
         "report this bug at https://github.com/recregt/mix/issues"
     ))
-}
-
-pub(crate) struct PackagesAction<'a> {
-    verb: &'static str,
-    packages: &'a [String],
-}
-
-impl Display for PackagesAction<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.verb)?;
-        match self.packages {
-            [] => f.write_str(" the packages"),
-            [first, rest @ ..] if rest.len() < 3 => {
-                f.write_str(" ")?;
-                f.write_str(first)?;
-                rest.iter().try_for_each(|package| {
-                    f.write_str(", ")?;
-                    f.write_str(package)
-                })
-            }
-            packages => write!(f, " {} packages", packages.len()),
-        }
-    }
-}
-
-pub(crate) fn packages_action<'a>(
-    verb: &'static str,
-    packages: &'a [String],
-) -> PackagesAction<'a> {
-    PackagesAction { verb, packages }
 }

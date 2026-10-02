@@ -1,9 +1,5 @@
 use mix_events::Diagnose;
-use mix_events::v1::command::Request;
-use mix_events::v1::{
-    CleanRequest, CommandDetail, Diagnostic as Wire, InstallRequest, RemoveRequest, RepairRequest,
-    diagnostic::Detail,
-};
+use mix_events::v1::{CommandDetail, Diagnostic as Wire, diagnostic::Detail};
 use mix_shell::ops::bootstrap::{Error as BootstrapError, Host};
 use mix_shell::ops::remove::Error as RemoveError;
 use mix_shell::profile::change::Error as ChangeError;
@@ -13,36 +9,19 @@ use mix_shell::target::{Error as TargetError, Unfixable};
 use super::render::damaged;
 use super::*;
 
-fn packages(names: &[&str]) -> Vec<String> {
-    names.iter().map(|name| name.to_string()).collect()
+fn said(command: &str, action: &str, error: &impl Diagnose) -> String {
+    outcome(command, &action, &error.fault()).message()
 }
 
-fn bootstrap() -> Request {
-    Request::Bootstrap(Box::default())
-}
+const BOOTSTRAP: (&str, &str) = ("mix bootstrap", "finish setting up `mix`");
+const INSTALL: (&str, &str) = ("mix install", "install ripgrep");
+const REMOVE: (&str, &str) = ("mix remove", "remove git");
+const REPAIR: (&str, &str) = ("mix repair", "finish the repair");
+const DOCTOR: (&str, &str) = ("mix doctor", "finish the health check");
+const CLEAN: (&str, &str) = ("mix clean", "clean up your profile");
 
-fn install(names: &[&str]) -> Request {
-    Request::Install(InstallRequest {
-        packages: packages(names),
-    })
-}
-
-fn remove(names: &[&str]) -> Request {
-    Request::Remove(RemoveRequest {
-        packages: packages(names),
-    })
-}
-
-fn repair() -> Request {
-    Request::Repair(RepairRequest {})
-}
-
-fn clean() -> Request {
-    Request::Clean(CleanRequest { all: false })
-}
-
-fn said(request: &Request, error: &impl Diagnose) -> String {
-    outcome(Some(request), &error.fault()).message()
+fn says((command, action): (&str, &str), error: &impl Diagnose) -> String {
+    said(command, action, error)
 }
 
 #[test]
@@ -66,7 +45,7 @@ fn a_refused_path_says_whose_permission_is_missing() {
         source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
     };
 
-    let message = said(&Request::Doctor(Default::default()), &error);
+    let message = says(DOCTOR, &error);
 
     assert!(message.starts_with("no permission to use /nix/store"));
     assert!(message.contains("check who owns it"));
@@ -80,7 +59,7 @@ fn a_failed_step_says_what_could_not_be_done_and_keeps_the_internals_out() {
     };
 
     assert_eq!(
-        said(&install(&["ripgrep"]), &error),
+        says(INSTALL, &error),
         "couldn't install ripgrep\nrun it again with `-v` to see what went wrong"
     );
 }
@@ -88,7 +67,8 @@ fn a_failed_step_says_what_could_not_be_done_and_keeps_the_internals_out() {
 #[test]
 fn a_bug_is_called_a_bug_and_says_where_to_report_it() {
     let message = outcome(
-        Some(&install(&["ripgrep"])),
+        INSTALL.0,
+        &INSTALL.1,
         &mix_core::diagnose::failed(mix_events::v1::Code::Internal, "oops", None),
     )
     .message();
@@ -99,87 +79,14 @@ fn a_bug_is_called_a_bug_and_says_where_to_report_it() {
 }
 
 #[test]
-fn a_long_list_of_packages_is_counted() {
-    let packages = packages(&["a", "b", "c", "d"]);
-
-    assert_eq!(
-        packages_action("install", &packages[..1]).to_string(),
-        "install a"
-    );
-    assert_eq!(
-        packages_action("install", &packages[..3]).to_string(),
-        "install a, b, c"
-    );
-    assert_eq!(
-        packages_action("install", &packages).to_string(),
-        "install 4 packages"
-    );
-}
-
-#[test]
 fn a_missing_lock_sends_the_reader_to_bootstrap() {
     let error = mix_core::Error::LockMissing {
         path: "/var/lib/mix/lock".into(),
     };
 
     assert_eq!(
-        said(&install(&["ripgrep"]), &error),
+        says(INSTALL, &error),
         "`mix` isn't set up yet\nrun `mix bootstrap` first"
-    );
-}
-
-#[test]
-fn a_refused_sudo_is_about_administrator_rights() {
-    let error = anyhow::Error::from(mix_rpc::Error::Refused("connection closed".into()));
-
-    assert_eq!(
-        words(&error, &repair()).message(),
-        "couldn't get administrator rights to finish the repair\n\
-         make sure your account can use sudo, then try again"
-    );
-}
-
-#[test]
-fn a_worker_that_stopped_mid_way_says_to_run_the_command_again() {
-    let message = words(&anyhow::Error::from(mix_rpc::Error::Ended), &repair()).message();
-
-    assert!(message.contains("stopped before it could finish the repair"));
-    assert!(message.contains("run the same command again"));
-}
-
-#[test]
-fn an_error_from_the_client_itself_says_what_could_not_be_done() {
-    let error = anyhow::anyhow!("something else broke");
-
-    assert_eq!(
-        words(&error, &install(&["x"])).message(),
-        "couldn't install x\nrun it again with `-v` to see what went wrong"
-    );
-    assert_eq!(
-        words(&error, &remove(&["git"])).message(),
-        "couldn't remove git\nrun it again with `-v` to see what went wrong"
-    );
-    assert_eq!(
-        words(&error, &repair()).message(),
-        "couldn't finish the repair\nrun it again with `-v` to see what went wrong"
-    );
-    assert_eq!(
-        words(&error, &clean()).message(),
-        "couldn't clean up your profile\nrun it again with `-v` to see what went wrong"
-    );
-}
-
-#[test]
-fn a_failure_from_the_daemon_is_worded_for_the_request_it_ended() {
-    let failed = crate::client::Failed {
-        request: install(&["x"]),
-        fault: ChangeError::NotRoot.fault(),
-    };
-
-    assert!(
-        words(&anyhow::Error::from(failed), &repair())
-            .message()
-            .contains("`mix install` can't be run as root")
     );
 }
 
@@ -232,8 +139,8 @@ fn a_failure_mix_has_no_words_for_keeps_its_producers_words() {
 
 #[test]
 fn a_missing_privilege_names_the_command_to_re_run() {
-    let message = said(
-        &bootstrap(),
+    let message = says(
+        BOOTSTRAP,
         &BootstrapError::NotRoot("bootstrap the managed environment"),
     );
 
@@ -243,8 +150,8 @@ fn a_missing_privilege_names_the_command_to_re_run() {
 
 #[test]
 fn a_network_failure_points_at_the_connection() {
-    let message = said(
-        &bootstrap(),
+    let message = says(
+        BOOTSTRAP,
         &BootstrapError::Network("connection reset".into()),
     );
 
@@ -255,15 +162,15 @@ fn a_network_failure_points_at_the_connection() {
 
 #[test]
 fn a_damaged_download_reads_the_same_however_it_was_caught() {
-    let integrity = said(
-        &bootstrap(),
+    let integrity = says(
+        BOOTSTRAP,
         &BootstrapError::Integrity {
             artifact: "nix archive".into(),
             detail: "sha256 mismatch".into(),
         },
     );
-    let decompression = said(
-        &bootstrap(),
+    let decompression = says(
+        BOOTSTRAP,
         &BootstrapError::Decompression("unexpected end".into()),
     );
 
@@ -274,15 +181,15 @@ fn a_damaged_download_reads_the_same_however_it_was_caught() {
 #[test]
 fn systemd_on_wsl_is_turned_on_differently_than_on_a_distro() {
     assert!(
-        said(
-            &bootstrap(),
+        says(
+            BOOTSTRAP,
             &BootstrapError::SystemdNotReady { host: Host::Wsl }
         )
         .contains("/etc/wsl.conf")
     );
     assert!(
-        said(
-            &bootstrap(),
+        says(
+            BOOTSTRAP,
             &BootstrapError::SystemdNotReady { host: Host::Native }
         )
         .contains("init system")
@@ -292,8 +199,8 @@ fn systemd_on_wsl_is_turned_on_differently_than_on_a_distro() {
 #[test]
 fn a_unit_failure_names_the_operation_and_the_run_to_read() {
     let unit = |invocation: Option<&str>| {
-        said(
-            &bootstrap(),
+        says(
+            BOOTSTRAP,
             &BootstrapError::Unit {
                 operation: "start".into(),
                 unit: "nix-daemon.socket".into(),
@@ -310,7 +217,7 @@ fn a_unit_failure_names_the_operation_and_the_run_to_read() {
 
 #[test]
 fn an_unreachable_systemd_is_not_mistaken_for_a_missing_one() {
-    let message = said(&bootstrap(), &BootstrapError::SystemdUnreachable);
+    let message = says(BOOTSTRAP, &BootstrapError::SystemdUnreachable);
 
     assert!(message.contains("systemctl status dbus"));
     assert!(!message.contains("init system"));
@@ -318,7 +225,7 @@ fn an_unreachable_systemd_is_not_mistaken_for_a_missing_one() {
 
 #[test]
 fn an_existing_nix_is_never_met_with_a_command_that_deletes_it() {
-    let message = said(&bootstrap(), &BootstrapError::AlreadyManaged);
+    let message = says(BOOTSTRAP, &BootstrapError::AlreadyManaged);
 
     assert!(!message.contains("rm -rf"));
     assert!(message.contains("removes everything you installed with it"));
@@ -326,8 +233,8 @@ fn an_existing_nix_is_never_met_with_a_command_that_deletes_it() {
 
 #[test]
 fn a_cross_device_store_names_the_mount_to_remove() {
-    let message = said(
-        &bootstrap(),
+    let message = says(
+        BOOTSTRAP,
         &BootstrapError::CrossDeviceStore {
             path: "/nix/store/pkg-a".into(),
         },
@@ -339,8 +246,8 @@ fn a_cross_device_store_names_the_mount_to_remove() {
 
 #[test]
 fn a_failed_rollback_keeps_the_cause_and_says_where_to_look() {
-    let message = said(
-        &bootstrap(),
+    let message = says(
+        BOOTSTRAP,
         &BootstrapError::Rollback {
             cause: Box::new(BootstrapError::UnsupportedHost),
             summary: "1 rollback step(s) failed: nixbld group: exit 1".to_string(),
@@ -362,7 +269,7 @@ fn nothing_mix_does_internally_reaches_the_reader() {
         BootstrapError::NotRoot("x"),
     ];
     for error in errors {
-        let message = said(&bootstrap(), &error);
+        let message = says(BOOTSTRAP, &error);
         for word in ["pinned", "archive", "daemon", "nix store", "derivation"] {
             assert!(!message.contains(word), "{word:?} leaked into {message:?}");
         }
@@ -371,12 +278,8 @@ fn nothing_mix_does_internally_reaches_the_reader() {
 
 #[test]
 fn running_as_root_names_the_command_and_says_how_to_run_it_instead() {
-    for (request, command) in [
-        (install(&["ripgrep"]), "mix install"),
-        (remove(&["ripgrep"]), "mix remove"),
-        (clean(), "mix clean"),
-    ] {
-        let message = said(&request, &ChangeError::NotRoot);
+    for (command, action) in [INSTALL, REMOVE, CLEAN] {
+        let message = said(command, action, &ChangeError::NotRoot);
 
         assert!(message.contains(&format!("`{command}` can't be run as root")));
         assert!(message.contains("without sudo"));
@@ -385,7 +288,7 @@ fn running_as_root_names_the_command_and_says_how_to_run_it_instead() {
 
 #[test]
 fn an_older_mix_is_told_how_to_update() {
-    let message = said(&install(&["ripgrep"]), &ChangeError::NewerState(2));
+    let message = says(INSTALL, &ChangeError::NewerState(2));
 
     assert!(message.contains("older than the one that set up your packages"));
     assert!(message.contains("original install method"));
@@ -394,12 +297,12 @@ fn an_older_mix_is_told_how_to_update() {
 
 #[test]
 fn a_bad_package_name_reads_the_same_whichever_check_caught_it() {
-    let from_state = said(
-        &install(&["ripgrep"]),
+    let from_state = says(
+        INSTALL,
         &ChangeError::InvalidState(Invalid::Package("rip grep".to_string())),
     );
-    let from_render = said(
-        &install(&["ripgrep"]),
+    let from_render = says(
+        INSTALL,
         &ChangeError::InvalidPackage(
             mix_nixgen::HomeModule::new(
                 "mix",
@@ -423,11 +326,8 @@ fn a_bad_package_name_reads_the_same_whichever_check_caught_it() {
 #[test]
 fn a_list_mix_built_wrong_is_reported_as_a_bug() {
     assert!(
-        said(
-            &install(&["ripgrep"]),
-            &ChangeError::InvalidState(Invalid::Missing("git"))
-        )
-        .contains("report this bug")
+        says(INSTALL, &ChangeError::InvalidState(Invalid::Missing("git")))
+            .contains("report this bug")
     );
 }
 
@@ -444,7 +344,7 @@ fn only_packages_that_are_gone_are_worth_telling() {
 
 #[test]
 fn an_unbootstrapped_user_is_sent_to_bootstrap() {
-    let message = said(&install(&["ripgrep"]), &ChangeError::NotBootstrapped);
+    let message = says(INSTALL, &ChangeError::NotBootstrapped);
 
     assert!(message.contains("isn't set up for you yet"));
     assert!(message.contains("mix bootstrap"));
@@ -452,10 +352,7 @@ fn an_unbootstrapped_user_is_sent_to_bootstrap() {
 
 #[test]
 fn a_protected_package_is_named_and_explained() {
-    let message = said(
-        &remove(&["git"]),
-        &RemoveError::Protected(vec!["git".to_string()]),
-    );
+    let message = says(REMOVE, &RemoveError::Protected(vec!["git".to_string()]));
 
     assert!(message.contains("`git` can't be removed"));
     assert!(message.contains("`mix` needs it to work"));
@@ -463,8 +360,8 @@ fn a_protected_package_is_named_and_explained() {
 
 #[test]
 fn several_protected_packages_are_each_named() {
-    let message = said(
-        &remove(&["git"]),
+    let message = says(
+        REMOVE,
         &RemoveError::Protected(vec!["git".to_string(), "curl".to_string()]),
     );
 
@@ -473,8 +370,8 @@ fn several_protected_packages_are_each_named() {
 
 #[test]
 fn a_target_repair_will_not_touch_is_explained_in_its_own_words() {
-    let message = said(
-        &repair(),
+    let message = says(
+        REPAIR,
         &TargetError::Unrepairable {
             artifact: "/nix".to_string(),
             reason: Unfixable::NotADirectory,
@@ -487,8 +384,8 @@ fn a_target_repair_will_not_touch_is_explained_in_its_own_words() {
 
 #[test]
 fn a_missing_runtime_is_sent_to_bootstrap() {
-    let message = said(
-        &repair(),
+    let message = says(
+        REPAIR,
         &TargetError::Unrepairable {
             artifact: "default profile".to_string(),
             reason: Unfixable::MissingRuntime,

@@ -3,39 +3,8 @@ use mix_ui::{Help, Note, help, note};
 use nix::sys::signal::Signal;
 use tokio::signal::unix::{SignalKind, signal};
 
-#[derive(Debug)]
-pub struct Stopping {
-    pub first: Note,
-}
-
-impl Stopping {
-    pub fn first_help(&self) -> Help {
-        help!("press Ctrl-C again to leave it running in the background")
-    }
-}
-
-pub fn bootstrap() -> Stopping {
-    Stopping {
-        first: note!("cancelling and cleaning up"),
-    }
-}
-
-pub fn repair() -> Stopping {
-    Stopping {
-        first: note!("stopping after the current repair"),
-    }
-}
-
-pub fn change() -> Stopping {
-    Stopping {
-        first: note!("cancelling and putting the package list back"),
-    }
-}
-
-pub fn clean() -> Stopping {
-    Stopping {
-        first: note!("stopping after the current removal"),
-    }
+pub fn second_ctrl_c() -> Help {
+    help!("press Ctrl-C again to leave it running in the background")
 }
 
 pub fn detached() -> Note {

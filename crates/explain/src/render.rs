@@ -25,7 +25,7 @@ pub(crate) fn render(fault: &Fault, context: &Context<'_>) -> Diagnostic {
     }
 }
 
-pub(crate) fn warning(diagnostic: &Wire) -> Diagnostic {
+pub fn warning(diagnostic: &Wire) -> Diagnostic {
     let context = Context {
         command: "mix",
         action: &"",
@@ -36,21 +36,6 @@ pub(crate) fn warning(diagnostic: &Wire) -> Diagnostic {
         }
         _ => bug(),
     }
-}
-
-pub(crate) fn rpc_fault(error: &mix_rpc::Error) -> Fault {
-    use mix_rpc::Error;
-
-    let code = match error {
-        Error::Spawn(_) | Error::Launch(_) | Error::Connect(_) | Error::Refused(_) => {
-            Code::PrivilegesUnavailable
-        }
-        Error::Ended => Code::WorkerEnded,
-        Error::VersionMismatch { .. } => Code::VersionMismatch,
-        Error::Denied(_) => Code::NotBootstrapped,
-        Error::Malformed(_) | Error::NotAConnection(_) => Code::Internal,
-    };
-    mix_core::diagnose::failed(code, error.to_string(), None)
 }
 
 pub(crate) fn unfixable_of(reason: i32) -> Option<Unfixable> {

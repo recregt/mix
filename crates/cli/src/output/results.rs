@@ -20,7 +20,7 @@ pub(crate) fn took(elapsed: Duration) -> String {
     }
 }
 
-fn words(out: &dyn Out, severity: Severity, words: &crate::explain::Diagnostic) {
+fn words(out: &dyn Out, severity: Severity, words: &mix_explain::Diagnostic) {
     mix_ui::report_to(out, severity, &words.report());
 }
 
@@ -126,7 +126,7 @@ fn size(bytes: u64) -> String {
 fn reset(out: &dyn Out, was_reset: bool, level: Detail) {
     if was_reset
         && level >= Detail::Step
-        && let Some(note) = crate::explain::restored(Source::Fresh)
+        && let Some(note) = mix_explain::restored(Source::Fresh)
     {
         words(out, Severity::Warning, &note);
     }
@@ -180,17 +180,11 @@ fn repaired(
                 Some(failure) => {
                     let fault = mix_events::Fault::Failed(failure.clone());
                     let action = format!("repair {}", report.target);
-                    let words = crate::explain::render(
-                        &fault,
-                        &crate::explain::Context {
-                            command: "mix repair",
-                            action: &action,
-                        },
-                    );
+                    let words = mix_explain::outcome("mix repair", &action, &fault);
                     mix_ui::report_to(
                         out,
                         Severity::Warning,
-                        &words.report().causes(crate::explain::evidence(&fault)),
+                        &words.report().causes(mix_explain::evidence(&fault)),
                     );
                 }
             }
@@ -201,7 +195,7 @@ fn repaired(
             words(
                 out,
                 Severity::Warning,
-                &crate::explain::Diagnostic::new(mix_ui::phrase!(
+                &mix_explain::Diagnostic::new(mix_ui::phrase!(
                     "the repair was stopped before it finished"
                 ))
                 .help(mix_ui::help!("run `mix repair` again to finish it")),
@@ -228,7 +222,7 @@ fn repaired(
         words(
             out,
             Severity::Error,
-            &crate::explain::Diagnostic::new(mix_ui::phrase!(
+            &mix_explain::Diagnostic::new(mix_ui::phrase!(
                 "some problems couldn't be repaired automatically"
             )),
         );
@@ -261,8 +255,8 @@ fn audited(out: &dyn Out, inspected: &[InspectionReport], level: Detail, elapsed
         if !chatty {
             continue;
         }
-        let words = crate::explain::doctor::check(report);
-        let labels = report.finding.map(crate::explain::doctor::labels);
+        let words = mix_explain::doctor::check(report);
+        let labels = report.finding.map(mix_explain::doctor::labels);
         let lines = report
             .drift
             .as_ref()
@@ -283,7 +277,7 @@ fn audited(out: &dyn Out, inspected: &[InspectionReport], level: Detail, elapsed
             );
         }
     } else {
-        let verdict = crate::explain::doctor::unhealthy(&reports);
+        let verdict = mix_explain::doctor::unhealthy(&reports);
         mix_ui::problem_to(out, Severity::Error, &verdict.problem(None));
     }
 }

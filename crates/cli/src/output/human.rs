@@ -15,7 +15,7 @@ use mix_events::{Detail, Fault, NodeId, ROOT};
 use mix_ui::{Display, Out, Severity, Status, StepLine};
 
 use super::{trace, verbs};
-use crate::controls::{self, Stopping};
+use crate::session::controls;
 
 pub struct Human {
     display: Arc<dyn Display>,
@@ -24,7 +24,6 @@ pub struct Human {
     level: Detail,
     results: bool,
     started: Instant,
-    stopping: Option<Stopping>,
     stop_noticed: bool,
     request: Option<Request>,
     lines: HashMap<NodeId, Arc<dyn StepLine>>,
@@ -43,7 +42,6 @@ impl Human {
             level: Detail::Step,
             results: true,
             started: Instant::now(),
-            stopping: None,
             stop_noticed: false,
             request: None,
             lines: HashMap::new(),
@@ -90,7 +88,6 @@ impl Human {
         match event {
             Event::NodeStarted(node) => match node.kind {
                 Some(node_started::Kind::Command(command)) => {
-                    self.stopping = command.request.as_ref().and_then(stopping_for);
                     self.request = command.request;
                     if self.shows(Detail::Trace) {
                         mix_ui::note_to(
@@ -173,17 +170,17 @@ impl Human {
             }) => self.progress(id, progress),
             Event::Diagnostic(diagnostic) => {
                 if self.shows(Detail::Step) {
-                    let words = crate::explain::render::warning(&diagnostic);
+                    let words = mix_explain::warning(&diagnostic);
                     let code = (self.shows(Detail::Action)
                         && diagnostic.code() != mix_events::v1::Code::Unspecified)
-                        .then(|| crate::explain::codes::kebab(diagnostic.code()));
+                        .then(|| mix_explain::codes::kebab(diagnostic.code()));
                     mix_ui::report_to(
                         self.out.as_ref(),
                         Severity::Warning,
                         &words
                             .report()
                             .code(code.as_deref())
-                            .causes(crate::explain::evidence(&mix_events::Fault::Failed(
+                            .causes(mix_explain::evidence(&mix_events::Fault::Failed(
                                 diagnostic.clone(),
                             ))),
                     );
@@ -205,7 +202,7 @@ impl Human {
                     Status::Cancelled,
                     &format!(
                         "`{}` in {}",
-                        crate::explain::command_of(self.request.as_ref()),
+                        self.request.as_ref().map_or("mix", crate::request::name),
                         super::results::took(elapsed)
                     ),
                 );
@@ -213,19 +210,22 @@ impl Human {
             }
             Ended::Unspecified | Ended::Succeeded | Ended::AlreadySatisfied => return,
         };
-        let words = crate::explain::outcome(self.request.as_ref(), &fault);
+        let words = match &self.request {
+            Some(request) => crate::session::outcome(request, &fault),
+            None => mix_explain::outcome("mix", &"finish", &fault),
+        };
         let code = self
             .shows(Detail::Action)
             .then(|| fault.code())
             .flatten()
-            .map(crate::explain::codes::kebab);
+            .map(mix_explain::codes::kebab);
         mix_ui::report_to(
             self.out.as_ref(),
             Severity::Error,
             &words
                 .report()
                 .code(code.as_deref())
-                .causes(crate::explain::evidence(&fault)),
+                .causes(mix_explain::evidence(&fault)),
         );
     }
 
@@ -235,14 +235,10 @@ impl Human {
         match progress {
             Progress::Stopping(_) => {
                 if self.shows(Detail::Step)
-                    && let Some(stopping) = &self.stopping
+                    && let Some(note) = self.request.as_ref().and_then(crate::request::stopping)
                     && !std::mem::replace(&mut self.stop_noticed, true)
                 {
-                    mix_ui::note_to(
-                        self.out.as_ref(),
-                        &stopping.first,
-                        Some(&stopping.first_help()),
-                    );
+                    mix_ui::note_to(self.out.as_ref(), &note, Some(&controls::second_ctrl_c()));
                 }
             }
             Progress::Command(command) => {
@@ -319,16 +315,6 @@ impl Human {
                 }
             }
         }
-    }
-}
-
-fn stopping_for(request: &Request) -> Option<Stopping> {
-    match request {
-        Request::Bootstrap(_) => Some(controls::bootstrap()),
-        Request::Repair(_) => Some(controls::repair()),
-        Request::Install(_) | Request::Remove(_) => Some(controls::change()),
-        Request::Clean(_) => Some(controls::clean()),
-        Request::Doctor(_) => None,
     }
 }
 
