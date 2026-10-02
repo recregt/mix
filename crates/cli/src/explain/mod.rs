@@ -142,7 +142,7 @@ impl Diagnostic {
 }
 
 pub fn words(error: &anyhow::Error, request: &mix_events::v1::command::Request) -> Diagnostic {
-    if let Some(failed) = error.downcast_ref::<crate::remote::client::Failed>() {
+    if let Some(failed) = error.downcast_ref::<crate::client::Failed>() {
         return outcome(Some(&failed.request), &failed.fault);
     }
     if let Some(error) = error.downcast_ref::<mix_rpc::Error>() {
@@ -152,7 +152,7 @@ pub fn words(error: &anyhow::Error, request: &mix_events::v1::command::Request) 
 }
 
 pub(crate) fn fault_of(error: &anyhow::Error) -> mix_events::Fault {
-    if let Some(failed) = error.downcast_ref::<crate::remote::client::Failed>() {
+    if let Some(failed) = error.downcast_ref::<crate::client::Failed>() {
         return failed.fault.clone();
     }
     if let Some(error) = error.downcast_ref::<mix_rpc::Error>() {

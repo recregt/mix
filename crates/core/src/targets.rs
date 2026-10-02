@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::path::Path;
 
+use crate::identity::InvokingUser;
 use crate::identity::{
     self, MIX_USERS_GID, MIX_USERS_GROUP, NIXBLD_GID, NIXBLD_GROUP, NIXBLD_UID_BASE,
     NIXBLD_USER_COUNT,
@@ -14,7 +15,6 @@ use crate::paths::{
     PROFILE_SNIPPET_DEST, STATE_FILE, mix_state_dir, nix_profiles_dir,
 };
 use crate::policy::Policy;
-use crate::privilege::InvokingUser;
 
 pub const MIX_DAEMON_SOCKET: &str = "[Unit]
 Description=mix daemon socket

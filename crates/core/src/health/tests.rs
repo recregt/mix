@@ -7,15 +7,15 @@ use mix_events::{Outbox, ROOT, Start, Tree};
 use super::*;
 use crate::action::Digest;
 use crate::bootstrap::{Runtime, Settings, steps};
-use crate::model::World;
-use crate::models::{UserConfig, targets};
+use crate::identity::InvokingUser;
 use crate::paths::{
     DEFAULT_PROFILE_NIX_ENV, NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_UNIT, POLICY_FILE,
     STATE_FILE, mix_state_dir,
 };
 use crate::plan::{Input, Next, Report, Runner, StepOutcome, make_guard};
 use crate::policy::Policy;
-use crate::privilege::InvokingUser;
+use crate::targets::{UserConfig, targets};
+use crate::world::World;
 
 /// The binding between what an inspection found and what repair can do about it.
 #[test]
@@ -335,7 +335,7 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
             |world: &mut World| {
                 world
                     .files
-                    .remove(Path::new(crate::constants::paths::NIX_DAEMON_SOCKET_SRC));
+                    .remove(Path::new(crate::paths::NIX_DAEMON_SOCKET_SRC));
             },
             &[],
         ),
@@ -545,7 +545,7 @@ fn every_finding_and_category_survive_the_event_stream() {
         };
         assert_eq!(wire::finding_from(&wire::finding(listed)), Some(finding));
     }
-    for category in crate::models::Category::ALL {
+    for category in crate::targets::Category::ALL {
         assert_eq!(
             wire::category_from(wire::category(category)),
             Some(category)

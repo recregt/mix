@@ -10,7 +10,6 @@ use crate::identity::{
     MIX_USERS_GID, MIX_USERS_GROUP, NIXBLD_GID, NIXBLD_GROUP, NIXBLD_HOME, NIXBLD_SHELL,
     NIXBLD_UID_BASE, NIXBLD_USER_COUNT, user_name,
 };
-use crate::models::{MIX_DAEMON_SERVICE, MIX_DAEMON_SOCKET, PROFILE_SNIPPET, UserConfig};
 use crate::paths::{
     DEFAULT_PROFILE_NIX_ENV, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, MIX_BIN_DIR, MIX_DAEMON_BIN,
     MIX_DAEMON_BIN_MODE, MIX_DAEMON_SERVICE_DEST, MIX_DAEMON_SERVICE_UNIT, MIX_DAEMON_SOCKET_DEST,
@@ -23,6 +22,7 @@ use crate::paths::{
 use crate::plan::{StepSpec, Title};
 use crate::policy::Policy;
 use crate::state::StateManifest;
+use crate::targets::{MIX_DAEMON_SERVICE, MIX_DAEMON_SOCKET, PROFILE_SNIPPET, UserConfig};
 use mix_events::v1::Verb;
 
 const DIR_MODE: u32 = 0o755;

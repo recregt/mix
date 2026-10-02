@@ -9,10 +9,10 @@ use crate::action::Digest;
 use crate::action::{Expect, Kind};
 use crate::bootstrap::{Runtime, Settings};
 use crate::journal::{Record, Recovery, recover};
-use crate::model::World;
-use crate::models::UserConfig;
 use crate::plan::{Input, Next, Report, Runner, Verdict, make_guard};
 use crate::policy::Policy;
+use crate::targets::UserConfig;
+use crate::world::World;
 use mix_events::v1::Cancellation;
 
 fn manifest(packages: &[&str]) -> StateManifest {

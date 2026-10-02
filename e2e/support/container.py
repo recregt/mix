@@ -412,7 +412,7 @@ def daemon_trusts(container: Container, user: str) -> bool:
 @pytest.fixture(scope="session")
 def mix_binary():
     subprocess.run(
-        ["cargo", "build", "--release", "-p", "mix-bin", "-p", "mix-daemon"],
+        ["cargo", "build", "--release", "-p", "mix-cli", "-p", "mix-daemon"],
         cwd=REPO_ROOT,
         check=True,
     )

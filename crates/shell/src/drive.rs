@@ -6,11 +6,11 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use mix_core::action::{Action, Fact, Failure, Kind, Outcome, PathFacts, Performed, Query};
+use mix_core::identity::InvokingUser;
 use mix_core::journal::Record;
 use mix_core::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
 use mix_core::paths::mix_state_dir;
 use mix_core::plan::{Input, Next, Report, Runner, make_guard};
-use mix_core::privilege::InvokingUser;
 use mix_core::{ActivityReporter, BuildProgress, DownloadProgress};
 use mix_events::v1::node_progress::Progress;
 use mix_events::v1::{
@@ -223,7 +223,7 @@ impl Performer {
 
     async fn find_built(
         &mut self,
-        user: &mix_core::privilege::InvokingUser,
+        user: &mix_core::identity::InvokingUser,
         scope: &Scope,
     ) -> Result<Option<u64>, Failure> {
         let generations = generations::existing(user);

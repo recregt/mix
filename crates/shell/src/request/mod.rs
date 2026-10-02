@@ -1,28 +1,32 @@
+pub mod context;
+mod delivery;
+pub mod lock;
+pub mod sink;
+
 use std::sync::Arc;
 
+use mix_core::identity::InvokingUser;
 use mix_core::locks::locks_for;
-use mix_core::models::UserConfig;
 use mix_core::policy::Policy;
-use mix_core::privilege::InvokingUser;
+use mix_core::targets::UserConfig;
 use mix_events::v1::{
     BootstrapRequest, Cancellation, CleanRequest, Code, Command, DoctorRequest, InstallRequest,
     RemoveRequest, RepairRequest, command,
 };
 use mix_events::{Diagnose, Ending, Fault, Outbox, ROOT, Start, Stopped, Tree};
 use mix_exec::Scope;
-use tokio::sync::{Notify, oneshot};
-use tokio::task::JoinHandle;
 
-use crate::context::{Context, HostConfig, Request};
 use crate::drive::stopped_by;
-use crate::lock::{Blocked, Holder, Locks};
 use crate::ops::bootstrap::Environment;
 use crate::ops::clean::Cleaned;
 use crate::ops::doctor::HealthReport;
 use crate::ops::install::Installed;
 use crate::ops::remove::Removed;
 use crate::ops::repair::{Repair, RepairReport};
-use crate::render::{Render, Shared};
+use crate::request::context::{Context, HostConfig};
+use crate::request::lock::{Blocked, Holder, Locks};
+use crate::request::sink::{Render, Shared};
+use delivery::open;
 
 pub struct Locked(());
 
@@ -54,7 +58,7 @@ impl Session {
     pub fn new(scope: Scope) -> Self {
         Self {
             scope,
-            render: crate::render::shared(crate::render::Quiet),
+            render: crate::request::sink::shared(crate::request::sink::Quiet),
             host: HostConfig::default(),
             locks: None,
             caller: Caller::Fixed(None),
@@ -63,7 +67,7 @@ impl Session {
     }
 
     pub fn with_render(mut self, render: impl Render + 'static) -> Self {
-        self.render = crate::render::shared(render);
+        self.render = crate::request::sink::shared(render);
         self
     }
 
@@ -221,50 +225,6 @@ impl Unrun for Repair {
 impl Unrun for Vec<HealthReport> {
     fn unrun(_blocked: Blocked, _command: &str) -> Self {
         Vec::new()
-    }
-}
-
-struct Delivery {
-    close: oneshot::Sender<()>,
-    task: JoinHandle<()>,
-}
-
-fn pass(outbox: &Outbox, render: &Shared) {
-    let mut render = render
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    for envelope in outbox.drain() {
-        render.envelope(envelope);
-    }
-}
-
-fn open(render: &Shared) -> (Request, Delivery) {
-    let id = crate::context::request_id();
-    let notify = Arc::new(Notify::new());
-    let wake = Arc::clone(&notify);
-    let outbox = Arc::new(Outbox::new(id.clone(), move || wake.notify_one()));
-    let (close, mut closed) = oneshot::channel();
-    let delivered = Arc::clone(&outbox);
-    let render = Arc::clone(render);
-    let task = tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                biased;
-                _ = &mut closed => {
-                    pass(&delivered, &render);
-                    return;
-                }
-                () = notify.notified() => pass(&delivered, &render),
-            }
-        }
-    });
-    (Request { id, outbox }, Delivery { close, task })
-}
-
-impl Delivery {
-    async fn finish(self) {
-        let _ = self.close.send(());
-        let _ = self.task.await;
     }
 }
 
@@ -433,7 +393,7 @@ pub async fn recover(
     scope: &Scope,
 ) -> Result<crate::effect::journal::Recovered, mix_core::Error> {
     let mut tree = Tree::new(
-        Arc::new(Outbox::new(crate::context::request_id(), || {})),
+        Arc::new(Outbox::new(crate::request::context::request_id(), || {})),
         Arc::new(|| None),
         Start::command("recover", Command::default()),
     );
@@ -456,12 +416,14 @@ pub async fn recover(
             },
             Blocked::Failed(error) => error,
         })?;
-    let files =
-        crate::effect::files::Files::open(std::path::Path::new("/"), crate::context::request_id())
-            .map_err(|source| mix_core::Error::Io {
-                path: "/".into(),
-                source,
-            })?;
+    let files = crate::effect::files::Files::open(
+        std::path::Path::new("/"),
+        crate::request::context::request_id(),
+    )
+    .map_err(|source| mix_core::Error::Io {
+        path: "/".into(),
+        source,
+    })?;
     let mut performer = crate::drive::Performer::new(files);
     Ok(crate::effect::journal::recover_all(
         std::path::Path::new(crate::effect::journal::JOURNAL_DIR),
@@ -518,7 +480,7 @@ mod tests {
     use mix_events::v1::{Envelope, envelope, node_started};
 
     use super::*;
-    use crate::lock::Need;
+    use crate::request::lock::Need;
 
     struct Recorded(Arc<Mutex<Vec<Envelope>>>);
 

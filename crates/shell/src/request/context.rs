@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use mix_core::models::UserConfig;
 use mix_core::policy::{Mirror, Policy};
+use mix_core::targets::UserConfig;
 use mix_events::Outbox;
 use mix_exec::Scope;
 
@@ -27,13 +27,13 @@ pub struct Context {
     pub scope: Scope,
     pub policy: Policy,
     pub host: HostConfig,
-    pub render: crate::render::Shared,
+    pub render: crate::request::sink::Shared,
     pub locked: Locked,
 }
 
 impl Context {
-    pub(crate) fn relay(&self) -> crate::render::Relay {
-        crate::render::Relay::new(Arc::clone(&self.render))
+    pub(crate) fn relay(&self) -> crate::request::sink::Relay {
+        crate::request::sink::Relay::new(Arc::clone(&self.render))
     }
 
     pub(crate) fn mirror(&self) -> Option<&str> {

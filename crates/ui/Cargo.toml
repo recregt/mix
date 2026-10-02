@@ -19,3 +19,6 @@ trybuild = "=1.0.121"
 [[bench]]
 name = "activity"
 harness = false
+
+[lints]
+workspace = true

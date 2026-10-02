@@ -23,7 +23,7 @@ use crate::target::Finding;
 pub use mix_core::health::HealthReport;
 
 pub(crate) async fn audit(ctx: &Context, root: &mut Root) -> Concluded<Vec<HealthReport>> {
-    let items = mix_core::models::targets(ctx.user.as_ref(), &ctx.policy);
+    let items = mix_core::targets::targets(ctx.user.as_ref(), &ctx.policy);
     let tree = &mut root.tree;
     let plan = tree
         .start(
@@ -109,12 +109,12 @@ fn kind_of(failure: &Failure) -> std::io::ErrorKind {
 mod tests {
     use std::path::PathBuf;
 
-    use mix_core::privilege::InvokingUser;
+    use mix_core::identity::InvokingUser;
 
     use super::*;
 
-    fn user_config() -> mix_core::models::UserConfig {
-        mix_core::models::UserConfig {
+    fn user_config() -> mix_core::targets::UserConfig {
+        mix_core::targets::UserConfig {
             user: InvokingUser {
                 uid: 1000,
                 gid: 1000,
@@ -138,7 +138,7 @@ mod tests {
         let reports = crate::request::doctor(&session()).await;
         assert_eq!(
             reports.len(),
-            mix_core::models::targets(None, &mix_core::policy::Policy::default()).len()
+            mix_core::targets::targets(None, &mix_core::policy::Policy::default()).len()
         );
     }
 
@@ -150,7 +150,7 @@ mod tests {
 
         assert_eq!(
             reports.len(),
-            mix_core::models::targets(Some(&cfg), &mix_core::policy::Policy::default()).len(),
+            mix_core::targets::targets(Some(&cfg), &mix_core::policy::Policy::default()).len(),
             "every target of the injected config must be reported"
         );
         assert!(reports.len() > crate::request::doctor(&session()).await.len());
@@ -172,7 +172,7 @@ mod tests {
 
     struct Recorded(std::sync::Arc<std::sync::Mutex<Vec<mix_events::v1::Envelope>>>);
 
-    impl crate::render::Render for Recorded {
+    impl crate::request::sink::Render for Recorded {
         fn envelope(&mut self, envelope: mix_events::v1::Envelope) {
             self.0.lock().unwrap().push(envelope);
         }

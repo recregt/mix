@@ -1,6 +1,5 @@
 mod controls;
 mod serve;
-mod settings;
 mod worker;
 
 use std::io::Write as _;

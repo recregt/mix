@@ -3,10 +3,10 @@ use std::sync::Arc;
 
 use mix_core::ActivityReporter;
 use mix_core::action::{Action, Fact, Failure, Outcome, Performed, ProfileFacts, Query};
+use mix_core::identity::InvokingUser;
 use mix_core::paths::{
     DEFAULT_PROFILE_NIX_ENV, DEFAULT_PROFILE_NIX_STORE, HOME_MANAGER_PROFILE_NAME, nix_profiles_dir,
 };
-use mix_core::privilege::InvokingUser;
 use mix_exec::Scope;
 
 use crate::HostConfig;

@@ -6,7 +6,7 @@ authors = ["Ömer Tekin"]
 license = "MPL-2.0"
 
 [features]
-model = []
+world = []
 
 [dependencies]
 similar = "3.2.0"
@@ -37,3 +37,6 @@ harness = false
 [[bench]]
 name = "targets"
 harness = false
+
+[lints]
+workspace = true

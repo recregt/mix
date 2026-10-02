@@ -6,8 +6,8 @@ use crate::action::{
     Action, Expect, Fact, Failure, FileId, GroupFacts, Kind, Outcome, Owner, PathFacts, Performed,
     ProfileFacts, Query, UnitFacts, UnitFailure, UnitOperation, UserFacts, UserSpec,
 };
+use crate::identity::InvokingUser;
 use crate::paths::{DEFAULT_PROFILE_NIX_ENV, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SOCKET_SRC};
-use crate::privilege::InvokingUser;
 
 pub use crate::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
 

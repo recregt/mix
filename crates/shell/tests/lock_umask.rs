@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use mix_events::v1::Command;
 use mix_events::{Outbox, Start, Tree};
-use mix_shell::lock::{Holder, Locks, Need};
+use mix_shell::request::lock::{Holder, Locks, Need};
 
 fn mode(path: &Path) -> u32 {
     std::fs::metadata(path).unwrap().permissions().mode() & 0o7777

@@ -7,8 +7,8 @@
 use std::path::{Path, PathBuf};
 
 use mix_core::Result;
+use mix_core::identity::InvokingUser;
 use mix_core::paths::{FLAKE_LOCK, FLAKE_NIX, HOME_NIX, STATE_FILE};
-use mix_core::privilege::InvokingUser;
 use mix_exec::Scope;
 
 use crate::effect::exec::{run_as, status_as};

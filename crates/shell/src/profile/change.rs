@@ -2,8 +2,8 @@ use std::path::Path;
 
 use mix_core::action::Failure;
 use mix_core::change::{Change, NewerList, Unrenderable};
-use mix_core::models::UserConfig;
 use mix_core::plan::{Runner, StepSpec, Verdict, diagnostic};
+use mix_core::targets::UserConfig;
 use mix_events::v1::{InstallResult, RemoveResult, node_finished};
 use mix_events::{Ending, ROOT};
 

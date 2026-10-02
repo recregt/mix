@@ -1,10 +1,10 @@
 use mix_core::change::render_home;
+use mix_core::identity::InvokingUser;
 use mix_core::identity::MIX_USERS_GROUP;
-use mix_core::models::UserConfig;
 use mix_core::paths::{HOME_NIX, mix_state_dir};
-use mix_core::privilege::InvokingUser;
 use mix_core::state::StateManifest;
 use mix_core::system::{Arch, Os};
+use mix_core::targets::UserConfig;
 use mix_nixgen::lock::{self, LockedInput, NarHash};
 use mix_nixgen::{FlakeConfig, Rev, System};
 use mix_pins::{

@@ -5,9 +5,9 @@ use mix_nixgen::{CopyIntoGeneration, FileName, HomeModule, InvalidInput, StateVe
 
 use crate::action::{Action, Fact, Failure, ProfileFacts, Query};
 use crate::bootstrap::{FILE_MODE, Facts, ensure_file};
+use crate::identity::InvokingUser;
 use crate::paths::{GENERATION_INPUTS, HOME_NIX, STATE_FILE, mix_state_dir};
 use crate::plan::{StepSpec, Title};
-use crate::privilege::InvokingUser;
 use crate::state::{REQUIRED_PACKAGES, StateManifest};
 use mix_events::v1::Verb;
 

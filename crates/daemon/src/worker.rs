@@ -4,10 +4,16 @@ use std::sync::Arc;
 use mix_core::paths::LOCK_FILE;
 use mix_events::v1::{Command, Envelope};
 use mix_rpc::{Caller, Controls, Events, Reply};
-use mix_shell::lock::Locks;
-use mix_shell::render::Render;
+use mix_shell::request::lock::Locks;
+use mix_shell::request::sink::Render;
 
 use crate::controls;
+
+pub fn host_config() -> mix_shell::HostConfig {
+    mix_shell::HostConfig {
+        git_binary: std::env::var_os("MIX_GIT_PATH").map(std::path::PathBuf::from),
+    }
+}
 
 struct Forward(Events);
 
@@ -53,7 +59,7 @@ impl Host {
         };
         mix_shell::Session::new(mix_exec::Scope::root())
             .with_render(Forward(events.clone()))
-            .with_host(crate::settings::host_config())
+            .with_host(host_config())
             .with_locks(Arc::clone(&self.locks))
             .with_caller(mix_shell::Caller::Account {
                 peer_is_root: caller.uid == 0,

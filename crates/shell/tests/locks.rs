@@ -4,7 +4,7 @@ use std::sync::Arc;
 use mix_events::v1::{Command, LockWait, envelope, node_started};
 use mix_events::{Outbox, Start, Stopped, Tree};
 use mix_exec::{Reason, Scope};
-use mix_shell::lock::{Blocked, Held, Holder, Locks, Need};
+use mix_shell::request::lock::{Blocked, Held, Holder, Locks, Need};
 
 struct Request {
     outbox: Arc<Outbox>,

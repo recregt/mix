@@ -57,23 +57,25 @@ pub(crate) async fn clean(ctx: &Context, root: &mut Root, all: bool) -> Conclude
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod tests {
-    use mix_core::privilege::InvokingUser;
+    use mix_core::identity::InvokingUser;
 
     use super::*;
 
     fn context(home: &std::path::Path) -> crate::Session {
-        crate::Session::new(mix_exec::Scope::root()).with_user(Some(mix_core::models::UserConfig {
-            user: InvokingUser {
-                uid: 1000,
-                gid: 1000,
-                name: "mix-user".to_string(),
-                home: home.to_path_buf(),
+        crate::Session::new(mix_exec::Scope::root()).with_user(Some(
+            mix_core::targets::UserConfig {
+                user: InvokingUser {
+                    uid: 1000,
+                    gid: 1000,
+                    name: "mix-user".to_string(),
+                    home: home.to_path_buf(),
+                },
+                flake: String::new(),
+                lock: String::new(),
+                home: String::new(),
+                restored_state: None,
             },
-            flake: String::new(),
-            lock: String::new(),
-            home: String::new(),
-            restored_state: None,
-        }))
+        ))
     }
 
     #[tokio::test]

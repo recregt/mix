@@ -5,9 +5,9 @@ use std::sync::Arc;
 use crate::action::{Action, Expect, Fact, Failure, Kind, Owner, PathFacts, Query, UserSpec};
 use crate::bootstrap::stale_restart;
 use crate::identity;
-use crate::models::{Target, UnitSource};
 use crate::paths::{NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT};
 use crate::plan::{StepSpec, Title};
+use crate::targets::{Target, UnitSource};
 use mix_events::v1::Verb;
 
 const FILE_MODE: u32 = 0o644;
@@ -19,7 +19,7 @@ const FILE_MODE: u32 = 0o644;
 /// says why it stopped — so the words are chosen where the command is known.
 pub struct HealthReport {
     pub name: String,
-    pub category: crate::models::Category,
+    pub category: crate::targets::Category,
     pub finding: Option<Finding>,
     pub drift: Option<Drift>,
 }
@@ -659,7 +659,7 @@ pub mod wire {
 
     use super::{Drift, Finding, Hunk};
     use crate::identity::MIX_USERS_GROUP;
-    use crate::models::Category;
+    use crate::targets::Category;
 
     const GROUPS: [&str; 1] = [MIX_USERS_GROUP];
 

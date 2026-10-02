@@ -2,7 +2,7 @@ use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
 use mix_core::action::{Action, Expect, Fact, Failure, Outcome, PathFacts, Query};
-use mix_core::privilege::InvokingUser;
+use mix_core::identity::InvokingUser;
 use mix_exec::Scope;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};

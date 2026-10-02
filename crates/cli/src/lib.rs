@@ -1,8 +1,8 @@
 mod cli;
+mod client;
 mod commands;
 mod controls;
 pub mod explain;
-mod remote;
 pub mod render;
 
 use std::process::ExitCode;
@@ -299,7 +299,7 @@ mod tests {
             quiet: false,
             exit: render::sinks::Exit::default(),
         };
-        let refused = anyhow::Error::from(remote::client::Failed {
+        let refused = anyhow::Error::from(client::Failed {
             request: request_of(&Command::Install {
                 packages: vec!["ripgrep".into()],
             }),

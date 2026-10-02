@@ -1396,14 +1396,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mix-bin"
-version = "0.1.0"
-dependencies = [
- "mix-cli",
- "tokio",
-]
-
-[[package]]
 name = "mix-cli"
 version = "0.1.0"
 dependencies = [

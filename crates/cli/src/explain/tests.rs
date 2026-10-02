@@ -171,7 +171,7 @@ fn an_error_from_the_client_itself_says_what_could_not_be_done() {
 
 #[test]
 fn a_failure_from_the_daemon_is_worded_for_the_request_it_ended() {
-    let failed = crate::remote::client::Failed {
+    let failed = crate::client::Failed {
         request: install(&["x"]),
         fault: ChangeError::NotRoot.fault(),
     };

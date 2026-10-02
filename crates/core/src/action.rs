@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::privilege::InvokingUser;
+use crate::identity::InvokingUser;
 
 pub type Owner = (u32, u32);
 
