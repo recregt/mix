@@ -276,6 +276,7 @@ impl StepSpec for Activate {
     fn actions(&self, _: &[Fact]) -> Result<Vec<Action>, Failure> {
         Ok(vec![Action::ActivateProfile {
             user: self.user.clone(),
+            source: crate::action::FlakeSource::Git,
         }])
     }
 }

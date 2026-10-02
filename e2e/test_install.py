@@ -14,6 +14,12 @@ def test_install_adds_a_package_as_a_regular_user_with_no_sudo(
 
     assert run.succeeded(), run
     assert run.result("install")["added"] == [INSTALL_TEST_PACKAGE]
+    builds = [
+        command["line"]
+        for command in run.progress("command")
+        if " build " in command["line"]
+    ]
+    assert builds and all(f"git+file://{state_dir}#" in line for line in builds), builds
     assert container.path_exists(
         f"/home/{USER}/.nix-profile/bin/{INSTALL_TEST_PACKAGE}"
     )
@@ -42,7 +48,9 @@ def test_install_adds_a_package_as_a_regular_user_with_no_sudo(
 
 
 @pytest.mark.bootstrapped
-def test_an_unknown_package_is_named_and_nothing_changes(container, mock_nix_server, mirror_cache):
+def test_an_unknown_package_is_named_and_nothing_changes(
+    container, mock_nix_server, mirror_cache
+):
     state_dir = f"/home/{USER}/.local/state/mix"
     before = container.exec("cat", f"{state_dir}/state", check=True).stdout
 

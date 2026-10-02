@@ -830,7 +830,10 @@ fn an_install_performs_exactly_the_writes_the_activation_the_record_and_the_comm
                 owner: Some((1000, 1000)),
                 expect: Expect::Present(home_id),
             },
-            Action::ActivateProfile { user: user() },
+            Action::ActivateProfile {
+                user: user(),
+                source: crate::action::FlakeSource::Git,
+            },
             Action::RecordState { user: user() },
             Action::Commit,
         ]
@@ -863,7 +866,10 @@ fn an_install_over_a_broken_list_restores_it_and_adds_the_package() {
     assert_eq!(report.verdict, Verdict::Succeeded);
     assert_eq!(change.source, Source::Generation);
     assert_eq!(listed(&world), names(&["fd", "git", "ripgrep"]));
-    assert!(actions.contains(&Action::ActivateProfile { user: user() }));
+    assert!(actions.contains(&Action::ActivateProfile {
+        user: user(),
+        source: crate::action::FlakeSource::Git,
+    }));
 }
 
 #[test]

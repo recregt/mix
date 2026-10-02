@@ -481,7 +481,7 @@ impl Performer {
         }
         if self.profile.is_some() {
             let built = match action {
-                Action::ActivateProfile { user } => self.find_built(user, scope).await?,
+                Action::ActivateProfile { user, .. } => self.find_built(user, scope).await?,
                 _ => None,
             };
             let profile = self.profile.as_ref().expect("checked above");

@@ -830,6 +830,7 @@ impl StepSpec for ActivateHome {
         Ok(vec![
             Action::ActivateProfile {
                 user: self.0.user.clone(),
+                source: crate::action::FlakeSource::Path,
             },
             Action::RecordState {
                 user: self.0.user.clone(),

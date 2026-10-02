@@ -678,7 +678,7 @@ pub fn describe(action: &Action) -> (Operation, String) {
         Action::DaemonReload => (Operation::DaemonReload, String::new()),
         Action::InstallRuntime { url, .. } => (Operation::InstallRuntime, url.clone()),
         Action::RemoveRuntime { .. } => (Operation::RemoveRuntime, String::new()),
-        Action::ActivateProfile { user } => (
+        Action::ActivateProfile { user, .. } => (
             Operation::ActivateProfile,
             format!("{}'s profile", user.name),
         ),

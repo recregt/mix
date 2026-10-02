@@ -138,8 +138,8 @@ pub async fn perform(
     prepared: &mut Prepared<'_>,
 ) -> Option<Outcome> {
     Some(match action {
-        Action::ActivateProfile { user } => {
-            activate(user, built, context, activity, scope, prepared).await
+        Action::ActivateProfile { user, source } => {
+            activate(user, *source, built, context, activity, scope, prepared).await
         }
         Action::SwitchGeneration {
             user,
@@ -267,6 +267,7 @@ async fn reuse(
 
 async fn activate(
     user: &InvokingUser,
+    source: mix_core::action::FlakeSource,
     built: Option<u64>,
     context: &ProfileContext,
     activity: &Arc<dyn ActivityReporter>,
@@ -280,7 +281,7 @@ async fn activate(
     }
     let predicted = before.iter().max().map_or(1, |last| last + 1);
     prepared(&undo_activation(user, previous, predicted))?;
-    let generation = profile::switch(user, context.mirror.as_deref(), activity, scope)
+    let generation = profile::switch(user, source, context.mirror.as_deref(), activity, scope)
         .await
         .map_err(core_failure)?;
     let new = current(user).unwrap_or(predicted);

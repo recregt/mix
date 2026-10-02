@@ -811,7 +811,7 @@ impl World {
                 }
                 done(Vec::new())
             }
-            Action::ActivateProfile { user } => {
+            Action::ActivateProfile { user, .. } => {
                 if self.contents(DEFAULT_PROFILE_NIX_ENV).is_none() {
                     return Err(Failure::SpawnFailed {
                         program: DEFAULT_PROFILE_NIX_ENV.to_string(),
@@ -1593,7 +1593,10 @@ mod tests {
             name: "alice".into(),
             home: "/home/alice".into(),
         };
-        let activate = Action::ActivateProfile { user: user.clone() };
+        let activate = Action::ActivateProfile {
+            user: user.clone(),
+            source: crate::action::FlakeSource::Git,
+        };
         run(
             &mut world,
             &[Action::InstallRuntime {
@@ -1658,7 +1661,10 @@ mod tests {
                     sha256: crate::action::Digest([0; 32]),
                     size: 1,
                 },
-                Action::ActivateProfile { user: user.clone() },
+                Action::ActivateProfile {
+                    user: user.clone(),
+                    source: crate::action::FlakeSource::Git,
+                },
             ],
         );
         assert_eq!(world.profile(&user).and_then(|p| p.active), Some(1));

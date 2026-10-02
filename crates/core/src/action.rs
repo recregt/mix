@@ -99,6 +99,12 @@ pub struct UserSpec {
     pub groups: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FlakeSource {
+    Path,
+    Git,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Action {
     CreateDir {
@@ -221,6 +227,7 @@ pub enum Action {
     },
     ActivateProfile {
         user: InvokingUser,
+        source: FlakeSource,
     },
     SwitchGeneration {
         user: InvokingUser,

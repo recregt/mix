@@ -27,6 +27,14 @@ def test_bootstrap_auto_escalates_for_a_sudo_user(
 
     assert run.succeeded(), run
     assert "write-home-config" in run.steps()
+    builds = [
+        command["line"]
+        for command in run.progress("command")
+        if " build " in command["line"] and "/.local/state/mix" in command["line"]
+    ]
+    assert builds and all(
+        "path:/home/ciuser/.local/state/mix#" in line for line in builds
+    ), builds
     assert container.path_exists("/nix/var/nix/profiles/default/bin/nix-env")
 
     state_dir = "/home/ciuser/.local/state/mix"
@@ -55,8 +63,9 @@ def test_bootstrap_auto_escalates_for_a_sudo_user(
     )
     assert daemon.stdout.strip() == "root:root 755"
     assert (
-        container.exec("cmp", "/usr/local/bin/mix-daemon", "/var/lib/mix/bin/mix-daemon")
-        .returncode
+        container.exec(
+            "cmp", "/usr/local/bin/mix-daemon", "/var/lib/mix/bin/mix-daemon"
+        ).returncode
         == 0
     )
     socket = container.exec("systemctl", "is-active", "mix-daemon.socket")
