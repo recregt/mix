@@ -1509,6 +1509,7 @@ dependencies = [
 name = "mix-rpc"
 version = "0.1.0"
 dependencies = [
+ "codspeed-divan-compat",
  "futures-util",
  "hyper-util",
  "mix-events",

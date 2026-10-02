@@ -22,5 +22,12 @@ tower = { version = "0.5.3", features = ["util"] }
 protox = "0.9.1"
 tonic-prost-build = "0.14.6"
 
+[dev-dependencies]
+divan = { workspace = true }
+
+[[bench]]
+name = "stream"
+harness = false
+
 [package.metadata.cargo-machete]
 ignored = ["tonic-prost"]
