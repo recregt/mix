@@ -15,6 +15,10 @@ pre-commit:
 
 pre-push:
   commands:
+    doc:
+      run: cargo doc --workspace --no-deps --document-private-items --locked
+      env:
+        RUSTDOCFLAGS: -D warnings
     clippy:
       run: cargo clippy --workspace --all-targets --locked -- -D warnings
     test:
