@@ -2,7 +2,7 @@ use std::io::IsTerminal;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use indicatif::ProgressBar;
-use mix_core::BuildProgress;
+use mix_events::v1::Builds;
 
 use crate::Status;
 use crate::progress::{ELAPSED_TICK, bar_style, bar_width, board, columns, live_style};
@@ -13,7 +13,7 @@ pub trait Display: Send + Sync {
 
 pub trait StepLine: Send + Sync {
     fn bytes(&self, done: u64, total: Option<u64>);
-    fn builds(&self, progress: &BuildProgress);
+    fn builds(&self, progress: &Builds);
     fn item(&self, name: &str);
     fn finish(&self);
 }
@@ -28,7 +28,7 @@ impl Display for Silent {
 
 impl StepLine for Silent {
     fn bytes(&self, _done: u64, _total: Option<u64>) {}
-    fn builds(&self, _progress: &BuildProgress) {}
+    fn builds(&self, _progress: &Builds) {}
     fn item(&self, _name: &str) {}
     fn finish(&self) {}
 }
@@ -77,7 +77,7 @@ struct Live {
     showing: Mutex<Showing>,
     item: Mutex<String>,
     frame: Mutex<String>,
-    last: Mutex<Option<BuildProgress>>,
+    last: Mutex<Option<Builds>>,
 }
 
 impl Live {
@@ -114,7 +114,7 @@ impl StepLine for Live {
         }
     }
 
-    fn builds(&self, progress: &BuildProgress) {
+    fn builds(&self, progress: &Builds) {
         *self.last.lock().unwrap_or_else(PoisonError::into_inner) = Some(*progress);
         let Some((phase, done, expected)) = crate::activity::phase(progress) else {
             self.draw(self.status.text(), &self.subject, None);

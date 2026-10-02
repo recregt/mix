@@ -33,6 +33,14 @@ RULES = [
         {"mix-shell", "mix-rpc", "mix-exec", "tokio"},
         "is not words: mix-explain turns a fault into text and nothing else",
     ),
+    *(
+        (
+            crate,
+            {"mix-core", "mix-nixgen", "mix-pins"},
+            "is the daemon's model: the client reads the protocol, not the core",
+        )
+        for crate in ("mix-cli", "mix-explain", "mix-ui")
+    ),
 ]
 
 

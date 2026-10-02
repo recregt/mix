@@ -467,7 +467,7 @@ pub async fn run(session: &Session, command: Command) {
             mix_events::fail(
                 crate::request::context::request_id(),
                 Command::default(),
-                mix_core::diagnose::failed(Code::Internal, "the request names no command", None),
+                mix_events::Fault::failed(Code::Internal, "the request names no command", None),
                 &mut **render,
             );
         }

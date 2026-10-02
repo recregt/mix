@@ -1,5 +1,5 @@
 {"header":{"format":"mix.capture.v1","mixVersion":"0.1.0","request":"01920000-0000-7000-8000-000000000001"}}
-{"record":{"offset":"0s","envelope":{"seq":"1","request":"01920000-0000-7000-8000-000000000001","nodeStarted":{"id":"1","key":"install","command":{"mixVersion":"0.1.0","schemaMinor":2,"install":{"packages":["hello"]}}}}}}
+{"record":{"offset":"0s","envelope":{"seq":"1","request":"01920000-0000-7000-8000-000000000001","nodeStarted":{"id":"1","key":"install","command":{"mixVersion":"0.1.0","schemaMinor":3,"install":{"packages":["hello"]}}}}}}
 {"record":{"offset":"1s","envelope":{"seq":"2","request":"01920000-0000-7000-8000-000000000001","nodeStarted":{"id":"2","parent":"1","key":"lock","lockWait":{"lock":"/var/lib/mix/lock","holder":"alice","command":"install"}}}}}
 {"record":{"offset":"2s","envelope":{"seq":"3","request":"01920000-0000-7000-8000-000000000001","nodeFinished":{"id":"2","status":"STATUS_SUCCEEDED"}}}}
 {"record":{"offset":"3s","envelope":{"seq":"4","request":"01920000-0000-7000-8000-000000000001","nodeStarted":{"id":"3","parent":"1","key":"plan","plan":{"title":"install"}}}}}
@@ -20,8 +20,8 @@
 {"record":{"offset":"18s","envelope":{"seq":"19","request":"01920000-0000-7000-8000-000000000001","nodeStarted":{"id":"10","parent":"7","key":"n1","nixActivity":{"activityType":"build","text":"building hello"}}}}}
 {"record":{"offset":"19s","envelope":{"seq":"20","request":"01920000-0000-7000-8000-000000000001","nodeFinished":{"id":"10","status":"STATUS_SUCCEEDED"}}}}
 {"record":{"offset":"20s","envelope":{"seq":"21","request":"01920000-0000-7000-8000-000000000001","nodeProgress":{"id":"7","command":{"line":"/nix/var/nix/profiles/default/bin/nix build"}}}}}
-{"record":{"offset":"21s","envelope":{"seq":"22","request":"01920000-0000-7000-8000-000000000001","nodeProgress":{"id":"7","substitution":{"path":"/nix/store/xl1h9i29pgq2q5cszjhm5wpfxfbbqwyi-glibc-2.40"}}}}}
-{"record":{"offset":"22s","envelope":{"seq":"23","request":"01920000-0000-7000-8000-000000000001","nodeProgress":{"id":"7","build":{"derivation":"/nix/store/bbx79xgf89bvd25i1sivdcykhy39bz14-hello-2.12.drv"}}}}}
+{"record":{"offset":"21s","envelope":{"seq":"22","request":"01920000-0000-7000-8000-000000000001","nodeProgress":{"id":"7","substitution":{"path":"/nix/store/xl1h9i29pgq2q5cszjhm5wpfxfbbqwyi-glibc-2.40","name":"glibc-2.40"}}}}}
+{"record":{"offset":"22s","envelope":{"seq":"23","request":"01920000-0000-7000-8000-000000000001","nodeProgress":{"id":"7","build":{"derivation":"/nix/store/bbx79xgf89bvd25i1sivdcykhy39bz14-hello-2.12.drv","name":"hello-2.12"}}}}}
 {"record":{"offset":"23s","envelope":{"seq":"24","request":"01920000-0000-7000-8000-000000000001","nodeProgress":{"id":"7","builds":{"buildsDone":"1","buildsExpected":"3"}}}}}
 {"record":{"offset":"24s","envelope":{"seq":"25","request":"01920000-0000-7000-8000-000000000001","nodeProgress":{"id":"7","line":{"text":"building hello","stream":"STREAM_STDERR"}}}}}
 {"record":{"offset":"25s","envelope":{"seq":"26","request":"01920000-0000-7000-8000-000000000001","nodeProgress":{"id":"7","commandFinished":{"line":"/nix/var/nix/profiles/default/bin/nix build","exitCode":0}}}}}

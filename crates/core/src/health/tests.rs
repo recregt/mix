@@ -491,7 +491,7 @@ fn repairing_one_user_leaves_the_other_alone() {
 }
 
 #[test]
-fn every_finding_and_category_survive_the_event_stream() {
+fn every_finding_and_category_reach_the_event_stream_as_their_own_kind() {
     let findings = [
         Finding::Missing,
         Finding::Unreadable {
@@ -524,6 +524,7 @@ fn every_finding_and_category_survive_the_event_stream() {
         Finding::UnitInactive,
         Finding::RuntimeMissing,
     ];
+    let mut kinds = std::collections::HashSet::new();
     for finding in findings {
         let listed = match finding {
             Finding::Missing
@@ -543,14 +544,39 @@ fn every_finding_and_category_survive_the_event_stream() {
             | Finding::UnitInactive
             | Finding::RuntimeMissing => finding,
         };
-        assert_eq!(wire::finding_from(&wire::finding(listed)), Some(finding));
-    }
-    for category in crate::targets::Category::ALL {
-        assert_eq!(
-            wire::category_from(wire::category(category)),
-            Some(category)
+        let kind = wire::finding(listed)
+            .kind
+            .expect("every finding has a kind");
+        assert!(
+            kinds.insert(std::mem::discriminant(&kind)),
+            "{finding:?} shares its kind"
         );
     }
+    for category in crate::targets::Category::ALL {
+        assert_ne!(
+            wire::category(category),
+            mix_events::v1::Category::Unspecified
+        );
+    }
+}
+
+#[test]
+fn a_report_tells_the_reader_what_repair_cannot_fix() {
+    let report = |finding| HealthReport {
+        name: "/nix".to_string(),
+        category: crate::targets::Category::Filesystem,
+        finding: Some(finding),
+        drift: None,
+    };
+
+    assert_eq!(
+        wire::report(&report(Finding::RuntimeMissing)).unfixable(),
+        mix_events::v1::Unfixable::MissingRuntime
+    );
+    assert_eq!(
+        wire::report(&report(Finding::Missing)).unfixable(),
+        mix_events::v1::Unfixable::Unspecified
+    );
 }
 
 #[test]

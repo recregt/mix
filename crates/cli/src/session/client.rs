@@ -7,8 +7,6 @@ use mix_exec::Reason;
 use mix_rpc::{Client, Controller, Reply};
 use nix::sys::signal::Signal;
 
-use mix_core::paths::MIX_DAEMON_SOCKET_PATH;
-
 use crate::args::Output;
 use crate::output::{Sinks, View};
 use crate::request::Route;
@@ -132,16 +130,16 @@ async fn one_shot(view: &View) -> anyhow::Result<Client> {
 fn not_set_up(request: &Request, error: &std::io::Error) -> Failed {
     Failed {
         request: request.clone(),
-        fault: mix_core::diagnose::failed(
+        fault: Fault::failed(
             mix_events::v1::Code::NotBootstrapped,
-            format!("no mix daemon listens at {MIX_DAEMON_SOCKET_PATH}: {error}"),
+            format!("no mix daemon listens at {}: {error}", mix_rpc::SOCKET_PATH),
             None,
         ),
     }
 }
 
 async fn socket(request: &Request) -> anyhow::Result<Client> {
-    let stream = match tokio::net::UnixStream::connect(MIX_DAEMON_SOCKET_PATH).await {
+    let stream = match tokio::net::UnixStream::connect(mix_rpc::SOCKET_PATH).await {
         Ok(stream) => stream,
         Err(error)
             if matches!(

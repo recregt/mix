@@ -1,6 +1,7 @@
 use mix_core::Category;
-use mix_core::health::HealthReport;
+use mix_core::health::{HealthReport, wire};
 use mix_events::Diagnose;
+use mix_events::v1::InspectionReport;
 use mix_explain as explain;
 use mix_shell::profile::change::Error as InstallError;
 use mix_shell::target::{Error as TargetError, Finding, Unfixable};
@@ -50,13 +51,13 @@ fn word_an_unrepairable_target(bencher: divan::Bencher) {
     });
 }
 
-fn report(name: &str, finding: Finding) -> HealthReport {
-    HealthReport {
+fn report(name: &str, finding: Finding) -> InspectionReport {
+    wire::report(&HealthReport {
         name: name.to_string(),
         category: Category::Filesystem,
         finding: Some(finding),
         drift: None,
-    }
+    })
 }
 
 /// A problem as `mix doctor` writes it: the item and what is wrong with it, and a note with what
@@ -86,7 +87,7 @@ fn explain_a_doctor_problem_repair_cannot_fix(bencher: divan::Bencher) {
 /// decide whether `mix repair` is worth suggesting, so it grows with the number found.
 #[divan::bench(args = [1, 8, 64])]
 fn explain_the_doctor_verdict(bencher: divan::Bencher, n: usize) {
-    let reports: Vec<HealthReport> = (0..n)
+    let reports: Vec<InspectionReport> = (0..n)
         .map(|i| report(&format!("nixbld{i}"), Finding::RuntimeMissing))
         .collect();
 

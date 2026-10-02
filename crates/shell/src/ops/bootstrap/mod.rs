@@ -223,7 +223,9 @@ pub(crate) async fn bootstrap(
     .await;
     let ending = match &report.verdict {
         Verdict::Succeeded => {
-            Ending::succeeded().with_result(node_finished::Result::Bootstrap(BootstrapResult {}))
+            Ending::succeeded().with_result(node_finished::Result::Bootstrap(BootstrapResult {
+                profile_snippet: mix_core::paths::PROFILE_SNIPPET_DEST.to_string(),
+            }))
         }
         Verdict::Failed { failure, .. } => Ending::failed(diagnostic(failure)),
         Verdict::Cancelled(cause) => Ending::cancelled(*cause),

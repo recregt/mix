@@ -1,7 +1,7 @@
 use mix_events::v1::diagnostic::Detail;
 use mix_events::v1::{
     Cancellation, Code, CommandDetail, Diagnostic, IoDetail, LockDetail, PackagesDetail, Severity,
-    Unfixable as WireUnfixable, UnrepairableDetail,
+    UnrepairableDetail,
 };
 use mix_events::{Diagnose, Fault};
 
@@ -9,17 +9,6 @@ use crate::Error;
 use crate::action::Failure;
 use crate::health::Unfixable;
 use crate::plan::diagnostic;
-
-pub fn failed(code: Code, message: impl Into<String>, detail: Option<Detail>) -> Fault {
-    Fault::Failed(Diagnostic {
-        code: code as i32,
-        severity: Severity::Error as i32,
-        node: 0,
-        message: message.into(),
-        causes: Vec::new(),
-        detail,
-    })
-}
 
 fn command_code(tail: &str) -> Code {
     match crate::nix_log::nix_error(tail).and_then(|error| error.failure) {
@@ -103,11 +92,7 @@ pub fn warning(code: Code, message: impl Into<String>, cause: &dyn Diagnose) -> 
 pub fn unrepairable(artifact: &str, reason: Unfixable) -> UnrepairableDetail {
     UnrepairableDetail {
         artifact: artifact.to_string(),
-        reason: match reason {
-            Unfixable::NotADirectory => WireUnfixable::NotADirectory,
-            Unfixable::MissingUser => WireUnfixable::MissingUser,
-            Unfixable::MissingRuntime => WireUnfixable::MissingRuntime,
-        } as i32,
+        reason: crate::health::wire::unfixable(reason) as i32,
     }
 }
 
@@ -134,7 +119,7 @@ fn lock(code: Code, path: &std::path::Path, message: impl FnOnce(&str) -> String
         Some(path) => std::borrow::Cow::Borrowed(path),
         None => path.to_string_lossy(),
     };
-    failed(
+    Fault::failed(
         code,
         message(&path),
         Some(Detail::Lock(LockDetail {
@@ -160,7 +145,7 @@ impl Diagnose for Error {
 
     fn fault(&self) -> Fault {
         match self {
-            Error::Io { path, source } => failed(
+            Error::Io { path, source } => Fault::failed(
                 if source.kind() == std::io::ErrorKind::PermissionDenied {
                     Code::PermissionDenied
                 } else {
@@ -169,13 +154,13 @@ impl Diagnose for Error {
                 self.to_string(),
                 Some(Detail::Io(IoDetail {
                     path: path.display().to_string(),
-                    kind: format!("{:?}", source.kind()),
+                    kind: mix_events::io_kind::name(source.kind()),
                 })),
             ),
             Error::Command { command, detail } => {
                 Fault::Failed(command_failure(command, None, detail, self.to_string()))
             }
-            Error::Exec { command, .. } => failed(
+            Error::Exec { command, .. } => Fault::failed(
                 Code::SpawnFailed,
                 self.to_string(),
                 Some(Detail::Command(CommandDetail {

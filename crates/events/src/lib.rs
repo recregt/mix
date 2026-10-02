@@ -15,6 +15,8 @@ mod events {
     pub(crate) use crate::v1;
 }
 mod fault;
+pub mod io_kind;
+pub mod mirror;
 mod outbox;
 mod root;
 mod tree;
@@ -28,4 +30,4 @@ pub use root::{Render, command, fail, key_of};
 pub use tree::{Ending, Misuse, Node, NodeId, ROOT, Start, Stopped, Tree, exit, output};
 pub use validate::{Entry, Outcome, Validated, Validator, Violation, validate};
 
-pub const SCHEMA_MINOR: u32 = 2;
+pub const SCHEMA_MINOR: u32 = 3;

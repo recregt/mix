@@ -2,10 +2,6 @@
 
 use std::time::Duration;
 
-use mix_core::change::Source;
-use mix_core::health::HealthReport;
-use mix_core::health::wire;
-use mix_core::paths::PROFILE_SNIPPET_DEST;
 use mix_events::Detail;
 use mix_events::v1::node_finished::Result;
 use mix_events::v1::{CleanResult, InspectionReport, NodeFinished, RepairReport, Status as Ended};
@@ -36,7 +32,7 @@ pub(super) fn finished(
     };
     let chatty = level >= Detail::Step;
     match result {
-        Result::Bootstrap(_) => {
+        Result::Bootstrap(bootstrap) => {
             if chatty {
                 mix_ui::status_to(
                     out,
@@ -47,7 +43,8 @@ pub(super) fn finished(
                     out,
                     &mix_ui::note!("new terminal sessions see the installed packages"),
                     Some(&mix_ui::help!(
-                        "run `source {PROFILE_SNIPPET_DEST}` to use them in this one"
+                        "run `source {}` to use them in this one",
+                        bootstrap.profile_snippet
                     )),
                 );
             }
@@ -124,11 +121,8 @@ fn size(bytes: u64) -> String {
 }
 
 fn reset(out: &dyn Out, was_reset: bool, level: Detail) {
-    if was_reset
-        && level >= Detail::Step
-        && let Some(note) = mix_explain::restored(Source::Fresh)
-    {
-        words(out, Severity::Warning, &note);
+    if was_reset && level >= Detail::Step {
+        words(out, Severity::Warning, &mix_explain::reset());
     }
 }
 
@@ -229,26 +223,12 @@ fn repaired(
     }
 }
 
-fn audited(out: &dyn Out, inspected: &[InspectionReport], level: Detail, elapsed: Duration) {
-    let reports: Vec<HealthReport> = inspected
-        .iter()
-        .filter_map(|report| {
-            Some(HealthReport {
-                name: report.target.clone(),
-                category: wire::category_from(report.category())?,
-                finding: match &report.finding {
-                    Some(finding) => Some(wire::finding_from(finding)?),
-                    None => None,
-                },
-                drift: report.drift.as_ref().map(wire::drift_from),
-            })
-        })
-        .collect();
+fn audited(out: &dyn Out, reports: &[InspectionReport], level: Detail, elapsed: Duration) {
     let chatty = level >= Detail::Step;
-    for report in &reports {
-        if report.healthy() {
+    for report in reports {
+        if mix_explain::doctor::healthy(report) {
             if level >= Detail::Action {
-                mix_ui::status_to(out, Status::Checked, &report.name);
+                mix_ui::status_to(out, Status::Checked, &report.target);
             }
             continue;
         }
@@ -256,7 +236,7 @@ fn audited(out: &dyn Out, inspected: &[InspectionReport], level: Detail, elapsed
             continue;
         }
         let words = mix_explain::doctor::check(report);
-        let labels = report.finding.map(mix_explain::doctor::labels);
+        let labels = report.finding.as_ref().map(mix_explain::doctor::labels);
         let lines = report
             .drift
             .as_ref()
@@ -268,7 +248,7 @@ fn audited(out: &dyn Out, inspected: &[InspectionReport], level: Detail, elapsed
             });
         mix_ui::problem_to(out, Severity::Warning, &words.problem(lines));
     }
-    if reports.iter().all(HealthReport::healthy) {
+    if reports.iter().all(mix_explain::doctor::healthy) {
         if chatty {
             mix_ui::status_to(
                 out,
@@ -277,7 +257,7 @@ fn audited(out: &dyn Out, inspected: &[InspectionReport], level: Detail, elapsed
             );
         }
     } else {
-        let verdict = mix_explain::doctor::unhealthy(&reports);
+        let verdict = mix_explain::doctor::unhealthy(reports);
         mix_ui::problem_to(out, Severity::Error, &verdict.problem(None));
     }
 }

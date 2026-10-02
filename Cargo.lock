@@ -1569,7 +1569,7 @@ dependencies = [
  "codspeed-divan-compat",
  "console",
  "indicatif",
- "mix-core",
+ "mix-events",
  "trybuild",
 ]
 

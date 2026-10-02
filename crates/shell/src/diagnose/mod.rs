@@ -1,5 +1,5 @@
 use mix_core::change::Invalid;
-use mix_core::diagnose::{failed, unrepairable};
+use mix_core::diagnose::unrepairable;
 use mix_events::v1::diagnostic::Detail;
 use mix_events::v1::{
     Cancellation, Code, ConflictDetail, FormatDetail, Host as WireHost, HostDetail, PackagesDetail,
@@ -66,17 +66,21 @@ impl Diagnose for BootstrapError {
                 cause: Cancellation::Interrupted,
                 rolled_back: true,
             },
-            BootstrapError::Network(_) => failed(Code::Network, self.to_string(), None),
-            BootstrapError::Integrity { .. } => failed(Code::Integrity, self.to_string(), None),
-            BootstrapError::UnsupportedTarget(platform) => {
-                failed(Code::UnsupportedTarget, self.to_string(), target(platform))
+            BootstrapError::Network(_) => Fault::failed(Code::Network, self.to_string(), None),
+            BootstrapError::Integrity { .. } => {
+                Fault::failed(Code::Integrity, self.to_string(), None)
             }
-            BootstrapError::InvalidMirror(_) => failed(Code::InvalidMirror, self.to_string(), None),
+            BootstrapError::UnsupportedTarget(platform) => {
+                Fault::failed(Code::UnsupportedTarget, self.to_string(), target(platform))
+            }
+            BootstrapError::InvalidMirror(_) => {
+                Fault::failed(Code::InvalidMirror, self.to_string(), None)
+            }
             BootstrapError::Conflict {
                 subject,
                 expected,
                 found,
-            } => failed(
+            } => Fault::failed(
                 Code::Conflict,
                 self.to_string(),
                 Some(Detail::Conflict(Box::new(ConflictDetail {
@@ -85,22 +89,24 @@ impl Diagnose for BootstrapError {
                     found: found.clone(),
                 }))),
             ),
-            BootstrapError::Decompression(_) => failed(Code::Decompression, self.to_string(), None),
-            BootstrapError::MalformedArchive(_) => {
-                failed(Code::MalformedArchive, self.to_string(), None)
+            BootstrapError::Decompression(_) => {
+                Fault::failed(Code::Decompression, self.to_string(), None)
             }
-            BootstrapError::NotRoot(_) => failed(Code::NotRoot, self.to_string(), None),
-            BootstrapError::UnsupportedHost => failed(
+            BootstrapError::MalformedArchive(_) => {
+                Fault::failed(Code::MalformedArchive, self.to_string(), None)
+            }
+            BootstrapError::NotRoot(_) => Fault::failed(Code::NotRoot, self.to_string(), None),
+            BootstrapError::UnsupportedHost => Fault::failed(
                 Code::UnsupportedHost,
                 self.to_string(),
                 host(WireHost::Nixos, ""),
             ),
-            BootstrapError::UnsupportedKernel => failed(
+            BootstrapError::UnsupportedKernel => Fault::failed(
                 Code::UnsupportedKernel,
                 self.to_string(),
                 host(WireHost::Wsl, "wsl1"),
             ),
-            BootstrapError::SystemdNotReady { host: found } => failed(
+            BootstrapError::SystemdNotReady { host: found } => Fault::failed(
                 Code::SystemdNotReady,
                 self.to_string(),
                 host(
@@ -112,14 +118,14 @@ impl Diagnose for BootstrapError {
                 ),
             ),
             BootstrapError::SystemdUnreachable => {
-                failed(Code::SystemdUnreachable, self.to_string(), None)
+                Fault::failed(Code::SystemdUnreachable, self.to_string(), None)
             }
             BootstrapError::Unit {
                 operation,
                 unit,
                 invocation,
                 ..
-            } => failed(
+            } => Fault::failed(
                 Code::UnitFailed,
                 self.to_string(),
                 Some(Detail::Unit(Box::new(UnitDetail {
@@ -128,8 +134,10 @@ impl Diagnose for BootstrapError {
                     invocation: invocation.clone(),
                 }))),
             ),
-            BootstrapError::AlreadyManaged => failed(Code::AlreadyManaged, self.to_string(), None),
-            BootstrapError::CrossDeviceStore { path } => failed(
+            BootstrapError::AlreadyManaged => {
+                Fault::failed(Code::AlreadyManaged, self.to_string(), None)
+            }
+            BootstrapError::CrossDeviceStore { path } => Fault::failed(
                 Code::CrossDeviceStore,
                 self.to_string(),
                 Some(Detail::Path(PathDetail {
@@ -137,7 +145,7 @@ impl Diagnose for BootstrapError {
                 })),
             ),
             BootstrapError::Rollback { cause, .. } => {
-                let mut fault = failed(Code::RollbackIncomplete, self.to_string(), None);
+                let mut fault = Fault::failed(Code::RollbackIncomplete, self.to_string(), None);
                 if let (Fault::Failed(diagnostic), Fault::Failed(cause)) =
                     (&mut fault, cause.fault())
                 {
@@ -168,22 +176,28 @@ impl Diagnose for ChangeError {
         match self {
             ChangeError::Core(error) => error.fault(),
             ChangeError::InvalidPackage(error) => match error.rejected() {
-                Some(name) => failed(Code::InvalidPackage, self.to_string(), packages([name])),
-                None => failed(Code::Internal, self.to_string(), None),
+                Some(name) => {
+                    Fault::failed(Code::InvalidPackage, self.to_string(), packages([name]))
+                }
+                None => Fault::failed(Code::Internal, self.to_string(), None),
             },
-            ChangeError::InvalidState(Invalid::Package(name)) => failed(
+            ChangeError::InvalidState(Invalid::Package(name)) => Fault::failed(
                 Code::InvalidState,
                 self.to_string(),
                 packages([name.as_str()]),
             ),
-            ChangeError::InvalidState(_) => failed(Code::InvalidState, self.to_string(), None),
-            ChangeError::NewerState(format) => failed(
+            ChangeError::InvalidState(_) => {
+                Fault::failed(Code::InvalidState, self.to_string(), None)
+            }
+            ChangeError::NewerState(format) => Fault::failed(
                 Code::NewerState,
                 self.to_string(),
                 Some(Detail::Format(FormatDetail { format: *format })),
             ),
-            ChangeError::NotRoot => failed(Code::RootNotAllowed, self.to_string(), None),
-            ChangeError::NotBootstrapped => failed(Code::NotBootstrapped, self.to_string(), None),
+            ChangeError::NotRoot => Fault::failed(Code::RootNotAllowed, self.to_string(), None),
+            ChangeError::NotBootstrapped => {
+                Fault::failed(Code::NotBootstrapped, self.to_string(), None)
+            }
         }
     }
 }
@@ -199,7 +213,7 @@ impl Diagnose for RemoveError {
     fn fault(&self) -> Fault {
         match self {
             RemoveError::Change(error) => error.fault(),
-            RemoveError::Protected(names) => failed(
+            RemoveError::Protected(names) => Fault::failed(
                 Code::ProtectedPackage,
                 self.to_string(),
                 packages(names.iter().map(String::as_str)),
@@ -219,7 +233,7 @@ impl Diagnose for TargetError {
     fn fault(&self) -> Fault {
         match self {
             TargetError::Core(error) => error.fault(),
-            TargetError::Unrepairable { artifact, reason } => failed(
+            TargetError::Unrepairable { artifact, reason } => Fault::failed(
                 Code::Unrepairable,
                 self.to_string(),
                 Some(Detail::Unrepairable(unrepairable(artifact, *reason))),

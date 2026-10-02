@@ -2,157 +2,168 @@
 //!
 //! The audit hands over measurements, such as a mode, a pair of ids, or a unit that is not
 //! running, and every one of them is written here. The match is exhaustive on purpose: a new
-//! inspection cannot reach a terminal without someone deciding how it reads.
+//! inspection cannot reach a terminal without someone deciding how it reads, and one this
+//! build does not know is still shown as a failed check.
 
-use mix_core::health::{Finding, HealthReport};
+use mix_events::v1::finding::Kind;
+use mix_events::v1::{Finding, InspectionReport, Unfixable};
 use mix_ui::text::{decimal, octal};
 use mix_ui::{Labels, around, help, note, note_around, note_parts, phrase, phrase_parts};
 
 use super::Diagnostic;
 
-pub fn check(report: &HealthReport) -> Diagnostic {
-    let Some(found) = report.finding else {
-        return Diagnostic::new(around!("", " failed its check").around(&report.name));
+pub fn healthy(report: &InspectionReport) -> bool {
+    report.finding.is_none()
+}
+
+pub fn check(report: &InspectionReport) -> Diagnostic {
+    let Some(found) = report
+        .finding
+        .as_ref()
+        .and_then(|finding| finding.kind.as_ref())
+    else {
+        return Diagnostic::new(around!("", " failed its check").around(&report.target))
+            .help(super::report_a_bug());
     };
     let (mut a, mut b, mut c, mut d) = ([0u8; 22], [0u8; 22], [0u8; 22], [0u8; 22]);
     let (summary, note) = match found {
-        Finding::Missing => (
+        Kind::Missing(_) => (
             around!("", " is missing"),
             Some(note!("`mix` set it up, and it is no longer there")),
         ),
-        Finding::Unreadable { kind } => (
+        Kind::Unreadable(unreadable) => (
             around!("", " can't be read"),
-            Some(note!("{}", std::io::Error::from(kind))),
+            Some(note!(
+                "{}",
+                std::io::Error::from(mix_events::io_kind::named(&unreadable.kind))
+            )),
         ),
-        Finding::NotADirectory => (
+        Kind::NotADirectory(_) => (
             around!("", " is not a directory"),
             Some(note!("something else is in its place")),
         ),
-        Finding::Mode { actual, expected } => (
+        Kind::Mode(mode) => (
             around!("", " has the wrong permissions"),
             Some(note_parts![
                 "its mode is ",
-                octal(&mut a, u64::from(actual)),
+                octal(&mut a, u64::from(mode.actual)),
                 ", and `mix` set ",
-                octal(&mut b, u64::from(expected)),
+                octal(&mut b, u64::from(mode.expected)),
                 ""
             ]),
         ),
-        Finding::Owner {
-            actual: (uid, gid),
-            expected: (want_uid, want_gid),
-        } => (
+        Kind::Owner(ids) => (
             around!("", " has the wrong owner"),
             Some(note_parts![
                 "it is owned by ",
-                decimal(&mut a, u64::from(uid)),
+                decimal(&mut a, u64::from(ids.actual_uid)),
                 ":",
-                decimal(&mut b, u64::from(gid)),
+                decimal(&mut b, u64::from(ids.actual_gid)),
                 ", and `mix` set ",
-                decimal(&mut c, u64::from(want_uid)),
+                decimal(&mut c, u64::from(ids.expected_uid)),
                 ":",
-                decimal(&mut d, u64::from(want_gid)),
+                decimal(&mut d, u64::from(ids.expected_gid)),
                 ""
             ]),
         ),
-        Finding::ContentDrift => (
+        Kind::ContentDrift(_) => (
             around!("", " was changed outside `mix`"),
             Some(note!("its contents differ from what `mix` wrote")),
         ),
-        Finding::GroupMissing => (
+        Kind::GroupMissing(_) => (
             around!("group ", " does not exist"),
             Some(note!("`mix` creates it for the users that build packages")),
         ),
-        Finding::GroupGid { actual, expected } => (
+        Kind::GroupGid(gid) => (
             around!("group ", " has the wrong id"),
             Some(note_parts![
                 "its gid is ",
-                decimal(&mut a, u64::from(actual)),
+                decimal(&mut a, u64::from(gid.actual)),
                 ", and `mix` set ",
-                decimal(&mut b, u64::from(expected)),
+                decimal(&mut b, u64::from(gid.expected)),
                 ""
             ]),
         ),
-        Finding::NotAMember { group } => (
+        Kind::NotAMember(member) => (
             around!("", " is not in a group `mix` manages"),
             Some(note_parts![
                 "`mix` adds every user that builds packages to ",
-                group,
+                &member.group,
                 ""
             ]),
         ),
-        Finding::NoSuchUser => (around!("user ", " no longer exists"), None),
-        Finding::UserMissing => (
+        Kind::NoSuchUser(_) => (around!("user ", " no longer exists"), None),
+        Kind::UserMissing(_) => (
             around!("user ", " does not exist"),
             Some(note!("`mix` creates it to build packages")),
         ),
-        Finding::UserIds {
-            actual: (uid, gid),
-            expected: (want_uid, want_gid),
-        } => (
+        Kind::UserIds(ids) => (
             around!("user ", " has the wrong ids"),
             Some(note_parts![
                 "its uid/gid is ",
-                decimal(&mut a, u64::from(uid)),
+                decimal(&mut a, u64::from(ids.actual_uid)),
                 "/",
-                decimal(&mut b, u64::from(gid)),
+                decimal(&mut b, u64::from(ids.actual_gid)),
                 ", and `mix` set ",
-                decimal(&mut c, u64::from(want_uid)),
+                decimal(&mut c, u64::from(ids.expected_uid)),
                 "/",
-                decimal(&mut d, u64::from(want_gid)),
+                decimal(&mut d, u64::from(ids.expected_gid)),
                 ""
             ]),
         ),
-        Finding::UnitMissing => (
+        Kind::UnitMissing(_) => (
             around!("the unit file for ", " is missing"),
             Some(note!("`mix` installs it to run the Nix daemon")),
         ),
-        Finding::UnitDrift => (
+        Kind::UnitDrift(_) => (
             around!("the unit file for ", " was changed outside `mix`"),
             Some(note!("its contents differ from what `mix` wrote")),
         ),
-        Finding::UnitInactive => (
+        Kind::UnitInactive(_) => (
             around!("", " is not running"),
             Some(note!("systemd reports it as inactive")),
         ),
-        Finding::RuntimeMissing => (
+        Kind::RuntimeMissing(_) => (
             around!("", " is missing"),
             Some(note!("`mix repair` can't restore it")),
         ),
     };
-    let mut words = Diagnostic::new(summary.around(&report.name));
+    let mut words = Diagnostic::new(summary.around(&report.target));
     if let Some(note) = note {
         words = words.note(note);
     }
-    match found.unfixable() {
-        Some(reason) => words.help(super::render::unfixable(reason)),
+    match super::render::unfixable(report.unfixable()) {
+        Some(help) => words.help(help),
         None => words,
     }
 }
 
-pub fn labels(finding: Finding) -> Labels {
-    match finding {
-        Finding::UnitDrift => Labels {
+pub fn labels(finding: &Finding) -> Labels {
+    match finding.kind {
+        Some(Kind::UnitDrift(_)) => Labels {
             added: phrase!("not in the Nix runtime's copy"),
             changed: phrase!("differs from the Nix runtime's copy"),
             missing: note_around!("lines of the Nix runtime's copy are missing at line ", ""),
             fix: phrase!("`mix repair` puts back the Nix runtime's copy"),
         },
-        Finding::Missing
-        | Finding::Unreadable { .. }
-        | Finding::NotADirectory
-        | Finding::Mode { .. }
-        | Finding::Owner { .. }
-        | Finding::ContentDrift
-        | Finding::GroupMissing
-        | Finding::GroupGid { .. }
-        | Finding::NotAMember { .. }
-        | Finding::NoSuchUser
-        | Finding::UserMissing
-        | Finding::UserIds { .. }
-        | Finding::UnitMissing
-        | Finding::UnitInactive
-        | Finding::RuntimeMissing => Labels {
+        Some(
+            Kind::Missing(_)
+            | Kind::Unreadable(_)
+            | Kind::NotADirectory(_)
+            | Kind::Mode(_)
+            | Kind::Owner(_)
+            | Kind::ContentDrift(_)
+            | Kind::GroupMissing(_)
+            | Kind::GroupGid(_)
+            | Kind::NotAMember(_)
+            | Kind::NoSuchUser(_)
+            | Kind::UserMissing(_)
+            | Kind::UserIds(_)
+            | Kind::UnitMissing(_)
+            | Kind::UnitInactive(_)
+            | Kind::RuntimeMissing(_),
+        )
+        | None => Labels {
             added: phrase!("not written by `mix`"),
             changed: phrase!("differs from what `mix` wrote"),
             missing: note_around!("lines `mix` wrote are missing at line ", ""),
@@ -161,11 +172,11 @@ pub fn labels(finding: Finding) -> Labels {
     }
 }
 
-pub fn unhealthy(reports: &[HealthReport]) -> Diagnostic {
-    let (problems, fixable) = reports.iter().filter(|report| !report.healthy()).fold(
+pub fn unhealthy(reports: &[InspectionReport]) -> Diagnostic {
+    let (problems, fixable) = reports.iter().filter(|report| !healthy(report)).fold(
         (0u64, 0u64),
         |(problems, fixable), report| {
-            let repairable = report.finding.and_then(Finding::unfixable).is_none();
+            let repairable = report.unfixable() == Unfixable::Unspecified;
             (problems + 1, fixable + u64::from(repairable))
         },
     );
@@ -190,16 +201,17 @@ pub fn unhealthy(reports: &[HealthReport]) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use mix_core::Category;
+    use mix_core::health::{Finding, HealthReport, wire};
 
     use super::*;
 
-    fn report(name: &str, finding: Option<Finding>) -> HealthReport {
-        HealthReport {
+    fn report(name: &str, finding: Option<Finding>) -> InspectionReport {
+        wire::report(&HealthReport {
             name: name.to_string(),
             category: Category::Filesystem,
             finding,
             drift: None,
-        }
+        })
     }
 
     #[test]
@@ -291,10 +303,21 @@ mod tests {
     }
 
     #[test]
-    fn a_check_with_nothing_to_say_still_says_it_failed() {
+    fn a_finding_this_build_does_not_know_is_shown_and_counted() {
+        let unknown = InspectionReport {
+            finding: Some(mix_events::v1::Finding { kind: None }),
+            ..report("nixbld1", None)
+        };
+
         assert_eq!(
-            check(&report("nixbld1", None)).message(),
-            "nixbld1 failed its check"
+            check(&unknown).message(),
+            "nixbld1 failed its check\nreport this bug at https://github.com/recregt/mix/issues"
+        );
+        assert!(!healthy(&unknown));
+        assert!(
+            unhealthy(&[unknown, report("/nix", None)])
+                .message()
+                .starts_with("found 1 problem\n")
         );
     }
 

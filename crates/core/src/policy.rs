@@ -5,62 +5,18 @@ pub const FORMAT: u32 = 1;
 pub const CACHE_NIXOS_ORG_KEY: &str =
     "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=";
 
+pub use mix_events::mirror::Mirror;
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Invalid {
-    #[error("the mirror must be an http or https URL without spaces: {0:?}")]
-    Url(String),
-
-    #[error("the mirror key must be a single <name>:<key> entry: {0:?}")]
-    Key(String),
-
-    #[error("a mirror key was given without a mirror")]
-    KeyWithoutMirror,
+    #[error(transparent)]
+    Mirror(#[from] mix_events::mirror::Invalid),
 
     #[error("the policy was written by a newer version of mix (format {0})")]
     Newer(u32),
 
     #[error("the policy is not valid JSON: {0}")]
     Malformed(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Mirror {
-    url: String,
-    key: Option<String>,
-}
-
-impl Mirror {
-    pub fn new(url: &str, key: Option<&str>) -> Result<Self, Invalid> {
-        let url = url.trim().trim_end_matches('/');
-        if !is_mirror_url(url) {
-            return Err(Invalid::Url(url.to_string()));
-        }
-        let key = match key.map(str::trim).filter(|key| !key.is_empty()) {
-            Some(key) if is_binary_cache_key(key) => Some(key.to_string()),
-            Some(key) => return Err(Invalid::Key(key.to_string())),
-            None => None,
-        };
-        Ok(Self {
-            url: url.to_string(),
-            key,
-        })
-    }
-
-    pub fn url(&self) -> &str {
-        &self.url
-    }
-
-    pub fn key(&self) -> Option<&str> {
-        self.key.as_deref()
-    }
-
-    pub fn file(&self, name: &str) -> String {
-        format!("{}/{name}", self.url)
-    }
-
-    pub fn cache(&self) -> String {
-        self.file("cache")
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,13 +46,7 @@ struct StoredMirror {
 
 impl Policy {
     pub fn new(url: Option<&str>, key: Option<&str>) -> Result<Self, Invalid> {
-        let url = url.map(str::trim).filter(|url| !url.is_empty());
-        let key = key.map(str::trim).filter(|key| !key.is_empty());
-        match (url, key) {
-            (Some(url), key) => Ok(Self::with(Some(Mirror::new(url, key)?))),
-            (None, Some(_)) => Err(Invalid::KeyWithoutMirror),
-            (None, None) => Ok(Self::default()),
-        }
+        Ok(Self::with(Mirror::given(url, key)?))
     }
 
     pub fn mirror(&self) -> Option<&Mirror> {
@@ -142,8 +92,8 @@ fn render(mirror: Option<&Mirror>) -> String {
     let stored = Stored {
         format: FORMAT,
         mirror: mirror.map(|mirror| StoredMirror {
-            url: mirror.url.clone(),
-            key: mirror.key.clone(),
+            url: mirror.url().to_string(),
+            key: mirror.key().map(str::to_string),
         }),
     };
     let mut rendered = serde_json::to_string_pretty(&stored).expect("a policy always serialises");
@@ -156,36 +106,14 @@ fn nix_conf(mirror: Option<&Mirror>) -> String {
         "build-users-group = nixbld\nexperimental-features = nix-command flakes\ntrusted-users = root\n",
     );
     if let Some(mirror) = mirror {
-        conf.push_str(&format!("substituters = {}\n", mirror.cache()));
-        if let Some(key) = &mirror.key {
+        conf.push_str(&format!("substituters = {}/cache\n", mirror.url()));
+        if let Some(key) = mirror.key() {
             conf.push_str(&format!(
                 "trusted-public-keys = {CACHE_NIXOS_ORG_KEY} {key}\n"
             ));
         }
     }
     conf
-}
-
-fn is_mirror_url(url: &str) -> bool {
-    let rest = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"));
-    rest.is_some_and(|rest| !rest.is_empty())
-        && !url
-            .chars()
-            .any(|c| c.is_whitespace() || c.is_control() || c == '#' || c == '"')
-}
-
-pub fn is_binary_cache_key(key: &str) -> bool {
-    let Some((name, material)) = key.split_once(':') else {
-        return false;
-    };
-    !name.is_empty()
-        && !material.is_empty()
-        && !material.contains(':')
-        && !key
-            .chars()
-            .any(|c| c.is_whitespace() || c.is_control() || c == '#')
 }
 
 #[cfg(test)]
@@ -225,44 +153,11 @@ mod tests {
     }
 
     #[test]
-    fn nothing_can_be_smuggled_into_nix_conf_through_the_mirror() {
-        for url in [
-            "https://mirror\ntrusted-users = root evil",
-            "https://mirror trusted-users",
-            "https://mirror#comment",
-            "ftp://mirror",
-            "https://",
-            "mirror.internal",
-        ] {
-            assert_eq!(
-                Policy::new(Some(url), None),
-                Err(Invalid::Url(url.trim().trim_end_matches('/').to_string())),
-                "{url:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn nothing_can_be_smuggled_into_nix_conf_through_the_key() {
-        for key in [
-            "name:key\ntrusted-users = evil",
-            "name key",
-            "no-colon",
-            "a:b:c",
-        ] {
-            assert!(
-                matches!(
-                    Policy::new(Some("https://mirror"), Some(key)),
-                    Err(Invalid::Key(_))
-                ),
-                "{key:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_key_needs_a_mirror() {
-        assert_eq!(Policy::new(None, Some(KEY)), Err(Invalid::KeyWithoutMirror));
+    fn a_mirror_is_checked_before_it_reaches_nix_conf() {
+        assert!(matches!(
+            Policy::new(Some("https://mirror\ntrusted-users = evil"), None),
+            Err(Invalid::Mirror(mix_events::mirror::Invalid::Url(_)))
+        ));
     }
 
     #[test]
@@ -281,7 +176,10 @@ mod tests {
         let smuggled =
             r#"{"format":1,"mirror":{"url":"https://m\ntrusted-users = evil","key":null}}"#;
 
-        assert!(matches!(Policy::parse(smuggled), Err(Invalid::Url(_))));
+        assert!(matches!(
+            Policy::parse(smuggled),
+            Err(Invalid::Mirror(mix_events::mirror::Invalid::Url(_)))
+        ));
         assert_eq!(Policy::load(Some(smuggled)), Policy::default());
     }
 

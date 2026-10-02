@@ -1,6 +1,6 @@
 use annotate_snippets::renderer::DecorStyle;
 use annotate_snippets::{AnnotationKind, Group, Level, Patch, Renderer, Snippet};
-use mix_core::health::Hunk;
+use mix_events::v1::Hunk;
 
 use crate::text::{Help, Note, NoteAround, Phrase};
 use crate::{Out, Severity};

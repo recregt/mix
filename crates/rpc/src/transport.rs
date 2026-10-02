@@ -29,6 +29,8 @@ const WORKER_URI: &str = "http://worker";
 
 pub const PROTOCOL: u32 = 1;
 
+pub const SOCKET_PATH: &str = "/run/mix/daemon.sock";
+
 pub type Events = mpsc::UnboundedSender<Reply>;
 
 pub type Controls = mpsc::UnboundedReceiver<Control>;

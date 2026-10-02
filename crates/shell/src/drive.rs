@@ -127,12 +127,14 @@ impl ActivityReporter for Activity {
     fn build_started(&self, derivation: &str) {
         self.send(Progress::Build(BuildStarted {
             derivation: derivation.to_string(),
+            name: mix_core::nix_log::package_name(derivation).to_string(),
         }));
     }
 
     fn fetch_started(&self, path: &str) {
         self.send(Progress::Substitution(SubstitutionStarted {
             path: path.to_string(),
+            name: mix_core::nix_log::package_name(path).to_string(),
         }));
     }
 }
@@ -802,7 +804,7 @@ mod tests {
         ));
         assert!(matches!(
             &events[2],
-            Event::NodeProgress(p) if p.progress == Some(Progress::Build(BuildStarted { derivation: "/nix/store/x-hello.drv".into() }))
+            Event::NodeProgress(p) if p.progress == Some(Progress::Build(BuildStarted { derivation: "/nix/store/x-hello.drv".into(), name: "x-hello".into() }))
         ));
         assert!(matches!(
             &events[3],

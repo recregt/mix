@@ -7,7 +7,7 @@ use std::path::Path;
 use mix_core::action::Failure;
 use mix_core::health::{self, wire};
 use mix_events::v1::{
-    DoctorResult, Inspection, InspectionReport, InspectionResult, Plan, node_finished, node_started,
+    DoctorResult, Inspection, InspectionResult, Plan, node_finished, node_started,
 };
 use mix_events::{Ending, ROOT, Start};
 
@@ -76,15 +76,7 @@ pub(crate) async fn audit(ctx: &Context, root: &mut Root) -> Concluded<Vec<Healt
         });
     }
     let result = DoctorResult {
-        reports: reports
-            .iter()
-            .map(|report| InspectionReport {
-                target: report.name.clone(),
-                category: wire::category(report.category) as i32,
-                finding: report.finding.map(wire::finding),
-                drift: report.drift.as_ref().map(wire::drift),
-            })
-            .collect(),
+        reports: reports.iter().map(wire::report).collect(),
     };
     let _ = tree.finish(plan, Ending::succeeded());
     let healthy = reports.iter().all(HealthReport::healthy);

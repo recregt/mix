@@ -195,3 +195,33 @@ fn error_of(failure: Failure) -> Error {
         },
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use mix_core::state::StateManifest;
+
+    use super::*;
+
+    fn restored(source: Source) -> bool {
+        let change = Change {
+            changed: vec!["ripgrep".to_string()],
+            skipped: Vec::new(),
+            manifest: StateManifest::seed(),
+            source,
+        };
+        match (Verb::Install.result(&change), Verb::Remove.result(&change)) {
+            (node_finished::Result::Install(install), node_finished::Result::Remove(remove)) => {
+                assert_eq!(install.restored, remove.restored);
+                install.restored
+            }
+            other => panic!("expected an install and a remove result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn only_a_package_list_that_could_not_be_recovered_is_reported_as_reset() {
+        assert!(!restored(Source::File));
+        assert!(!restored(Source::Generation));
+        assert!(restored(Source::Fresh));
+    }
+}

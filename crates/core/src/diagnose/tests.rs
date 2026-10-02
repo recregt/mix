@@ -170,7 +170,7 @@ fn an_unrepairable_artifact_carries_its_reason() {
         diagnostic.detail,
         Some(Detail::Unrepairable(UnrepairableDetail {
             artifact: "/nix/store".into(),
-            reason: WireUnfixable::MissingRuntime as i32,
+            reason: mix_events::v1::Unfixable::MissingRuntime as i32,
         }))
     );
 }

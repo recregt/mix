@@ -12,11 +12,8 @@ use mix_events::v1::Verb;
 
 const FILE_MODE: u32 = 0o644;
 
-/// Why an artifact is beyond repair's reach.
-///
-/// The reason is a value rather than a sentence: what a reader should do about it differs per
-/// command — `mix repair` offers a way out, the health gate in front of the other commands only
-/// says why it stopped — so the words are chosen where the command is known.
+/// What the audit found about one target. The daemon sends it to the client as an
+/// `InspectionReport`.
 pub struct HealthReport {
     pub name: String,
     pub category: crate::targets::Category,
@@ -30,6 +27,11 @@ impl HealthReport {
     }
 }
 
+/// Why an artifact is beyond repair's reach.
+///
+/// The reason is a value, not a sentence. What a reader should do about it depends on the
+/// command: `mix repair` offers a way out, and the health gate in front of the other commands
+/// only says why it stopped. So the words are chosen where the command is known.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, serde::Serialize, serde::Deserialize,
 )]
@@ -49,7 +51,7 @@ pub enum Unfixable {
 
 /// What an inspection measured about an artifact that is not as it should be.
 ///
-/// Every variant is a fact and nothing else: no advice, no sentence, no name — the artifact is
+/// Every variant is a fact and nothing else: no advice, no sentence, no name. The artifact is
 /// named by the report that carries the finding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Finding {
@@ -111,8 +113,8 @@ pub enum Finding {
 impl Finding {
     /// Why `mix repair` cannot reconcile this finding, or `None` when it can.
     ///
-    /// Repair's reach is a fact about repair rather than a choice of words, so it is bound to
-    /// the finding here — and both commands then read the same answer instead of each deciding
+    /// Repair's reach is a fact about repair, not a choice of words, so it is bound to the
+    /// finding here. The daemon sends the answer with every report, so the client never decides
     /// for itself what the reader can be promised.
     pub fn unfixable(self) -> Option<Unfixable> {
         match self {
@@ -654,14 +656,33 @@ pub fn target_steps(targets: Vec<Target<'_>>, request: &str) -> Vec<Box<dyn Step
 pub mod wire {
     use mix_events::v1::finding::Kind;
     use mix_events::v1::{
-        Category as WireCategory, Finding as WireFinding, Gid, Ids, Mode, NotAMember, Unreadable,
+        Category as WireCategory, Finding as WireFinding, Gid, Ids, InspectionReport, Mode,
+        NotAMember, Unfixable as WireUnfixable, Unreadable,
     };
 
-    use super::{Drift, Finding, Hunk};
-    use crate::identity::MIX_USERS_GROUP;
+    use super::{Drift, Finding, HealthReport, Unfixable};
     use crate::targets::Category;
 
-    const GROUPS: [&str; 1] = [MIX_USERS_GROUP];
+    pub fn report(report: &HealthReport) -> InspectionReport {
+        InspectionReport {
+            target: report.name.clone(),
+            category: category(report.category) as i32,
+            finding: report.finding.map(finding),
+            drift: report.drift.as_ref().map(drift),
+            unfixable: report
+                .finding
+                .and_then(Finding::unfixable)
+                .map_or(WireUnfixable::Unspecified, unfixable) as i32,
+        }
+    }
+
+    pub fn unfixable(reason: Unfixable) -> WireUnfixable {
+        match reason {
+            Unfixable::NotADirectory => WireUnfixable::NotADirectory,
+            Unfixable::MissingUser => WireUnfixable::MissingUser,
+            Unfixable::MissingRuntime => WireUnfixable::MissingRuntime,
+        }
+    }
 
     pub fn drift(drift: &Drift) -> mix_events::v1::Drift {
         mix_events::v1::Drift {
@@ -670,21 +691,6 @@ pub mod wire {
                 .hunks
                 .iter()
                 .map(|hunk| mix_events::v1::Hunk {
-                    found_line: hunk.found_line,
-                    found: hunk.found.clone(),
-                    expected: hunk.expected.clone(),
-                })
-                .collect(),
-        }
-    }
-
-    pub fn drift_from(drift: &mix_events::v1::Drift) -> Drift {
-        Drift {
-            path: drift.path.clone(),
-            hunks: drift
-                .hunks
-                .iter()
-                .map(|hunk| Hunk {
                     found_line: hunk.found_line,
                     found: hunk.found.clone(),
                     expected: hunk.expected.clone(),
@@ -702,16 +708,6 @@ pub mod wire {
         }
     }
 
-    pub fn category_from(category: WireCategory) -> Option<Category> {
-        match category {
-            WireCategory::Filesystem => Some(Category::Filesystem),
-            WireCategory::Identity => Some(Category::Identity),
-            WireCategory::Services => Some(Category::Services),
-            WireCategory::Configuration => Some(Category::Configuration),
-            WireCategory::Unspecified => None,
-        }
-    }
-
     fn ids((actual_uid, actual_gid): (u32, u32), (expected_uid, expected_gid): (u32, u32)) -> Ids {
         Ids {
             actual_uid,
@@ -725,7 +721,7 @@ pub mod wire {
         let kind = match finding {
             Finding::Missing => Kind::Missing(Default::default()),
             Finding::Unreadable { kind } => Kind::Unreadable(Unreadable {
-                kind: format!("{kind:?}"),
+                kind: mix_events::io_kind::name(kind),
             }),
             Finding::NotADirectory => Kind::NotADirectory(Default::default()),
             Finding::Mode { actual, expected } => Kind::Mode(Mode { actual, expected }),
@@ -745,49 +741,6 @@ pub mod wire {
             Finding::RuntimeMissing => Kind::RuntimeMissing(Default::default()),
         };
         WireFinding { kind: Some(kind) }
-    }
-
-    pub fn finding_from(finding: &WireFinding) -> Option<Finding> {
-        let pair = |ids: &Ids| {
-            (
-                (ids.actual_uid, ids.actual_gid),
-                (ids.expected_uid, ids.expected_gid),
-            )
-        };
-        Some(match finding.kind.as_ref()? {
-            Kind::Missing(_) => Finding::Missing,
-            Kind::Unreadable(unreadable) => Finding::Unreadable {
-                kind: crate::action::error_kind::named(&unreadable.kind),
-            },
-            Kind::NotADirectory(_) => Finding::NotADirectory,
-            Kind::Mode(mode) => Finding::Mode {
-                actual: mode.actual,
-                expected: mode.expected,
-            },
-            Kind::Owner(owner) => {
-                let (actual, expected) = pair(owner);
-                Finding::Owner { actual, expected }
-            }
-            Kind::ContentDrift(_) => Finding::ContentDrift,
-            Kind::GroupMissing(_) => Finding::GroupMissing,
-            Kind::GroupGid(gid) => Finding::GroupGid {
-                actual: gid.actual,
-                expected: gid.expected,
-            },
-            Kind::NotAMember(member) => Finding::NotAMember {
-                group: GROUPS.into_iter().find(|group| *group == member.group)?,
-            },
-            Kind::NoSuchUser(_) => Finding::NoSuchUser,
-            Kind::UserMissing(_) => Finding::UserMissing,
-            Kind::UserIds(ids) => {
-                let (actual, expected) = pair(ids);
-                Finding::UserIds { actual, expected }
-            }
-            Kind::UnitMissing(_) => Finding::UnitMissing,
-            Kind::UnitDrift(_) => Finding::UnitDrift,
-            Kind::UnitInactive(_) => Finding::UnitInactive,
-            Kind::RuntimeMissing(_) => Finding::RuntimeMissing,
-        })
     }
 }
 

@@ -84,7 +84,7 @@ fn fault_of(error: &anyhow::Error) -> Fault {
     if let Some(error) = error.downcast_ref::<mix_rpc::Error>() {
         return rpc_fault(error);
     }
-    mix_core::diagnose::failed(Code::Internal, error.to_string(), None)
+    Fault::failed(Code::Internal, error.to_string(), None)
 }
 
 fn rpc_fault(error: &mix_rpc::Error) -> Fault {
@@ -99,7 +99,7 @@ fn rpc_fault(error: &mix_rpc::Error) -> Fault {
         Error::Denied(_) => Code::NotBootstrapped,
         Error::Malformed(_) | Error::NotAConnection(_) => Code::Internal,
     };
-    mix_core::diagnose::failed(code, error.to_string(), None)
+    Fault::failed(code, error.to_string(), None)
 }
 
 fn stream_the_failure(request: &Request, error: &anyhow::Error, view: &View) {

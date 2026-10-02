@@ -4,7 +4,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use mix_core::BuildProgress;
 use mix_events::Render;
 use mix_events::v1::command::Request;
 use mix_events::v1::{
@@ -261,13 +260,13 @@ impl Human {
             Progress::Build(build) => {
                 self.status(Detail::Action, Status::Building, &build.derivation);
                 if let Some(line) = self.lines.get(&id) {
-                    line.item(mix_core::nix_log::package_name(&build.derivation));
+                    line.item(&build.name);
                 }
             }
             Progress::Substitution(substitution) => {
                 self.status(Detail::Action, Status::Fetching, &substitution.path);
                 if let Some(line) = self.lines.get(&id) {
-                    line.item(mix_core::nix_log::package_name(&substitution.path));
+                    line.item(&substitution.name);
                 }
             }
             Progress::Bytes(bytes) => {
@@ -277,16 +276,7 @@ impl Human {
             }
             Progress::Builds(builds) => {
                 if let Some(line) = self.lines.get(&id) {
-                    line.builds(&BuildProgress {
-                        builds_done: builds.builds_done,
-                        builds_expected: builds.builds_expected,
-                        builds_running: builds.builds_running,
-                        downloads_done: builds.downloads_done,
-                        downloads_expected: builds.downloads_expected,
-                        downloads_running: builds.downloads_running,
-                        bytes_done: builds.bytes_done,
-                        bytes_expected: builds.bytes_expected,
-                    });
+                    line.builds(&builds);
                 }
             }
             Progress::Line(line) => {
@@ -362,7 +352,7 @@ mod tests {
             self.0.push(format!("bytes {done}/{total:?}"));
         }
 
-        fn builds(&self, progress: &BuildProgress) {
+        fn builds(&self, progress: &mix_events::v1::Builds) {
             self.0.push(format!(
                 "builds {}/{}",
                 progress.builds_done, progress.builds_expected

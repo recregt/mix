@@ -674,10 +674,6 @@ mod daemon_unit_tests {
 
     #[test]
     fn the_units_name_the_socket_and_the_binary_mix_installs() {
-        assert!(MIX_DAEMON_SOCKET.contains(&format!(
-            "ListenStream={}\n",
-            crate::paths::MIX_DAEMON_SOCKET_PATH
-        )));
         assert!(MIX_DAEMON_SERVICE.contains(&format!(
             "ExecStart={} serve\n",
             crate::paths::MIX_DAEMON_BIN

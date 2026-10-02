@@ -69,7 +69,7 @@ fn a_bug_is_called_a_bug_and_says_where_to_report_it() {
     let message = outcome(
         INSTALL.0,
         &INSTALL.1,
-        &mix_core::diagnose::failed(mix_events::v1::Code::Internal, "oops", None),
+        &mix_events::Fault::failed(mix_events::v1::Code::Internal, "oops", None),
     )
     .message();
 
@@ -332,12 +332,8 @@ fn a_list_mix_built_wrong_is_reported_as_a_bug() {
 }
 
 #[test]
-fn only_packages_that_are_gone_are_worth_telling() {
-    use mix_core::change::Source;
-
-    assert!(restored(Source::File).is_none());
-    assert!(restored(Source::Generation).is_none());
-    let note = restored(Source::Fresh).unwrap().message();
+fn a_reset_package_list_is_told_with_the_way_back() {
+    let note = reset().message();
     assert!(note.contains("couldn't be recovered"));
     assert!(note.ends_with("reinstall your packages with `mix install`"));
 }

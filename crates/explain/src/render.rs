@@ -1,9 +1,8 @@
 use std::fmt::Display;
 
-use mix_core::health::Unfixable;
 use mix_events::Fault;
 use mix_events::v1::diagnostic::Detail;
-use mix_events::v1::{Code, Diagnostic as Wire, Host, Unfixable as WireUnfixable};
+use mix_events::v1::{Code, Diagnostic as Wire, Host, Unfixable};
 use mix_ui::{Help, help, help_around, note, phrase, phrase_parts};
 
 use super::{Diagnostic, bug, failed};
@@ -38,42 +37,37 @@ pub fn warning(diagnostic: &Wire) -> Diagnostic {
     }
 }
 
-pub(crate) fn unfixable_of(reason: i32) -> Option<Unfixable> {
-    match WireUnfixable::try_from(reason).ok()? {
-        WireUnfixable::NotADirectory => Some(Unfixable::NotADirectory),
-        WireUnfixable::MissingUser => Some(Unfixable::MissingUser),
-        WireUnfixable::MissingRuntime => Some(Unfixable::MissingRuntime),
-        WireUnfixable::Unspecified => None,
-    }
-}
-
-pub(crate) fn unfixable(reason: Unfixable) -> Help {
-    match reason {
+pub(crate) fn unfixable(reason: Unfixable) -> Option<Help> {
+    Some(match reason {
         Unfixable::NotADirectory => help!("remove it, then run `mix repair` again"),
         Unfixable::MissingUser => {
             help!("recreate the user, or ignore this if it was removed on purpose")
         }
         Unfixable::MissingRuntime => help!("run `mix bootstrap` to reinstall it"),
-    }
+        Unfixable::Unspecified => return None,
+    })
 }
 
-fn unfixable_reason(reason: Unfixable) -> &'static str {
-    match reason {
+fn unfixable_reason(reason: Unfixable) -> Option<&'static str> {
+    Some(match reason {
         Unfixable::NotADirectory => "exists but is not a directory",
         Unfixable::MissingUser => "the user no longer exists",
         Unfixable::MissingRuntime => "missing, and `mix repair` can't restore it",
-    }
+        Unfixable::Unspecified => return None,
+    })
 }
 
-pub(crate) fn unrepairable(artifact: &str, reason: Unfixable) -> Diagnostic {
-    Diagnostic::new(phrase_parts![
-        "",
-        artifact,
-        ": ",
-        unfixable_reason(reason),
-        ""
-    ])
-    .help(unfixable(reason))
+fn unrepairable(artifact: &str, reason: Unfixable) -> Option<Diagnostic> {
+    Some(
+        Diagnostic::new(phrase_parts![
+            "",
+            artifact,
+            ": ",
+            unfixable_reason(reason)?,
+            ""
+        ])
+        .help(unfixable(reason)?),
+    )
 }
 
 fn packages(diagnostic: &Wire) -> &[String] {
@@ -268,10 +262,9 @@ fn detailed(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
                 .note(note!("`mix` runs on 64-bit Intel, AMD and ARM Linux"))
         }
         Code::Unrepairable => match detail {
-            Some(Detail::Unrepairable(detail)) => match unfixable_of(detail.reason) {
-                Some(reason) => unrepairable(&detail.artifact, reason),
-                None => bug(),
-            },
+            Some(Detail::Unrepairable(detail)) => {
+                unrepairable(&detail.artifact, detail.reason()).unwrap_or_else(bug)
+            }
             _ => bug(),
         },
         Code::SystemdNotReady => {

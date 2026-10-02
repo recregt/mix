@@ -12,63 +12,13 @@ pub(crate) mod error_kind {
 
     use serde::{Deserialize, Deserializer, Serializer};
 
-    pub(super) const KINDS: &[ErrorKind] = &[
-        ErrorKind::NotFound,
-        ErrorKind::PermissionDenied,
-        ErrorKind::ConnectionRefused,
-        ErrorKind::ConnectionReset,
-        ErrorKind::HostUnreachable,
-        ErrorKind::NetworkUnreachable,
-        ErrorKind::ConnectionAborted,
-        ErrorKind::NotConnected,
-        ErrorKind::AddrInUse,
-        ErrorKind::AddrNotAvailable,
-        ErrorKind::NetworkDown,
-        ErrorKind::BrokenPipe,
-        ErrorKind::AlreadyExists,
-        ErrorKind::WouldBlock,
-        ErrorKind::NotADirectory,
-        ErrorKind::IsADirectory,
-        ErrorKind::DirectoryNotEmpty,
-        ErrorKind::ReadOnlyFilesystem,
-        ErrorKind::StaleNetworkFileHandle,
-        ErrorKind::InvalidInput,
-        ErrorKind::InvalidData,
-        ErrorKind::TimedOut,
-        ErrorKind::WriteZero,
-        ErrorKind::StorageFull,
-        ErrorKind::NotSeekable,
-        ErrorKind::QuotaExceeded,
-        ErrorKind::FileTooLarge,
-        ErrorKind::ResourceBusy,
-        ErrorKind::ExecutableFileBusy,
-        ErrorKind::Deadlock,
-        ErrorKind::CrossesDevices,
-        ErrorKind::TooManyLinks,
-        ErrorKind::InvalidFilename,
-        ErrorKind::ArgumentListTooLong,
-        ErrorKind::Interrupted,
-        ErrorKind::Unsupported,
-        ErrorKind::UnexpectedEof,
-        ErrorKind::OutOfMemory,
-        ErrorKind::Other,
-    ];
-
     pub fn serialize<S: Serializer>(kind: &ErrorKind, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(&format_args!("{kind:?}"))
+        serializer.collect_str(&mix_events::io_kind::name(*kind))
     }
 
     pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<ErrorKind, D::Error> {
         let name = String::deserialize(deserializer)?;
-        Ok(named(&name))
-    }
-
-    pub fn named(name: &str) -> ErrorKind {
-        KINDS
-            .iter()
-            .copied()
-            .find(|kind| format!("{kind:?}") == name)
-            .unwrap_or(ErrorKind::Other)
+        Ok(mix_events::io_kind::named(&name))
     }
 }
 
@@ -465,7 +415,7 @@ mod tests {
 
     #[test]
     fn every_io_error_kind_survives_serialization() {
-        for kind in error_kind::KINDS {
+        for kind in mix_events::io_kind::KINDS {
             let failure = Failure::Io {
                 path: "/home/alice".into(),
                 kind: *kind,

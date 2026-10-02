@@ -134,16 +134,11 @@ impl Diagnostic {
     }
 }
 
-pub fn restored(source: mix_core::change::Source) -> Option<Diagnostic> {
-    match source {
-        mix_core::change::Source::File | mix_core::change::Source::Generation => None,
-        mix_core::change::Source::Fresh => Some(
-            Diagnostic::new(phrase!(
-                "your package list was damaged and couldn't be recovered, so it was reset"
-            ))
-            .help(help!("reinstall your packages with `mix install`")),
-        ),
-    }
+pub fn reset() -> Diagnostic {
+    Diagnostic::new(phrase!(
+        "your package list was damaged and couldn't be recovered, so it was reset"
+    ))
+    .help(help!("reinstall your packages with `mix install`"))
 }
 
 fn unworded(code: mix_events::v1::Code) -> bool {
@@ -187,7 +182,9 @@ pub fn failed(action: &dyn Display) -> Diagnostic {
 }
 
 pub(crate) fn bug() -> Diagnostic {
-    Diagnostic::new(phrase!("something went wrong inside `mix`")).help(help!(
-        "report this bug at https://github.com/recregt/mix/issues"
-    ))
+    Diagnostic::new(phrase!("something went wrong inside `mix`")).help(report_a_bug())
+}
+
+pub(crate) fn report_a_bug() -> Help {
+    help!("report this bug at https://github.com/recregt/mix/issues")
 }

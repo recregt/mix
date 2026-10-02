@@ -264,9 +264,11 @@ mod tests {
             }),
             Progress::Substitution(SubstitutionStarted {
                 path: "/nix/store/xl1h9i29pgq2q5cszjhm5wpfxfbbqwyi-glibc-2.40".into(),
+                name: "glibc-2.40".into(),
             }),
             Progress::Build(BuildStarted {
                 derivation: "/nix/store/bbx79xgf89bvd25i1sivdcykhy39bz14-hello-2.12.drv".into(),
+                name: "hello-2.12".into(),
             }),
             Progress::Builds(Builds {
                 builds_done: 1,
@@ -498,6 +500,37 @@ mod tests {
         outbox.drain()
     }
 
+    fn drift(target: &str) -> Option<mix_core::health::Drift> {
+        let hunk = |found_line, found: &[&str], expected: &[&str]| mix_core::health::Hunk {
+            found_line,
+            found: found.iter().map(|line| line.to_string()).collect(),
+            expected: expected.iter().map(|line| line.to_string()).collect(),
+        };
+        let (path, hunks) = match target {
+            "nix-daemon.service" => (
+                "/etc/systemd/system/nix-daemon.service",
+                vec![hunk(18, &["Nice=10"], &[])],
+            ),
+            "/etc/nix/nix.conf" => (
+                "/etc/nix/nix.conf",
+                vec![
+                    hunk(
+                        1,
+                        &["build-users-group = nixbuild"],
+                        &["build-users-group = nixbld"],
+                    ),
+                    hunk(3, &[], &["max-jobs = auto"]),
+                    hunk(4, &["trusted-users = ciuser"], &[]),
+                ],
+            ),
+            _ => return None,
+        };
+        Some(mix_core::health::Drift {
+            path: path.into(),
+            hunks,
+        })
+    }
+
     fn doctored(findings: &[(&str, Option<mix_core::health::Finding>)]) -> Vec<Envelope> {
         let outbox = Arc::new(Outbox::new("01920000-0000-7000-8000-000000000005", || {}));
         let mut tree = Tree::new(
@@ -515,45 +548,13 @@ mod tests {
         let result = mix_events::v1::DoctorResult {
             reports: findings
                 .iter()
-                .map(|(target, finding)| mix_events::v1::InspectionReport {
-                    target: (*target).into(),
-                    category: mix_events::v1::Category::Filesystem as i32,
-                    finding: finding.map(mix_core::health::wire::finding),
-                    drift: match *target {
-                        "nix-daemon.service" => {
-                            Some(mix_core::health::wire::drift(&mix_core::health::Drift {
-                                path: "/etc/systemd/system/nix-daemon.service".into(),
-                                hunks: vec![mix_core::health::Hunk {
-                                    found_line: 18,
-                                    found: vec!["Nice=10".into()],
-                                    expected: vec![],
-                                }],
-                            }))
-                        }
-                        "/etc/nix/nix.conf" => Some({
-                            mix_core::health::wire::drift(&mix_core::health::Drift {
-                                path: "/etc/nix/nix.conf".into(),
-                                hunks: vec![
-                                    mix_core::health::Hunk {
-                                        found_line: 1,
-                                        found: vec!["build-users-group = nixbuild".into()],
-                                        expected: vec!["build-users-group = nixbld".into()],
-                                    },
-                                    mix_core::health::Hunk {
-                                        found_line: 3,
-                                        found: vec![],
-                                        expected: vec!["max-jobs = auto".into()],
-                                    },
-                                    mix_core::health::Hunk {
-                                        found_line: 4,
-                                        found: vec!["trusted-users = ciuser".into()],
-                                        expected: vec![],
-                                    },
-                                ],
-                            })
-                        }),
-                        _ => None,
-                    },
+                .map(|(target, finding)| {
+                    mix_core::health::wire::report(&mix_core::health::HealthReport {
+                        name: (*target).into(),
+                        category: mix_core::Category::Filesystem,
+                        finding: *finding,
+                        drift: drift(target),
+                    })
                 })
                 .collect(),
         };

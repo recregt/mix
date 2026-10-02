@@ -1,6 +1,7 @@
 use std::fmt::{self, Display};
 
 use mix_events::Fault;
+use mix_events::mirror::Mirror;
 use mix_events::v1::command::Request;
 use mix_events::v1::{
     BootstrapRequest, CleanRequest, Code, DoctorRequest, InstallRequest, RemoveRequest,
@@ -102,12 +103,11 @@ pub fn stopping(request: &Request) -> Option<Note> {
 
 pub fn refused(request: &Request) -> Option<Fault> {
     match request {
-        Request::Bootstrap(bootstrap) => mix_core::policy::Policy::new(
-            bootstrap.mirror.as_deref(),
-            bootstrap.mirror_key.as_deref(),
-        )
-        .err()
-        .map(|invalid| mix_core::diagnose::failed(Code::InvalidMirror, invalid.to_string(), None)),
+        Request::Bootstrap(bootstrap) => {
+            Mirror::given(bootstrap.mirror.as_deref(), bootstrap.mirror_key.as_deref())
+                .err()
+                .map(|invalid| Fault::failed(Code::InvalidMirror, invalid.to_string(), None))
+        }
         Request::Install(_)
         | Request::Remove(_)
         | Request::Clean(_)
