@@ -231,10 +231,6 @@ pub fn status_to(out: &dyn Out, status: Status, subject: &str) {
     out.line(&status_line(status, subject, out.colours()));
 }
 
-pub fn status(status: Status, subject: &str) {
-    status_to(&Stderr, status, subject);
-}
-
 pub fn output_lines(text: &str) -> impl Iterator<Item = String> + '_ {
     text.lines().map(output_line)
 }

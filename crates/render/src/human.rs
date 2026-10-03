@@ -109,7 +109,8 @@ impl Human {
         self
     }
 
-    pub fn at(&mut self, offset: Duration) {
+    #[cfg(test)]
+    pub(crate) fn at(&mut self, offset: Duration) {
         self.recorded = Some(offset);
     }
 

@@ -4,7 +4,6 @@ use mix_events::v1::command::Request;
 pub enum Need {
     Nothing,
     Exclusive,
-    Shared,
     SharedForUser,
 }
 

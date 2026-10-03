@@ -91,12 +91,22 @@ async fn shared_holders_hold_together_and_an_exclusive_one_waits_for_both() {
     let locks = Arc::new(Locks::new(lock_in(&dir)));
     let mut first = request();
     let mut second = request();
-    let a = acquire(&locks, &mut first, holder(1, "install"), Need::Shared)
-        .await
-        .unwrap();
-    let b = acquire(&locks, &mut second, holder(2, "install"), Need::Shared)
-        .await
-        .unwrap();
+    let a = acquire(
+        &locks,
+        &mut first,
+        holder(1, "install"),
+        Need::SharedForUser,
+    )
+    .await
+    .unwrap();
+    let b = acquire(
+        &locks,
+        &mut second,
+        holder(2, "install"),
+        Need::SharedForUser,
+    )
+    .await
+    .unwrap();
     assert!(waits(&first.outbox).is_empty() && waits(&second.outbox).is_empty());
 
     let mut third = request();
@@ -175,7 +185,13 @@ async fn a_cancelled_waiter_leaves_the_lock_free_for_the_next_request() {
     let shared = Arc::clone(&locks);
     let cancelled = tokio::spawn(async move {
         matches!(
-            acquire(&shared, &mut waiting, holder(1, "install"), Need::Shared).await,
+            acquire(
+                &shared,
+                &mut waiting,
+                holder(1, "install"),
+                Need::SharedForUser
+            )
+            .await,
             Err(Blocked::Stopped(_))
         )
     });
@@ -221,10 +237,15 @@ async fn another_process_reads_the_exclusive_holder_from_the_lock_file() {
     let outbox = Arc::clone(&waiting.outbox);
     let shared = Arc::clone(&one_shot);
     let task = tokio::spawn(async move {
-        acquire(&shared, &mut waiting, holder(1, "install"), Need::Shared)
-            .await
-            .map(drop)
-            .is_ok()
+        acquire(
+            &shared,
+            &mut waiting,
+            holder(1, "install"),
+            Need::SharedForUser,
+        )
+        .await
+        .map(drop)
+        .is_ok()
     });
     let wait = until_waiting(&outbox).await;
     assert_eq!(wait.holder.as_deref(), Some("user0"));
