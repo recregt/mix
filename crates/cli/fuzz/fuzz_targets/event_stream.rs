@@ -3,10 +3,10 @@
 use libfuzzer_sys::fuzz_target;
 use std::sync::Arc;
 
-use mix_cli::render::human::Human;
+use mix_cli::output::human::Human;
 use mix_events::Normalize;
 use mix_events::v1::Envelope;
-use mix_shell::render::Render;
+use mix_events::Render;
 use prost::Message;
 
 fn consume(envelopes: &[Envelope]) {

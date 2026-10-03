@@ -5,10 +5,13 @@ edition = "2024"
 authors = ["Ömer Tekin"]
 license = "MPL-2.0"
 
+[[bin]]
+name = "mix"
+path = "src/main.rs"
+
 [dependencies]
+uuid = { version = "1.26.1", features = ["v7"] }
 thiserror = { workspace = true }
-mix-shell = { path = "../shell" }
-mix-core = { path = "../core" }
 mix-exec = { path = "../exec" }
 mix-rpc = { path = "../rpc" }
 mix-ui = { path = "../ui" }
@@ -18,14 +21,16 @@ futures-util = { workspace = true }
 nix = { workspace = true, features = ["signal"] }
 tokio = { workspace = true, features = ["signal"] }
 mix-events = { path = "../events" }
+mix-explain = { path = "../explain" }
 pbjson-types = "0.9.0"
 serde_json = { workspace = true }
 
 [dev-dependencies]
+mix-core = { path = "../core" }
+mix-shell = { path = "../shell" }
 mix-nixgen = { path = "../nixgen" }
 divan = { workspace = true }
 tempfile = { workspace = true }
 
-[[bench]]
-name = "explain"
-harness = false
+[lints]
+workspace = true

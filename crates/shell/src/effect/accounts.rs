@@ -1,4 +1,4 @@
-use mix_core::privilege::InvokingUser;
+use mix_core::identity::InvokingUser;
 
 pub fn is_root() -> bool {
     nix::unistd::Uid::effective().is_root()
@@ -51,22 +51,6 @@ fn usable(name: &str, home: &std::path::Path) -> bool {
     !name.contains('"') && home.is_absolute() && home.to_str().is_some()
 }
 
-pub fn group_exists(name: &str) -> bool {
-    nix::unistd::Group::from_name(name).ok().flatten().is_some()
-}
-
-/// The gid the group carries, or `None` when there is no such group.
-pub fn group_gid(name: &str) -> Option<u32> {
-    nix::unistd::Group::from_name(name)
-        .ok()
-        .flatten()
-        .map(|group| group.gid.as_raw())
-}
-
-pub fn group_has_gid(name: &str, gid: u32) -> bool {
-    group_gid(name) == Some(gid)
-}
-
 pub fn user_in_group(name: &str, user: &InvokingUser) -> bool {
     nix::unistd::Group::from_name(name)
         .ok()
@@ -83,33 +67,6 @@ pub fn group_has_member(name: &str, user: &str) -> bool {
             .ok()
             .flatten()
             .is_some_and(|resolved| resolved.gid == group.gid)
-}
-
-pub fn user_exists(name: &str) -> bool {
-    nix::unistd::User::from_name(name).ok().flatten().is_some()
-}
-
-/// The uid and gid the user carries, or `None` when there is no such user.
-///
-/// One lookup for both: a caller that wants to say what it found rather than only whether it
-/// matched needs the pair anyway.
-pub fn user_ids(name: &str) -> Option<(u32, u32)> {
-    nix::unistd::User::from_name(name)
-        .ok()
-        .flatten()
-        .map(|user| (user.uid.as_raw(), user.gid.as_raw()))
-}
-
-pub fn user_has_gid(name: &str, gid: u32) -> bool {
-    user_ids(name).is_some_and(|(_, actual)| actual == gid)
-}
-
-pub fn user_has_uid(name: &str, uid: u32) -> bool {
-    user_ids(name).is_some_and(|(actual, _)| actual == uid)
-}
-
-pub fn user_matches(name: &str, uid: u32, gid: u32) -> bool {
-    user_ids(name) == Some((uid, gid))
 }
 
 #[cfg(test)]
@@ -202,52 +159,6 @@ mod tests {
 
         assert!(invoking_user_from(|key| env.get(key).cloned()).is_none());
     }
-
-    #[test]
-    fn group_exists_true_for_a_known_system_group() {
-        assert!(group_exists("root"));
-    }
-
-    #[test]
-    fn group_exists_false_for_a_nonexistent_group() {
-        assert!(!group_exists("mix-test-nonexistent-group-xyz"));
-    }
-
-    #[test]
-    fn group_gid_reports_the_gid_a_known_system_group_carries() {
-        assert_eq!(group_gid("root"), Some(0));
-    }
-
-    #[test]
-    fn group_gid_is_none_for_a_nonexistent_group() {
-        assert_eq!(group_gid("mix-test-nonexistent-group-xyz"), None);
-    }
-
-    #[test]
-    fn user_ids_reports_both_ids_of_a_known_system_user() {
-        assert_eq!(user_ids("root"), Some((0, 0)));
-    }
-
-    #[test]
-    fn user_ids_is_none_for_a_nonexistent_user() {
-        assert_eq!(user_ids("mix-test-nonexistent-user-xyz"), None);
-    }
-
-    #[test]
-    fn group_has_gid_true_for_a_known_system_group() {
-        assert!(group_has_gid("root", 0));
-    }
-
-    #[test]
-    fn group_has_gid_false_for_the_wrong_gid() {
-        assert!(!group_has_gid("root", 9999));
-    }
-
-    #[test]
-    fn group_has_gid_false_for_a_nonexistent_group() {
-        assert!(!group_has_gid("mix-test-nonexistent-group-xyz", 0));
-    }
-
     #[test]
     fn group_has_member_counts_a_primary_group_as_membership() {
         assert!(group_has_member("root", "root"));
@@ -273,55 +184,5 @@ mod tests {
     #[test]
     fn group_has_member_false_for_a_nonexistent_group() {
         assert!(!group_has_member("mix-test-nonexistent-group-xyz", "root"));
-    }
-
-    #[test]
-    fn user_exists_true_for_a_known_system_user() {
-        assert!(user_exists("root"));
-    }
-
-    #[test]
-    fn user_exists_false_for_a_nonexistent_user() {
-        assert!(!user_exists("mix-test-nonexistent-user-xyz"));
-    }
-
-    #[test]
-    fn user_has_gid_true_for_a_known_system_user() {
-        assert!(user_has_gid("root", 0));
-    }
-
-    #[test]
-    fn user_has_gid_false_for_a_nonexistent_user() {
-        assert!(!user_has_gid("mix-test-nonexistent-user-xyz", 0));
-    }
-
-    #[test]
-    fn user_has_uid_true_for_a_known_system_user() {
-        assert!(user_has_uid("root", 0));
-    }
-
-    #[test]
-    fn user_has_uid_false_for_a_nonexistent_user() {
-        assert!(!user_has_uid("mix-test-nonexistent-user-xyz", 0));
-    }
-
-    #[test]
-    fn user_matches_true_for_a_known_system_user() {
-        assert!(user_matches("root", 0, 0));
-    }
-
-    #[test]
-    fn user_matches_false_for_the_wrong_uid() {
-        assert!(!user_matches("root", 1, 0));
-    }
-
-    #[test]
-    fn user_matches_false_for_the_wrong_gid() {
-        assert!(!user_matches("root", 0, 1));
-    }
-
-    #[test]
-    fn user_matches_false_for_a_nonexistent_user() {
-        assert!(!user_matches("mix-test-nonexistent-user-xyz", 0, 0));
     }
 }

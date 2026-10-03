@@ -5,9 +5,9 @@ use mix_events::v1::{Cancellation, Command, NotRunReason, Status};
 use mix_events::{Ending, Outbox, Outcome as EventOutcome, ROOT, Start, Tree, validate};
 
 use super::*;
-use crate::model::World;
+use crate::identity::InvokingUser;
 use crate::plan::{Input, Next, Report, Runner, Verdict, diagnostic, make_guard};
-use crate::privilege::InvokingUser;
+use crate::world::World;
 
 fn settings(user: Option<UserConfig>, force: bool) -> Settings {
     Settings {

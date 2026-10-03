@@ -11,7 +11,6 @@ fn every_error() -> Vec<Error> {
         Error::Io { .. }
         | Error::Command { .. }
         | Error::Exec { .. }
-        | Error::TaskPanicked(_)
         | Error::Cancelled { .. }
         | Error::LockMissing { .. } => {}
     };
@@ -28,7 +27,6 @@ fn every_error() -> Vec<Error> {
             command: "nix".into(),
             source: ErrorKind::NotFound.into(),
         },
-        Error::TaskPanicked("boom".into()),
         Error::Cancelled {
             command: "mix install".into(),
         },
@@ -104,7 +102,6 @@ fn every_failure() -> Vec<Failure> {
 fn every_core_error_has_a_code_unless_it_is_internal_or_an_interruption() {
     for error in every_error() {
         match (&error, error.fault()) {
-            (Error::TaskPanicked(_), fault) => assert_eq!(fault.code(), Some(Code::Internal)),
             (Error::Cancelled { .. }, fault) => {
                 assert_eq!(
                     fault,
@@ -173,7 +170,7 @@ fn an_unrepairable_artifact_carries_its_reason() {
         diagnostic.detail,
         Some(Detail::Unrepairable(UnrepairableDetail {
             artifact: "/nix/store".into(),
-            reason: WireUnfixable::MissingRuntime as i32,
+            reason: mix_events::v1::Unfixable::MissingRuntime as i32,
         }))
     );
 }

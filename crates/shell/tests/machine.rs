@@ -6,14 +6,14 @@ use mix_core::action::{
     Action, Expect, Fact, Kind as PathKind, Owner, PathFacts, ProfileFacts, Query, UserSpec,
     rollback_order,
 };
+use mix_core::identity::InvokingUser;
 use mix_core::identity::{NIXBLD_GID, NIXBLD_GROUP, NIXBLD_HOME, NIXBLD_SHELL, NIXBLD_UID_BASE};
-use mix_core::model::{Profile, World};
 use mix_core::paths::{
     DEFAULT_PROFILE_NIX_ENV, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, NIX_DAEMON_SERVICE_SRC,
     NIX_DAEMON_SOCKET_SRC, NIX_TREE_MODE, NIX_TREE_PATHS, POLICY_FILE, STATE_FILE, mix_state_dir,
 };
 use mix_core::policy::Policy;
-use mix_core::privilege::InvokingUser;
+use mix_core::world::{Profile, World};
 use mix_exec::Scope;
 use mix_shell::HostConfig;
 use mix_shell::drive::Performer;

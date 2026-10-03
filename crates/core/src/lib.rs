@@ -1,28 +1,26 @@
 pub mod action;
 pub mod bootstrap;
-pub mod build_graph;
 pub mod change;
-pub mod constants;
 pub mod diagnose;
 pub mod error;
 pub mod health;
+pub mod identity;
 pub mod journal;
 pub mod locks;
-#[cfg(any(test, feature = "model"))]
-pub mod model;
-pub mod models;
 pub mod nix_log;
+pub mod paths;
 pub mod plan;
 pub mod policy;
-pub mod privilege;
 pub mod progress;
 pub mod state;
 pub mod system;
+pub mod targets;
 pub mod trace;
 pub mod vocabulary;
+#[cfg(any(test, feature = "world"))]
+pub mod world;
 
-pub use constants::{identity, paths};
 pub use error::{Error, Result};
-pub use models::{Category, Target};
 pub use nix_log::{BuildProgress, NixLog};
 pub use progress::{ActivityReporter, DownloadProgress, NoopActivity, NoopProgress};
+pub use targets::{Category, Target};

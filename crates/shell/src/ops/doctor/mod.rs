@@ -1,17 +1,13 @@
-//! The audit behind `mix doctor`: every declared target inspected, once each.
-//!
-//! What was measured travels as a [`Finding`](crate::target::Finding) — the mode that was read
-//! and the mode that was wanted, the ids an account carries, the unit file that is not there.
-//! The measuring itself belongs to [`crate::target`], which `mix repair` reconciles from, so the
-//! two commands cannot drift apart. The words are `mix-cli`'s.
+//! `mix doctor` checks every declared target, the system's and the caller's, against what
+//! it should be, and reports what it finds. `mix repair` uses the same checks to fix those
+//! targets. Because both rely on the same logic, detection and repair never go out of sync.
 
 use std::path::Path;
 
 use mix_core::action::Failure;
-use mix_core::health::{self, Drift, wire};
-use mix_core::models::Category;
+use mix_core::health::{self, wire};
 use mix_events::v1::{
-    DoctorResult, Inspection, InspectionReport, InspectionResult, Plan, node_finished, node_started,
+    DoctorResult, Inspection, InspectionResult, Plan, node_finished, node_started,
 };
 use mix_events::{Ending, ROOT, Start};
 
@@ -21,21 +17,10 @@ use crate::effect::files::Files;
 use crate::request::{Concluded, Root};
 use crate::target::Finding;
 
-pub struct HealthReport {
-    pub name: String,
-    pub category: Category,
-    pub finding: Option<Finding>,
-    pub drift: Option<Drift>,
-}
-
-impl HealthReport {
-    pub fn healthy(&self) -> bool {
-        self.finding.is_none()
-    }
-}
+pub use mix_core::health::HealthReport;
 
 pub(crate) async fn audit(ctx: &Context, root: &mut Root) -> Concluded<Vec<HealthReport>> {
-    let items = mix_core::models::targets(ctx.user.as_ref(), &ctx.policy);
+    let items = mix_core::targets::targets(ctx.user.as_ref(), &ctx.policy);
     let tree = &mut root.tree;
     let plan = tree
         .start(
@@ -91,15 +76,7 @@ pub(crate) async fn audit(ctx: &Context, root: &mut Root) -> Concluded<Vec<Healt
         });
     }
     let result = DoctorResult {
-        reports: reports
-            .iter()
-            .map(|report| InspectionReport {
-                target: report.name.clone(),
-                category: wire::category(report.category) as i32,
-                finding: report.finding.map(wire::finding),
-                drift: report.drift.as_ref().map(wire::drift),
-            })
-            .collect(),
+        reports: reports.iter().map(wire::report).collect(),
     };
     let _ = tree.finish(plan, Ending::succeeded());
     let healthy = reports.iter().all(HealthReport::healthy);
@@ -121,12 +98,12 @@ fn kind_of(failure: &Failure) -> std::io::ErrorKind {
 mod tests {
     use std::path::PathBuf;
 
-    use mix_core::privilege::InvokingUser;
+    use mix_core::identity::InvokingUser;
 
     use super::*;
 
-    fn user_config() -> mix_core::models::UserConfig {
-        mix_core::models::UserConfig {
+    fn user_config() -> mix_core::targets::UserConfig {
+        mix_core::targets::UserConfig {
             user: InvokingUser {
                 uid: 1000,
                 gid: 1000,
@@ -150,7 +127,7 @@ mod tests {
         let reports = crate::request::doctor(&session()).await;
         assert_eq!(
             reports.len(),
-            mix_core::models::targets(None, &mix_core::policy::Policy::default()).len()
+            mix_core::targets::targets(None, &mix_core::policy::Policy::default()).len()
         );
     }
 
@@ -162,7 +139,7 @@ mod tests {
 
         assert_eq!(
             reports.len(),
-            mix_core::models::targets(Some(&cfg), &mix_core::policy::Policy::default()).len(),
+            mix_core::targets::targets(Some(&cfg), &mix_core::policy::Policy::default()).len(),
             "every target of the injected config must be reported"
         );
         assert!(reports.len() > crate::request::doctor(&session()).await.len());
@@ -184,7 +161,7 @@ mod tests {
 
     struct Recorded(std::sync::Arc<std::sync::Mutex<Vec<mix_events::v1::Envelope>>>);
 
-    impl crate::render::Render for Recorded {
+    impl crate::request::sink::Render for Recorded {
         fn envelope(&mut self, envelope: mix_events::v1::Envelope) {
             self.0.lock().unwrap().push(envelope);
         }

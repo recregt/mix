@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mix_core::action::{Action, Expect, Fact, FileId, Owner, PathFacts, Query, rollback_order};
-use mix_core::model::{Content, World};
+use mix_core::world::{Content, World};
 use mix_exec::Scope;
 use mix_shell::drive::Performer;
 use mix_shell::effect::files::Files;

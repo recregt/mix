@@ -9,9 +9,16 @@ pre-commit:
     fmt:
       glob: "*.rs"
       run: cargo fmt --all -- --check
+    dependencies:
+      glob: "{Cargo.toml,Cargo.lock,**/Cargo.toml}"
+      run: scripts/check_dependencies.py
 
 pre-push:
   commands:
+    doc:
+      run: cargo doc --workspace --no-deps --document-private-items --locked
+      env:
+        RUSTDOCFLAGS: -D warnings
     clippy:
       run: cargo clippy --workspace --all-targets --locked -- -D warnings
     test:

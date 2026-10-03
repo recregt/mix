@@ -39,7 +39,7 @@ def require(tool: str) -> None:
 
 def build_mix() -> None:
     step("building mix (release)")
-    subprocess.run(["cargo", "build", "--release", "-p", "mix-bin", "-p", "mix-daemon"], cwd=REPO_ROOT, check=True)
+    subprocess.run(["cargo", "build", "--release", "-p", "mix-cli", "-p", "mix-daemon"], cwd=REPO_ROOT, check=True)
 
 
 def resolve_image(requested: str | None) -> str:

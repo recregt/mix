@@ -8,7 +8,7 @@ use proptest::prelude::*;
 
 use super::*;
 use crate::action::{Expect, Kind as PathKind};
-use crate::model::World;
+use crate::world::World;
 
 struct EnsureDir {
     key: &'static str,

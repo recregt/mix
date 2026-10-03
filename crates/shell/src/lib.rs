@@ -5,21 +5,16 @@
 //! reconciled. [`effect`] holds everything that reaches the system: accounts, files, processes,
 //! git, systemd, the mirror and the lock.
 
-mod context;
-
 pub mod diagnose;
 pub mod drive;
 
 pub mod effect;
-pub mod lock;
 pub mod ops;
 pub mod profile;
-pub mod render;
 pub mod request;
-pub mod root;
 pub mod target;
 
-pub use context::{Context, HostConfig, Request, request_id};
+pub use request::context::{Context, HostConfig, Request, request_id};
 pub use request::{Caller, Session};
 
 #[doc(hidden)]

@@ -5,7 +5,7 @@ error[E0423]: cannot initialize a tuple struct which contains private fields
    |                    ^^^^^^
    |
 note: constructor is not visible here due to private fields
-  --> src/plan.rs
+  --> src/plan/mod.rs
    |
    | pub struct Closed<'id>(Id<'id>);
    |                        ^^^^^^^ private field

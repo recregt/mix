@@ -2,8 +2,8 @@ use std::path::Path;
 
 use mix_core::action::Failure;
 use mix_core::change::{Change, NewerList, Unrenderable};
-use mix_core::models::UserConfig;
 use mix_core::plan::{Runner, StepSpec, Verdict, diagnostic};
+use mix_core::targets::UserConfig;
 use mix_events::v1::{InstallResult, RemoveResult, node_finished};
 use mix_events::{Ending, ROOT};
 
@@ -194,4 +194,34 @@ fn error_of(failure: Failure) -> Error {
             detail: diagnostic(&other).message,
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use mix_core::state::StateManifest;
+
+    use super::*;
+
+    fn restored(source: Source) -> bool {
+        let change = Change {
+            changed: vec!["ripgrep".to_string()],
+            skipped: Vec::new(),
+            manifest: StateManifest::seed(),
+            source,
+        };
+        match (Verb::Install.result(&change), Verb::Remove.result(&change)) {
+            (node_finished::Result::Install(install), node_finished::Result::Remove(remove)) => {
+                assert_eq!(install.restored, remove.restored);
+                install.restored
+            }
+            other => panic!("expected an install and a remove result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn only_a_package_list_that_could_not_be_recovered_is_reported_as_reset() {
+        assert!(!restored(Source::File));
+        assert!(!restored(Source::Generation));
+        assert!(restored(Source::Fresh));
+    }
 }

@@ -30,7 +30,8 @@ impl ProcessSet {
         self.signal(Signal::SIGCONT);
     }
 
-    pub fn same_set(&self, other: &ProcessSet) -> bool {
+    #[cfg(test)]
+    pub(crate) fn same_set(&self, other: &ProcessSet) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
 }

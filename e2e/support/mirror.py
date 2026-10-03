@@ -6,7 +6,6 @@ import json
 import os
 import pathlib
 import re
-import shlex
 import shutil
 import socket
 import subprocess
@@ -365,26 +364,6 @@ def mirror_args(mock_nix_server, mirror_cache):
 
 
 @contextlib.contextmanager
-def policy_mirror(container, url: str):
-    """Points the machine's policy at another mirror for the duration, as an administrator would."""
-    before = container.exec("cat", POLICY_FILE, check=True).stdout
-    policy = json.loads(before)
-    policy["mirror"]["url"] = url
-    container.exec(
-        "bash",
-        "-c",
-        f"printf '%s' {shlex.quote(json.dumps(policy))} > {POLICY_FILE}",
-        check=True,
-    )
-    try:
-        yield
-    finally:
-        container.exec(
-            "bash",
-            "-c",
-            f"printf '%s' {shlex.quote(before)} > {POLICY_FILE}",
-            check=True,
-        )
 
 
 def bootstrap_root(container, mock_nix_server):

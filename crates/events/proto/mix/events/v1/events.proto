@@ -317,6 +317,7 @@ message Stopping {
 
 message BuildStarted {
   string derivation = 1;
+  string name = 2;
 }
 
 message CommandStarted {
@@ -329,6 +330,7 @@ message FetchStarted {
 
 message SubstitutionStarted {
   string path = 1;
+  string name = 2;
 }
 
 message Bytes {
@@ -396,7 +398,9 @@ message ProcessResult {
   optional int32 signal = 2;
 }
 
-message BootstrapResult {}
+message BootstrapResult {
+  string profile_snippet = 1;
+}
 
 message InstallResult {
   repeated string added = 1;
@@ -434,6 +438,7 @@ message InspectionReport {
   Category category = 2;
   Finding finding = 3;
   Drift drift = 4;
+  Unfixable unfixable = 5;
 }
 
 message InspectionResult {

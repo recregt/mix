@@ -61,13 +61,6 @@ pub struct BuildProgress {
     pub bytes_expected: u64,
 }
 
-impl BuildProgress {
-    /// Whether there is nothing to draw yet: no counter has moved off zero.
-    pub fn is_idle(&self) -> bool {
-        *self == Self::default()
-    }
-}
-
 /// What a record means to whoever is drawing the screen.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Event<'a> {
@@ -646,7 +639,7 @@ mod tests {
             event,
             Event::Transient(Cow::Borrowed("building '/nix/store/x.drv'"))
         );
-        assert!(log.snapshot().is_idle());
+        assert_eq!(log.snapshot(), BuildProgress::default());
     }
 
     #[test]
@@ -751,7 +744,7 @@ mod tests {
 
     #[test]
     fn nothing_is_drawn_before_the_first_counter_moves() {
-        assert!(NixLog::new().snapshot().is_idle());
+        assert_eq!(NixLog::new().snapshot(), BuildProgress::default());
     }
 
     #[test]
@@ -765,7 +758,7 @@ mod tests {
         assert_eq!(snapshot.builds_done, 3);
         assert_eq!(snapshot.builds_expected, 17);
         assert_eq!(snapshot.builds_running, 2);
-        assert!(!snapshot.is_idle());
+        assert_ne!(snapshot, BuildProgress::default());
     }
 
     #[test]
@@ -821,7 +814,7 @@ mod tests {
     fn progress_for_an_unknown_activity_is_ignored() {
         let mut log = NixLog::new();
         assert_eq!(log.observe(&progress(404, 1, 2, 0)), Event::Ignored);
-        assert!(log.snapshot().is_idle());
+        assert_eq!(log.snapshot(), BuildProgress::default());
     }
 
     #[test]

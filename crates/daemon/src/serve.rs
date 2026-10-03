@@ -74,3 +74,14 @@ pub async fn serve() -> ExitCode {
         Some(reason) => stopped(reason),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_installed_socket_listens_where_the_client_dials() {
+        assert!(
+            mix_core::targets::MIX_DAEMON_SOCKET
+                .contains(&format!("ListenStream={}\n", mix_rpc::SOCKET_PATH))
+        );
+    }
+}

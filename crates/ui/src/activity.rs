@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use mix_core::BuildProgress;
+use mix_events::v1::Builds;
 
 pub fn printable(raw: &str) -> Cow<'_, str> {
     if !raw.bytes().any(|byte| byte.is_ascii_control()) {
@@ -50,7 +50,7 @@ pub enum Phase {
 
 /// Which of nix's two kinds of work the live line shows: downloads while any are left, then
 /// builds, so one bar never switches between two counters.
-pub fn phase(progress: &BuildProgress) -> Option<(Phase, u64, u64)> {
+pub fn phase(progress: &Builds) -> Option<(Phase, u64, u64)> {
     if progress.downloads_expected > progress.downloads_done {
         Some((
             Phase::Fetching,
@@ -79,7 +79,7 @@ pub fn phase(progress: &BuildProgress) -> Option<(Phase, u64, u64)> {
 /// The numbers are written digit by digit into the caller's buffer, so a drawn frame does no
 /// formatting and, once the buffer has been used once, no allocation either. A counter is padded
 /// to the width of its total and both byte counts share one unit, so the text keeps its shape.
-pub fn write_progress(out: &mut String, progress: &BuildProgress, item: &str) {
+pub fn write_progress(out: &mut String, progress: &Builds, item: &str) {
     let Some((phase, done, expected)) = phase(progress) else {
         return;
     };
@@ -97,12 +97,6 @@ pub fn write_progress(out: &mut String, progress: &BuildProgress, item: &str) {
 pub fn render_bytes(done: u64, total: u64) -> String {
     let mut out = String::with_capacity(24);
     write_bytes(&mut out, done, total);
-    out
-}
-
-pub fn render_progress(progress: &BuildProgress, item: &str) -> String {
-    let mut out = String::with_capacity(64);
-    write_progress(&mut out, progress, item);
     out
 }
 
@@ -190,6 +184,12 @@ fn digits(value: u64) -> u32 {
 mod tests {
     use super::*;
 
+    fn render_progress(progress: &Builds, item: &str) -> String {
+        let mut out = String::new();
+        write_progress(&mut out, progress, item);
+        out
+    }
+
     #[test]
     fn a_plain_line_is_passed_through_without_copying() {
         let line = "copying path '/nix/store/abc-git-2.45.0'";
@@ -236,8 +236,8 @@ mod tests {
         assert_eq!(printable(&line).len(), 500);
     }
 
-    fn progress() -> BuildProgress {
-        BuildProgress {
+    fn progress() -> Builds {
+        Builds {
             builds_done: 3,
             builds_expected: 17,
             builds_running: 1,
@@ -255,7 +255,7 @@ mod tests {
             render_progress(&progress(), "hello-2.12.3"),
             "12/37, 48.2/91.0 MiB: hello-2.12.3"
         );
-        let fetched = BuildProgress {
+        let fetched = Builds {
             downloads_done: 37,
             ..progress()
         };
@@ -265,49 +265,49 @@ mod tests {
 
     #[test]
     fn a_build_only_snapshot_is_just_the_build_counter() {
-        let progress = BuildProgress {
+        let progress = Builds {
             builds_done: 1,
             builds_expected: 2,
-            ..BuildProgress::default()
+            ..Builds::default()
         };
         assert_eq!(render_progress(&progress, ""), "1/2");
     }
 
     #[test]
     fn nothing_is_drawn_before_nix_has_a_plan() {
-        assert_eq!(phase(&BuildProgress::default()), None);
-        assert_eq!(render_progress(&BuildProgress::default(), "x"), "");
+        assert_eq!(phase(&Builds::default()), None);
+        assert_eq!(render_progress(&Builds::default(), "x"), "");
     }
 
     #[test]
     fn small_byte_counts_stay_in_bytes() {
-        let progress = BuildProgress {
+        let progress = Builds {
             downloads_expected: 1,
             bytes_done: 12,
             bytes_expected: 900,
-            ..BuildProgress::default()
+            ..Builds::default()
         };
         assert_eq!(render_progress(&progress, ""), "0/1, 12/900 B");
     }
 
     #[test]
     fn a_byte_count_is_rounded_rather_than_truncated() {
-        let progress = BuildProgress {
+        let progress = Builds {
             downloads_expected: 1,
             bytes_done: 50_525_798,
             bytes_expected: 50_525_798,
-            ..BuildProgress::default()
+            ..Builds::default()
         };
         assert_eq!(render_progress(&progress, ""), "0/1, 48.2/48.2 MiB");
     }
 
     #[test]
     fn large_byte_counts_reach_gibibytes() {
-        let progress = BuildProgress {
+        let progress = Builds {
             downloads_expected: 1,
             bytes_done: 3_221_225_472,
             bytes_expected: 6_442_450_944,
-            ..BuildProgress::default()
+            ..Builds::default()
         };
         assert_eq!(render_progress(&progress, ""), "0/1, 3.0/6.0 GiB");
     }
@@ -316,10 +316,10 @@ mod tests {
     fn a_counter_keeps_its_width_as_it_rolls_over() {
         let at = |done| {
             render_progress(
-                &BuildProgress {
+                &Builds {
                     builds_done: done,
                     builds_expected: 120,
-                    ..BuildProgress::default()
+                    ..Builds::default()
                 },
                 "",
             )
@@ -331,11 +331,11 @@ mod tests {
 
     #[test]
     fn both_byte_counts_share_the_unit_of_the_larger_one() {
-        let progress = BuildProgress {
+        let progress = Builds {
             downloads_expected: 1,
             bytes_done: 900 * 1024,
             bytes_expected: 91 * 1024 * 1024,
-            ..BuildProgress::default()
+            ..Builds::default()
         };
         assert_eq!(render_progress(&progress, ""), "0/1, 0.9/91.0 MiB");
     }
@@ -351,6 +351,6 @@ mod tests {
 
     #[test]
     fn an_idle_snapshot_renders_nothing() {
-        assert!(render_progress(&BuildProgress::default(), "").is_empty());
+        assert!(render_progress(&Builds::default(), "").is_empty());
     }
 }

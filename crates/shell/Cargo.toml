@@ -12,6 +12,7 @@ embed-tarball = []
 machine-tests = []
 
 [dependencies]
+uuid = { version = "1.26.1", features = ["v7"] }
 mix-core = { path = "../core" }
 mix-events = { path = "../events" }
 mix-exec = { path = "../exec" }
@@ -29,7 +30,6 @@ tar = "0.4.46"
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-uuid = { version = "1.26.1", features = ["v7"] }
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 
 [build-dependencies]
@@ -38,7 +38,7 @@ sha2 = "0.11.0"
 
 [dev-dependencies]
 divan = { workspace = true }
-mix-core = { path = "../core", features = ["model"] }
+mix-core = { path = "../core", features = ["world"] }
 mockito = "=1.7.2"
 proptest = { workspace = true }
 
@@ -57,3 +57,6 @@ harness = false
 [[test]]
 name = "machine"
 required-features = ["machine-tests"]
+
+[lints]
+workspace = true

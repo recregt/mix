@@ -58,8 +58,8 @@ pub(crate) async fn install(
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod tests {
+    use mix_core::identity::InvokingUser;
     use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
-    use mix_core::privilege::InvokingUser;
     use mix_core::state::StateManifest;
 
     use crate::profile::change::Error;
@@ -79,8 +79,8 @@ mod tests {
         crate::Session::new(mix_exec::Scope::root()).with_user(Some(user_config(home)))
     }
 
-    fn user_config(home: &std::path::Path) -> mix_core::models::UserConfig {
-        mix_core::models::UserConfig {
+    fn user_config(home: &std::path::Path) -> mix_core::targets::UserConfig {
+        mix_core::targets::UserConfig {
             user: InvokingUser {
                 uid: 1000,
                 gid: 1000,

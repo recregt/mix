@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use mix_core::health;
 use mix_core::journal::Record;
-use mix_core::models::Target;
 use mix_core::plan::Runner;
+use mix_core::targets::Target;
 use mix_events::v1::Command;
 use mix_events::{Ending, Outbox, ROOT, Start, Tree};
 use mix_shell::drive::{Performer, drive};

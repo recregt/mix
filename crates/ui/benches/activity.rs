@@ -1,5 +1,5 @@
 use indicatif::{ProgressBar, ProgressDrawTarget, TermLike};
-use mix_core::BuildProgress;
+use mix_events::v1::Builds;
 use mix_ui::activity::{printable, write_progress};
 
 fn main() {
@@ -44,8 +44,8 @@ fn clean_a_wide_line(bencher: divan::Bencher) {
 }
 
 /// What nix reports part way through installing a package.
-fn counters() -> BuildProgress {
-    BuildProgress {
+fn counters() -> Builds {
+    Builds {
         builds_done: 3,
         builds_expected: 17,
         builds_running: 1,
