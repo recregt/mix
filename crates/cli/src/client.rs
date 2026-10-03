@@ -7,8 +7,8 @@ use mix_exec::Reason;
 use mix_rpc::{Client, Controller, Reply};
 use nix::sys::signal::Signal;
 
+use crate::controls::{Control, Terminal, Translator};
 use crate::request::Route;
-use crate::session::controls::{Control, Terminal, Translator};
 use mix_render::{Sinks, View};
 
 const LAUNCHER: &str = "sudo";
@@ -47,7 +47,7 @@ fn detach(view: &View) -> ! {
         mix_ui::note(&mix_render::words::detached(), None);
     }
     mix_ui::restore_terminal();
-    std::process::exit(i32::try_from(crate::session::controls::DETACHED_EXIT).unwrap_or(i32::MAX));
+    std::process::exit(i32::try_from(crate::controls::DETACHED_EXIT).unwrap_or(i32::MAX));
 }
 
 fn steer(controller: &Controller, control: Control, view: &View) -> bool {

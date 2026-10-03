@@ -1,4 +1,6 @@
 mod args;
+mod client;
+mod controls;
 mod request;
 mod session;
 
