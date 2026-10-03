@@ -15,7 +15,7 @@ use mix_events::{Diagnose, Ending, Fault, Outbox, ROOT, Start, Stopped, Tree};
 use mix_exec::Scope;
 
 use crate::drive::stopped_by;
-use crate::request::context::{Context, HostConfig};
+use crate::request::context::Context;
 use crate::request::lock::{Blocked, Holder, Locks};
 use crate::request::sink::{Render, Shared};
 use delivery::open;
@@ -40,7 +40,6 @@ pub enum Caller {
 pub struct Session {
     pub scope: Scope,
     pub render: Shared,
-    pub host: HostConfig,
     pub locks: Option<Arc<Locks>>,
     pub caller: Caller,
     pub policy: Option<Policy>,
@@ -51,7 +50,6 @@ impl Session {
         Self {
             scope,
             render: crate::request::sink::shared(crate::request::sink::Quiet),
-            host: HostConfig::default(),
             locks: None,
             caller: Caller::Fixed(None),
             policy: None,
@@ -60,11 +58,6 @@ impl Session {
 
     pub fn with_render(mut self, render: impl Render + 'static) -> Self {
         self.render = crate::request::sink::shared(render);
-        self
-    }
-
-    pub fn with_host(mut self, host: HostConfig) -> Self {
-        self.host = host;
         self
     }
 
@@ -227,7 +220,6 @@ async fn host(
         policy: policy
             .or_else(|| session.policy.clone())
             .unwrap_or_else(stored_policy),
-        host: session.host.clone(),
         render: Arc::clone(&session.render),
         locked,
     };

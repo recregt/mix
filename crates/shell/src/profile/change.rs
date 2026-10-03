@@ -121,7 +121,6 @@ pub async fn perform(
         };
         let mut performer = Performer::new(files).with_profile(ProfileContext {
             mirror: ctx.mirror().map(str::to_string),
-            host: ctx.host.clone(),
         });
         let mut runner = Runner::new(ROOT, steps);
         drive(

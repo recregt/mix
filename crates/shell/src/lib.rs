@@ -14,7 +14,7 @@ pub mod profile;
 pub mod request;
 pub mod target;
 
-pub use request::context::{Context, HostConfig, Request, request_id};
+pub use request::context::{Context, Request, request_id};
 pub use request::{Caller, Session};
 
 #[doc(hidden)]

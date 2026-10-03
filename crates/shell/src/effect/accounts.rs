@@ -4,19 +4,17 @@ pub fn is_root() -> bool {
     nix::unistd::Uid::effective().is_root()
 }
 
-pub fn invoking_user() -> Option<InvokingUser> {
-    resolve_invoking_user(is_root(), nix::unistd::Uid::current(), |key| {
-        std::env::var(key).ok()
-    })
+pub fn invoking_user(sudo_uid: Option<&str>) -> Option<InvokingUser> {
+    resolve_invoking_user(is_root(), nix::unistd::Uid::current(), sudo_uid)
 }
 
 fn resolve_invoking_user(
     is_root: bool,
     current: nix::unistd::Uid,
-    get: impl Fn(&str) -> Option<String>,
+    sudo_uid: Option<&str>,
 ) -> Option<InvokingUser> {
     if is_root {
-        invoking_user_from(get)
+        invoking_user_from(sudo_uid)
     } else {
         current_user(current)
     }
@@ -29,8 +27,8 @@ pub fn user_by_uid(uid: u32) -> Option<InvokingUser> {
     current_user(nix::unistd::Uid::from_raw(uid))
 }
 
-fn invoking_user_from(get: impl Fn(&str) -> Option<String>) -> Option<InvokingUser> {
-    let uid: u32 = get("SUDO_UID")?.parse().ok()?;
+fn invoking_user_from(sudo_uid: Option<&str>) -> Option<InvokingUser> {
+    let uid: u32 = sudo_uid?.parse().ok()?;
     current_user(nix::unistd::Uid::from_raw(uid))
 }
 
@@ -86,10 +84,7 @@ mod tests {
 
     #[test]
     fn invoking_user_from_resolves_a_known_uid() {
-        let mut env = std::collections::HashMap::new();
-        env.insert("SUDO_UID".to_string(), "0".to_string());
-
-        let user = invoking_user_from(|key| env.get(key).cloned()).unwrap();
+        let user = invoking_user_from(Some("0")).unwrap();
 
         assert_eq!(user.uid, 0);
         assert_eq!(user.gid, 0);
@@ -99,15 +94,12 @@ mod tests {
 
     #[test]
     fn invoking_user_from_none_when_sudo_uid_is_unset() {
-        assert!(invoking_user_from(|_| None).is_none());
+        assert!(invoking_user_from(None).is_none());
     }
 
     #[test]
     fn invoking_user_from_none_when_sudo_uid_is_not_a_number() {
-        let mut env = std::collections::HashMap::new();
-        env.insert("SUDO_UID".to_string(), "not-a-uid".to_string());
-
-        assert!(invoking_user_from(|key| env.get(key).cloned()).is_none());
+        assert!(invoking_user_from(Some("not-a-uid")).is_none());
     }
 
     #[test]
@@ -115,24 +107,20 @@ mod tests {
         if is_root() {
             return;
         }
-        let user = invoking_user().expect("the current uid should have a passwd entry");
+        let user = invoking_user(None).expect("the current uid should have a passwd entry");
         assert_eq!(user.uid, nix::unistd::Uid::current().as_raw());
     }
 
     #[test]
     fn resolve_invoking_user_none_for_bare_root_without_sudo_uid() {
-        assert!(resolve_invoking_user(true, nix::unistd::Uid::current(), |_| None).is_none());
+        assert!(resolve_invoking_user(true, nix::unistd::Uid::current(), None).is_none());
     }
 
     #[test]
     fn resolve_invoking_user_uses_sudo_uid_when_root() {
-        let mut env = std::collections::HashMap::new();
-        env.insert("SUDO_UID".to_string(), "0".to_string());
-
-        let user = resolve_invoking_user(true, nix::unistd::Uid::from_raw(4_294_967_295), |key| {
-            env.get(key).cloned()
-        })
-        .unwrap();
+        let user =
+            resolve_invoking_user(true, nix::unistd::Uid::from_raw(4_294_967_295), Some("0"))
+                .unwrap();
 
         assert_eq!(user.uid, 0);
         assert_eq!(user.name, "root");
@@ -140,13 +128,8 @@ mod tests {
 
     #[test]
     fn resolve_invoking_user_ignores_sudo_uid_when_not_root() {
-        let mut env = std::collections::HashMap::new();
-        env.insert("SUDO_UID".to_string(), "4294967295".to_string());
-
-        let user = resolve_invoking_user(false, nix::unistd::Uid::from_raw(0), |key| {
-            env.get(key).cloned()
-        })
-        .unwrap();
+        let user = resolve_invoking_user(false, nix::unistd::Uid::from_raw(0), Some("4294967295"))
+            .unwrap();
 
         assert_eq!(user.uid, 0);
         assert_eq!(user.name, "root");
@@ -154,11 +137,9 @@ mod tests {
 
     #[test]
     fn invoking_user_from_none_when_the_uid_has_no_passwd_entry() {
-        let mut env = std::collections::HashMap::new();
-        env.insert("SUDO_UID".to_string(), "4294967295".to_string());
-
-        assert!(invoking_user_from(|key| env.get(key).cloned()).is_none());
+        assert!(invoking_user_from(Some("4294967295")).is_none());
     }
+
     #[test]
     fn group_has_member_counts_a_primary_group_as_membership() {
         assert!(group_has_member("root", "root"));

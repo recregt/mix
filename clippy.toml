@@ -6,6 +6,10 @@ disallowed-macros = [
     { path = "std::dbg", reason = "print through mix_ui, the one writer to the terminal" },
 ]
 disallowed-methods = [
+    { path = "std::env::var", reason = "read the environment in the binary's env module, the one place that lists what mix reads" },
+    { path = "std::env::var_os", reason = "read the environment in the binary's env module, the one place that lists what mix reads" },
+    { path = "std::env::vars", reason = "read the environment in the binary's env module, the one place that lists what mix reads" },
+    { path = "std::env::vars_os", reason = "read the environment in the binary's env module, the one place that lists what mix reads" },
     { path = "std::io::stdout", reason = "write through mix_ui, or allow it where stdout is a protocol" },
     { path = "std::io::stderr", reason = "write through mix_ui, the one writer to the terminal" },
     { path = "tokio_util::sync::CancellationToken::new", reason = "run in the request's mix_exec::Scope, or its shielded() scope for work that must finish" },

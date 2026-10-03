@@ -1,7 +1,9 @@
+use std::path::Path;
+
+use mix_events::Fault;
 use mix_events::Render;
+use mix_events::v1::Code;
 use mix_events::v1::command::Request;
-use mix_events::v1::{Code, Envelope, NodeFinished, Status, envelope};
-use mix_events::{Fault, ROOT};
 use mix_render::{Sinks, View};
 use mix_rpc::{Client, Controller, Replies, Reply};
 use nix::sys::signal::Signal;
@@ -55,26 +57,6 @@ fn transported(error: &mix_rpc::Error) -> Code {
     }
 }
 
-fn root(envelope: &Envelope) -> Option<&NodeFinished> {
-    match &envelope.event {
-        Some(envelope::Event::NodeFinished(finished)) if finished.id == ROOT => Some(finished),
-        _ => None,
-    }
-}
-
-fn fault_of(root: &NodeFinished) -> Option<Fault> {
-    match root.status() {
-        Status::Succeeded | Status::AlreadySatisfied => None,
-        Status::Cancelled => Some(Fault::Cancelled {
-            cause: root.cancellation(),
-            rolled_back: false,
-        }),
-        Status::Failed | Status::Unspecified => Some(Fault::Failed(
-            root.diagnostic.as_deref().cloned().unwrap_or_default(),
-        )),
-    }
-}
-
 fn detach(view: &View) -> ! {
     view.detaching();
     mix_render::restore();
@@ -95,26 +77,16 @@ fn steer(controller: &Controller, control: Control, view: &View) -> bool {
     false
 }
 
-async fn replay(
-    controller: Controller,
-    mut replies: Replies,
-    view: &View,
-) -> Result<Option<Fault>, Failure> {
+async fn replay(controller: Controller, mut replies: Replies, view: &View) -> Result<(), Failure> {
     let mut terminal = Terminal::listen();
     let mut sinks: Sinks = view.sinks().map_err(Failure::Output)?;
     let mut translator = Translator::default();
     let mut pausing = false;
-    let mut ended = None;
     loop {
         tokio::select! {
             reply = replies.next() => match reply.transpose().map_err(Failure::Transport)? {
                 None => break,
-                Some(Reply::Envelope(envelope)) => {
-                    if let Some(finished) = root(&envelope) {
-                        ended = Some(fault_of(finished));
-                    }
-                    sinks.envelope(envelope);
-                }
+                Some(Reply::Envelope(envelope)) => sinks.envelope(envelope),
                 Some(Reply::Applied(mix_rpc::Control::Pause)) if std::mem::take(&mut pausing) => {
                     let _ = nix::sys::signal::raise(Signal::SIGSTOP);
                 }
@@ -125,7 +97,10 @@ async fn replay(
             }
         }
     }
-    ended.ok_or(Failure::Transport(mix_rpc::Error::Ended))
+    match view.exit.code() {
+        Some(_) => Ok(()),
+        None => Err(Failure::Transport(mix_rpc::Error::Ended)),
+    }
 }
 
 fn daemon_next_to(client: &std::path::Path) -> std::path::PathBuf {
@@ -149,74 +124,137 @@ async fn one_shot(view: &View) -> Result<Client, mix_rpc::Error> {
     .await
 }
 
-fn not_set_up(error: &std::io::Error) -> Failure {
-    Failure::Failed(Box::new(Fault::failed(
-        Code::NotBootstrapped,
-        format!("no mix daemon listens at {}: {error}", mix_rpc::SOCKET_PATH),
-        None,
-    )))
+fn unreachable(socket: &Path, error: &std::io::Error) -> Failure {
+    match error.kind() {
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused => {
+            Failure::Failed(Box::new(Fault::failed(
+                Code::NotBootstrapped,
+                format!("no mix daemon listens at {}: {error}", socket.display()),
+                None,
+            )))
+        }
+        _ => Failure::Transport(mix_rpc::Error::Connect(error.to_string())),
+    }
 }
 
-async fn socket() -> Result<Client, Failure> {
-    let stream = match tokio::net::UnixStream::connect(mix_rpc::SOCKET_PATH).await {
-        Ok(stream) => stream,
-        Err(error)
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
-            ) =>
-        {
-            return Err(not_set_up(&error));
-        }
-        Err(error) => {
-            return Err(Failure::Transport(mix_rpc::Error::Connect(
-                error.to_string(),
-            )));
-        }
-    };
+async fn socket(path: &Path) -> Result<Client, Failure> {
+    let stream = tokio::net::UnixStream::connect(path)
+        .await
+        .map_err(|error| unreachable(path, &error))?;
     Client::connect(stream, env!("CARGO_PKG_VERSION"))
         .await
         .map_err(Failure::Transport)
 }
 
-pub async fn run(request: &Request, route: Route, view: &View) -> Result<(), Failure> {
+pub async fn run(
+    request: &Request,
+    route: Route,
+    view: &View,
+    socket_path: &Path,
+) -> Result<(), Failure> {
     let mut client = match route {
         Route::OneShot => one_shot(view).await.map_err(Failure::Transport)?,
-        Route::Socket => socket().await?,
+        Route::Socket => socket(socket_path).await?,
     };
     let command = mix_events::command(request.clone());
     let (controller, replies) = client.run(&command).await.map_err(Failure::Transport)?;
-    let ended = replay(controller, replies, view).await?;
+    let replayed = replay(controller, replies, view).await;
     let _ = client.wait().await;
-    match ended {
-        None => Ok(()),
-        Some(fault) => Err(Failure::Failed(Box::new(fault))),
-    }
+    replayed
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn finished(status: Status) -> NodeFinished {
-        NodeFinished {
-            id: ROOT,
-            status: status as i32,
-            ..NodeFinished::default()
+    #[test]
+    fn the_one_shot_worker_is_the_daemon_installed_next_to_mix() {
+        assert_eq!(
+            daemon_next_to(Path::new("/usr/local/bin/mix")),
+            Path::new("/usr/local/bin/mix-daemon")
+        );
+    }
+
+    fn io(message: &str) -> std::io::Error {
+        std::io::Error::other(message.to_string())
+    }
+
+    #[test]
+    fn every_failure_has_the_code_its_reader_acts_on() {
+        use mix_rpc::Error;
+
+        let daemon = Fault::failed(Code::RootNotAllowed, "root", None);
+        for (failure, code) in [
+            (Failure::Failed(Box::new(daemon)), Code::RootNotAllowed),
+            (Failure::Output(io("read-only")), Code::Io),
+            (
+                Failure::Transport(Error::Spawn(io("x"))),
+                Code::PrivilegesUnavailable,
+            ),
+            (
+                Failure::Transport(Error::Launch(mix_exec::Error::Spawn {
+                    command: "sudo".into(),
+                    source: io("x"),
+                })),
+                Code::PrivilegesUnavailable,
+            ),
+            (
+                Failure::Transport(Error::Connect("x".into())),
+                Code::PrivilegesUnavailable,
+            ),
+            (
+                Failure::Transport(Error::Refused("x".into())),
+                Code::PrivilegesUnavailable,
+            ),
+            (Failure::Transport(Error::Ended), Code::WorkerEnded),
+            (
+                Failure::Transport(Error::Denied("x".into())),
+                Code::NotBootstrapped,
+            ),
+            (
+                Failure::Transport(Error::VersionMismatch {
+                    ours: "1.0.0".into(),
+                    theirs: "1.1.0".into(),
+                }),
+                Code::VersionMismatch,
+            ),
+            (
+                Failure::Transport(Error::Malformed(mix_rpc::Malformed("x".into()))),
+                Code::Internal,
+            ),
+            (
+                Failure::Transport(Error::NotAConnection(io("x"))),
+                Code::Internal,
+            ),
+        ] {
+            assert_eq!(failure.fault().code(), Some(code), "{failure:?}");
         }
     }
 
     #[test]
-    fn only_a_root_that_succeeded_or_was_already_satisfied_is_not_a_fault() {
-        assert_eq!(fault_of(&finished(Status::Succeeded)), None);
-        assert_eq!(fault_of(&finished(Status::AlreadySatisfied)), None);
-        assert!(matches!(
-            fault_of(&finished(Status::Failed)),
-            Some(Fault::Failed(_))
-        ));
-        assert!(matches!(
-            fault_of(&finished(Status::Cancelled)),
-            Some(Fault::Cancelled { .. })
-        ));
+    fn a_transport_failure_hands_its_cause_to_the_report() {
+        let failure = Failure::Transport(mix_rpc::Error::Spawn(io("sudo: command not found")));
+
+        assert_eq!(
+            failure.source().map(ToString::to_string).as_deref(),
+            Some("sudo: command not found")
+        );
+        assert!(Failure::Output(io("x")).source().is_none());
+    }
+
+    #[test]
+    fn a_missing_or_silent_socket_means_mix_is_not_set_up_and_anything_else_is_transport() {
+        let socket = Path::new("/run/mix/daemon.sock");
+        for (kind, code) in [
+            (std::io::ErrorKind::NotFound, Code::NotBootstrapped),
+            (std::io::ErrorKind::ConnectionRefused, Code::NotBootstrapped),
+            (
+                std::io::ErrorKind::PermissionDenied,
+                Code::PrivilegesUnavailable,
+            ),
+        ] {
+            let failure = unreachable(socket, &kind.into());
+            assert_eq!(failure.fault().code(), Some(code), "{kind:?}");
+        }
     }
 }

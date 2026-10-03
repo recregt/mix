@@ -33,7 +33,7 @@ pub struct Args {
     #[arg(
         long,
         global = true,
-        env = "MIX_NO_PROGRESS",
+        env = crate::env::NO_PROGRESS,
         action = ArgAction::SetTrue,
         value_parser = clap::builder::FalseyValueParser::new(),
     )]
@@ -202,19 +202,10 @@ impl Args {
 
     /// Whether output may be drawn in place.
     ///
-    /// `--no-progress` and `--output json` are explicit requests for plain output; `CI` is
-    /// honoured because build systems set it and nobody is watching a CI log live.
-    pub fn draws_progress(&self) -> bool {
-        !self.no_progress
-            && self.output == Output::Human
-            && !ci_asks_for_plain_output(std::env::var("CI").ok().as_deref())
-    }
-}
-
-fn ci_asks_for_plain_output(ci: Option<&str>) -> bool {
-    match ci.map(str::trim) {
-        None | Some("") | Some("0") => false,
-        Some(value) => !value.eq_ignore_ascii_case("false"),
+    /// `--no-progress` and `--output json` are explicit requests for plain output, and so is
+    /// running under CI.
+    pub fn draws_progress(&self, ci: bool) -> bool {
+        !self.no_progress && self.output == Output::Human && !ci
     }
 }
 
@@ -310,8 +301,15 @@ mod tests {
     }
 
     #[test]
-    fn json_output_implies_plain_output() {
-        assert!(!parse(&["mix", "--output", "json", "install", "ripgrep"]).draws_progress());
+    fn progress_is_drawn_only_for_people_and_only_when_nothing_asks_for_plain_output() {
+        for (args, ci, drawn) in [
+            (&["mix", "doctor"][..], false, true),
+            (&["mix", "--no-progress", "doctor"], false, false),
+            (&["mix", "--output", "json", "doctor"], false, false),
+            (&["mix", "doctor"], true, false),
+        ] {
+            assert_eq!(parse(args).draws_progress(ci), drawn, "{args:?}, CI {ci}");
+        }
     }
 
     #[test]
@@ -330,33 +328,6 @@ mod tests {
                 .find(|arg| arg.get_id() == id)
                 .unwrap_or_else(|| panic!("no argument {id}"));
             assert!(arg.is_global_set(), "--{id} must be global");
-        }
-    }
-
-    #[test]
-    fn an_unset_or_disabled_ci_variable_leaves_progress_alone() {
-        for value in [
-            None,
-            Some(""),
-            Some("  "),
-            Some("0"),
-            Some("false"),
-            Some("FALSE"),
-        ] {
-            assert!(
-                !ci_asks_for_plain_output(value),
-                "CI={value:?} should not force plain output"
-            );
-        }
-    }
-
-    #[test]
-    fn a_set_ci_variable_forces_plain_output() {
-        for value in [Some("1"), Some("true"), Some("yes"), Some("github")] {
-            assert!(
-                ci_asks_for_plain_output(value),
-                "CI={value:?} should force plain output"
-            );
         }
     }
 

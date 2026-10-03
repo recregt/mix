@@ -7,9 +7,7 @@ use mix_events::v1::{
 };
 
 use crate::args::Command;
-
-pub const MIRROR_VAR: &str = "MIX_NIX_MIRROR";
-pub const MIRROR_KEY_VAR: &str = "MIX_NIX_MIRROR_KEY";
+use crate::env::Environment;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
@@ -17,7 +15,7 @@ pub enum Route {
     OneShot,
 }
 
-pub fn from_args(command: &Command, environment: impl Fn(&str) -> Option<String>) -> Request {
+pub fn from_args(command: &Command, environment: &Environment) -> Request {
     match command {
         Command::Bootstrap {
             mirror,
@@ -27,8 +25,10 @@ pub fn from_args(command: &Command, environment: impl Fn(&str) -> Option<String>
             let (mirror, mirror_key) = match mirror {
                 Some(url) => (Some(url.clone()), mirror_key.clone()),
                 None => (
-                    environment(MIRROR_VAR),
-                    mirror_key.clone().or_else(|| environment(MIRROR_KEY_VAR)),
+                    environment.mirror.clone(),
+                    mirror_key
+                        .clone()
+                        .or_else(|| environment.mirror_key.clone()),
                 ),
             };
             Request::Bootstrap(Box::new(BootstrapRequest {
@@ -84,14 +84,11 @@ pub fn refused(request: &Request) -> Option<Fault> {
 mod tests {
     use super::*;
 
-    fn environment(
-        url: Option<&'static str>,
-        key: Option<&'static str>,
-    ) -> impl Fn(&str) -> Option<String> {
-        move |name| match name {
-            MIRROR_VAR => url.map(str::to_string),
-            MIRROR_KEY_VAR => key.map(str::to_string),
-            _ => None,
+    fn environment(url: Option<&str>, key: Option<&str>) -> Environment {
+        Environment {
+            mirror: url.map(str::to_string),
+            mirror_key: key.map(str::to_string),
+            ci: false,
         }
     }
 
@@ -114,7 +111,7 @@ mod tests {
     fn a_mirror_on_the_command_line_wins_over_the_environment_with_its_own_key() {
         let request = from_args(
             &bootstrap(Some("http://flag.internal"), None),
-            environment(Some("http://env.internal"), Some("env:KEY")),
+            &environment(Some("http://env.internal"), Some("env:KEY")),
         );
 
         assert_eq!(
@@ -127,7 +124,7 @@ mod tests {
     fn a_mirror_set_only_in_the_environment_is_used_with_the_environments_key() {
         let request = from_args(
             &bootstrap(None, None),
-            environment(Some("http://env.internal"), Some("env:KEY")),
+            &environment(Some("http://env.internal"), Some("env:KEY")),
         );
 
         assert_eq!(
@@ -135,21 +132,24 @@ mod tests {
             (Some("http://env.internal".into()), Some("env:KEY".into()))
         );
         assert_eq!(
-            mirror_of(from_args(&bootstrap(None, None), environment(None, None))),
+            mirror_of(from_args(&bootstrap(None, None), &environment(None, None))),
             (None, None)
         );
     }
 
     #[test]
     fn a_key_without_a_mirror_is_not_sent() {
-        let request = from_args(&bootstrap(None, Some("stray:KEY")), environment(None, None));
+        let request = from_args(
+            &bootstrap(None, Some("stray:KEY")),
+            &environment(None, None),
+        );
 
         assert_eq!(mirror_of(request), (None, None));
     }
 
     #[test]
     fn only_bootstrap_asks_for_sudo() {
-        let bootstrap = from_args(&bootstrap(None, None), |_| None);
+        let bootstrap = from_args(&bootstrap(None, None), &Environment::default());
         assert_eq!(route(&bootstrap), Route::OneShot);
         for command in [
             Command::Doctor,
@@ -160,17 +160,83 @@ mod tests {
                 list: true,
             },
         ] {
-            assert_eq!(route(&from_args(&command, |_| None)), Route::Socket);
+            assert_eq!(
+                route(&from_args(&command, &Environment::default())),
+                Route::Socket
+            );
         }
     }
 
     #[test]
     fn a_bad_mirror_is_refused_before_sudo_is_asked() {
-        let request = from_args(&bootstrap(Some("not a url"), None), |_| None);
+        let request = from_args(&bootstrap(Some("not a url"), None), &Environment::default());
 
         assert_eq!(
             refused(&request).and_then(|fault| fault.code()),
             Some(Code::InvalidMirror)
         );
+    }
+
+    #[test]
+    fn every_command_builds_the_request_it_names() {
+        let packages = vec!["ripgrep".to_string(), "fd".to_string()];
+        for (command, request) in [
+            (
+                Command::Bootstrap {
+                    mirror: None,
+                    mirror_key: None,
+                    force: true,
+                },
+                Request::Bootstrap(Box::new(BootstrapRequest {
+                    force: true,
+                    mirror: None,
+                    mirror_key: None,
+                })),
+            ),
+            (
+                Command::Install {
+                    packages: packages.clone(),
+                },
+                Request::Install(InstallRequest {
+                    packages: packages.clone(),
+                }),
+            ),
+            (
+                Command::Remove {
+                    packages: packages.clone(),
+                },
+                Request::Remove(RemoveRequest {
+                    packages: packages.clone(),
+                }),
+            ),
+            (
+                Command::Clean { all: true },
+                Request::Clean(CleanRequest { all: true }),
+            ),
+            (
+                Command::Clean { all: false },
+                Request::Clean(CleanRequest { all: false }),
+            ),
+            (Command::Repair, Request::Repair(RepairRequest {})),
+            (Command::Doctor, Request::Doctor(DoctorRequest {})),
+            (
+                Command::Explain {
+                    code: Some(Code::Network),
+                    list: false,
+                },
+                Request::Explain(ExplainRequest {
+                    code: Some(Code::Network as i32),
+                }),
+            ),
+            (
+                Command::Explain {
+                    code: None,
+                    list: true,
+                },
+                Request::Explain(ExplainRequest { code: None }),
+            ),
+        ] {
+            assert_eq!(from_args(&command, &Environment::default()), request);
+        }
     }
 }

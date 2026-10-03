@@ -21,6 +21,9 @@ uuid = { version = "1.26.1", features = ["v7"] }
 
 [dev-dependencies]
 mix-core = { path = "../core" }
+mix-exec = { path = "../exec" }
+mix-shell = { path = "../shell" }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

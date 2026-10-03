@@ -1402,9 +1402,12 @@ dependencies = [
  "clap",
  "mix-core",
  "mix-events",
+ "mix-exec",
  "mix-render",
  "mix-rpc",
+ "mix-shell",
  "nix",
+ "tempfile",
  "tokio",
  "uuid",
 ]

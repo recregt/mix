@@ -9,7 +9,6 @@ use mix_core::paths::{
 };
 use mix_exec::Scope;
 
-use crate::HostConfig;
 use crate::effect::exec::{run_as, run_as_reporting};
 use crate::effect::files::Prepared;
 use crate::effect::tools::trusted;
@@ -17,7 +16,6 @@ use crate::profile;
 
 pub struct ProfileContext {
     pub mirror: Option<String>,
-    pub host: HostConfig,
 }
 
 pub fn profile_link(user: &InvokingUser) -> PathBuf {

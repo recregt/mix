@@ -16,6 +16,7 @@ use mix_events::v1::{Cancellation, Code, RepairRequest, RepairResult, node_finis
 use mix_events::{Diagnose, Ending, Fault, ROOT, Stopped, Tree};
 use mix_exec::Scope;
 
+use crate::Context;
 use crate::drive::{Journal, Observer, Performer, drive};
 use crate::effect::files::Files;
 use crate::effect::git;
@@ -24,7 +25,6 @@ use crate::effect::journal::{FileJournal, JOURNAL_DIR, recover_all};
 use crate::request::sink::Relay;
 use crate::request::{Concluded, Root};
 use crate::target::Error;
-use crate::{Context, HostConfig};
 
 pub struct RepairReport {
     pub name: String,
@@ -165,7 +165,7 @@ async fn repaired(
     }
 
     if let Some(cfg) = user_config {
-        commit_the_tracked_state(cfg, &ctx.host, &scope.shielded(), &mut reports).await;
+        commit_the_tracked_state(cfg, &scope.shielded(), &mut reports).await;
     }
 
     Repair {
@@ -235,14 +235,13 @@ async fn put_back(
 /// Configuration mix rewrote is drift the user should be able to see in git.
 async fn commit_the_tracked_state(
     cfg: &UserConfig,
-    host: &HostConfig,
     scope: &Scope,
     reports: &mut Vec<RepairReport>,
 ) {
     const NAME: &str = "git-tracked state";
 
     let state_dir = mix_state_dir(&cfg.user.home);
-    let git = git::Git::resolve(&cfg.user, host.git_binary.as_deref()).await;
+    let git = git::Git::resolve(&cfg.user).await;
     match git.sync(&cfg.user, &state_dir, scope).await {
         Ok(true) => reports.push(RepairReport::repaired(NAME)),
         Ok(false) => {}

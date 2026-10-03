@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process::ExitCode;
 
 use mix_events::v1::command::Request;
@@ -6,10 +7,10 @@ use mix_render::View;
 use crate::client::{self, Failure};
 use crate::request;
 
-pub async fn run(request: Request, view: &View) -> ExitCode {
+pub async fn run(request: Request, view: &View, socket: &Path) -> ExitCode {
     let result = match request::refused(&request) {
         Some(fault) => Err(Failure::Failed(Box::new(fault))),
-        None => client::run(&request, request::route(&request), view).await,
+        None => client::run(&request, request::route(&request), view, socket).await,
     };
     if let Err(failure) = &result {
         view.failed(
@@ -31,117 +32,242 @@ pub async fn run(request: Request, view: &View) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use mix_events::Fault;
+    use std::path::{Path, PathBuf};
+    use std::process::ExitCode;
+    use std::sync::Arc;
+
+    use mix_events::v1::command::Request;
     use mix_events::v1::{
-        CleanRequest, Code, InstallRequest, RemoveRequest, RepairRequest, command::Request,
+        Code, Command, Envelope, ExplainRequest, InstallRequest, NodeFinished, envelope,
+        node_finished,
     };
-    use mix_render::words::outcome;
+    use mix_events::{Detail, Ending, Outbox, ROOT, Render, Start, Tree};
+    use mix_render::{Exit, Format, View};
+    use mix_rpc::{Caller, Controls, Events, Reply, Worker};
 
-    use crate::client::Failure;
+    use super::run;
 
-    fn install(packages: &[&str]) -> Request {
-        Request::Install(InstallRequest {
-            packages: packages.iter().map(|name| name.to_string()).collect(),
+    struct Forward(Events);
+
+    impl Render for Forward {
+        fn envelope(&mut self, envelope: Envelope) {
+            let _ = self.0.send(Reply::Envelope(envelope));
+        }
+
+        fn detail(&self) -> Detail {
+            Detail::Trace
+        }
+    }
+
+    struct RequestHost;
+
+    impl Worker for RequestHost {
+        const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+
+        fn admits(&self, _caller: Caller) -> bool {
+            true
+        }
+
+        async fn run(
+            &self,
+            _caller: Caller,
+            command: Command,
+            _controls: Controls,
+            events: Events,
+        ) {
+            let session =
+                mix_shell::Session::new(mix_exec::Scope::root()).with_render(Forward(events));
+            mix_shell::request::run(&session, command).await;
+        }
+    }
+
+    struct EndsWithProblems;
+
+    impl Worker for EndsWithProblems {
+        const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+
+        fn admits(&self, _caller: Caller) -> bool {
+            true
+        }
+
+        async fn run(
+            &self,
+            _caller: Caller,
+            command: Command,
+            _controls: Controls,
+            events: Events,
+        ) {
+            let outbox = Arc::new(Outbox::new("request", || {}));
+            let key = mix_events::key_of(command.request.as_ref());
+            let mut tree = Tree::new(
+                Arc::clone(&outbox),
+                Arc::new(|| None),
+                Start::command(key, command),
+            );
+            tree.finish(ROOT, Ending::succeeded().for_root(true))
+                .unwrap();
+            drop(tree);
+            for envelope in outbox.drain() {
+                let _ = events.send(Reply::Envelope(envelope));
+            }
+        }
+    }
+
+    struct EndsSilently;
+
+    impl Worker for EndsSilently {
+        const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+
+        fn admits(&self, _caller: Caller) -> bool {
+            true
+        }
+
+        async fn run(
+            &self,
+            _caller: Caller,
+            _command: Command,
+            _controls: Controls,
+            _events: Events,
+        ) {
+        }
+    }
+
+    fn listening<W: Worker>(directory: &Path, worker: fn() -> W) -> PathBuf {
+        let path = directory.join("daemon.sock");
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(mix_rpc::serve_connection(worker(), stream));
+            }
+        });
+        path
+    }
+
+    fn recording(directory: &Path) -> View {
+        View {
+            format: Format::Human,
+            events_file: Some(directory.join("events.ndjson")),
+            verbose: 0,
+            quiet: true,
+            exit: Exit::default(),
+        }
+    }
+
+    fn root(directory: &Path) -> NodeFinished {
+        let file = std::fs::File::open(directory.join("events.ndjson")).unwrap();
+        let captured = mix_events::capture::read(std::io::BufReader::new(file)).unwrap();
+        mix_events::validate(captured.envelopes.iter()).unwrap();
+        captured
+            .envelopes
+            .into_iter()
+            .find_map(|envelope| match envelope.event {
+                Some(envelope::Event::NodeFinished(finished)) if finished.id == ROOT => {
+                    Some(finished)
+                }
+                _ => None,
+            })
+            .expect("every run records its root")
+    }
+
+    fn explain(code: Code) -> Request {
+        Request::Explain(ExplainRequest {
+            code: Some(code as i32),
         })
     }
 
-    fn remove(packages: &[&str]) -> Request {
-        Request::Remove(RemoveRequest {
-            packages: packages.iter().map(|name| name.to_string()).collect(),
-        })
-    }
+    #[tokio::test]
+    async fn a_code_is_explained_by_the_daemon_like_every_other_command() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = listening(directory.path(), || RequestHost);
 
-    fn repair() -> Request {
-        Request::Repair(RepairRequest {})
-    }
+        let exit = run(
+            explain(Code::Network),
+            &recording(directory.path()),
+            &socket,
+        )
+        .await;
 
-    fn clean() -> Request {
-        Request::Clean(CleanRequest { all: false })
-    }
-
-    fn says(request: &Request, failure: Failure) -> String {
-        outcome(request, &failure.fault()).message()
-    }
-
-    #[test]
-    fn a_refused_sudo_is_about_administrator_rights() {
+        assert_eq!(exit, ExitCode::SUCCESS);
         assert_eq!(
-            says(
-                &repair(),
-                Failure::Transport(mix_rpc::Error::Refused("connection closed".into()))
-            ),
-            "couldn't get administrator rights to finish the repair\n\
-             make sure your account can use sudo, then try again"
+            root(directory.path()).result,
+            Some(node_finished::Result::Explain(
+                mix_events::v1::ExplainResult {
+                    codes: vec![Code::Network as i32],
+                }
+            ))
         );
     }
 
-    #[test]
-    fn a_worker_that_stopped_mid_way_says_to_run_the_command_again() {
-        let message = says(&repair(), Failure::Transport(mix_rpc::Error::Ended));
+    #[tokio::test]
+    async fn without_a_daemon_the_command_fails_as_not_set_up() {
+        let directory = tempfile::tempdir().unwrap();
 
-        assert!(message.contains("stopped before it could finish the repair"));
-        assert!(message.contains("run the same command again"));
+        let exit = run(
+            explain(Code::Network),
+            &recording(directory.path()),
+            &directory.path().join("daemon.sock"),
+        )
+        .await;
+
+        assert_eq!(exit, ExitCode::FAILURE);
+        let root = root(directory.path());
+        assert_eq!(root.diagnostic.unwrap().code(), Code::NotBootstrapped);
+        assert_eq!(root.exit_code, mix_events::exit::FAILED);
     }
 
-    #[test]
-    fn an_events_file_that_cannot_be_written_says_what_could_not_be_done() {
-        for (request, words_for) in [
-            (install(&["x"]), "couldn't install x"),
-            (remove(&["git"]), "couldn't remove git"),
-            (repair(), "couldn't finish the repair"),
-            (clean(), "couldn't clean up your profile"),
-        ] {
-            let failure = Failure::Output(std::io::ErrorKind::PermissionDenied.into());
-            assert_eq!(failure.fault().code(), Some(Code::Io));
-            assert_eq!(
-                says(&request, failure),
-                format!("{words_for}\nrun it again with `-v` to see what went wrong")
-            );
-        }
-    }
+    #[tokio::test]
+    async fn a_socket_nobody_listens_on_is_not_set_up_either() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("daemon.sock");
+        drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
 
-    #[test]
-    fn a_failure_from_the_daemon_is_worded_for_the_request_it_ended() {
-        let fault = Fault::failed(Code::RootNotAllowed, "root", None);
+        let exit = run(
+            explain(Code::Network),
+            &recording(directory.path()),
+            &socket,
+        )
+        .await;
 
-        assert!(
-            says(&install(&["x"]), Failure::Failed(Box::new(fault)))
-                .contains("`mix install` can't be run as root")
+        assert_eq!(exit, ExitCode::FAILURE);
+        assert_eq!(
+            root(directory.path()).diagnostic.unwrap().code(),
+            Code::NotBootstrapped
         );
     }
 
-    #[test]
-    fn every_worker_failure_has_a_code_unless_it_is_a_protocol_violation() {
-        use mix_rpc::Error;
+    #[tokio::test]
+    async fn the_exit_code_is_the_one_the_daemons_root_ends_with() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = listening(directory.path(), || EndsWithProblems);
+        let request = Request::Install(InstallRequest {
+            packages: vec!["hello".to_string()],
+        });
 
-        let errors = vec![
-            Error::Spawn(std::io::ErrorKind::NotFound.into()),
-            Error::Connect("refused".into()),
-            Error::Refused("not allowed".into()),
-            Error::Ended,
-            Error::VersionMismatch {
-                ours: "1.0.0".into(),
-                theirs: "1.1.0".into(),
-            },
-            Error::Denied("uid 1001 is not root and not a member of mix-users".into()),
-            Error::NotAConnection(std::io::ErrorKind::InvalidInput.into()),
-        ];
-        for error in errors {
-            let expected = match &error {
-                Error::Malformed(_) | Error::NotAConnection(_) => vec![Code::Internal],
-                Error::VersionMismatch { .. } => vec![Code::VersionMismatch],
-                Error::Denied(_) => vec![Code::NotBootstrapped],
-                Error::Spawn(_)
-                | Error::Launch(_)
-                | Error::Connect(_)
-                | Error::Refused(_)
-                | Error::Ended => vec![Code::PrivilegesUnavailable, Code::WorkerEnded],
-            };
-            let code = Failure::Transport(error).fault().code();
-            assert!(
-                code.is_some_and(|code| expected.contains(&code)),
-                "{code:?}"
-            );
-        }
+        let exit = run(request, &recording(directory.path()), &socket).await;
+
+        assert_eq!(exit, ExitCode::from(3));
+        assert_eq!(
+            root(directory.path()).exit_code,
+            mix_events::exit::PROBLEMS_REMAIN
+        );
+    }
+
+    #[tokio::test]
+    async fn a_worker_that_stops_without_an_ending_is_reported_as_ended() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = listening(directory.path(), || EndsSilently);
+
+        let exit = run(
+            explain(Code::Network),
+            &recording(directory.path()),
+            &socket,
+        )
+        .await;
+
+        assert_eq!(exit, ExitCode::FAILURE);
+        assert_eq!(
+            root(directory.path()).diagnostic.unwrap().code(),
+            Code::WorkerEnded
+        );
     }
 }

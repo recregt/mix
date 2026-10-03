@@ -96,4 +96,47 @@ mod tests {
             "install 4 packages"
         );
     }
+
+    #[test]
+    fn every_request_says_what_could_not_be_done_when_it_fails() {
+        use mix_events::v1::{
+            CleanRequest, Code, DoctorRequest, ExplainRequest, InstallRequest, RemoveRequest,
+            RepairRequest,
+        };
+
+        let fault = Fault::failed(Code::Io, "read-only file system", None);
+        for (request, action) in [
+            (
+                Request::Bootstrap(Box::default()),
+                "finish setting up `mix`",
+            ),
+            (
+                Request::Install(InstallRequest {
+                    packages: vec!["x".to_string()],
+                }),
+                "install x",
+            ),
+            (
+                Request::Remove(RemoveRequest {
+                    packages: vec!["git".to_string()],
+                }),
+                "remove git",
+            ),
+            (
+                Request::Clean(CleanRequest { all: false }),
+                "clean up your profile",
+            ),
+            (Request::Repair(RepairRequest {}), "finish the repair"),
+            (Request::Doctor(DoctorRequest {}), "finish the health check"),
+            (
+                Request::Explain(ExplainRequest { code: None }),
+                "explain the code",
+            ),
+        ] {
+            assert_eq!(
+                outcome(&request, &fault).message(),
+                format!("couldn't {action}\nrun it again with `-v` to see what went wrong")
+            );
+        }
+    }
 }

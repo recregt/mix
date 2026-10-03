@@ -9,12 +9,6 @@ use mix_shell::request::sink::Render;
 
 use crate::controls;
 
-pub fn host_config() -> mix_shell::HostConfig {
-    mix_shell::HostConfig {
-        git_binary: std::env::var_os("MIX_GIT_PATH").map(std::path::PathBuf::from),
-    }
-}
-
 struct Forward(Events);
 
 impl Render for Forward {
@@ -53,13 +47,12 @@ impl Host {
 
     fn session(&self, caller: Caller, events: &Events) -> mix_shell::Session {
         let account = if caller.uid == 0 {
-            mix_shell::effect::accounts::invoking_user()
+            mix_shell::effect::accounts::invoking_user(crate::env::sudo_uid().as_deref())
         } else {
             mix_shell::effect::accounts::user_by_uid(caller.uid)
         };
         mix_shell::Session::new(mix_exec::Scope::root())
             .with_render(Forward(events.clone()))
-            .with_host(host_config())
             .with_locks(Arc::clone(&self.locks))
             .with_caller(mix_shell::Caller::Account {
                 peer_is_root: caller.uid == 0,
