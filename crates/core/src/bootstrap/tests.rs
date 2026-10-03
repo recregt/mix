@@ -485,6 +485,49 @@ fn a_running_daemon_is_restarted_only_when_its_configuration_changed_after_it_st
     assert!(world.units[NIX_DAEMON_SERVICE_UNIT].since > Some(started));
 }
 
+fn operations(run: &Run) -> Vec<(mix_events::v1::Operation, String)> {
+    run.stream
+        .iter()
+        .filter_map(|envelope| match &envelope.event {
+            Some(mix_events::v1::envelope::Event::NodeStarted(started)) => match &started.kind {
+                Some(mix_events::v1::node_started::Kind::Action(action)) => {
+                    Some((action.operation(), action.subject.clone()))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_new_daemon_binary_asks_the_running_daemon_to_drain_instead_of_restarting_it() {
+    let mut world = machine();
+    run(&mut world, &settings(None, false), Script::default());
+    let service = world
+        .units
+        .entry(MIX_DAEMON_SERVICE_UNIT.into())
+        .or_default();
+    service.running = service
+        .loaded
+        .clone()
+        .or(Some(Arc::from(&b"[Service]"[..])));
+    world.with_file("/usr/local/bin/mix-daemon", b"mix-daemon 2", 0o755, (0, 0));
+
+    let upgraded = run(&mut world, &settings(None, false), Script::default());
+
+    assert_eq!(upgraded.report.verdict, Verdict::Succeeded);
+    let operations = operations(&upgraded);
+    assert!(operations.contains(&(
+        mix_events::v1::Operation::DrainService,
+        MIX_DAEMON_SERVICE_UNIT.to_string()
+    )));
+    assert!(!operations.contains(&(
+        mix_events::v1::Operation::RestartUnit,
+        MIX_DAEMON_SERVICE_UNIT.to_string()
+    )));
+}
+
 #[test]
 fn a_masked_socket_is_left_alone_and_reported() {
     let facts = [

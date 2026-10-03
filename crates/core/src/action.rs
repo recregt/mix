@@ -165,6 +165,9 @@ pub enum Action {
     RestartUnit {
         unit: String,
     },
+    DrainService {
+        unit: String,
+    },
     DaemonReload,
     InstallRuntime {
         url: String,

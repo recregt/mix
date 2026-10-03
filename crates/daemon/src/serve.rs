@@ -30,14 +30,34 @@ fn stopped(reason: String) -> ExitCode {
     ExitCode::FAILURE
 }
 
+fn serving(count: usize) -> String {
+    match count {
+        0 => "Waiting for requests".to_string(),
+        1 => "Serving 1 request".to_string(),
+        count => format!("Serving {count} requests"),
+    }
+}
+
 pub async fn serve() -> ExitCode {
     let listener = match passed_by_systemd() {
         Ok(listener) => listener,
         Err(reason) => return stopped(reason),
     };
     let mut terminate = controls::listen(Signal::SIGTERM);
+    let mut drain = controls::listen(mix_shell::effect::units::DRAIN);
+    crate::notify::ready("Recovering interrupted requests");
     let host = Host::new(Gate::Members);
-    match mix_shell::request::recover(&host.locks, &mix_exec::Scope::root()).await {
+    let scope = mix_exec::Scope::root();
+    let recovery = mix_shell::request::recover(&host.locks, &scope);
+    tokio::pin!(recovery);
+    let (recovered, stopping) = tokio::select! {
+        recovered = &mut recovery => (recovered, false),
+        _ = terminate.recv() => {
+            scope.cancel(mix_exec::Reason::Terminated);
+            ((&mut recovery).await, true)
+        }
+    };
+    match recovered {
         Ok(recovered) => {
             for (action, failure) in recovered.failures {
                 mix_ui::report(
@@ -49,27 +69,52 @@ pub async fn serve() -> ExitCode {
                 );
             }
         }
+        Err(_) if stopping => return ExitCode::SUCCESS,
         Err(error) => return stopped(error.to_string()),
     }
+    if stopping {
+        return ExitCode::SUCCESS;
+    }
+    crate::notify::status(&serving(0));
     let mut connections = tokio::task::JoinSet::new();
     let ended = loop {
         tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => {
                     connections.spawn(mix_rpc::serve_connection(host.clone(), stream));
+                    crate::notify::status(&serving(connections.len()));
                 }
-                Err(error) => break Some(format!("accepting a connection failed: {error}")),
+                Err(error) => break Ended::Failed(format!("accepting a connection failed: {error}")),
             },
-            _ = terminate.recv() => break None,
-            Some(_) = connections.join_next(), if !connections.is_empty() => {}
+            _ = terminate.recv() => break Ended::Stopped,
+            _ = drain.recv() => break Ended::Drained,
+            Some(_) = connections.join_next(), if !connections.is_empty() => {
+                crate::notify::status(&serving(connections.len()));
+            }
         }
     };
     drop(listener);
+    if matches!(ended, Ended::Drained) {
+        crate::notify::stopping(&format!(
+            "Finishing {} before restarting",
+            match connections.len() {
+                1 => "1 request".to_string(),
+                count => format!("{count} requests"),
+            }
+        ));
+    }
     while connections.join_next().await.is_some() {}
     match ended {
-        None => ExitCode::SUCCESS,
-        Some(reason) => stopped(reason),
+        Ended::Stopped => ExitCode::SUCCESS,
+        Ended::Drained => ExitCode::from(mix_core::targets::MIX_DAEMON_DRAINED),
+        Ended::Failed(reason) => stopped(reason),
     }
+}
+
+enum Ended {
+    Stopped,
+    Drained,
+    Failed(String),
 }
 
 #[cfg(test)]

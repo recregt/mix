@@ -1,5 +1,7 @@
 mod controls;
 mod env;
+mod journal;
+mod notify;
 mod serve;
 mod worker;
 

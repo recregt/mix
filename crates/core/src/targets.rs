@@ -28,13 +28,35 @@ DirectoryMode=0755
 WantedBy=sockets.target
 ";
 
+/// Exit status of a `mix-daemon` that finished its accepted requests so systemd can restart it.
+pub const MIX_DAEMON_DRAINED: u8 = 75;
+
 pub const MIX_DAEMON_SERVICE: &str = "[Unit]
 Description=mix daemon
 Requires=mix-daemon.socket
 After=mix-daemon.socket nix-daemon.socket
 
 [Service]
+Type=notify
 ExecStart=/var/lib/mix/bin/mix-daemon serve
+KillMode=mixed
+TimeoutStopSec=infinity
+Restart=on-failure
+RestartForceExitStatus=75
+SuccessExitStatus=75
+ProtectSystem=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+LockPersonality=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
 ";
 
 pub const PROFILE_SNIPPET: &str = "# Managed by mix -- do not edit, changes are overwritten and will trip `mix doctor`.\nif [ -e '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh' ]; then\n    . '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'\nfi\n";
@@ -679,5 +701,15 @@ mod daemon_unit_tests {
             crate::paths::MIX_DAEMON_BIN
         )));
         assert!(MIX_DAEMON_SERVICE.contains(&format!("Requires={MIX_DAEMON_SOCKET_UNIT}\n")));
+    }
+
+    #[test]
+    fn a_drained_daemon_is_restarted_and_not_counted_as_a_failure() {
+        for setting in ["RestartForceExitStatus", "SuccessExitStatus"] {
+            assert!(
+                MIX_DAEMON_SERVICE.contains(&format!("{setting}={MIX_DAEMON_DRAINED}\n")),
+                "{setting}"
+            );
+        }
     }
 }

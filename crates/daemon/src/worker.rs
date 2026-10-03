@@ -1,18 +1,32 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use std::sync::Mutex;
+
 use mix_core::paths::LOCK_FILE;
-use mix_events::v1::{Command, Envelope};
+use mix_events::ROOT;
+use mix_events::v1::{Command, Envelope, NodeFinished, envelope};
 use mix_rpc::{Caller, Controls, Events, Reply};
 use mix_shell::request::lock::Locks;
 use mix_shell::request::sink::Render;
 
 use crate::controls;
 
-struct Forward(Events);
+type Ending = Arc<Mutex<Option<(String, NodeFinished)>>>;
+
+struct Forward(Events, Ending);
 
 impl Render for Forward {
     fn envelope(&mut self, envelope: Envelope) {
+        if let Some(envelope::Event::NodeFinished(finished)) = &envelope.event
+            && finished.id == ROOT
+        {
+            *self
+                .1
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                Some((envelope.request.clone(), finished.clone()));
+        }
         let _ = self.0.send(Reply::Envelope(envelope));
     }
 
@@ -45,14 +59,15 @@ impl Host {
         }
     }
 
-    fn session(&self, caller: Caller, events: &Events) -> mix_shell::Session {
-        let account = if caller.uid == 0 {
-            mix_shell::effect::accounts::invoking_user(crate::env::sudo_uid().as_deref())
-        } else {
-            mix_shell::effect::accounts::user_by_uid(caller.uid)
-        };
+    fn session(
+        &self,
+        caller: Caller,
+        account: Option<mix_core::identity::InvokingUser>,
+        events: &Events,
+        ending: &Ending,
+    ) -> mix_shell::Session {
         mix_shell::Session::new(mix_exec::Scope::root())
-            .with_render(Forward(events.clone()))
+            .with_render(Forward(events.clone(), Arc::clone(ending)))
             .with_locks(Arc::clone(&self.locks))
             .with_caller(mix_shell::Caller::Account {
                 peer_is_root: caller.uid == 0,
@@ -79,10 +94,64 @@ impl mix_rpc::Worker for Host {
     }
 
     async fn run(&self, caller: Caller, command: Command, controls: Controls, events: Events) {
-        let session = self.session(caller, &events);
+        let account = if caller.uid == 0 {
+            mix_shell::effect::accounts::invoking_user(crate::env::sudo_uid().as_deref())
+        } else {
+            mix_shell::effect::accounts::user_by_uid(caller.uid)
+        };
+        let who = account.as_ref().map_or_else(
+            || format!("uid {}", caller.uid),
+            |account| account.name.clone(),
+        );
+        let key = mix_events::key_of(command.request.as_ref());
+        let ending = Ending::default();
+        let session = self.session(caller, account, &events, &ending);
         let _steer = controls::steer(&session.scope, controls, &events);
         mix_shell::request::run(&session, command).await;
+        let ended = ending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        crate::journal::record(&audit(&who, key, ended.as_ref()));
     }
+}
+
+fn audit(
+    who: &str,
+    key: &str,
+    ended: Option<&(String, NodeFinished)>,
+) -> Vec<(&'static str, String)> {
+    let outcome = ended.map_or_else(
+        || "ended without an outcome".to_string(),
+        |(_, finished)| {
+            finished
+                .status()
+                .as_str_name()
+                .trim_start_matches("STATUS_")
+                .to_ascii_lowercase()
+                .replace('_', " ")
+        },
+    );
+    let failed =
+        !ended.is_some_and(|(_, finished)| finished.exit_code == mix_events::exit::SUCCEEDED);
+    let mut fields = vec![
+        ("MESSAGE", format!("{who} ran mix {key}: {outcome}")),
+        ("PRIORITY", if failed { "4" } else { "6" }.to_string()),
+        ("SYSLOG_IDENTIFIER", "mix-daemon".to_string()),
+        ("MIX_USER", who.to_string()),
+        ("MIX_COMMAND", key.to_string()),
+    ];
+    if let Some((request, finished)) = ended {
+        fields.push(("MIX_REQUEST", request.clone()));
+        fields.push(("MIX_EXIT", finished.exit_code.to_string()));
+        if let Some(diagnostic) = &finished.diagnostic {
+            fields.push((
+                "MIX_CODE",
+                mix_events::code::name(diagnostic.code()).to_string(),
+            ));
+        }
+    }
+    fields
 }
 
 pub async fn serve_stdin() -> ExitCode {
@@ -185,6 +254,7 @@ mod tests {
 
 #[cfg(test)]
 mod gate_tests {
+    use mix_events::v1::Code;
     use mix_rpc::Worker;
 
     use super::*;
@@ -208,5 +278,75 @@ mod gate_tests {
             uid: u32::MAX - 1,
             gid: u32::MAX - 1
         }));
+    }
+
+    fn finished(
+        status: mix_events::v1::Status,
+        exit_code: u32,
+        code: Option<Code>,
+    ) -> (String, NodeFinished) {
+        (
+            "request-1".to_string(),
+            NodeFinished {
+                id: ROOT,
+                status: status as i32,
+                exit_code,
+                diagnostic: code.map(|code| {
+                    Box::new(mix_events::v1::Diagnostic {
+                        code: code as i32,
+                        ..Default::default()
+                    })
+                }),
+                ..Default::default()
+            },
+        )
+    }
+
+    fn field<'a>(fields: &'a [(&str, String)], name: &str) -> Option<&'a str> {
+        fields
+            .iter()
+            .find(|(field, _)| *field == name)
+            .map(|(_, value)| value.as_str())
+    }
+
+    #[test]
+    fn an_audit_entry_names_who_ran_what_and_how_it_ended() {
+        let succeeded = audit(
+            "alice",
+            "install",
+            Some(&finished(mix_events::v1::Status::Succeeded, 0, None)),
+        );
+        assert_eq!(
+            field(&succeeded, "MESSAGE"),
+            Some("alice ran mix install: succeeded")
+        );
+        assert_eq!(field(&succeeded, "PRIORITY"), Some("6"));
+        assert_eq!(field(&succeeded, "MIX_REQUEST"), Some("request-1"));
+        assert_eq!(field(&succeeded, "MIX_CODE"), None);
+
+        let failed = audit(
+            "uid 1001",
+            "repair",
+            Some(&finished(
+                mix_events::v1::Status::Failed,
+                mix_events::exit::FAILED,
+                Some(Code::NotBootstrapped),
+            )),
+        );
+        assert_eq!(field(&failed, "PRIORITY"), Some("4"));
+        assert_eq!(field(&failed, "MIX_CODE"), Some("NOT_BOOTSTRAPPED"));
+        assert_eq!(field(&failed, "MIX_EXIT"), Some("1"));
+    }
+
+    #[test]
+    fn a_request_that_ended_without_an_outcome_is_still_audited() {
+        let fields = audit("alice", "doctor", None);
+
+        assert_eq!(
+            field(&fields, "MESSAGE"),
+            Some("alice ran mix doctor: ended without an outcome")
+        );
+        assert_eq!(field(&fields, "PRIORITY"), Some("4"));
+        assert_eq!(field(&fields, "MIX_REQUEST"), None);
     }
 }
