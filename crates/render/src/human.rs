@@ -1,7 +1,7 @@
 #![cfg_attr(not(test), deny(clippy::wildcard_enum_match_arm))]
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use mix_events::Render;
@@ -14,14 +14,63 @@ use mix_events::{Detail, Fault, NodeId, ROOT};
 use mix_ui::{Display, Out, Severity, Status, StepLine};
 
 use super::{trace, verbs};
-use crate::session::controls;
+
+struct Unlogged {
+    status: Status,
+    subject: String,
+    line: Arc<dyn StepLine>,
+}
+
+struct Logging {
+    inner: Arc<dyn Out>,
+    unlogged: Mutex<Vec<Unlogged>>,
+}
+
+impl Logging {
+    fn new(inner: Arc<dyn Out>) -> Self {
+        Self {
+            inner,
+            unlogged: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn defer(&self, unlogged: Unlogged) {
+        self.unlogged
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(unlogged);
+    }
+
+    fn flush(&self) {
+        let unlogged =
+            std::mem::take(&mut *self.unlogged.lock().unwrap_or_else(PoisonError::into_inner));
+        for step in unlogged {
+            step.line.commit();
+            self.inner.line(&mix_ui::status_line(
+                step.status,
+                &step.subject,
+                self.inner.colours(),
+            ));
+        }
+    }
+}
+
+impl Out for Logging {
+    fn line(&self, text: &str) {
+        self.flush();
+        self.inner.line(text);
+    }
+
+    fn colours(&self) -> bool {
+        self.inner.colours()
+    }
+}
 
 pub struct Human {
     display: Arc<dyn Display>,
-    out: Arc<dyn Out>,
+    out: Arc<Logging>,
     recorded: Option<Duration>,
     level: Detail,
-    results: bool,
     started: Instant,
     stop_noticed: bool,
     request: Option<Request>,
@@ -36,10 +85,9 @@ impl Human {
     pub fn new(display: Arc<dyn Display>) -> Self {
         Self {
             display,
-            out: Arc::new(mix_ui::Spaced::new(mix_ui::Stderr)),
+            out: Arc::new(Logging::new(Arc::new(mix_ui::Spaced::new(mix_ui::Stderr)))),
             recorded: None,
             level: Detail::Step,
-            results: true,
             started: Instant::now(),
             stop_noticed: false,
             request: None,
@@ -57,11 +105,12 @@ impl Human {
     }
 
     pub fn to(mut self, out: Arc<dyn Out>) -> Self {
-        self.out = Arc::new(mix_ui::Spaced::new(out));
+        self.out = Arc::new(Logging::new(Arc::new(mix_ui::Spaced::new(out))));
         self
     }
 
-    pub fn at(&mut self, offset: Duration) {
+    #[cfg(test)]
+    pub(crate) fn at(&mut self, offset: Duration) {
         self.recorded = Some(offset);
     }
 
@@ -76,8 +125,17 @@ impl Human {
     }
 
     fn announce(&mut self, node: NodeId, status: Status, subject: &str) {
-        self.status(Detail::Step, status, subject);
-        self.lines.insert(node, self.display.step(status, subject));
+        let line = self.display.step(status, subject);
+        if self.display.live() && self.shows(Detail::Step) {
+            self.out.defer(Unlogged {
+                status,
+                subject: subject.to_string(),
+                line: Arc::clone(&line),
+            });
+        } else {
+            self.status(Detail::Step, status, subject);
+        }
+        self.lines.insert(node, line);
     }
 
     fn replay(&mut self, envelope: Envelope) {
@@ -148,7 +206,7 @@ impl Human {
                 super::results::finished(
                     self.out.as_ref(),
                     &node,
-                    self.results,
+                    self.request.as_ref(),
                     self.level,
                     elapsed,
                 );
@@ -160,6 +218,7 @@ impl Human {
             Event::NodeFinished(node) => {
                 self.pending.remove(&node.id);
                 if let Some(line) = self.lines.remove(&node.id) {
+                    self.out.flush();
                     line.finish();
                 }
             }
@@ -172,7 +231,7 @@ impl Human {
                     let words = mix_explain::warning(&diagnostic);
                     let code = (self.shows(Detail::Action)
                         && diagnostic.code() != mix_events::v1::Code::Unspecified)
-                        .then(|| mix_explain::codes::kebab(diagnostic.code()));
+                        .then(|| mix_events::code::kebab(diagnostic.code()));
                     mix_ui::report_to(
                         self.out.as_ref(),
                         Severity::Warning,
@@ -201,7 +260,7 @@ impl Human {
                     Status::Cancelled,
                     &format!(
                         "`{}` in {}",
-                        self.request.as_ref().map_or("mix", crate::request::name),
+                        self.request.as_ref().map_or("mix", crate::words::name),
                         super::results::took(elapsed)
                     ),
                 );
@@ -210,14 +269,14 @@ impl Human {
             Ended::Unspecified | Ended::Succeeded | Ended::AlreadySatisfied => return,
         };
         let words = match &self.request {
-            Some(request) => crate::session::outcome(request, &fault),
+            Some(request) => crate::words::outcome(request, &fault),
             None => mix_explain::outcome("mix", &"finish", &fault),
         };
         let code = self
             .shows(Detail::Action)
             .then(|| fault.code())
             .flatten()
-            .map(mix_explain::codes::kebab);
+            .map(mix_events::code::kebab);
         mix_ui::report_to(
             self.out.as_ref(),
             Severity::Error,
@@ -234,10 +293,14 @@ impl Human {
         match progress {
             Progress::Stopping(_) => {
                 if self.shows(Detail::Step)
-                    && let Some(note) = self.request.as_ref().and_then(crate::request::stopping)
+                    && let Some(note) = self.request.as_ref().and_then(crate::words::stopping)
                     && !std::mem::replace(&mut self.stop_noticed, true)
                 {
-                    mix_ui::note_to(self.out.as_ref(), &note, Some(&controls::second_ctrl_c()));
+                    mix_ui::note_to(
+                        self.out.as_ref(),
+                        &note,
+                        Some(&crate::words::second_ctrl_c()),
+                    );
                 }
             }
             Progress::Command(command) => {
@@ -271,11 +334,17 @@ impl Human {
             }
             Progress::Bytes(bytes) => {
                 if let Some(line) = self.lines.get(&id) {
+                    if bytes.total.is_some() {
+                        self.out.flush();
+                    }
                     line.bytes(bytes.done, bytes.total);
                 }
             }
             Progress::Builds(builds) => {
                 if let Some(line) = self.lines.get(&id) {
+                    if mix_ui::activity::phase(&builds).is_some() {
+                        self.out.flush();
+                    }
                     line.builds(&builds);
                 }
             }
@@ -345,6 +414,24 @@ mod tests {
             self.0.push(format!("opened {} {subject}", status.text()));
             Arc::new(Recorded(Arc::clone(&self.0), subject.to_string()))
         }
+
+        fn live(&self) -> bool {
+            true
+        }
+    }
+
+    struct Logged(Arc<Seen>);
+
+    impl Out for Logged {
+        fn line(&self, text: &str) {
+            if !text.is_empty() {
+                self.0.push(format!("logged {}", text.trim_start()));
+            }
+        }
+
+        fn colours(&self) -> bool {
+            false
+        }
     }
 
     impl StepLine for Recorded {
@@ -361,6 +448,10 @@ mod tests {
 
         fn item(&self, name: &str) {
             self.0.push(format!("item {name}"));
+        }
+
+        fn commit(&self) {
+            self.0.push(format!("committed {}", self.1));
         }
 
         fn finish(&self) {
@@ -470,5 +561,71 @@ mod tests {
             rendered(&seen, &outbox, &mut human),
             ["opened Activating profile", "builds 1/3", "closed profile"]
         );
+    }
+
+    fn logging(level: Detail) -> (Arc<Seen>, Arc<Outbox>, Human, Tree) {
+        let (seen, outbox, _, tree) = setup();
+        let human = Human::new(Arc::new(Recording(Arc::clone(&seen))))
+            .level(level)
+            .to(Arc::new(Logged(Arc::clone(&seen))));
+        (seen, outbox, human, tree)
+    }
+
+    #[test]
+    fn a_running_step_is_shown_once_and_logged_once_when_it_ends() {
+        let (seen, outbox, mut human, mut tree) = logging(Detail::Step);
+        let (step, action) = action_under_a_step(&mut tree, "profile");
+
+        assert_eq!(
+            rendered(&seen, &outbox, &mut human),
+            ["opened Activating profile"]
+        );
+
+        tree.finish(action, Ending::succeeded()).unwrap();
+        tree.finish(step, Ending::succeeded()).unwrap();
+
+        assert_eq!(
+            rendered(&seen, &outbox, &mut human),
+            [
+                "opened Activating profile",
+                "committed profile",
+                "logged Activating profile",
+                "closed profile",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_step_is_logged_before_anything_printed_under_it() {
+        let (seen, outbox, mut human, mut tree) = logging(Detail::Action);
+        let (step, action) = action_under_a_step(&mut tree, "profile");
+        tree.finish(action, Ending::succeeded()).unwrap();
+        tree.finish(step, Ending::succeeded()).unwrap();
+
+        let seen = rendered(&seen, &outbox, &mut human);
+
+        let logged: Vec<&String> = seen
+            .iter()
+            .filter(|line| line.starts_with("logged"))
+            .collect();
+        assert_eq!(
+            logged.first().map(|line| line.as_str()),
+            Some("logged Activating profile")
+        );
+        assert_eq!(
+            seen.iter()
+                .filter(|line| *line == "logged Activating profile")
+                .count(),
+            1
+        );
+        let committed = seen
+            .iter()
+            .position(|line| line == "committed profile")
+            .unwrap();
+        let first_logged = seen
+            .iter()
+            .position(|line| line.starts_with("logged"))
+            .unwrap();
+        assert!(committed < first_logged, "{seen:?}");
     }
 }

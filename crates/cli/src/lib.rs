@@ -1,31 +1,35 @@
 mod args;
-mod local;
+mod client;
+mod controls;
+mod env;
 mod request;
 mod session;
 
-pub mod output;
-
 use std::process::ExitCode;
 
-use args::{Args, Color};
+use args::{Args, Color, Output};
 
 pub async fn run() -> ExitCode {
     let args = Args::parse_with_color();
-    mix_ui::set_color(match args.color {
-        Color::Auto => mix_ui::ColorChoice::Auto,
-        Color::Always => mix_ui::ColorChoice::Always,
-        Color::Never => mix_ui::ColorChoice::Never,
-    });
-    let Some(request) = request::from_args(&args.command, |name| std::env::var(name).ok()) else {
-        return local::run(&args);
-    };
-    let view = output::View {
-        output: args.output,
+    let environment = env::Environment::read();
+    let request = request::from_args(&args.command, &environment);
+    let view = mix_render::View {
+        format: match args.output {
+            Output::Human => mix_render::Format::Human,
+            Output::Json => mix_render::Format::Json,
+        },
         events_file: args.events_file.clone(),
         verbose: args.verbose,
         quiet: args.quiet,
-        exit: output::Exit::default(),
+        exit: mix_render::Exit::default(),
     };
-    mix_ui::init(args.draws_progress());
-    session::run(request, &view).await
+    mix_render::start(
+        match args.color {
+            Color::Auto => mix_render::Color::Auto,
+            Color::Always => mix_render::Color::Always,
+            Color::Never => mix_render::Color::Never,
+        },
+        args.draws_progress(environment.ci),
+    );
+    session::run(request, &view, std::path::Path::new(mix_rpc::SOCKET_PATH)).await
 }

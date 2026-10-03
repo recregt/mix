@@ -1,42 +1,21 @@
+use mix_events::v1::InstallRequest;
+
 use crate::Context;
+use crate::profile::change;
 use crate::request::{Concluded, Root};
 
-use crate::profile::change::{self, Result};
-use crate::profile::state::Source;
-
-/// What a run of `install` actually did, so a caller can report an idempotent no-op as a
-/// success rather than a failure.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct Installed {
-    /// Packages added to the profile by this run, in the order they were requested.
-    pub added: Vec<String>,
-    /// Packages that were already in the profile and were left alone.
-    pub skipped: Vec<String>,
-    pub restored: Option<Source>,
-}
-
-impl Installed {
-    pub fn changed_nothing(&self) -> bool {
-        self.added.is_empty()
-    }
-}
-
-pub(crate) async fn install(
-    ctx: &Context,
-    root: &mut Root,
-    packages: &[String],
-) -> Concluded<Result<Installed>> {
+pub(crate) async fn install(ctx: &Context, root: &mut Root, request: &InstallRequest) -> Concluded {
     if ctx.caller_is_root {
         return root.refuse(change::Error::NotRoot);
     }
     let Some(cfg) = ctx.user.as_ref() else {
         return root.refuse(change::Error::NotBootstrapped);
     };
-    let decided = match mix_core::change::install(packages, change::settled(cfg, &ctx.locked)) {
-        Ok(decided) => decided,
-        Err(refused) => return root.refuse(change::Error::from(refused)),
-    };
-    let restored = (decided.source != Source::File).then_some(decided.source);
+    let decided =
+        match mix_core::change::install(&request.packages, change::settled(cfg, &ctx.locked)) {
+            Ok(decided) => decided,
+            Err(refused) => return root.refuse(change::Error::from(refused)),
+        };
     change::run(
         ctx,
         root,
@@ -46,13 +25,6 @@ pub(crate) async fn install(
         &mut Vec::new(),
     )
     .await
-    .map(|ran| {
-        ran.map(|()| Installed {
-            added: decided.changed,
-            skipped: decided.skipped,
-            restored,
-        })
-    })
 }
 
 #[cfg(test)]
@@ -62,7 +34,10 @@ mod tests {
     use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
     use mix_core::state::StateManifest;
 
-    use crate::profile::change::Error;
+    use mix_events::v1::command::Request;
+    use mix_events::v1::{Code, InstallRequest, InstallResult, node_finished};
+
+    use crate::request::ran::{Ran, ran};
 
     fn seeded_home() -> tempfile::TempDir {
         let home = tempfile::tempdir().unwrap();
@@ -94,16 +69,26 @@ mod tests {
         }
     }
 
+    async fn install(home: &std::path::Path, packages: &[&str]) -> Ran {
+        let packages = packages.iter().map(|package| package.to_string()).collect();
+        ran(context(home), Request::Install(InstallRequest { packages })).await
+    }
+
+    fn installed(ran: &Ran) -> &InstallResult {
+        match ran.result() {
+            Some(node_finished::Result::Install(installed)) => installed,
+            other => panic!("expected an install result, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn install_skips_a_package_that_is_already_present() {
         let home = seeded_home();
 
-        let installed = crate::request::install(&context(home.path()), &["git".to_string()])
-            .await
-            .unwrap();
+        let ran = install(home.path(), &["git"]).await;
 
-        assert!(installed.changed_nothing());
-        assert_eq!(installed.skipped, vec!["git".to_string()]);
+        assert!(installed(&ran).added.is_empty());
+        assert_eq!(installed(&ran).skipped, vec!["git".to_string()]);
     }
 
     #[tokio::test]
@@ -112,9 +97,7 @@ mod tests {
         let state_before =
             std::fs::read_to_string(mix_state_dir(home.path()).join(STATE_FILE)).unwrap();
 
-        crate::request::install(&context(home.path()), &["git".to_string()])
-            .await
-            .unwrap();
+        install(home.path(), &["git"]).await;
 
         assert_eq!(
             std::fs::read_to_string(mix_state_dir(home.path()).join(STATE_FILE)).unwrap(),
@@ -127,27 +110,19 @@ mod tests {
     async fn install_reports_a_repeated_package_once() {
         let home = seeded_home();
 
-        let installed = crate::request::install(
-            &context(home.path()),
-            &["git".to_string(), "git".to_string()],
-        )
-        .await
-        .unwrap();
+        let ran = install(home.path(), &["git", "git"]).await;
 
-        assert_eq!(installed.skipped, vec!["git".to_string()]);
-        assert!(installed.added.is_empty());
+        assert_eq!(installed(&ran).skipped, vec!["git".to_string()]);
+        assert!(installed(&ran).added.is_empty());
     }
 
     #[tokio::test]
     async fn install_leaves_nothing_written_for_an_invalid_package_name() {
         let home = seeded_home();
 
-        let err =
-            crate::request::install(&context(home.path()), &["not a valid ident".to_string()])
-                .await
-                .unwrap_err();
+        let ran = install(home.path(), &["not a valid ident"]).await;
 
-        assert!(matches!(err, Error::InvalidPackage(_)));
+        assert_eq!(ran.code(), Some(Code::InvalidPackage));
         assert!(!mix_state_dir(home.path()).join(HOME_NIX).exists());
     }
 }

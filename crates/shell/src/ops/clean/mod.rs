@@ -1,24 +1,18 @@
 use mix_core::action::{Fact, Query};
 use mix_core::paths::NIX_STORE;
-use mix_events::v1::{CleanResult, node_finished};
+use mix_events::v1::{CleanRequest, CleanResult, node_finished};
 
 use crate::Context;
 use crate::effect::generations;
-use crate::profile::change::{self, Result};
+use crate::profile::change;
 use crate::request::{Concluded, Root};
-
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct Cleaned {
-    pub generations: Vec<u64>,
-    pub freed_bytes: Option<u64>,
-}
 
 fn available() -> Option<u64> {
     let stat = rustix::fs::statvfs(NIX_STORE).ok()?;
     Some(stat.f_bavail.saturating_mul(stat.f_frsize))
 }
 
-pub(crate) async fn clean(ctx: &Context, root: &mut Root, all: bool) -> Concluded<Result<Cleaned>> {
+pub(crate) async fn clean(ctx: &Context, root: &mut Root, request: &CleanRequest) -> Concluded {
     if ctx.caller_is_root {
         return root.refuse(change::Error::NotRoot);
     }
@@ -29,37 +23,30 @@ pub(crate) async fn clean(ctx: &Context, root: &mut Root, all: bool) -> Conclude
         Some(Fact::Profile(profile)) => mix_core::change::old_generations(&profile),
         _ => Vec::new(),
     };
-    let before = all.then(available).flatten();
-    let mut freed = None;
-    let concluded = change::perform(
+    let before = request.all.then(available).flatten();
+    change::perform(
         ctx,
         root,
-        "clean",
-        mix_core::change::clean_steps(&cfg.user, all),
+        mix_core::change::clean_steps(&cfg.user, request.all),
         || {
-            freed = before.zip(available()).map(|(b, a)| a.saturating_sub(b));
             node_finished::Result::Clean(CleanResult {
-                generations: old.clone(),
-                freed_bytes: freed,
+                generations: old,
+                freed_bytes: before.zip(available()).map(|(b, a)| a.saturating_sub(b)),
             })
         },
         &mut Vec::new(),
     )
-    .await;
-    concluded.map(|ran| {
-        ran.map(|()| Cleaned {
-            generations: old,
-            freed_bytes: freed,
-        })
-    })
+    .await
 }
 
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod tests {
     use mix_core::identity::InvokingUser;
+    use mix_events::v1::command::Request;
 
     use super::*;
+    use crate::request::ran::{Ran, ran};
 
     fn context(home: &std::path::Path) -> crate::Session {
         crate::Session::new(mix_exec::Scope::root()).with_user(Some(
@@ -78,23 +65,26 @@ mod tests {
         ))
     }
 
+    async fn cleaned(session: crate::Session) -> Ran {
+        ran(session, Request::Clean(CleanRequest { all: false })).await
+    }
+
     #[tokio::test]
     async fn a_profile_with_no_generations_has_nothing_to_clean() {
         let home = tempfile::tempdir().unwrap();
 
-        let cleaned = crate::request::clean(&context(home.path()), false)
-            .await
-            .unwrap();
+        let ran = cleaned(context(home.path())).await;
 
-        assert_eq!(cleaned, Cleaned::default());
+        assert_eq!(
+            ran.result(),
+            Some(&node_finished::Result::Clean(CleanResult::default()))
+        );
     }
 
     #[tokio::test]
     async fn clean_needs_a_bootstrapped_user() {
-        let ctx = crate::Session::new(mix_exec::Scope::root());
+        let ran = cleaned(crate::Session::new(mix_exec::Scope::root())).await;
 
-        let refused = crate::request::clean(&ctx, false).await.unwrap_err();
-
-        assert!(matches!(refused, change::Error::NotBootstrapped));
+        assert_eq!(ran.code(), Some(mix_events::v1::Code::NotBootstrapped));
     }
 }

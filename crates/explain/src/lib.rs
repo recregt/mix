@@ -1,10 +1,10 @@
 //! `mix-explain` turns a failure into the words the person who ran the command reads. The code
 //! underneath reports facts as a coded diagnostic, but only the command knows what the reader
 //! should try next, so the caller passes the command's name and action, and the words are
-//! chosen here from the code and its details. `mix explain` prints the longer text for a code.
+//! chosen here from the code and its details. The longer text `mix explain` shows for each code
+//! is here too.
 
 pub mod codes;
-pub mod command;
 pub mod doctor;
 pub(crate) mod render;
 #[cfg(test)]
@@ -121,16 +121,6 @@ impl Diagnostic {
 
     pub fn message(&self) -> String {
         self.text.to_string()
-    }
-
-    pub(crate) fn summary(self) -> Phrase {
-        match self.text {
-            Cow::Borrowed(text) => Phrase::checked_static(&text[..self.summary_end]),
-            Cow::Owned(mut text) => {
-                text.truncate(self.summary_end);
-                Phrase::checked_owned(text)
-            }
-        }
     }
 }
 

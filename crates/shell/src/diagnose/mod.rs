@@ -54,7 +54,6 @@ impl Diagnose for BootstrapError {
             BootstrapError::Unit { .. } => Code::UnitFailed,
             BootstrapError::AlreadyManaged => Code::AlreadyManaged,
             BootstrapError::CrossDeviceStore { .. } => Code::CrossDeviceStore,
-            BootstrapError::Rollback { .. } => Code::RollbackIncomplete,
         })
     }
 
@@ -144,15 +143,6 @@ impl Diagnose for BootstrapError {
                     path: path.display().to_string(),
                 })),
             ),
-            BootstrapError::Rollback { cause, .. } => {
-                let mut fault = Fault::failed(Code::RollbackIncomplete, self.to_string(), None);
-                if let (Fault::Failed(diagnostic), Fault::Failed(cause)) =
-                    (&mut fault, cause.fault())
-                {
-                    diagnostic.causes.push(cause);
-                }
-                fault
-            }
         }
     }
 }

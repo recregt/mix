@@ -9,11 +9,8 @@ use crate::worker::{Gate, Host};
 const FIRST_PASSED_FD: i32 = 3;
 
 fn passed_by_systemd() -> Result<tokio::net::UnixListener, String> {
-    let ours = std::env::var("LISTEN_PID")
-        .ok()
-        .and_then(|pid| pid.parse::<u32>().ok())
-        == Some(std::process::id());
-    if !ours || std::env::var("LISTEN_FDS").as_deref() != Ok("1") {
+    let ours = crate::env::listen_pid() == Some(std::process::id());
+    if !ours || crate::env::listen_fds().as_deref() != Some("1") {
         return Err("systemd passed no socket to this process".to_string());
     }
     let fd = unsafe { OwnedFd::from_raw_fd(FIRST_PASSED_FD) };

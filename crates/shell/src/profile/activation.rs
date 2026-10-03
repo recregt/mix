@@ -16,7 +16,6 @@ use mix_core::paths::{
 use mix_exec::Scope;
 use mix_nixgen::{AttrPath, FlakeRef, Installable};
 
-use crate::HostConfig;
 use crate::effect::exec::run_as_reporting;
 use crate::effect::fs;
 use crate::effect::git;
@@ -108,9 +107,9 @@ pub async fn activate_generation(
     Ok(())
 }
 
-pub async fn record(user: &InvokingUser, host: &HostConfig, scope: &Scope) -> Result<()> {
+pub async fn record(user: &InvokingUser, scope: &Scope) -> Result<()> {
     let state_dir = mix_state_dir(&user.home);
-    let git = git::Git::resolve(user, host.git_binary.as_deref()).await;
+    let git = git::Git::resolve(user).await;
     if !fs::exists(state_dir.join(".git")).await {
         git.init(user, &state_dir, scope).await?;
     }

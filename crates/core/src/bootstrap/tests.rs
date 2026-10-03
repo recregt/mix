@@ -344,10 +344,8 @@ fn an_undo_that_fails_is_reported_and_every_other_undo_still_runs() {
         assert!(
             run.stream.iter().any(|envelope| matches!(
                 &envelope.event,
-                Some(mix_events::v1::envelope::Event::NodeFinished(finished))
-                    if finished.diagnostic.as_ref().is_some_and(|diagnostic| {
-                        diagnostic.code == mix_events::v1::Code::RollbackIncomplete as i32
-                    })
+                Some(mix_events::v1::envelope::Event::Diagnostic(diagnostic))
+                    if diagnostic.code == mix_events::v1::Code::RollbackIncomplete as i32
             )),
             "{fail_undo_at}"
         );

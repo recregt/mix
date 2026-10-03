@@ -158,3 +158,27 @@ fn the_agent_answers_which_generation_was_built_from_the_current_files() {
 
     assert!(matches!(replies(&output).as_slice(), [Reply::Built(None)]));
 }
+
+#[tokio::test]
+async fn a_write_interrupted_before_its_commit_does_not_block_the_next_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(".gitignore");
+    std::fs::write(&path, b"old\n").unwrap();
+    let mut interrupted = Files::open(Path::new("/"), write_request()).unwrap();
+    let Some(Fact::Path(PathFacts { id: Some(id), .. })) =
+        interrupted.observe(&Query::Path(path.clone()))
+    else {
+        panic!("the file is there");
+    };
+    interrupted
+        .perform(&put(&path, Expect::Present(id)), &mut |_: &[Action]| Ok(()))
+        .expect("a file action")
+        .unwrap();
+    drop(interrupted);
+
+    write_file(&path, b"*\n", 0o644, &mix_exec::Scope::root())
+        .await
+        .unwrap();
+
+    assert_eq!(std::fs::read(&path).unwrap(), b"*\n");
+}

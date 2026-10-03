@@ -1,4 +1,4 @@
-#![allow(clippy::disallowed_macros)]
+#![allow(clippy::disallowed_macros, clippy::disallowed_methods)]
 
 use std::fmt::Write as _;
 

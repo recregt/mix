@@ -33,15 +33,35 @@ RULES = [
         {"mix-shell", "mix-rpc", "mix-exec", "tokio"},
         "is not words: mix-explain turns a fault into text and nothing else",
     ),
+    (
+        "mix-render",
+        {"mix-shell", "mix-rpc", "mix-exec", "tokio"},
+        "is not rendering: mix-render turns events into output and nothing else",
+    ),
     *(
         (
             crate,
             {"mix-core", "mix-nixgen", "mix-pins"},
             "is the daemon's model: the client reads the protocol, not the core",
         )
-        for crate in ("mix-cli", "mix-explain", "mix-ui")
+        for crate in ("mix-cli", "mix-explain", "mix-render", "mix-ui")
     ),
 ]
+
+DIRECT = {
+    "mix-cli": (
+        {
+            "clap",
+            "mix-events",
+            "mix-render",
+            "mix-rpc",
+            "nix",
+            "tokio",
+            "uuid",
+        },
+        "is arguments, routing, transport and signals; anything else belongs in the crates it uses",
+    ),
+}
 
 
 def host() -> str:
@@ -96,12 +116,21 @@ def normal_closure(data: dict, start: str) -> set[str]:
     return {names[id] for id in seen}
 
 
+def normal_direct(data: dict, crate: str) -> set[str]:
+    package = next(package for package in data["packages"] if package["name"] == crate)
+    return {dep["name"] for dep in package["dependencies"] if dep["kind"] is None}
+
+
 def main() -> int:
     data = metadata()
     failed = False
     for crate, forbidden, reason in RULES:
         for name in sorted(normal_closure(data, crate) & forbidden):
             print(f"{crate} depends on {name}, which {reason}", file=sys.stderr)
+            failed = True
+    for crate, (allowed, reason) in DIRECT.items():
+        for name in sorted(normal_direct(data, crate) - allowed):
+            print(f"{crate} depends directly on {name}, but {crate} {reason}", file=sys.stderr)
             failed = True
     return 1 if failed else 0
 

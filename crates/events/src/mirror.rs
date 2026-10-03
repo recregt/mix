@@ -27,7 +27,7 @@ impl Mirror {
         }
     }
 
-    pub fn new(url: &str, key: Option<&str>) -> Result<Self, Invalid> {
+    fn new(url: &str, key: Option<&str>) -> Result<Self, Invalid> {
         let url = url.trim().trim_end_matches('/');
         if !is_mirror_url(url) {
             return Err(Invalid::Url(url.to_string()));

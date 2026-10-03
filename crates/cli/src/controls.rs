@@ -1,15 +1,5 @@
-use mix_exec::Reason;
-use mix_ui::{Help, Note, help, note};
 use nix::sys::signal::Signal;
 use tokio::signal::unix::{SignalKind, signal};
-
-pub fn second_ctrl_c() -> Help {
-    help!("press Ctrl-C again to leave it running in the background")
-}
-
-pub fn detached() -> Note {
-    note!("`mix` is finishing the cleanup in the background")
-}
 
 pub const DETACHED_EXIT: u32 = mix_events::exit::INTERRUPTED;
 
@@ -23,7 +13,8 @@ pub enum Received {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Control {
-    Cancel(Reason),
+    Interrupt,
+    Terminate,
     Detach,
     Pause,
     Resume,
@@ -43,11 +34,11 @@ impl Translator {
                 if std::mem::replace(&mut self.cancelled, true) {
                     return Control::Detach;
                 }
-                Control::Cancel(if received == Received::Interrupt {
-                    Reason::Interrupted
+                if received == Received::Interrupt {
+                    Control::Interrupt
                 } else {
-                    Reason::Terminated
-                })
+                    Control::Terminate
+                }
             }
         }
     }
@@ -101,11 +92,11 @@ mod tests {
     fn a_first_interrupt_cancels_and_a_second_detaches() {
         assert_eq!(
             translated(&[Received::Interrupt, Received::Interrupt]),
-            [Control::Cancel(Reason::Interrupted), Control::Detach]
+            [Control::Interrupt, Control::Detach]
         );
         assert_eq!(
             translated(&[Received::Terminate, Received::Interrupt]),
-            [Control::Cancel(Reason::Terminated), Control::Detach]
+            [Control::Terminate, Control::Detach]
         );
     }
 
@@ -121,7 +112,7 @@ mod tests {
     fn suspending_does_not_count_as_an_interrupt() {
         assert_eq!(
             translated(&[Received::Suspend, Received::Interrupt]),
-            [Control::Pause, Control::Cancel(Reason::Interrupted)]
+            [Control::Pause, Control::Interrupt]
         );
     }
 }

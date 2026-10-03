@@ -1399,23 +1399,15 @@ dependencies = [
 name = "mix-cli"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "clap",
- "codspeed-divan-compat",
- "futures-util",
  "mix-core",
  "mix-events",
  "mix-exec",
- "mix-explain",
- "mix-nixgen",
+ "mix-render",
  "mix-rpc",
  "mix-shell",
- "mix-ui",
  "nix",
- "pbjson-types",
- "serde_json",
  "tempfile",
- "thiserror",
  "tokio",
  "uuid",
 ]
@@ -1513,6 +1505,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mix-render"
+version = "0.1.0"
+dependencies = [
+ "mix-core",
+ "mix-events",
+ "mix-explain",
+ "mix-ui",
+ "pbjson-types",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "mix-rpc"
 version = "0.1.0"
 dependencies = [
@@ -1546,7 +1551,6 @@ dependencies = [
  "mix-pins",
  "mockito",
  "nix",
- "proptest",
  "reqwest",
  "rustix",
  "serde",

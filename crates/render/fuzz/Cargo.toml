@@ -1,5 +1,5 @@
 [package]
-name = "mix-cli-fuzz"
+name = "mix-render-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-mix-cli = { path = ".." }
+mix-render = { path = ".." }
 mix-events = { path = "../../events" }
 mix-ui = { path = "../../ui" }
 prost = "0.14.4"

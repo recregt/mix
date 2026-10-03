@@ -3,8 +3,12 @@
 use std::time::Duration;
 
 use mix_events::Detail;
+use mix_events::v1::command::Request;
 use mix_events::v1::node_finished::Result;
-use mix_events::v1::{CleanResult, InspectionReport, NodeFinished, RepairReport, Status as Ended};
+use mix_events::v1::{
+    CleanResult, Code, ExplainRequest, ExplainResult, InspectionReport, NodeFinished, RepairReport,
+    Status as Ended,
+};
 use mix_ui::{Out, Report, Severity, Status};
 
 pub(crate) fn took(elapsed: Duration) -> String {
@@ -23,7 +27,7 @@ fn words(out: &dyn Out, severity: Severity, words: &mix_explain::Diagnostic) {
 pub(super) fn finished(
     out: &dyn Out,
     node: &NodeFinished,
-    printed: bool,
+    request: Option<&Request>,
     level: Detail,
     elapsed: Duration,
 ) {
@@ -59,7 +63,7 @@ pub(super) fn finished(
         Result::Doctor(doctor) => audited(out, &doctor.reports, level, elapsed),
         Result::Install(install) => {
             reset(out, install.restored, level);
-            if printed && chatty {
+            if chatty {
                 changed(
                     out,
                     &install.added,
@@ -72,7 +76,7 @@ pub(super) fn finished(
         }
         Result::Remove(remove) => {
             reset(out, remove.restored, level);
-            if printed && chatty {
+            if chatty {
                 changed(
                     out,
                     &remove.removed,
@@ -92,7 +96,31 @@ pub(super) fn finished(
                 );
             }
         }
+        Result::Explain(explain) => mix_ui::data(&explained(explain, request)),
         Result::Inspection(_) | Result::Process(_) => {}
+    }
+}
+
+fn explained(explain: &ExplainResult, request: Option<&Request>) -> String {
+    let codes = explain
+        .codes
+        .iter()
+        .filter_map(|code| Code::try_from(*code).ok());
+    match request {
+        Some(Request::Explain(ExplainRequest { code: Some(_) })) => codes
+            .map(mix_explain::codes::explanation_text)
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        Some(
+            Request::Explain(ExplainRequest { code: None })
+            | Request::Bootstrap(_)
+            | Request::Install(_)
+            | Request::Remove(_)
+            | Request::Clean(_)
+            | Request::Repair(_)
+            | Request::Doctor(_),
+        )
+        | None => mix_explain::codes::list_text(codes),
     }
 }
 

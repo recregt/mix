@@ -15,7 +15,6 @@ use mix_core::paths::{
 use mix_core::policy::Policy;
 use mix_core::world::{Profile, World};
 use mix_exec::Scope;
-use mix_shell::HostConfig;
 use mix_shell::drive::Performer;
 use mix_shell::effect::files::Files;
 use mix_shell::effect::generations::ProfileContext;
@@ -281,6 +280,7 @@ fn changing_an_owner_to_another_user_matches_the_model() {
     machine.run(&[&put, &chown], &[Query::Path(path.clone())]);
 }
 
+#[allow(clippy::disallowed_methods)]
 fn enrolled() -> InvokingUser {
     let name = std::env::var("MIX_DIFFERENTIAL_USER").expect("the enrolled user's name");
     let user = nix::unistd::User::from_name(&name).unwrap().unwrap();
@@ -313,7 +313,6 @@ fn every_profile_action_and_its_undo_match_the_model() {
             mirror: Policy::load(std::fs::read_to_string(POLICY_FILE).ok().as_deref())
                 .mirror()
                 .map(|mirror| mirror.url().to_string()),
-            host: HostConfig::default(),
         })
         .with_agent_program("/usr/local/bin/mix-daemon".into());
     let mut machine = Machine::with(World::default(), performer);
@@ -429,6 +428,7 @@ fn present(fact: Fact) -> Fact {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods)]
 fn installing_and_removing_the_runtime_match_the_model() {
     let mirror = std::env::var("MIX_DIFFERENTIAL_MIRROR").expect("the mirror's url");
     let runtime = mix_shell::ops::bootstrap::runtime(Some(&mirror)).unwrap();

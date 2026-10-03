@@ -1,8 +1,8 @@
 //! What bootstrap could not do, and the context that makes it legible.
 //!
-//! A variant here says which artifact, which host, which derivations — the facts `mix-core` does
-//! not have and this crate does. What a reader should do about it depends on the command they
-//! ran, which this crate does not know, so the advice is written in `mix-cli` instead.
+//! A variant here names the artifact, the host or the derivations: facts `mix-core` does not
+//! have and this crate does. What a reader should do about it depends on the command they ran,
+//! which this crate does not know, so the advice is written in `mix-explain` instead.
 
 /// Where systemd was looked for, which is what decides how it is turned on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,13 +78,6 @@ pub enum Error {
     )]
     CrossDeviceStore { path: std::path::PathBuf },
 
-    #[error("{cause}\n{summary}")]
-    Rollback {
-        #[source]
-        cause: Box<Error>,
-        summary: String,
-    },
-
     #[error("interrupted")]
     Interrupted,
 }
@@ -116,19 +109,5 @@ mod tests {
             err.to_string(),
             "cannot move /nix/store/pkg-a into /nix/store: it is on a different filesystem"
         );
-    }
-
-    #[test]
-    fn rollback_error_reports_the_original_cause_and_the_cleanup_summary() {
-        let err = Error::Rollback {
-            cause: Box::new(Error::UnsupportedHost),
-            summary: "1 rollback step(s) failed: nixbld group: exit 1".to_string(),
-        };
-
-        let message = err.to_string();
-        assert!(message.contains("NixOS"));
-        assert!(message.contains("nixbld group: exit 1"));
-        let source = std::error::Error::source(&err).expect("cause should be preserved");
-        assert!(source.to_string().contains("NixOS"));
     }
 }

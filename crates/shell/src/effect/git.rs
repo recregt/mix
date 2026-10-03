@@ -31,13 +31,9 @@ pub struct Git {
 }
 
 impl Git {
-    pub async fn resolve(user: &InvokingUser, configured: Option<&Path>) -> Self {
+    pub async fn resolve(user: &InvokingUser) -> Self {
         Self {
-            binary: resolve_binary(
-                user,
-                configured.map(|path| path.to_string_lossy().into_owned()),
-            )
-            .await,
+            binary: resolve_binary(user).await,
         }
     }
 
@@ -130,12 +126,7 @@ impl Git {
     }
 }
 
-async fn resolve_binary(user: &InvokingUser, configured: Option<String>) -> String {
-    if let Some(binary) = configured.map(|path| path.trim().to_string())
-        && !binary.is_empty()
-    {
-        return binary;
-    }
+async fn resolve_binary(user: &InvokingUser) -> String {
     let profile_git = profile_git(user);
     if exists(&profile_git).await {
         return profile_git.to_string_lossy().into_owned();
@@ -202,20 +193,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_binary_prefers_the_configured_override() {
-        let home = tempfile::tempdir().unwrap();
-        let binary = resolve_binary(&user(home.path()), Some(" /usr/bin/git ".to_string())).await;
-        assert_eq!(binary, "/usr/bin/git");
-    }
-
-    #[tokio::test]
     async fn resolve_binary_uses_the_git_in_the_users_nix_profile() {
         let home = tempfile::tempdir().unwrap();
         let profile_git = profile_git(&user(home.path()));
         std::fs::create_dir_all(profile_git.parent().unwrap()).unwrap();
         std::fs::write(&profile_git, "").unwrap();
 
-        let binary = resolve_binary(&user(home.path()), None).await;
+        let binary = resolve_binary(&user(home.path())).await;
 
         assert_eq!(binary, profile_git.to_string_lossy());
     }
@@ -223,11 +207,7 @@ mod tests {
     #[tokio::test]
     async fn resolve_binary_falls_back_to_the_path() {
         let home = tempfile::tempdir().unwrap();
-        assert_eq!(resolve_binary(&user(home.path()), None).await, "git");
-        assert_eq!(
-            resolve_binary(&user(home.path()), Some("   ".to_string())).await,
-            "git"
-        );
+        assert_eq!(resolve_binary(&user(home.path())).await, "git");
     }
 
     #[tokio::test]

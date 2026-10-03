@@ -33,7 +33,7 @@ pub struct Args {
     #[arg(
         long,
         global = true,
-        env = "MIX_NO_PROGRESS",
+        env = crate::env::NO_PROGRESS,
         action = ArgAction::SetTrue,
         value_parser = clap::builder::FalseyValueParser::new(),
     )]
@@ -66,25 +66,6 @@ pub enum Color {
 pub enum Output {
     Human,
     Json,
-}
-
-#[derive(Subcommand)]
-pub enum EventsCommand {
-    /// Check that a recorded events file is complete and well formed
-    Check {
-        /// The file `--events-file` wrote
-        file: PathBuf,
-    },
-
-    /// Show a recorded events file the way the run looked, at any verbosity
-    Show {
-        /// The file `--events-file` wrote
-        file: PathBuf,
-
-        /// Show only this node and what ran inside it, such as `install/activate`
-        #[arg(long)]
-        node: Option<String>,
-    },
 }
 
 #[derive(Subcommand)]
@@ -131,22 +112,22 @@ pub enum Command {
     /// Repair configuration drift
     Repair,
 
-    /// Work with recorded events
-    Events {
-        #[command(subcommand)]
-        command: EventsCommand,
-    },
-
-    /// Describe a failure code, such as `locked`
+    /// Describe a failure code, such as `network`
     Explain {
         /// The code, as a failure prints it
-        #[arg(required_unless_present = "list")]
-        code: Option<String>,
+        #[arg(required_unless_present = "list", value_parser = code)]
+        code: Option<mix_events::v1::Code>,
 
         /// List every failure code
         #[arg(long, conflicts_with = "code")]
         list: bool,
     },
+}
+
+fn code(name: &str) -> Result<mix_events::v1::Code, String> {
+    mix_events::code::parse(name).ok_or_else(|| {
+        "it isn't a code `mix` uses; `mix explain --list` shows them all".to_string()
+    })
 }
 
 pub fn color_requested<I, S>(args: I) -> Color
@@ -221,19 +202,10 @@ impl Args {
 
     /// Whether output may be drawn in place.
     ///
-    /// `--no-progress` and `--output json` are explicit requests for plain output; `CI` is
-    /// honoured because build systems set it and nobody is watching a CI log live.
-    pub fn draws_progress(&self) -> bool {
-        !self.no_progress
-            && self.output == Output::Human
-            && !ci_asks_for_plain_output(std::env::var("CI").ok().as_deref())
-    }
-}
-
-fn ci_asks_for_plain_output(ci: Option<&str>) -> bool {
-    match ci.map(str::trim) {
-        None | Some("") | Some("0") => false,
-        Some(value) => !value.eq_ignore_ascii_case("false"),
+    /// `--no-progress` and `--output json` are explicit requests for plain output, and so is
+    /// running under CI.
+    pub fn draws_progress(&self, ci: bool) -> bool {
+        !self.no_progress && self.output == Output::Human && !ci
     }
 }
 
@@ -314,8 +286,30 @@ mod tests {
     }
 
     #[test]
-    fn json_output_implies_plain_output() {
-        assert!(!parse(&["mix", "--output", "json", "install", "ripgrep"]).draws_progress());
+    fn a_code_is_read_as_a_failure_prints_it_and_anything_else_is_a_usage_error() {
+        assert!(matches!(
+            parse(&["mix", "explain", "not-bootstrapped"]).command,
+            Command::Explain {
+                code: Some(mix_events::v1::Code::NotBootstrapped),
+                list: false
+            }
+        ));
+        let refused = Args::try_parse_from(["mix", "explain", "locked"])
+            .err()
+            .expect("a code mix no longer uses is refused");
+        assert_eq!(refused.exit_code(), mix_events::exit::USAGE as i32);
+    }
+
+    #[test]
+    fn progress_is_drawn_only_for_people_and_only_when_nothing_asks_for_plain_output() {
+        for (args, ci, drawn) in [
+            (&["mix", "doctor"][..], false, true),
+            (&["mix", "--no-progress", "doctor"], false, false),
+            (&["mix", "--output", "json", "doctor"], false, false),
+            (&["mix", "doctor"], true, false),
+        ] {
+            assert_eq!(parse(args).draws_progress(ci), drawn, "{args:?}, CI {ci}");
+        }
     }
 
     #[test]
@@ -334,33 +328,6 @@ mod tests {
                 .find(|arg| arg.get_id() == id)
                 .unwrap_or_else(|| panic!("no argument {id}"));
             assert!(arg.is_global_set(), "--{id} must be global");
-        }
-    }
-
-    #[test]
-    fn an_unset_or_disabled_ci_variable_leaves_progress_alone() {
-        for value in [
-            None,
-            Some(""),
-            Some("  "),
-            Some("0"),
-            Some("false"),
-            Some("FALSE"),
-        ] {
-            assert!(
-                !ci_asks_for_plain_output(value),
-                "CI={value:?} should not force plain output"
-            );
-        }
-    }
-
-    #[test]
-    fn a_set_ci_variable_forces_plain_output() {
-        for value in [Some("1"), Some("true"), Some("yes"), Some("github")] {
-            assert!(
-                ci_asks_for_plain_output(value),
-                "CI={value:?} should force plain output"
-            );
         }
     }
 

@@ -182,10 +182,6 @@ class Container:
 
     def recorded(self, capture: str, returncode: int, stdout: str, stderr: str) -> Run:
         contents = self.exec("cat", capture).stdout
-        check = self.exec("mix", "events", "check", capture)
-        assert check.returncode == 0, (
-            f"{capture} is not a valid stream: {check.stderr}\n{contents}"
-        )
         run = Run(returncode, stdout, stderr, envelopes_of(contents))
         assert run.exit_code == returncode, (
             f"the root says exit {run.exit_code}: {run!r}"
@@ -270,9 +266,6 @@ class Container:
         )
         return BackgroundRun(self, process, capture)
 
-    def rendered(self, capture: str, verbosity: str) -> str:
-        return self.exec("mix", verbosity, "events", "show", capture).stdout
-
     def snapshot(self) -> str:
         probes = [
             ("units", ["systemctl", "list-units", "--all", "--no-pager", "nix-*", "mix*"]),
@@ -295,11 +288,9 @@ class Container:
         folder.mkdir(parents=True)
         for capture in self.captures:
             name = pathlib.PurePosixPath(capture).stem
-            (folder / f"{name}.ndjson").write_text(self.exec("cat", capture).stdout)
-            (folder / f"{name}.txt").write_text(self.rendered(capture, "-vv"))
-            report.sections.append(
-                (f"mix -v events show {capture}", self.rendered(capture, "-v"))
-            )
+            contents = self.exec("cat", capture).stdout
+            (folder / f"{name}.ndjson").write_text(contents)
+            report.sections.append((capture, contents))
         (folder / "machine.txt").write_text(self.snapshot())
         report.user_properties.append(("failure bundle", str(folder)))
 

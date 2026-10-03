@@ -343,12 +343,7 @@ impl Performer {
             }))
         );
         prepared(&[])?;
-        let host = self
-            .profile
-            .as_ref()
-            .map(|profile| profile.host.clone())
-            .unwrap_or_default();
-        if let Err(error) = profile::record(user, &host, scope).await {
+        if let Err(error) = profile::record(user, scope).await {
             report(Signal::Warning(Box::new(mix_core::diagnose::warning(
                 Code::GitRecordFailed,
                 "could not record the change in git",

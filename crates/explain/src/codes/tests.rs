@@ -12,8 +12,14 @@ use mix_events::v1::{
 use super::*;
 use crate::{Context, render};
 
+fn defined() -> impl Iterator<Item = Code> {
+    Code::DEFINED
+        .iter()
+        .filter_map(|value| Code::try_from(*value).ok())
+}
+
 fn every_code() -> Vec<Code> {
-    super::defined().collect()
+    defined().collect()
 }
 
 fn detail(code: Code) -> Option<Detail> {
@@ -67,11 +73,7 @@ fn sample(code: Code) -> Fault {
         causes: Vec::new(),
         detail: detail(code),
     };
-    let mut failed = diagnostic(code);
-    if code == Code::RollbackIncomplete {
-        failed.causes.push(diagnostic(Code::Network));
-    }
-    Fault::Failed(failed)
+    Fault::Failed(diagnostic(code))
 }
 
 fn golden(code: Code) -> String {
@@ -95,34 +97,16 @@ fn golden_dir() -> PathBuf {
 }
 
 #[test]
-fn every_code_has_a_name_that_parses_back_and_a_long_text() {
+fn every_code_has_a_long_text() {
     for code in every_code() {
-        assert_eq!(parse(name(code)), Some(code), "{code:?}");
-        assert_eq!(parse(&name(code).to_lowercase()), Some(code), "{code:?}");
-        assert_eq!(parse(code.as_str_name()), Some(code), "{code:?}");
         assert!(explanation(code).why.len() > 20, "{code:?}");
     }
 }
 
 #[test]
-fn the_kebab_name_shown_at_v_is_one_mix_explain_takes() {
-    for code in every_code() {
-        assert_eq!(parse(&kebab(code)), Some(code), "{code:?}");
-    }
-    assert_eq!(kebab(Code::GitRecordFailed), "git-record-failed");
-}
-
-#[test]
-fn a_name_mix_does_not_use_is_not_a_code() {
-    assert_eq!(parse("NOPE"), None);
-    assert_eq!(parse("UNSPECIFIED"), None);
-    assert_eq!(parse(""), None);
-}
-
-#[test]
 fn the_list_reads_as_its_golden_file() {
     let path = golden_dir().with_file_name("explain-list.txt");
-    let rendered = format!("$ mix explain --list\n{}\n", list_text());
+    let rendered = format!("$ mix explain --list\n{}\n", list_text(defined()));
     if std::env::var("MIX_UPDATE_GOLDEN").is_ok_and(|value| value == "1") {
         std::fs::write(&path, &rendered).unwrap();
     }

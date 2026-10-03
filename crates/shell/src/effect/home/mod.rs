@@ -283,13 +283,17 @@ pub fn account(uid: u32, path: &Path) -> Result<InvokingUser, Failure> {
     })
 }
 
+fn write_request() -> String {
+    format!("write-{}", crate::request::context::request_id())
+}
+
 pub async fn write_file(
     path: &Path,
     contents: &[u8],
     mode: u32,
     scope: &Scope,
 ) -> Result<(), Failure> {
-    let request = format!("write-{}", std::process::id());
+    let request = write_request();
     let mut files = Files::open(Path::new("/"), &request).map_err(|error| Failure::Io {
         path: "/".into(),
         kind: error.kind(),

@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use mix_core::policy::{Mirror, Policy};
@@ -7,11 +6,6 @@ use mix_events::Outbox;
 use mix_exec::Scope;
 
 use crate::request::Locked;
-
-#[derive(Debug, Clone, Default)]
-pub struct HostConfig {
-    pub git_binary: Option<PathBuf>,
-}
 
 pub fn request_id() -> String {
     uuid::Uuid::now_v7().to_string()
@@ -28,7 +22,6 @@ pub struct Context {
     pub caller_is_root: bool,
     pub scope: Scope,
     pub policy: Policy,
-    pub host: HostConfig,
     pub render: crate::request::sink::Shared,
     pub locked: Locked,
 }
