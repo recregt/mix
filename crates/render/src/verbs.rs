@@ -62,7 +62,7 @@ pub(crate) fn action(operation: Operation) -> Status {
         Operation::DisableUnit => Status::Disabling,
         Operation::StartUnit => Status::Starting,
         Operation::StopUnit => Status::Stopping,
-        Operation::RestartUnit => Status::Restarting,
+        Operation::RestartUnit | Operation::DrainService => Status::Restarting,
         Operation::DaemonReload => Status::Reloading,
         Operation::ActivateProfile => Status::Activating,
         Operation::SwitchGeneration => Status::Switching,

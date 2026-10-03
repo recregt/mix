@@ -13,6 +13,9 @@ const MANAGER_PATH: &str = "/org/freedesktop/systemd1";
 const MANAGER: &str = "org.freedesktop.systemd1.Manager";
 const UNIT: &str = "org.freedesktop.systemd1.Unit";
 
+/// Signal that asks a running `mix-daemon` to finish its accepted requests and exit for a restart.
+pub const DRAIN: nix::sys::signal::Signal = nix::sys::signal::Signal::SIGHUP;
+
 #[derive(Clone, Copy)]
 enum Job {
     Start,
@@ -260,6 +263,7 @@ impl Units {
             Action::StartUnit { unit } => self.start(unit, scope, prepared).await,
             Action::StopUnit { unit } => self.stop(unit, scope, prepared).await,
             Action::RestartUnit { unit } => self.restart(unit, scope, prepared).await,
+            Action::DrainService { unit } => self.drain(unit, prepared).await,
             _ => return None,
         })
     }
@@ -336,6 +340,21 @@ impl Units {
         prepared(&undo)?;
         self.job(Job::Restart, unit, scope).await?;
         done(undo)
+    }
+
+    async fn drain(&self, unit: &str, prepared: &mut Prepared<'_>) -> Outcome {
+        let facts = self.observe(unit).await?;
+        if facts.active_state != "active" {
+            return done(Vec::new());
+        }
+        prepared(&[])?;
+        let operation = UnitOperation::Restart;
+        self.manager(operation)
+            .await?
+            .call::<_, _, ()>("KillUnit", &(unit, "main", DRAIN as i32))
+            .await
+            .map_err(|error| bus_failure(operation, unit, error))?;
+        done(Vec::new())
     }
 
     async fn start(&self, unit: &str, scope: &Scope, prepared: &mut Prepared<'_>) -> Outcome {

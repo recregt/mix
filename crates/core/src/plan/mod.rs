@@ -675,6 +675,7 @@ pub fn describe(action: &Action) -> (Operation, String) {
         Action::StartUnit { unit } => (Operation::StartUnit, unit.clone()),
         Action::StopUnit { unit } => (Operation::StopUnit, unit.clone()),
         Action::RestartUnit { unit } => (Operation::RestartUnit, unit.clone()),
+        Action::DrainService { unit } => (Operation::DrainService, unit.clone()),
         Action::DaemonReload => (Operation::DaemonReload, String::new()),
         Action::InstallRuntime { url, .. } => (Operation::InstallRuntime, url.clone()),
         Action::RemoveRuntime { .. } => (Operation::RemoveRuntime, String::new()),

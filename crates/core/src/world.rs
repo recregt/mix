@@ -802,6 +802,15 @@ impl World {
                 }
                 done(vec![Action::RestartUnit { unit: unit.clone() }])
             }
+            Action::DrainService { unit } => {
+                let since = self.fresh().ino;
+                let facts = self.units.entry(unit.clone()).or_default();
+                if facts.running.is_some() {
+                    facts.running = facts.loaded.clone();
+                    facts.since = Some(since);
+                }
+                done(Vec::new())
+            }
             Action::InstallRuntime { .. } => self.install_runtime(),
             Action::RemoveRuntime { created, .. } => {
                 for path in created {

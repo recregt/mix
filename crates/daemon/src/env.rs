@@ -11,6 +11,10 @@ pub const LISTEN_FDS: &str = "LISTEN_FDS";
 /// invoking user for a root caller.
 pub const SUDO_UID: &str = "SUDO_UID";
 
+/// Datagram socket of the service manager that receives `sd_notify` state messages, set by systemd
+/// for `Type=notify`. A name starting with `@` is in the abstract namespace.
+pub const NOTIFY_SOCKET: &str = "NOTIFY_SOCKET";
+
 #[allow(clippy::disallowed_methods)]
 fn read(name: &str) -> Option<String> {
     std::env::var(name).ok()
@@ -26,4 +30,8 @@ pub fn listen_fds() -> Option<String> {
 
 pub fn sudo_uid() -> Option<String> {
     read(SUDO_UID)
+}
+
+pub fn notify_socket() -> Option<String> {
+    read(NOTIFY_SOCKET)
 }

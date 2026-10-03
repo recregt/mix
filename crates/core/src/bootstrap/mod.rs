@@ -674,8 +674,9 @@ impl StepSpec for InstallMixDaemon {
             actions.push(Action::DaemonReload);
         }
         actions.extend(enable_and_start(MIX_DAEMON_SOCKET_UNIT, socket)?);
+        actions.extend(enable_and_start(MIX_DAEMON_SERVICE_UNIT, service)?);
         if (replaced || units_changed) && service.active_state == "active" {
-            actions.push(Action::RestartUnit {
+            actions.push(Action::DrainService {
                 unit: MIX_DAEMON_SERVICE_UNIT.to_string(),
             });
         }
