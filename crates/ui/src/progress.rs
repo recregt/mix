@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use indicatif::{MultiProgress, ProgressDrawTarget, ProgressStyle};
+use indicatif::{MultiProgress, ProgressDrawTarget, ProgressStyle, TermLike};
 
 const WORKING: &str = "{prefix:>12.green.bright.bold} {msg} ({elapsed})";
 
@@ -17,10 +17,59 @@ pub(crate) const ELAPSED_TICK: Duration = Duration::from_secs(1);
 
 static BOARD: OnceLock<MultiProgress> = OnceLock::new();
 
+const CONTROL_ECHO: &str = "^C";
+
+#[derive(Debug)]
+struct EchoRoom<T>(T);
+
+impl<T: TermLike> TermLike for EchoRoom<T> {
+    fn width(&self) -> u16 {
+        self.0.width().saturating_sub(CONTROL_ECHO.len() as u16)
+    }
+
+    fn height(&self) -> u16 {
+        self.0.height()
+    }
+
+    fn move_cursor_up(&self, n: usize) -> std::io::Result<()> {
+        self.0.move_cursor_up(n)
+    }
+
+    fn move_cursor_down(&self, n: usize) -> std::io::Result<()> {
+        self.0.move_cursor_down(n)
+    }
+
+    fn move_cursor_right(&self, n: usize) -> std::io::Result<()> {
+        self.0.move_cursor_right(n)
+    }
+
+    fn move_cursor_left(&self, n: usize) -> std::io::Result<()> {
+        self.0.move_cursor_left(n)
+    }
+
+    fn write_line(&self, s: &str) -> std::io::Result<()> {
+        self.0.write_line(s)
+    }
+
+    fn write_str(&self, s: &str) -> std::io::Result<()> {
+        self.0.write_str(s)
+    }
+
+    fn clear_line(&self) -> std::io::Result<()> {
+        self.0.clear_line()
+    }
+
+    fn flush(&self) -> std::io::Result<()> {
+        self.0.flush()
+    }
+}
+
 pub fn init(progress: bool) {
+    let stderr = console::Term::buffered_stderr();
+    let progress = progress && stderr.is_term();
     crate::set_progress_enabled(progress);
     let _ = BOARD.set(MultiProgress::with_draw_target(if progress {
-        ProgressDrawTarget::stderr_with_hz(TERM_DRAW_HZ)
+        ProgressDrawTarget::term_like_with_hz(Box::new(EchoRoom(stderr)), TERM_DRAW_HZ)
     } else {
         ProgressDrawTarget::hidden()
     }));
@@ -130,6 +179,31 @@ mod tests {
         )
         .with_style(style);
         (bar, recorded)
+    }
+
+    #[test]
+    fn a_drawn_line_leaves_room_for_an_echoed_control_character() {
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let term = RecordingTerm(Arc::clone(&recorded));
+        let columns = usize::from(term.width());
+        let bar = ProgressBar::with_draw_target(
+            None,
+            ProgressDrawTarget::term_like(Box::new(EchoRoom(term))),
+        )
+        .with_style(live_style())
+        .with_prefix("Activating")
+        .with_message("profile");
+
+        bar.tick();
+
+        let written: String = recorded.lock().unwrap().concat();
+        let line = console::strip_ansi_codes(written.trim_start_matches('\r'));
+        assert!(line.starts_with("  Activating profile ("), "{line:?}");
+        assert_eq!(
+            console::measure_text_width(&line) + CONTROL_ECHO.len(),
+            columns,
+            "{line:?}"
+        );
     }
 
     #[test]
