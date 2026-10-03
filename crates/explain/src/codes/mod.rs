@@ -1,14 +1,5 @@
+use mix_events::code::{kebab, name};
 use mix_events::v1::Code;
-
-pub fn parse(name: &str) -> Option<Code> {
-    let upper = name.trim().to_ascii_uppercase().replace('-', "_");
-    let full = if upper.starts_with("CODE_") {
-        upper
-    } else {
-        format!("CODE_{upper}")
-    };
-    Code::from_str_name(&full).filter(|code| *code != Code::Unspecified)
-}
 
 pub fn list_text(codes: impl IntoIterator<Item = Code>) -> String {
     let codes: Vec<(String, &str)> = codes
@@ -31,14 +22,6 @@ pub fn list_text(codes: impl IntoIterator<Item = Code>) -> String {
         "Run `mix explain <code>` to read about one of them."
     ));
     out
-}
-
-pub fn name(code: Code) -> &'static str {
-    code.as_str_name().trim_start_matches("CODE_")
-}
-
-pub fn kebab(code: Code) -> String {
-    name(code).to_ascii_lowercase().replace('_', "-")
 }
 
 #[derive(Debug, Clone, Copy)]

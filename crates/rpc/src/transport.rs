@@ -332,6 +332,22 @@ fn unix_stream(fd: OwnedFd) -> std::io::Result<UnixStream> {
     UnixStream::from_std(socket)
 }
 
+pub struct Replies(Pin<Box<dyn Stream<Item = Result<Reply, Error>> + Send>>);
+
+impl Replies {
+    pub async fn next(&mut self) -> Option<Result<Reply, Error>> {
+        self.0.next().await
+    }
+}
+
+impl Stream for Replies {
+    type Item = Result<Reply, Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.0.as_mut().poll_next(cx)
+    }
+}
+
 pub struct Client {
     inner: WorkerServiceClient<Channel>,
     worker: Option<mix_exec::Foreground>,
@@ -394,10 +410,7 @@ impl Client {
         Ok(client)
     }
 
-    pub async fn run(
-        &mut self,
-        command: &Command,
-    ) -> Result<(Controller, impl Stream<Item = Result<Reply, Error>> + use<>), Error> {
+    pub async fn run(&mut self, command: &Command) -> Result<(Controller, Replies), Error> {
         let first = proto::RunRequest {
             call: Some(Call::Command(command.encode_to_vec())),
         };
@@ -415,10 +428,10 @@ impl Client {
         let responses = self.inner.run(calls).await.map_err(refused)?.into_inner();
         Ok((
             Controller(controls),
-            responses.map(|response| match response {
+            Replies(Box::pin(responses.map(|response| match response {
                 Ok(response) => reply_from_wire(response),
                 Err(_) => Err(Error::Ended),
-            }),
+            }))),
         ))
     }
 

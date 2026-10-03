@@ -169,7 +169,7 @@ impl Human {
                     let words = mix_explain::warning(&diagnostic);
                     let code = (self.shows(Detail::Action)
                         && diagnostic.code() != mix_events::v1::Code::Unspecified)
-                        .then(|| mix_explain::codes::kebab(diagnostic.code()));
+                        .then(|| mix_events::code::kebab(diagnostic.code()));
                     mix_ui::report_to(
                         self.out.as_ref(),
                         Severity::Warning,
@@ -214,7 +214,7 @@ impl Human {
             .shows(Detail::Action)
             .then(|| fault.code())
             .flatten()
-            .map(mix_explain::codes::kebab);
+            .map(mix_events::code::kebab);
         mix_ui::report_to(
             self.out.as_ref(),
             Severity::Error,

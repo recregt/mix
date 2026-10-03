@@ -125,7 +125,7 @@ pub enum Command {
 }
 
 fn code(name: &str) -> Result<mix_events::v1::Code, String> {
-    mix_explain::codes::parse(name).ok_or_else(|| {
+    mix_events::code::parse(name).ok_or_else(|| {
         "it isn't a code `mix` uses; `mix explain --list` shows them all".to_string()
     })
 }

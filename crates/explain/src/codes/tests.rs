@@ -97,28 +97,10 @@ fn golden_dir() -> PathBuf {
 }
 
 #[test]
-fn every_code_has_a_name_that_parses_back_and_a_long_text() {
+fn every_code_has_a_long_text() {
     for code in every_code() {
-        assert_eq!(parse(name(code)), Some(code), "{code:?}");
-        assert_eq!(parse(&name(code).to_lowercase()), Some(code), "{code:?}");
-        assert_eq!(parse(code.as_str_name()), Some(code), "{code:?}");
         assert!(explanation(code).why.len() > 20, "{code:?}");
     }
-}
-
-#[test]
-fn the_kebab_name_shown_at_v_is_one_mix_explain_takes() {
-    for code in every_code() {
-        assert_eq!(parse(&kebab(code)), Some(code), "{code:?}");
-    }
-    assert_eq!(kebab(Code::GitRecordFailed), "git-record-failed");
-}
-
-#[test]
-fn a_name_mix_does_not_use_is_not_a_code() {
-    assert_eq!(parse("NOPE"), None);
-    assert_eq!(parse("UNSPECIFIED"), None);
-    assert_eq!(parse(""), None);
 }
 
 #[test]

@@ -14,6 +14,7 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 mix-core = { path = "../core" }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

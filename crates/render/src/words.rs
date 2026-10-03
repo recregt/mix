@@ -49,6 +49,10 @@ pub fn second_ctrl_c() -> Help {
     help!("press Ctrl-C again to leave it running in the background")
 }
 
+pub fn escalating() -> Note {
+    note!("root is required, re-running with sudo")
+}
+
 pub fn detached() -> Note {
     note!("`mix` is finishing the cleanup in the background")
 }

@@ -10,6 +10,7 @@ pub trait Normalize {
 }
 
 pub mod capture;
+pub mod code;
 mod detail;
 mod events {
     pub(crate) use crate::v1;

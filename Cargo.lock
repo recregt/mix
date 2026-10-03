@@ -1399,20 +1399,12 @@ dependencies = [
 name = "mix-cli"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "clap",
- "futures-util",
  "mix-core",
  "mix-events",
- "mix-exec",
- "mix-explain",
  "mix-render",
  "mix-rpc",
- "mix-shell",
- "mix-ui",
  "nix",
- "tempfile",
- "thiserror",
  "tokio",
  "uuid",
 ]
@@ -1519,6 +1511,7 @@ dependencies = [
  "mix-ui",
  "pbjson-types",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

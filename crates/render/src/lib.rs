@@ -14,13 +14,24 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use mix_events::Render;
 use mix_events::capture::Capture;
 use mix_events::capture::v1::Header;
+use mix_events::v1::command::Request;
 use mix_events::v1::{Envelope, envelope};
-use mix_events::{Detail, ROOT};
+use mix_events::{Detail, Fault, ROOT, Render};
 
 use human::Human;
+
+pub use mix_ui::ColorChoice as Color;
+
+pub fn start(color: Color, draws_progress: bool) {
+    mix_ui::set_color(color);
+    mix_ui::init(draws_progress);
+}
+
+pub fn restore() {
+    mix_ui::restore_terminal();
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
@@ -67,7 +78,11 @@ pub struct View {
 }
 
 impl View {
-    pub fn sinks(&self, display: Arc<dyn mix_ui::Display>) -> std::io::Result<Sinks> {
+    pub fn sinks(&self) -> std::io::Result<Sinks> {
+        self.sinks_to(mix_ui::display())
+    }
+
+    fn sinks_to(&self, display: Arc<dyn mix_ui::Display>) -> std::io::Result<Sinks> {
         Ok(Sinks {
             human: (self.format == Format::Human).then(|| Human::new(display).level(self.level())),
             json: self.format == Format::Json,
@@ -86,6 +101,55 @@ impl View {
 
     pub fn level(&self) -> Detail {
         level(self.quiet, self.verbose)
+    }
+
+    pub fn escalating(&self) {
+        if self.format == Format::Human && self.level() >= Detail::Step {
+            mix_ui::note(&words::escalating(), None);
+        }
+    }
+
+    pub fn detaching(&self) {
+        if self.format == Format::Human {
+            mix_ui::note(&words::detached(), None);
+        }
+    }
+
+    pub fn failed(
+        &self,
+        id: String,
+        request: &Request,
+        fault: &Fault,
+        source: Option<&(dyn std::error::Error + 'static)>,
+    ) {
+        if self.streams()
+            && !self.exit.started()
+            && let Ok(mut sinks) = self.sinks_to(Arc::new(mix_ui::Silent))
+        {
+            mix_events::fail(
+                id,
+                mix_events::command(request.clone()),
+                fault.clone(),
+                &mut sinks,
+            );
+        }
+        if self.format == Format::Human && self.exit.code().is_none() {
+            let words = words::outcome(request, fault);
+            let code = (self.verbose > 0)
+                .then(|| fault.code())
+                .flatten()
+                .map(mix_events::code::kebab);
+            let mut causes = mix_explain::evidence(fault);
+            for cause in mix_ui::causes_of(source, words.summary_text()) {
+                if !causes.iter().any(|known| known.contains(&cause)) {
+                    causes.push(cause);
+                }
+            }
+            mix_ui::report(
+                mix_ui::Severity::Error,
+                &words.report().code(code.as_deref()).causes(causes),
+            );
+        }
     }
 }
 
@@ -204,5 +268,89 @@ impl Recorder {
                 .causes(vec![error.to_string()]),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mix_events::v1::envelope::Event;
+    use mix_events::v1::{Code, InstallRequest};
+
+    use super::*;
+
+    fn recording(file: PathBuf) -> View {
+        View {
+            format: Format::Human,
+            events_file: Some(file),
+            verbose: 0,
+            quiet: false,
+            exit: Exit::default(),
+        }
+    }
+
+    fn install() -> Request {
+        Request::Install(InstallRequest {
+            packages: vec!["ripgrep".to_string()],
+        })
+    }
+
+    fn refused() -> Fault {
+        Fault::failed(Code::RootNotAllowed, "root", None)
+    }
+
+    fn roots(file: &Path) -> Vec<mix_events::v1::NodeFinished> {
+        let captured =
+            mix_events::capture::read(std::io::BufReader::new(File::open(file).unwrap())).unwrap();
+        mix_events::validate(captured.envelopes.iter()).unwrap();
+        captured
+            .envelopes
+            .into_iter()
+            .filter_map(|envelope| match envelope.event {
+                Some(Event::NodeFinished(finished)) if finished.id == ROOT => Some(finished),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_failure_before_any_work_still_records_a_valid_stream_with_its_code() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("events.ndjson");
+        let view = recording(file.clone());
+
+        view.failed("request".to_string(), &install(), &refused(), None);
+
+        let roots = roots(&file);
+        assert_eq!(roots.len(), 1);
+        assert_eq!(
+            roots[0].diagnostic.as_ref().unwrap().code(),
+            Code::RootNotAllowed
+        );
+        assert_eq!(roots[0].exit_code, mix_events::exit::FAILED);
+        assert_eq!(view.exit.code(), Some(mix_events::exit::FAILED));
+    }
+
+    #[test]
+    fn a_stream_that_already_started_is_left_as_it_ended_rather_than_given_a_second_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("events.ndjson");
+        let view = recording(file.clone());
+        let mut sinks = view.sinks_to(Arc::new(mix_ui::Silent)).unwrap();
+        let outbox = Arc::new(mix_events::Outbox::new("request", || {}));
+        let tree = mix_events::Tree::new(
+            Arc::clone(&outbox),
+            Arc::new(|| None),
+            mix_events::Start::command("install", mix_events::command(install())),
+        );
+        for envelope in outbox.drain() {
+            sinks.envelope(envelope);
+        }
+
+        view.failed("other".to_string(), &install(), &refused(), None);
+
+        drop(tree);
+        assert_eq!(view.exit.code(), None);
+        let started = std::fs::read_to_string(&file).unwrap();
+        assert!(!started.contains("\"other\""), "{started}");
     }
 }

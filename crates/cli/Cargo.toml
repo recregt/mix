@@ -11,24 +11,16 @@ name = "mix"
 path = "src/main.rs"
 
 [dependencies]
-uuid = { version = "1.26.1", features = ["v7"] }
-thiserror = { workspace = true }
-mix-exec = { path = "../exec" }
-mix-rpc = { path = "../rpc" }
-mix-ui = { path = "../ui" }
-anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive", "env"] }
-futures-util = { workspace = true }
+mix-events = { path = "../events" }
+mix-render = { path = "../render" }
+mix-rpc = { path = "../rpc" }
 nix = { workspace = true, features = ["signal"] }
 tokio = { workspace = true, features = ["signal"] }
-mix-events = { path = "../events" }
-mix-explain = { path = "../explain" }
-mix-render = { path = "../render" }
+uuid = { version = "1.26.1", features = ["v7"] }
 
 [dev-dependencies]
 mix-core = { path = "../core" }
-mix-shell = { path = "../shell" }
-tempfile = { workspace = true }
 
 [lints]
 workspace = true

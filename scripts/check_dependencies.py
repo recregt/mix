@@ -48,6 +48,21 @@ RULES = [
     ),
 ]
 
+DIRECT = {
+    "mix-cli": (
+        {
+            "clap",
+            "mix-events",
+            "mix-render",
+            "mix-rpc",
+            "nix",
+            "tokio",
+            "uuid",
+        },
+        "is arguments, routing, transport and signals; anything else belongs in the crates it uses",
+    ),
+}
+
 
 def host() -> str:
     version = subprocess.run(
@@ -101,12 +116,21 @@ def normal_closure(data: dict, start: str) -> set[str]:
     return {names[id] for id in seen}
 
 
+def normal_direct(data: dict, crate: str) -> set[str]:
+    package = next(package for package in data["packages"] if package["name"] == crate)
+    return {dep["name"] for dep in package["dependencies"] if dep["kind"] is None}
+
+
 def main() -> int:
     data = metadata()
     failed = False
     for crate, forbidden, reason in RULES:
         for name in sorted(normal_closure(data, crate) & forbidden):
             print(f"{crate} depends on {name}, which {reason}", file=sys.stderr)
+            failed = True
+    for crate, (allowed, reason) in DIRECT.items():
+        for name in sorted(normal_direct(data, crate) - allowed):
+            print(f"{crate} depends directly on {name}, but {crate} {reason}", file=sys.stderr)
             failed = True
     return 1 if failed else 0
 
