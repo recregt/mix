@@ -2,6 +2,7 @@ use mix_events::v1::command::Request;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Need {
+    Nothing,
     Exclusive,
     Shared,
     SharedForUser,
@@ -14,12 +15,13 @@ pub fn locks_for(request: &Request) -> Need {
         Request::Install(_) | Request::Remove(_) | Request::Doctor(_) | Request::Clean(_) => {
             Need::SharedForUser
         }
+        Request::Explain(_) => Need::Nothing,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use mix_events::v1::{CleanRequest, InstallRequest, RepairRequest};
+    use mix_events::v1::{CleanRequest, ExplainRequest, InstallRequest, RepairRequest};
 
     use super::*;
 
@@ -48,6 +50,14 @@ mod tests {
         assert_eq!(
             locks_for(&Request::Clean(CleanRequest { all: false })),
             Need::SharedForUser
+        );
+    }
+
+    #[test]
+    fn a_request_that_reads_no_state_waits_for_no_one() {
+        assert_eq!(
+            locks_for(&Request::Explain(ExplainRequest::default())),
+            Need::Nothing
         );
     }
 }

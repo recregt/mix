@@ -7,17 +7,16 @@ use mix_exec::Reason;
 use mix_rpc::{Client, Controller, Reply};
 use nix::sys::signal::Signal;
 
-use crate::args::Output;
-use crate::output::{Sinks, View};
 use crate::request::Route;
 use crate::session::controls::{Control, Terminal, Translator};
+use mix_render::{Sinks, View};
 
 const LAUNCHER: &str = "sudo";
 const DAEMON: &str = "mix-daemon";
 const SERVE_STDIN: &str = "serve-stdin";
 
 #[derive(Debug, thiserror::Error)]
-#[error("`{}` did not finish", crate::request::name(.request))]
+#[error("`{}` did not finish", mix_render::words::name(.request))]
 pub struct Failed {
     pub request: Request,
     pub fault: Fault,
@@ -44,8 +43,8 @@ fn fault_of(root: &NodeFinished) -> Option<Fault> {
 }
 
 fn detach(view: &View) -> ! {
-    if view.output == Output::Human {
-        mix_ui::note(&crate::session::controls::detached(), None);
+    if view.format == mix_render::Format::Human {
+        mix_ui::note(&mix_render::words::detached(), None);
     }
     mix_ui::restore_terminal();
     std::process::exit(i32::try_from(crate::session::controls::DETACHED_EXIT).unwrap_or(i32::MAX));
@@ -110,7 +109,7 @@ async fn one_shot(view: &View) -> anyhow::Result<Client> {
     let launcher = if nix::unistd::geteuid().is_root() {
         None
     } else {
-        if view.output == Output::Human && view.level() >= Detail::Step {
+        if view.format == mix_render::Format::Human && view.level() >= Detail::Step {
             mix_ui::note(
                 &mix_ui::note!("root is required, re-running with sudo"),
                 None,

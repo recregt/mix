@@ -30,9 +30,12 @@ pub fn warning(diagnostic: &Wire) -> Diagnostic {
         action: &"",
     };
     match Code::try_from(diagnostic.code) {
-        Ok(code @ (Code::JournalUnwritable | Code::CleanupIncomplete | Code::GitRecordFailed)) => {
-            plain(code, &context).unwrap_or_else(bug)
-        }
+        Ok(
+            code @ (Code::JournalUnwritable
+            | Code::CleanupIncomplete
+            | Code::RollbackIncomplete
+            | Code::GitRecordFailed),
+        ) => plain(code, &context).unwrap_or_else(bug),
         _ => bug(),
     }
 }
@@ -119,6 +122,10 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
         .help(help!(
             "run `mix doctor` to see what is left, and `mix repair` to put back what it can"
         )),
+        Code::RollbackIncomplete => Diagnostic::new(phrase!("`mix` couldn't undo every change"))
+            .help(help!(
+                "run `mix doctor` to see what is left, and `mix repair` to put back what it can"
+            )),
         Code::GitRecordFailed => {
             Diagnostic::new(phrase!("the change was made but not recorded in git"))
                 .help(help!("run `mix repair` to record it"))
@@ -211,7 +218,6 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
         | Code::Unrepairable
         | Code::SystemdNotReady
         | Code::UnitFailed
-        | Code::RollbackIncomplete
         | Code::InvalidPackage
         | Code::InvalidState
         | Code::ProtectedPackage
@@ -301,13 +307,6 @@ fn detailed(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
             }
             _ => failed(context.action),
         },
-        Code::RollbackIncomplete => Diagnostic::new(match diagnostic.causes.first() {
-            Some(cause) => failure(cause, context).summary(),
-            None => phrase!("couldn't undo every change"),
-        })
-        .help(help!(
-            "run `mix doctor` to see the changes that couldn't be undone"
-        )),
         Code::InvalidPackage => match packages(diagnostic) {
             [name, ..] => bad_name(name),
             [] => bug(),

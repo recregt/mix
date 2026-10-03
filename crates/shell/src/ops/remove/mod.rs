@@ -1,10 +1,9 @@
 use mix_core::change::Refusal;
+use mix_events::v1::RemoveRequest;
 
 use crate::Context;
-use crate::request::{Concluded, Root};
-
 use crate::profile::change;
-use crate::profile::state::Source;
+use crate::request::{Concluded, Root};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -14,8 +13,6 @@ pub enum Error {
     #[error("{} cannot be removed", .0.join(", "))]
     Protected(Vec<String>),
 }
-
-pub type Result<T> = std::result::Result<T, Error>;
 
 impl From<mix_core::Error> for Error {
     fn from(error: mix_core::Error) -> Self {
@@ -32,35 +29,18 @@ impl From<Refusal> for Error {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct Removed {
-    pub removed: Vec<String>,
-    pub skipped: Vec<String>,
-    pub restored: Option<Source>,
-}
-
-impl Removed {
-    pub fn changed_nothing(&self) -> bool {
-        self.removed.is_empty()
-    }
-}
-
-pub(crate) async fn remove(
-    ctx: &Context,
-    root: &mut Root,
-    packages: &[String],
-) -> Concluded<Result<Removed>> {
+pub(crate) async fn remove(ctx: &Context, root: &mut Root, request: &RemoveRequest) -> Concluded {
     if ctx.caller_is_root {
         return root.refuse(Error::Change(change::Error::NotRoot));
     }
     let Some(cfg) = ctx.user.as_ref() else {
         return root.refuse(Error::Change(change::Error::NotBootstrapped));
     };
-    let decided = match mix_core::change::remove(packages, change::settled(cfg, &ctx.locked)) {
-        Ok(decided) => decided,
-        Err(refused) => return root.refuse(Error::from(refused)),
-    };
-    let restored = (decided.source != Source::File).then_some(decided.source);
+    let decided =
+        match mix_core::change::remove(&request.packages, change::settled(cfg, &ctx.locked)) {
+            Ok(decided) => decided,
+            Err(refused) => return root.refuse(Error::from(refused)),
+        };
     change::run(
         ctx,
         root,
@@ -70,14 +50,6 @@ pub(crate) async fn remove(
         &mut Vec::new(),
     )
     .await
-    .map(|ran| {
-        ran.map(|()| Removed {
-            removed: decided.changed,
-            skipped: decided.skipped,
-            restored,
-        })
-        .map_err(Error::from)
-    })
 }
 
 #[cfg(test)]
@@ -86,8 +58,12 @@ mod tests {
     use mix_core::identity::InvokingUser;
     use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
     use mix_core::state::StateManifest;
+    use mix_events::v1::command::Request;
+    use mix_events::v1::diagnostic::Detail;
+    use mix_events::v1::{Code, RemoveResult, node_finished};
 
     use super::*;
+    use crate::request::ran::{Ran, ran};
 
     fn home_with(packages: &[&str]) -> tempfile::TempDir {
         let home = tempfile::tempdir().unwrap();
@@ -127,19 +103,39 @@ mod tests {
         std::fs::read_to_string(mix_state_dir(home).join(STATE_FILE)).unwrap()
     }
 
-    async fn remove_from(home: &std::path::Path, packages: &[&str]) -> Result<Removed> {
-        let packages: Vec<String> = packages.iter().map(|p| p.to_string()).collect();
-        crate::request::remove(&context(home), &packages).await
+    async fn remove_from(home: &std::path::Path, packages: &[&str]) -> Ran {
+        let packages = packages.iter().map(|p| p.to_string()).collect();
+        ran(context(home), Request::Remove(RemoveRequest { packages })).await
+    }
+
+    fn removed(ran: &Ran) -> &RemoveResult {
+        match ran.result() {
+            Some(node_finished::Result::Remove(removed)) => removed,
+            other => panic!("expected a remove result, got {other:?}"),
+        }
+    }
+
+    fn protected(ran: &Ran) -> Vec<String> {
+        assert_eq!(ran.code(), Some(Code::ProtectedPackage));
+        match ran
+            .root()
+            .diagnostic
+            .as_ref()
+            .and_then(|d| d.detail.as_ref())
+        {
+            Some(Detail::Packages(detail)) => detail.packages.clone(),
+            other => panic!("expected the protected packages, got {other:?}"),
+        }
     }
 
     #[tokio::test]
     async fn remove_skips_a_package_that_is_not_installed() {
         let home = home_with(&["git", "ripgrep"]);
 
-        let removed = remove_from(home.path(), &["fd"]).await.unwrap();
+        let ran = remove_from(home.path(), &["fd"]).await;
 
-        assert!(removed.changed_nothing());
-        assert_eq!(removed.skipped, vec!["fd".to_string()]);
+        assert!(removed(&ran).removed.is_empty());
+        assert_eq!(removed(&ran).skipped, vec!["fd".to_string()]);
     }
 
     #[tokio::test]
@@ -147,7 +143,7 @@ mod tests {
         let home = home_with(&["git", "ripgrep"]);
         let state_before = state_of(home.path());
 
-        remove_from(home.path(), &["fd", "bat"]).await.unwrap();
+        remove_from(home.path(), &["fd", "bat"]).await;
 
         assert_eq!(state_of(home.path()), state_before);
         assert!(!mix_state_dir(home.path()).join(HOME_NIX).exists());
@@ -157,10 +153,10 @@ mod tests {
     async fn remove_reports_a_repeated_package_once() {
         let home = home_with(&["git"]);
 
-        let removed = remove_from(home.path(), &["fd", "fd"]).await.unwrap();
+        let ran = remove_from(home.path(), &["fd", "fd"]).await;
 
-        assert_eq!(removed.skipped, vec!["fd".to_string()]);
-        assert!(removed.removed.is_empty());
+        assert_eq!(removed(&ran).skipped, vec!["fd".to_string()]);
+        assert!(removed(&ran).removed.is_empty());
     }
 
     #[tokio::test]
@@ -168,9 +164,9 @@ mod tests {
         let home = home_with(&["git", "ripgrep"]);
         let state_before = state_of(home.path());
 
-        let err = remove_from(home.path(), &["git"]).await.unwrap_err();
+        let ran = remove_from(home.path(), &["git"]).await;
 
-        assert!(matches!(&err, Error::Protected(names) if names == &["git".to_string()]));
+        assert_eq!(protected(&ran), vec!["git".to_string()]);
         assert_eq!(state_of(home.path()), state_before);
         assert!(!mix_state_dir(home.path()).join(HOME_NIX).exists());
     }
@@ -180,11 +176,9 @@ mod tests {
         let home = home_with(&["git", "ripgrep"]);
         let state_before = state_of(home.path());
 
-        let err = remove_from(home.path(), &["ripgrep", "git"])
-            .await
-            .unwrap_err();
+        let ran = remove_from(home.path(), &["ripgrep", "git"]).await;
 
-        assert!(matches!(err, Error::Protected(_)));
+        assert_eq!(protected(&ran), vec!["git".to_string()]);
         assert_eq!(state_of(home.path()), state_before);
     }
 
@@ -192,9 +186,9 @@ mod tests {
     async fn remove_refuses_a_protected_package_even_when_the_manifest_lacks_it() {
         let home = home_with(&["ripgrep"]);
 
-        let err = remove_from(home.path(), &["git"]).await.unwrap_err();
+        let ran = remove_from(home.path(), &["git"]).await;
 
-        assert!(matches!(err, Error::Protected(_)));
+        assert_eq!(protected(&ran), vec!["git".to_string()]);
     }
 
     #[test]

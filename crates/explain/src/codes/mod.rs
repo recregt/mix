@@ -10,14 +10,9 @@ pub fn parse(name: &str) -> Option<Code> {
     Code::from_str_name(&full).filter(|code| *code != Code::Unspecified)
 }
 
-pub fn defined() -> impl Iterator<Item = Code> {
-    Code::DEFINED
-        .iter()
-        .filter_map(|value| Code::try_from(*value).ok())
-}
-
-pub fn list_text() -> String {
-    let codes: Vec<(String, &str)> = defined()
+pub fn list_text(codes: impl IntoIterator<Item = Code>) -> String {
+    let codes: Vec<(String, &str)> = codes
+        .into_iter()
         .map(|code| {
             let description = explanation(code).description;
             (

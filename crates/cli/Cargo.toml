@@ -22,14 +22,11 @@ nix = { workspace = true, features = ["signal"] }
 tokio = { workspace = true, features = ["signal"] }
 mix-events = { path = "../events" }
 mix-explain = { path = "../explain" }
-pbjson-types = "0.9.0"
-serde_json = { workspace = true }
+mix-render = { path = "../render" }
 
 [dev-dependencies]
 mix-core = { path = "../core" }
 mix-shell = { path = "../shell" }
-mix-nixgen = { path = "../nixgen" }
-divan = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

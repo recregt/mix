@@ -47,7 +47,12 @@ message Command {
     RepairRequest repair = 13;
     DoctorRequest doctor = 14;
     CleanRequest clean = 15;
+    ExplainRequest explain = 16;
   }
+}
+
+message ExplainRequest {
+  optional Code code = 1;
 }
 
 message BootstrapRequest {
@@ -390,7 +395,12 @@ message NodeFinished {
     InspectionResult inspection = 15;
     ProcessResult process = 16;
     CleanResult clean = 17;
+    ExplainResult explain = 18;
   }
+}
+
+message ExplainResult {
+  repeated Code codes = 1;
 }
 
 message ProcessResult {

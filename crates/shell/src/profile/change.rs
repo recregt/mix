@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use mix_core::action::Failure;
 use mix_core::change::{Change, NewerList, Unrenderable};
 use mix_core::plan::{Runner, StepSpec, Verdict, diagnostic};
 use mix_core::targets::UserConfig;
@@ -84,13 +83,6 @@ impl Verb {
             }),
         }
     }
-
-    pub(crate) fn key(&self) -> &'static str {
-        match self {
-            Verb::Install => "install",
-            Verb::Remove => "remove",
-        }
-    }
 }
 
 pub async fn run(
@@ -100,30 +92,21 @@ pub async fn run(
     verb: Verb,
     change: &Change,
     journal: &mut dyn Journal,
-) -> Concluded<Result<()>> {
+) -> Concluded {
     let steps = match mix_core::change::steps(&cfg.user, change, verb.doing()) {
         Ok(steps) => steps,
         Err(error) => return root.refuse(Error::from(error)),
     };
-    perform(
-        ctx,
-        root,
-        verb.key(),
-        steps,
-        || verb.result(change),
-        journal,
-    )
-    .await
+    perform(ctx, root, steps, || verb.result(change), journal).await
 }
 
 pub async fn perform(
     ctx: &Context,
     root: &mut Root,
-    key: &str,
     steps: Vec<Box<dyn StepSpec>>,
     result: impl FnOnce() -> node_finished::Result,
     journal: &mut dyn Journal,
-) -> Concluded<Result<()>> {
+) -> Concluded {
     let verdict = if steps.is_empty() {
         Verdict::Succeeded
     } else {
@@ -154,45 +137,10 @@ pub async fn perform(
         .verdict
         .clone()
     };
-    match verdict {
-        Verdict::Succeeded => root.conclude(Ending::succeeded().with_result(result()), Ok(())),
-        Verdict::Failed { failure, .. } => {
-            root.conclude(Ending::failed(diagnostic(&failure)), Err(error_of(failure)))
-        }
-        Verdict::Cancelled(cause) => root.conclude(
-            Ending::cancelled(cause),
-            Err(Error::Core(mix_core::Error::Cancelled {
-                command: format!("mix {key}"),
-            })),
-        ),
-    }
-}
-
-fn error_of(failure: Failure) -> Error {
-    Error::Core(match failure {
-        Failure::Io { path, kind } => mix_core::Error::Io {
-            path,
-            source: kind.into(),
-        },
-        Failure::SpawnFailed { program, kind } => mix_core::Error::Exec {
-            command: program,
-            source: kind.into(),
-        },
-        Failure::CommandFailed {
-            program,
-            output_tail,
-            ..
-        } => mix_core::Error::Command {
-            command: program,
-            detail: output_tail,
-        },
-        Failure::Cancelled => mix_core::Error::Cancelled {
-            command: "mix".to_string(),
-        },
-        other => mix_core::Error::Command {
-            command: "mix".to_string(),
-            detail: diagnostic(&other).message,
-        },
+    root.conclude(match verdict {
+        Verdict::Succeeded => Ending::succeeded().with_result(result()),
+        Verdict::Failed { failure, .. } => Ending::failed(diagnostic(&failure)),
+        Verdict::Cancelled(cause) => Ending::cancelled(cause),
     })
 }
 

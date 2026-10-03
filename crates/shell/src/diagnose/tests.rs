@@ -30,7 +30,6 @@ fn every_bootstrap_error() -> Vec<BootstrapError> {
         | BootstrapError::Unit { .. }
         | BootstrapError::AlreadyManaged
         | BootstrapError::CrossDeviceStore { .. }
-        | BootstrapError::Rollback { .. }
         | BootstrapError::Interrupted => {}
     };
     let errors = vec![
@@ -67,10 +66,6 @@ fn every_bootstrap_error() -> Vec<BootstrapError> {
         BootstrapError::AlreadyManaged,
         BootstrapError::CrossDeviceStore {
             path: "/nix/store/pkg".into(),
-        },
-        BootstrapError::Rollback {
-            cause: Box::new(BootstrapError::UnsupportedHost),
-            summary: "1 rollback step(s) failed".into(),
         },
         BootstrapError::Interrupted,
     ];
@@ -156,21 +151,6 @@ fn every_remove_and_target_error_has_a_code() {
     for (index, error) in errors.iter().enumerate() {
         has_a_code(error.fault(), &format!("error {index}"));
     }
-}
-
-#[test]
-fn a_failed_rollback_carries_what_it_was_rolling_back_for() {
-    let error = BootstrapError::Rollback {
-        cause: Box::new(BootstrapError::UnsupportedHost),
-        summary: "1 rollback step(s) failed".into(),
-    };
-
-    let Fault::Failed(diagnostic) = error.fault() else {
-        panic!("a failed rollback is a failure");
-    };
-    assert_eq!(diagnostic.code(), Code::RollbackIncomplete);
-    assert_eq!(diagnostic.causes.len(), 1);
-    assert_eq!(diagnostic.causes[0].code(), Code::UnsupportedHost);
 }
 
 #[test]

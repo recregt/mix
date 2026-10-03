@@ -69,6 +69,22 @@ def test_a_user_without_sudo_rights_cannot_bootstrap(container):
     assert run.code == "CODE_PRIVILEGES_UNAVAILABLE", run
 
 
+def test_explain_needs_the_daemon_like_every_command(container):
+    run = container.mix("explain", "network")
+
+    assert run.exit_code == 1, run
+    assert run.code == "CODE_NOT_BOOTSTRAPPED", run
+
+
+@pytest.mark.bootstrapped
+def test_an_enrolled_user_reads_a_code_through_the_daemon(container):
+    run = container.mix("explain", "network", user=USER)
+
+    assert run.succeeded(), run
+    assert run.result("explain")["codes"] == ["CODE_NETWORK"], run
+    assert run.stdout.startswith("NETWORK\n"), run
+
+
 @pytest.mark.bootstrapped
 def test_the_daemon_serves_no_user_outside_mix_users(container):
     create_user(container, "outsider")

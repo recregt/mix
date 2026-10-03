@@ -1,10 +1,13 @@
 #![cfg_attr(not(test), deny(clippy::wildcard_enum_match_arm))]
 
 pub mod human;
-pub mod replay;
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
+mod replay;
 mod results;
 mod trace;
 mod verbs;
+pub mod words;
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -17,8 +20,13 @@ use mix_events::capture::v1::Header;
 use mix_events::v1::{Envelope, envelope};
 use mix_events::{Detail, ROOT};
 
-use crate::args::Output;
 use human::Human;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    Human,
+    Json,
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 struct Seen {
@@ -51,7 +59,7 @@ impl Exit {
 }
 
 pub struct View {
-    pub output: Output,
+    pub format: Format,
     pub events_file: Option<PathBuf>,
     pub verbose: u8,
     pub quiet: bool,
@@ -61,8 +69,8 @@ pub struct View {
 impl View {
     pub fn sinks(&self, display: Arc<dyn mix_ui::Display>) -> std::io::Result<Sinks> {
         Ok(Sinks {
-            human: (self.output == Output::Human).then(|| Human::new(display).level(self.level())),
-            json: self.output == Output::Json,
+            human: (self.format == Format::Human).then(|| Human::new(display).level(self.level())),
+            json: self.format == Format::Json,
             file: self
                 .events_file
                 .as_deref()
@@ -73,7 +81,7 @@ impl View {
     }
 
     pub fn streams(&self) -> bool {
-        self.output == Output::Json || self.events_file.is_some()
+        self.format == Format::Json || self.events_file.is_some()
     }
 
     pub fn level(&self) -> Detail {

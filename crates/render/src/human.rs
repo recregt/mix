@@ -14,14 +14,12 @@ use mix_events::{Detail, Fault, NodeId, ROOT};
 use mix_ui::{Display, Out, Severity, Status, StepLine};
 
 use super::{trace, verbs};
-use crate::session::controls;
 
 pub struct Human {
     display: Arc<dyn Display>,
     out: Arc<dyn Out>,
     recorded: Option<Duration>,
     level: Detail,
-    results: bool,
     started: Instant,
     stop_noticed: bool,
     request: Option<Request>,
@@ -39,7 +37,6 @@ impl Human {
             out: Arc::new(mix_ui::Spaced::new(mix_ui::Stderr)),
             recorded: None,
             level: Detail::Step,
-            results: true,
             started: Instant::now(),
             stop_noticed: false,
             request: None,
@@ -148,7 +145,7 @@ impl Human {
                 super::results::finished(
                     self.out.as_ref(),
                     &node,
-                    self.results,
+                    self.request.as_ref(),
                     self.level,
                     elapsed,
                 );
@@ -201,7 +198,7 @@ impl Human {
                     Status::Cancelled,
                     &format!(
                         "`{}` in {}",
-                        self.request.as_ref().map_or("mix", crate::request::name),
+                        self.request.as_ref().map_or("mix", crate::words::name),
                         super::results::took(elapsed)
                     ),
                 );
@@ -210,7 +207,7 @@ impl Human {
             Ended::Unspecified | Ended::Succeeded | Ended::AlreadySatisfied => return,
         };
         let words = match &self.request {
-            Some(request) => crate::session::outcome(request, &fault),
+            Some(request) => crate::words::outcome(request, &fault),
             None => mix_explain::outcome("mix", &"finish", &fault),
         };
         let code = self
@@ -234,10 +231,14 @@ impl Human {
         match progress {
             Progress::Stopping(_) => {
                 if self.shows(Detail::Step)
-                    && let Some(note) = self.request.as_ref().and_then(crate::request::stopping)
+                    && let Some(note) = self.request.as_ref().and_then(crate::words::stopping)
                     && !std::mem::replace(&mut self.stop_noticed, true)
                 {
-                    mix_ui::note_to(self.out.as_ref(), &note, Some(&controls::second_ctrl_c()));
+                    mix_ui::note_to(
+                        self.out.as_ref(),
+                        &note,
+                        Some(&crate::words::second_ctrl_c()),
+                    );
                 }
             }
             Progress::Command(command) => {

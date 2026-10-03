@@ -8,8 +8,9 @@ use mix_events::v1::Code;
 use mix_events::v1::command::Request;
 use mix_explain::Diagnostic;
 
-use crate::args::Output;
-use crate::output::View;
+use mix_render::words::{action, outcome};
+use mix_render::{Format, View};
+
 use crate::request;
 
 pub async fn run(request: Request, view: &View) -> ExitCode {
@@ -32,7 +33,7 @@ pub async fn run(request: Request, view: &View) -> ExitCode {
     match result {
         Ok(()) => from_root.unwrap_or(ExitCode::SUCCESS),
         Err(error) => {
-            if view.output == Output::Human && view.exit.code().is_none() {
+            if view.format == Format::Human && view.exit.code().is_none() {
                 report(&error, &request, view.verbose);
             }
             from_root.unwrap_or(ExitCode::FAILURE)
@@ -63,10 +64,6 @@ fn report(error: &anyhow::Error, request: &Request, verbose: u8) {
     );
 }
 
-pub(crate) fn outcome(request: &Request, fault: &Fault) -> Diagnostic {
-    mix_explain::outcome(request::name(request), &*request::action(request), fault)
-}
-
 fn words(error: &anyhow::Error, request: &Request) -> Diagnostic {
     if let Some(failed) = error.downcast_ref::<client::Failed>() {
         return outcome(&failed.request, &failed.fault);
@@ -74,7 +71,7 @@ fn words(error: &anyhow::Error, request: &Request) -> Diagnostic {
     if let Some(error) = error.downcast_ref::<mix_rpc::Error>() {
         return outcome(request, &rpc_fault(error));
     }
-    mix_explain::failed(&*request::action(request))
+    mix_explain::failed(&*action(request))
 }
 
 fn fault_of(error: &anyhow::Error) -> Fault {

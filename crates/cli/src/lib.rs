@@ -1,13 +1,10 @@
 mod args;
-mod local;
 mod request;
 mod session;
 
-pub mod output;
-
 use std::process::ExitCode;
 
-use args::{Args, Color};
+use args::{Args, Color, Output};
 
 pub async fn run() -> ExitCode {
     let args = Args::parse_with_color();
@@ -16,15 +13,16 @@ pub async fn run() -> ExitCode {
         Color::Always => mix_ui::ColorChoice::Always,
         Color::Never => mix_ui::ColorChoice::Never,
     });
-    let Some(request) = request::from_args(&args.command, |name| std::env::var(name).ok()) else {
-        return local::run(&args);
-    };
-    let view = output::View {
-        output: args.output,
+    let request = request::from_args(&args.command, |name| std::env::var(name).ok());
+    let view = mix_render::View {
+        format: match args.output {
+            Output::Human => mix_render::Format::Human,
+            Output::Json => mix_render::Format::Json,
+        },
         events_file: args.events_file.clone(),
         verbose: args.verbose,
         quiet: args.quiet,
-        exit: output::Exit::default(),
+        exit: mix_render::Exit::default(),
     };
     mix_ui::init(args.draws_progress());
     session::run(request, &view).await

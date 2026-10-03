@@ -1,15 +1,6 @@
 use mix_exec::Reason;
-use mix_ui::{Help, Note, help, note};
 use nix::sys::signal::Signal;
 use tokio::signal::unix::{SignalKind, signal};
-
-pub fn second_ctrl_c() -> Help {
-    help!("press Ctrl-C again to leave it running in the background")
-}
-
-pub fn detached() -> Note {
-    note!("`mix` is finishing the cleanup in the background")
-}
 
 pub const DETACHED_EXIT: u32 = mix_events::exit::INTERRUPTED;
 

@@ -69,25 +69,6 @@ pub enum Output {
 }
 
 #[derive(Subcommand)]
-pub enum EventsCommand {
-    /// Check that a recorded events file is complete and well formed
-    Check {
-        /// The file `--events-file` wrote
-        file: PathBuf,
-    },
-
-    /// Show a recorded events file the way the run looked, at any verbosity
-    Show {
-        /// The file `--events-file` wrote
-        file: PathBuf,
-
-        /// Show only this node and what ran inside it, such as `install/activate`
-        #[arg(long)]
-        node: Option<String>,
-    },
-}
-
-#[derive(Subcommand)]
 pub enum Command {
     /// Set up `mix` and its runtime on this machine
     Bootstrap {
@@ -131,22 +112,22 @@ pub enum Command {
     /// Repair configuration drift
     Repair,
 
-    /// Work with recorded events
-    Events {
-        #[command(subcommand)]
-        command: EventsCommand,
-    },
-
-    /// Describe a failure code, such as `locked`
+    /// Describe a failure code, such as `network`
     Explain {
         /// The code, as a failure prints it
-        #[arg(required_unless_present = "list")]
-        code: Option<String>,
+        #[arg(required_unless_present = "list", value_parser = code)]
+        code: Option<mix_events::v1::Code>,
 
         /// List every failure code
         #[arg(long, conflicts_with = "code")]
         list: bool,
     },
+}
+
+fn code(name: &str) -> Result<mix_events::v1::Code, String> {
+    mix_explain::codes::parse(name).ok_or_else(|| {
+        "it isn't a code `mix` uses; `mix explain --list` shows them all".to_string()
+    })
 }
 
 pub fn color_requested<I, S>(args: I) -> Color
@@ -311,6 +292,21 @@ mod tests {
 
     fn parse(args: &[&str]) -> Args {
         Args::try_parse_from(args).expect("the arguments should parse")
+    }
+
+    #[test]
+    fn a_code_is_read_as_a_failure_prints_it_and_anything_else_is_a_usage_error() {
+        assert!(matches!(
+            parse(&["mix", "explain", "not-bootstrapped"]).command,
+            Command::Explain {
+                code: Some(mix_events::v1::Code::NotBootstrapped),
+                list: false
+            }
+        ));
+        let refused = Args::try_parse_from(["mix", "explain", "locked"])
+            .err()
+            .expect("a code mix no longer uses is refused");
+        assert_eq!(refused.exit_code(), mix_events::exit::USAGE as i32);
     }
 
     #[test]

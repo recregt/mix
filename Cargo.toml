@@ -12,6 +12,7 @@ members = [
     "crates/rpc",
     "crates/daemon",
     "crates/explain",
+    "crates/render",
 ]
 
 [workspace.package]

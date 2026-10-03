@@ -245,21 +245,6 @@ fn a_cross_device_store_names_the_mount_to_remove() {
 }
 
 #[test]
-fn a_failed_rollback_keeps_the_cause_and_says_where_to_look() {
-    let message = says(
-        BOOTSTRAP,
-        &BootstrapError::Rollback {
-            cause: Box::new(BootstrapError::UnsupportedHost),
-            summary: "1 rollback step(s) failed: nixbld group: exit 1".to_string(),
-        },
-    );
-
-    assert!(message.starts_with("this system is NixOS"));
-    assert!(message.contains("mix doctor"));
-    assert!(!message.contains("nixbld group"));
-}
-
-#[test]
 fn nothing_mix_does_internally_reaches_the_reader() {
     let errors = [
         BootstrapError::Network("x".into()),

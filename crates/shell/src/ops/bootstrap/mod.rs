@@ -12,8 +12,8 @@ use std::path::Path;
 
 use mix_core::action::{Digest, Failure};
 use mix_core::bootstrap::{Runtime, Settings, steps};
-use mix_core::plan::{Report, Runner, Verdict, diagnostic};
-use mix_events::v1::{BootstrapResult, Code, Step, node_finished, node_started};
+use mix_core::plan::{Runner, Verdict, diagnostic};
+use mix_events::v1::{BootstrapRequest, BootstrapResult, Code, Step, node_finished, node_started};
 use mix_events::{Ending, ROOT, Start};
 
 use crate::Context;
@@ -23,14 +23,6 @@ use crate::effect::generations::ProfileContext;
 use crate::effect::journal::{FileJournal, JOURNAL_DIR, recover_all, unfinished};
 use crate::effect::mirror::{filter_mirror, mirror_url};
 use crate::request::{Concluded, Root};
-
-pub struct Environment(());
-
-impl Environment {
-    pub(crate) fn new() -> Self {
-        Self(())
-    }
-}
 
 fn digest(hex: &str) -> Result<Digest> {
     let mut bytes = [0u8; 32];
@@ -110,30 +102,6 @@ pub fn error_from(failure: Failure) -> Error {
     }
 }
 
-fn outcome(report: &Report) -> Result<Environment> {
-    let cause = match &report.verdict {
-        Verdict::Succeeded => return Ok(Environment::new()),
-        Verdict::Cancelled(_) => Error::Interrupted,
-        Verdict::Failed { failure, .. } => error_from(failure.clone()),
-    };
-    if report.rollback_failures.is_empty() {
-        return Err(cause);
-    }
-    let summary = report
-        .rollback_failures
-        .iter()
-        .map(|(step, failure)| format!("{step}: {}", diagnostic(failure).message))
-        .collect::<Vec<_>>()
-        .join("; ");
-    Err(Error::Rollback {
-        cause: Box::new(cause),
-        summary: format!(
-            "{} rollback step(s) failed: {summary}",
-            report.rollback_failures.len()
-        ),
-    })
-}
-
 async fn prepare(ctx: &Context, force: bool) -> Result<(Settings, Performer)> {
     if !crate::effect::accounts::is_root() {
         return Err(Error::NotRoot("bootstrap the managed environment"));
@@ -170,9 +138,9 @@ async fn prepare(ctx: &Context, force: bool) -> Result<(Settings, Performer)> {
 pub(crate) async fn bootstrap(
     ctx: &Context,
     root: &mut Root,
-    force: bool,
-) -> Concluded<Result<Environment>> {
-    let (settings, mut performer) = match prepare(ctx, force).await {
+    request: &BootstrapRequest,
+) -> Concluded {
+    let (settings, mut performer) = match prepare(ctx, request.force).await {
         Ok(prepared) => prepared,
         Err(error) => return root.refuse(error),
     };
@@ -240,5 +208,5 @@ pub(crate) async fn bootstrap(
             ),
         );
     }
-    root.conclude(ending, outcome(report))
+    root.conclude(ending)
 }

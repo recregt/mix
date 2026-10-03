@@ -3,7 +3,7 @@ use mix_events::v1::envelope::Event;
 use mix_events::v1::{CleanRequest, InstallRequest, RemoveRequest, RepairRequest};
 
 use super::*;
-use crate::output::Exit;
+use mix_render::Exit;
 
 fn install(packages: &[&str]) -> Request {
     Request::Install(InstallRequest {
@@ -27,7 +27,7 @@ fn clean() -> Request {
 
 fn recording(file: std::path::PathBuf) -> View {
     View {
-        output: Output::Human,
+        format: mix_render::Format::Human,
         events_file: Some(file),
         verbose: 0,
         quiet: false,

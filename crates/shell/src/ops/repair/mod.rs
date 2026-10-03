@@ -3,7 +3,7 @@
 //!
 //! What can be measured and what can be put back are [`crate::target`]'s, not this command's:
 //! `mix repair` decides the order it walks the environment in, what a change means for the
-//! nix-daemon and for the git-tracked state, and what it hands the caller to print.
+//! nix-daemon and for the git-tracked state, and what it reports for the client to show.
 
 use std::path::Path;
 
@@ -12,7 +12,7 @@ use mix_core::health;
 use mix_core::paths::mix_state_dir;
 use mix_core::plan::{Runner, StepOutcome, Verdict};
 use mix_core::targets::{Target, UserConfig, targets};
-use mix_events::v1::{Cancellation, Code, RepairResult, node_finished};
+use mix_events::v1::{Cancellation, Code, RepairRequest, RepairResult, node_finished};
 use mix_events::{Diagnose, Ending, Fault, ROOT, Stopped, Tree};
 use mix_exec::Scope;
 
@@ -29,8 +29,8 @@ use crate::{Context, HostConfig};
 pub struct RepairReport {
     pub name: String,
     pub fixed: bool,
-    /// What stopped the repair, handed over rather than rendered: the caller decides how it
-    /// should read, and a typed error is still there to be matched on.
+    /// What stopped the repair. It reaches the client as a diagnostic, and the client decides
+    /// how it reads.
     pub error: Option<Error>,
 }
 
@@ -68,7 +68,7 @@ pub struct Repair {
     pub interrupted: bool,
 }
 
-pub(crate) async fn repair(ctx: &Context, root: &mut Root) -> Concluded<Repair> {
+pub(crate) async fn repair(ctx: &Context, root: &mut Root, _request: &RepairRequest) -> Concluded {
     let mut observer = ctx.relay();
     let repair = repaired(
         ctx,
@@ -87,7 +87,7 @@ pub(crate) async fn repair(ctx: &Context, root: &mut Root) -> Concluded<Repair> 
         Ending::succeeded()
     };
     let problems_remain = !repair.reports.iter().all(|report| report.fixed);
-    root.conclude_with_problems(ending.with_result(result), problems_remain, repair)
+    root.conclude_with_problems(ending.with_result(result), problems_remain)
 }
 
 async fn repaired(

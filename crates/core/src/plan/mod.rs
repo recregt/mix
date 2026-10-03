@@ -572,14 +572,14 @@ impl Runner {
                 }
                 Phase::Closing => {
                     let verdict = self.verdict.take().unwrap_or(Verdict::Succeeded);
-                    let mut ending = match &verdict {
+                    let ending = match &verdict {
                         Verdict::Succeeded => Ending::succeeded(),
                         Verdict::Failed { failure, .. } => Ending::failed(diagnostic(failure)),
                         Verdict::Cancelled(cause) => Ending::cancelled(*cause),
                     };
                     if !self.report.rollback_failures.is_empty() {
-                        let incomplete = incomplete(&self.report.rollback_failures);
-                        ending = ending.with_diagnostic(incomplete);
+                        tree.warn(self.plan, incomplete(&self.report.rollback_failures))
+                            .expect("the plan is open until it finishes");
                     }
                     finish(tree, self.plan, ending);
                     self.report.verdict = verdict;
@@ -727,7 +727,7 @@ fn incomplete(failures: &[(Cow<'static, str>, Failure)]) -> Diagnostic {
     steps.dedup();
     Diagnostic {
         code: Code::RollbackIncomplete as i32,
-        severity: Severity::Error as i32,
+        severity: Severity::Warning as i32,
         node: 0,
         message: format!("{} undo action(s) failed", failures.len()),
         causes: failures

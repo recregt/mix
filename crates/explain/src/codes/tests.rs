@@ -12,8 +12,14 @@ use mix_events::v1::{
 use super::*;
 use crate::{Context, render};
 
+fn defined() -> impl Iterator<Item = Code> {
+    Code::DEFINED
+        .iter()
+        .filter_map(|value| Code::try_from(*value).ok())
+}
+
 fn every_code() -> Vec<Code> {
-    super::defined().collect()
+    defined().collect()
 }
 
 fn detail(code: Code) -> Option<Detail> {
@@ -67,11 +73,7 @@ fn sample(code: Code) -> Fault {
         causes: Vec::new(),
         detail: detail(code),
     };
-    let mut failed = diagnostic(code);
-    if code == Code::RollbackIncomplete {
-        failed.causes.push(diagnostic(Code::Network));
-    }
-    Fault::Failed(failed)
+    Fault::Failed(diagnostic(code))
 }
 
 fn golden(code: Code) -> String {
@@ -122,7 +124,7 @@ fn a_name_mix_does_not_use_is_not_a_code() {
 #[test]
 fn the_list_reads_as_its_golden_file() {
     let path = golden_dir().with_file_name("explain-list.txt");
-    let rendered = format!("$ mix explain --list\n{}\n", list_text());
+    let rendered = format!("$ mix explain --list\n{}\n", list_text(defined()));
     if std::env::var("MIX_UPDATE_GOLDEN").is_ok_and(|value| value == "1") {
         std::fs::write(&path, &rendered).unwrap();
     }
