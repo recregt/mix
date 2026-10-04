@@ -9,6 +9,7 @@ use mix_core::world::World;
 use mix_events::Render;
 use mix_events::v1::command::Request;
 use mix_events::v1::{Command, DoctorRequest, Envelope, InstallRequest, RepairRequest};
+use mix_shell::drive::{Fault, Faults};
 use mix_shell::request::context::Host;
 use mix_shell::request::lock::Locks;
 use mix_shell::{Caller, Session};
@@ -87,8 +88,20 @@ impl Machine {
     }
 
     async fn run(&self, request: Request, dry_run: bool, as_root: bool) -> Value {
+        self.faulted(request, dry_run, as_root, None)
+            .await
+            .expect("only an armed fault crashes a request")
+    }
+
+    async fn faulted(
+        &self,
+        request: Request,
+        dry_run: bool,
+        as_root: bool,
+        faults: Option<Arc<Faults>>,
+    ) -> Option<Value> {
         let recorded: Arc<Mutex<Vec<Envelope>>> = Arc::default();
-        let session = Session::new(mix_exec::Scope::root())
+        let mut session = Session::new(mix_exec::Scope::root())
             .with_host(Host::Model(Arc::clone(&self.world)))
             .with_locks(Arc::clone(&self.locks))
             .with_journals(self.dir.path().join("journal"))
@@ -98,18 +111,29 @@ impl Machine {
                 account: Some(self.user.clone()),
             })
             .with_render(Recorded(Arc::clone(&recorded)));
-        mix_shell::request::run(
+        if let Some(faults) = &faults {
+            session = session.with_faults(Arc::clone(faults));
+        }
+        let ran = mix_shell::request::run(
             &session,
             Command {
                 dry_run,
                 ..mix_events::command(request)
             },
-        )
-        .await;
+        );
+        match &faults {
+            Some(faults) => {
+                tokio::select! {
+                    () = ran => {}
+                    () = faults.crashed() => return None,
+                }
+            }
+            None => ran.await,
+        }
         let envelopes = recorded.lock().unwrap().clone();
         mix_events::validate(envelopes.iter()).expect("every request streams a valid tree");
         let document = mix_render::document::of(&envelopes).expect("every request ends its root");
-        serde_json::to_value(document).unwrap()
+        Some(serde_json::to_value(document).unwrap())
     }
 
     fn snapshot(&self) -> World {
@@ -311,16 +335,51 @@ enum Step {
     Clean(bool),
     Repair,
     Damage(usize),
+    Faulted(Box<Step>, usize, FaultKind),
 }
 
-fn step() -> impl proptest::strategy::Strategy<Value = Step> {
+#[derive(Debug, Clone, Copy)]
+enum FaultKind {
+    Fail,
+    CrashBefore,
+    CrashAfter,
+}
+
+impl FaultKind {
+    fn fault(self) -> Fault {
+        match self {
+            FaultKind::Fail => Fault::Fail(mix_core::action::Failure::Io {
+                path: "/injected".into(),
+                kind: std::io::ErrorKind::StorageFull,
+            }),
+            FaultKind::CrashBefore => Fault::CrashBefore,
+            FaultKind::CrashAfter => Fault::CrashAfter,
+        }
+    }
+}
+
+fn command() -> impl proptest::strategy::Strategy<Value = Step> {
     use proptest::prelude::*;
     prop_oneof![
         (0..PACKAGES.len()).prop_map(Step::Install),
         (0..PACKAGES.len()).prop_map(Step::Remove),
         any::<bool>().prop_map(Step::Clean),
         Just(Step::Repair),
-        any::<usize>().prop_map(Step::Damage),
+    ]
+}
+
+fn step() -> impl proptest::strategy::Strategy<Value = Step> {
+    use proptest::prelude::*;
+    let fault = prop_oneof![
+        Just(FaultKind::Fail),
+        Just(FaultKind::CrashBefore),
+        Just(FaultKind::CrashAfter),
+    ];
+    prop_oneof![
+        3 => command(),
+        1 => any::<usize>().prop_map(Step::Damage),
+        1 => (command(), 0..12usize, fault)
+            .prop_map(|(command, at, kind)| Step::Faulted(Box::new(command), at, kind)),
     ]
 }
 
@@ -335,10 +394,10 @@ fn request_of(step: &Step) -> Option<(Request, bool)> {
         ),
         Step::Clean(all) => (
             Request::Clean(mix_events::v1::CleanRequest { all: *all }),
-            *all,
+            false,
         ),
         Step::Repair => (Request::Repair(RepairRequest {}), true),
-        Step::Damage(_) => return None,
+        Step::Damage(_) | Step::Faulted(..) => return None,
     })
 }
 
@@ -347,6 +406,30 @@ async fn walk(healthy: World, breakages: Vec<Breakage>, steps: Vec<Step>) -> Vec
     let mut found = Vec::new();
     for (index, step) in steps.iter().enumerate() {
         let at = format!("step {index} {step:?} of {steps:?}");
+        if let Step::Faulted(command, at_action, kind) = step {
+            let (request, as_root) = request_of(command).expect("a faulted step is a command");
+            let before = machine.snapshot();
+            let faults = Arc::new(Faults::default());
+            faults.arm(*at_action, kind.fault());
+            let done = machine
+                .faulted(request, false, as_root, Some(Arc::clone(&faults)))
+                .await;
+            faults.disarm();
+            if let Some(done) = done {
+                let atomic = matches!(**command, Step::Install(_) | Step::Remove(_));
+                if atomic && !succeeded(&done) && before.logs.is_empty() {
+                    let mut after = machine.snapshot();
+                    after.logs.clear();
+                    if after != before {
+                        found.push(format!("{at}: a failed change was not rolled back"));
+                    }
+                }
+                if done["exit"] != 0 && done["problems"].as_array().is_none_or(Vec::is_empty) {
+                    found.push(format!("{at}: exited {} without a problem", done["exit"]));
+                }
+            }
+            continue;
+        }
         let Some((request, as_root)) = request_of(step) else {
             if let Step::Damage(pick) = step {
                 let breakage = &breakages[pick % breakages.len()];
@@ -367,7 +450,7 @@ async fn walk(healthy: World, breakages: Vec<Breakage>, steps: Vec<Step>) -> Vec
             found.push(format!("{at}: exited {} without a problem", done["exit"]));
         }
         let world = machine.snapshot();
-        if !world.logs.is_empty() {
+        if succeeded(&done) && !world.logs.is_empty() {
             found.push(format!(
                 "{at}: journals left behind {:?}",
                 world.logs.keys()
@@ -401,6 +484,23 @@ async fn walk(healthy: World, breakages: Vec<Breakage>, steps: Vec<Step>) -> Vec
                 ));
             }
         }
+    }
+    let finale = machine
+        .run(Request::Repair(RepairRequest {}), false, true)
+        .await;
+    let world = machine.snapshot();
+    if !world.logs.is_empty() {
+        found.push(format!(
+            "after {steps:?}: a final repair left journals {:?}: {finale:#}",
+            world.logs.keys()
+        ));
+    }
+    let doctor = machine
+        .run(Request::Doctor(DoctorRequest {}), false, false)
+        .await;
+    let left = fixable(&doctor);
+    if !left.is_empty() {
+        found.push(format!("after {steps:?}: a final repair left {left:?}"));
     }
     found
 }
