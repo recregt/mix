@@ -1574,6 +1574,7 @@ dependencies = [
  "mix-testchild",
  "mockito",
  "nix",
+ "proptest",
  "reqwest",
  "rustix",
  "serde",

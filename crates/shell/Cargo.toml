@@ -42,6 +42,7 @@ divan = { workspace = true }
 mix-core = { path = "../core", features = ["testkit"] }
 mockito = "=1.7.2"
 mix-render = { path = "../render" }
+proptest = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 
 [[bench]]

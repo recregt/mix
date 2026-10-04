@@ -301,3 +301,125 @@ async fn any_single_damage_to_what_mix_owns_is_repaired_as_planned() {
         found.join("\n")
     );
 }
+
+const PACKAGES: [&str; 3] = ["hello", "jq", "ripgrep"];
+
+#[derive(Debug, Clone)]
+enum Step {
+    Install(usize),
+    Remove(usize),
+    Clean(bool),
+    Repair,
+    Damage(usize),
+}
+
+fn step() -> impl proptest::strategy::Strategy<Value = Step> {
+    use proptest::prelude::*;
+    prop_oneof![
+        (0..PACKAGES.len()).prop_map(Step::Install),
+        (0..PACKAGES.len()).prop_map(Step::Remove),
+        any::<bool>().prop_map(Step::Clean),
+        Just(Step::Repair),
+        any::<usize>().prop_map(Step::Damage),
+    ]
+}
+
+fn request_of(step: &Step) -> Option<(Request, bool)> {
+    Some(match step {
+        Step::Install(package) => (install(&[PACKAGES[*package]]), false),
+        Step::Remove(package) => (
+            Request::Remove(mix_events::v1::RemoveRequest {
+                packages: vec![PACKAGES[*package].to_string()],
+            }),
+            false,
+        ),
+        Step::Clean(all) => (
+            Request::Clean(mix_events::v1::CleanRequest { all: *all }),
+            *all,
+        ),
+        Step::Repair => (Request::Repair(RepairRequest {}), true),
+        Step::Damage(_) => return None,
+    })
+}
+
+async fn walk(healthy: World, breakages: Vec<Breakage>, steps: Vec<Step>) -> Vec<String> {
+    let machine = Machine::on(healthy);
+    let mut found = Vec::new();
+    for (index, step) in steps.iter().enumerate() {
+        let at = format!("step {index} {step:?} of {steps:?}");
+        let Some((request, as_root)) = request_of(step) else {
+            if let Step::Damage(pick) = step {
+                let breakage = &breakages[pick % breakages.len()];
+                breakage.apply(&mut machine.world.lock().unwrap());
+            }
+            continue;
+        };
+        let predicted = machine.run(request.clone(), true, as_root).await;
+        let done = machine.run(request.clone(), false, as_root).await;
+        if changes(&predicted) != changes(&done) {
+            found.push(format!(
+                "{at}: predicted {:?} but made {:?}",
+                changes(&predicted),
+                changes(&done)
+            ));
+        }
+        if done["exit"] != 0 && done["problems"].as_array().is_none_or(Vec::is_empty) {
+            found.push(format!("{at}: exited {} without a problem", done["exit"]));
+        }
+        let world = machine.snapshot();
+        if !world.logs.is_empty() {
+            found.push(format!(
+                "{at}: journals left behind {:?}",
+                world.logs.keys()
+            ));
+        }
+        if !world.pending().is_empty() {
+            found.push(format!("{at}: left pending {:?}", world.pending()));
+        }
+        let changed_packages = matches!(step, Step::Install(_) | Step::Remove(_));
+        if changed_packages && succeeded(&done) {
+            let listed = world.contents("/home/alice/.local/state/mix/state");
+            if listed != world.active_list(&machine.user) {
+                found.push(format!("{at}: the list differs from the active generation"));
+            }
+        }
+        if matches!(step, Step::Repair) {
+            let doctor = machine
+                .run(Request::Doctor(DoctorRequest {}), false, false)
+                .await;
+            let left = fixable(&doctor);
+            if !left.is_empty() {
+                found.push(format!("{at}: repair left {left:?}"));
+            }
+            let again = machine
+                .run(Request::Repair(RepairRequest {}), false, true)
+                .await;
+            if !changes(&again).is_empty() {
+                found.push(format!(
+                    "{at}: a second repair changed {:?}",
+                    changes(&again)
+                ));
+            }
+        }
+    }
+    found
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(256))]
+    #[test]
+    fn any_sequence_of_commands_and_damage_keeps_every_invariant(
+        steps in proptest::collection::vec(step(), 1..8)
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let found = runtime.block_on(async {
+            let machine = Machine::new();
+            let pristine = machine.snapshot();
+            machine.run(Request::Bootstrap(Box::default()), false, true).await;
+            let healthy = machine.snapshot();
+            let breakages = breakages(&owned(&pristine, &healthy));
+            walk(healthy, breakages, steps).await
+        });
+        proptest::prop_assert!(found.is_empty(), "{}", found.join("\n"));
+    }
+}
