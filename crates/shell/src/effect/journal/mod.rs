@@ -118,10 +118,56 @@ pub fn unfinished(dir: &Path) -> Vec<PathBuf> {
 pub struct Recovered {
     pub requests: usize,
     pub failures: Vec<(Action, Failure)>,
+    pub lost: Vec<(Action, Failure)>,
+}
+
+fn gone(failure: &Failure) -> bool {
+    matches!(
+        failure,
+        Failure::Conflict { .. }
+            | Failure::Io {
+                kind: std::io::ErrorKind::NotFound,
+                ..
+            }
+    )
+}
+
+fn accept_loss(recovered: &mut Recovered, failed_before: usize) -> bool {
+    if recovered.failures[failed_before..]
+        .iter()
+        .all(|(_, failure)| gone(failure))
+    {
+        let lost = recovered.failures.split_off(failed_before);
+        recovered.lost.extend(lost);
+        return true;
+    }
+    false
+}
+
+pub async fn recover_all(dir: &Path, performer: &mut Performer, scope: &Scope) -> Recovered {
+    recover_from(dir, performer, scope, true, false).await
+}
+
+pub async fn recover_accepting_loss(
+    dir: &Path,
+    performer: &mut Performer,
+    scope: &Scope,
+) -> Recovered {
+    recover_from(dir, performer, scope, true, true).await
+}
+
+pub async fn predict_recovery(dir: &Path, performer: &mut Performer, scope: &Scope) -> Recovered {
+    recover_from(dir, performer, scope, false, false).await
 }
 
 #[allow(clippy::disallowed_methods)]
-pub async fn recover_all(dir: &Path, performer: &mut Performer, scope: &Scope) -> Recovered {
+async fn recover_from(
+    dir: &Path,
+    performer: &mut Performer,
+    scope: &Scope,
+    remove: bool,
+    losing: bool,
+) -> Recovered {
     let mut recovered = Recovered::default();
     for path in unfinished(dir) {
         let Some(_held) = unheld(&path) else {
@@ -135,7 +181,31 @@ pub async fn recover_all(dir: &Path, performer: &mut Performer, scope: &Scope) -
             }
         };
         recovered.requests += 1;
-        if !recover_records(&records, performer, scope, &mut recovered).await {
+        let resumed = if remove {
+            match Resumed::open(&path) {
+                Ok(resumed) => Some(resumed),
+                Err(failure) => {
+                    recovered.failures.push((Action::Commit, failure));
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
+        let mut progress: Box<dyn Journal> = match resumed {
+            Some(resumed) => Box::new(resumed),
+            None => Box::new(Vec::new()),
+        };
+        let failed_before = recovered.failures.len();
+        let finished = recover_records(
+            &records,
+            performer,
+            scope,
+            &mut recovered,
+            progress.as_mut(),
+        )
+        .await;
+        if !remove || !(finished || losing && accept_loss(&mut recovered, failed_before)) {
             continue;
         }
         if let Err(failure) = std::fs::remove_file(&path).map_err(|error| io(&path, error)) {
@@ -150,6 +220,7 @@ pub async fn recover_records(
     performer: &mut Performer,
     scope: &Scope,
     recovered: &mut Recovered,
+    progress: &mut dyn Journal,
 ) -> bool {
     let failed_before = recovered.failures.len();
     let mut ignore = |_: &[Action]| Ok(());
@@ -158,15 +229,28 @@ pub async fn recover_records(
         Recovery::Nothing => {}
         Recovery::RollBack { uncertain, certain } => {
             for action in uncertain {
-                let _ = performer
-                    .perform(&action, scope, &mut quiet, &mut ignore)
-                    .await;
-            }
-            for action in certain {
-                if let Err(failure) = performer
+                if performer
                     .perform(&action, scope, &mut quiet, &mut ignore)
                     .await
+                    .is_ok()
+                    && let Err(failure) = progress.append(&Record::Reverted {
+                        action: action.clone(),
+                    })
                 {
+                    recovered.failures.push((action, failure));
+                    return false;
+                }
+            }
+            for action in certain {
+                let undone = performer
+                    .perform(&action, scope, &mut quiet, &mut ignore)
+                    .await
+                    .and_then(|_| {
+                        progress.append(&Record::Reverted {
+                            action: action.clone(),
+                        })
+                    });
+                if let Err(failure) = undone {
                     recovered.failures.push((action, failure));
                 }
             }
@@ -186,6 +270,52 @@ pub async fn recover_records(
         }
     }
     recovered.failures.len() == failed_before
+}
+
+struct Resumed {
+    file: File,
+    path: PathBuf,
+}
+
+impl Resumed {
+    #[allow(clippy::disallowed_methods)]
+    fn open(path: &Path) -> Result<Self, Failure> {
+        let file = OpenOptions::new()
+            .append(true)
+            .open(path)
+            .map_err(|error| io(path, error))?;
+        Ok(Self {
+            file,
+            path: path.to_path_buf(),
+        })
+    }
+}
+
+impl Journal for Resumed {
+    fn append(&mut self, record: &Record) -> Result<(), Failure> {
+        let mut line = serde_json::to_vec(record).expect("a record always serialises");
+        line.push(b'\n');
+        self.file
+            .write_all(&line)
+            .and_then(|()| self.file.sync_data())
+            .map_err(|error| io(&self.path, error))
+    }
+}
+
+struct ModelProgress {
+    world: Arc<Mutex<World>>,
+    request: String,
+}
+
+impl Journal for ModelProgress {
+    fn append(&mut self, record: &Record) -> Result<(), Failure> {
+        lock(&self.world)
+            .logs
+            .entry(self.request.clone())
+            .or_default()
+            .push(record.clone());
+        Ok(())
+    }
 }
 
 pub struct ModelJournal {
@@ -214,7 +344,9 @@ impl ModelJournal {
 
 impl Drop for ModelJournal {
     fn drop(&mut self) {
-        lock(&self.world).held.remove(&self.request);
+        let mut world = lock(&self.world);
+        world.held.remove(&self.request);
+        world.forget(&self.request);
     }
 }
 
@@ -259,6 +391,7 @@ pub async fn recover_model(
     world: &Arc<Mutex<World>>,
     performer: &mut Performer,
     scope: &Scope,
+    losing: bool,
 ) -> Recovered {
     let mut recovered = Recovered::default();
     let open: Vec<(String, Vec<Record>)> = {
@@ -272,7 +405,14 @@ pub async fn recover_model(
     };
     for (request, records) in open {
         recovered.requests += 1;
-        if recover_records(&records, performer, scope, &mut recovered).await {
+        let mut progress = ModelProgress {
+            world: Arc::clone(world),
+            request: request.clone(),
+        };
+        let failed_before = recovered.failures.len();
+        let finished =
+            recover_records(&records, performer, scope, &mut recovered, &mut progress).await;
+        if finished || losing && accept_loss(&mut recovered, failed_before) {
             lock(world).logs.remove(&request);
         }
     }

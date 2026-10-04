@@ -53,6 +53,16 @@ impl Host {
         }
     }
 
+    pub fn available(&self) -> Option<u64> {
+        match self {
+            Host::Machine => {
+                let stat = rustix::fs::statvfs(mix_core::paths::NIX_STORE).ok()?;
+                Some(stat.f_bavail.saturating_mul(stat.f_frsize))
+            }
+            Host::Model(_) => None,
+        }
+    }
+
     pub fn is_root(&self) -> bool {
         match self {
             Host::Machine => crate::effect::accounts::is_root(),
@@ -91,6 +101,7 @@ pub struct Context {
     pub journals: std::path::PathBuf,
     pub dry_run: bool,
     pub host: Host,
+    pub faults: Option<Arc<crate::drive::Faults>>,
 }
 
 impl Context {
@@ -125,12 +136,16 @@ impl Context {
         dir: &Path,
         performer: &mut Performer,
         scope: &mix_exec::Scope,
+        losing: bool,
     ) -> crate::effect::journal::Recovered {
-        match &self.host {
-            Host::Machine => crate::effect::journal::recover_all(dir, performer, scope).await,
-            Host::Model(world) => {
-                crate::effect::journal::recover_model(world, performer, scope).await
-            }
+        use crate::effect::journal::{
+            predict_recovery, recover_accepting_loss, recover_all, recover_model,
+        };
+        match performer.model() {
+            Some(world) => recover_model(&world, performer, scope, losing).await,
+            None if self.dry_run => predict_recovery(dir, performer, scope).await,
+            None if losing => recover_accepting_loss(dir, performer, scope).await,
+            None => recover_all(dir, performer, scope).await,
         }
     }
 
@@ -146,9 +161,11 @@ impl Context {
             }
             Host::Model(world) if self.dry_run => {
                 let copy = world.lock().unwrap_or_else(PoisonError::into_inner).clone();
-                Performer::modelled(Arc::new(Mutex::new(copy)))
+                Ok(Performer::modelled(Arc::new(Mutex::new(copy)))?.acting_for(&self.request.id))
             }
-            Host::Model(world) => Performer::modelled(Arc::clone(world)),
+            Host::Model(world) => Ok(Performer::modelled(Arc::clone(world))?
+                .acting_for(&self.request.id)
+                .with_faults(self.faults.clone())),
         }
     }
 

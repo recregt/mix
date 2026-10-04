@@ -11,7 +11,7 @@ use mix_pins::{
     NIXPKGS_NAR_HASH, NIXPKGS_REV,
 };
 
-use crate::profile::state::{Settled, Source, settle};
+use crate::profile::state::{Settled, Source};
 
 const NIXPKGS: Rev = Rev::new_static(NIXPKGS_REV);
 const HOME_MANAGER: Rev = Rev::new_static(HOME_MANAGER_REV);
@@ -43,23 +43,24 @@ fn nix_system(arch: Arch, os: Os) -> System {
     }
 }
 
-pub fn user_config_for(
+fn configured(
     user: InvokingUser,
-    host: &crate::request::context::Host,
-    locked: &crate::request::Locked,
+    state: Option<&str>,
+    active: Option<&str>,
+    home_nix: Option<String>,
 ) -> Option<UserConfig> {
     let system = nix_system(Arch::current()?, Os::current()?);
     let flake = FlakeConfig::new(system, &user.name, NIXPKGS, HOME_MANAGER)
         .expect("a real username cannot contain a null byte")
         .render();
-    let (home, restored_state) = match settle(&user, host, locked) {
+    let (home, restored_state) = match mix_core::change::settle(state, active) {
         Settled::Current { manifest, source } => (
             render_home(&user, &manifest.packages)
                 .expect("a settled package list only holds valid names"),
             (source != Source::File).then(|| manifest.render()),
         ),
         Settled::Newer(_) => (
-            host.home_nix(&user).unwrap_or_else(|| {
+            home_nix.unwrap_or_else(|| {
                 render_home(&user, StateManifest::seed().packages)
                     .expect("the seed package list is always valid")
             }),
@@ -73,6 +74,48 @@ pub fn user_config_for(
         home,
         restored_state,
     })
+}
+
+pub fn user_config_for(
+    user: InvokingUser,
+    host: &crate::request::context::Host,
+    _locked: &crate::request::Locked,
+) -> Option<UserConfig> {
+    let state = host.state_file(&user);
+    let active = host.active_list(&user);
+    let home_nix = host.home_nix(&user);
+    configured(user, state.as_deref(), active.as_deref(), home_nix)
+}
+
+pub async fn observed_user_config(
+    user: InvokingUser,
+    performer: &mut crate::drive::Performer,
+    scope: &mix_exec::Scope,
+) -> Option<UserConfig> {
+    use mix_core::action::{Fact, Query};
+    use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
+    let state_dir = mix_state_dir(&user.home);
+    let facts = performer
+        .observe(
+            &[
+                Query::Contents(state_dir.join(STATE_FILE)),
+                Query::ActiveList(user.clone()),
+                Query::Contents(state_dir.join(HOME_NIX)),
+            ],
+            scope,
+        )
+        .await
+        .ok()?;
+    let text = |fact: &Fact| match fact {
+        Fact::Contents(Some(bytes)) => Some(String::from_utf8_lossy(bytes).into_owned()),
+        _ => None,
+    };
+    configured(
+        user,
+        text(&facts[0]).as_deref(),
+        text(&facts[1]).as_deref(),
+        text(&facts[2]),
+    )
 }
 
 pub fn existing_user_config_for(

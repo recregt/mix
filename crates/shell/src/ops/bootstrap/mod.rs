@@ -11,12 +11,13 @@ pub use error::{Error, Host, Result};
 use mix_core::action::{Digest, Failure};
 use mix_core::bootstrap::{Runtime, Settings, steps};
 use mix_core::plan::{Runner, Verdict, diagnostic};
-use mix_events::v1::{BootstrapRequest, BootstrapResult, Code, Step, node_finished, node_started};
-use mix_events::{Ending, ROOT, Start};
+use mix_events::v1::{BootstrapRequest, BootstrapResult, Code, node_finished};
+use mix_events::{Ending, ROOT};
 
 use crate::Context;
 use crate::drive::{Performer, drive};
 use crate::effect::generations::ProfileContext;
+use crate::profile::config::observed_user_config;
 
 use crate::effect::mirror::{filter_mirror, mirror_url};
 use crate::request::{Concluded, Root};
@@ -148,13 +149,19 @@ pub(crate) async fn bootstrap(
     root: &mut Root,
     request: &BootstrapRequest,
 ) -> Concluded {
-    let (settings, mut performer) = match prepare(ctx, request.force).await {
+    let (mut settings, mut performer) = match prepare(ctx, request.force).await {
         Ok(prepared) => prepared,
         Err(error) => return root.refuse(error),
     };
     let scope = &ctx.scope;
     let tree = &mut root.tree;
     let journals = ctx.journals.as_path();
+    crate::ops::recover_interrupted(ctx, tree, &mut performer, true).await;
+    if let Some(user) = ctx.user.as_ref().map(|cfg| cfg.user.clone()) {
+        settings.user = observed_user_config(user, &mut performer, scope)
+            .await
+            .or(settings.user);
+    }
     if ctx.dry_run {
         let mut runner = Runner::new(ROOT, steps(&settings));
         let report = drive(
@@ -169,35 +176,6 @@ pub(crate) async fn bootstrap(
         .await;
         let ending = ending_of(&report.verdict);
         return root.conclude(ending);
-    }
-    if ctx.interrupted(journals) {
-        let node = tree
-            .start(
-                ROOT,
-                Start::new(
-                    "recover",
-                    node_started::Kind::Step(Step {
-                        verb: mix_events::v1::Verb::Recovering as i32,
-                        subject: "interrupted request".to_string(),
-                    }),
-                )
-                .shielded(),
-            )
-            .expect("the root is open");
-        let recovered = ctx
-            .recover(journals, &mut performer, &scope.shielded())
-            .await;
-        for (_, failure) in &recovered.failures {
-            let _ = tree.warn(
-                node,
-                mix_core::diagnose::warning(
-                    Code::CleanupIncomplete,
-                    "could not finish an interrupted request",
-                    failure,
-                ),
-            );
-        }
-        let _ = tree.finish(node, Ending::succeeded());
     }
     let mut journal = match ctx.journal(journals) {
         Ok(journal) => journal,

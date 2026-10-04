@@ -36,14 +36,16 @@ pub(crate) async fn remove(ctx: &Context, root: &mut Root, request: &RemoveReque
     let Some(cfg) = ctx.user.as_ref() else {
         return root.refuse(Error::Change(change::Error::NotBootstrapped));
     };
-    let decided = match mix_core::change::remove(
-        &request.packages,
-        change::settled(cfg, &ctx.host, &ctx.locked),
-    ) {
+    let mut performer = match change::begin(ctx, root).await {
+        Ok(performer) => performer,
+        Err(concluded) => return *concluded,
+    };
+    let settled = change::settled(&mut performer, cfg, &ctx.scope).await;
+    let decided = match mix_core::change::remove(&request.packages, settled) {
         Ok(decided) => decided,
         Err(refused) => return root.refuse(Error::from(refused)),
     };
-    change::run(ctx, root, cfg, change::Verb::Remove, &decided).await
+    change::run(ctx, root, performer, cfg, change::Verb::Remove, &decided).await
 }
 
 #[cfg(test)]

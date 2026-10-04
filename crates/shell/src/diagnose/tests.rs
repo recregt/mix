@@ -80,7 +80,8 @@ fn every_change_error() -> Vec<ChangeError> {
         | ChangeError::InvalidState(_)
         | ChangeError::NewerState(_)
         | ChangeError::NotRoot
-        | ChangeError::NotBootstrapped => {}
+        | ChangeError::NotBootstrapped
+        | ChangeError::Unrecovered => {}
     };
     let rejected = mix_nixgen::HomeModule::new(
         "mix-user",
@@ -97,6 +98,7 @@ fn every_change_error() -> Vec<ChangeError> {
         ChangeError::NewerState(2),
         ChangeError::NotRoot,
         ChangeError::NotBootstrapped,
+        ChangeError::Unrecovered,
     ];
     errors.iter().for_each(exhaustive);
     errors

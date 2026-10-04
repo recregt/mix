@@ -46,6 +46,7 @@ pub struct Session {
     pub policy: Option<Policy>,
     pub journals: PathBuf,
     pub host: context::Host,
+    pub faults: Option<Arc<crate::drive::Faults>>,
 }
 
 impl Session {
@@ -58,7 +59,13 @@ impl Session {
             policy: None,
             journals: PathBuf::from(crate::effect::journal::JOURNAL_DIR),
             host: context::Host::Machine,
+            faults: None,
         }
+    }
+
+    pub fn with_faults(mut self, faults: Arc<crate::drive::Faults>) -> Self {
+        self.faults = Some(faults);
+        self
     }
 
     pub fn with_host(mut self, host: context::Host) -> Self {
@@ -242,6 +249,7 @@ async fn host(
         journals: session.journals.clone(),
         dry_run,
         host: session.host.clone(),
+        faults: session.faults.clone(),
     };
     let mut root = Root { tree, stopped };
     let concluded = op(&ctx, &mut root).await;

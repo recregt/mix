@@ -213,6 +213,7 @@ impl Prediction {
             | Query::Strangers { path, .. }
             | Query::Program { path, .. } => near(path),
             Query::Repository(user) => near(&repository_dir(&user.home)),
+            Query::ActiveList(user) => self.touched.contains(&Subject::Profile(user.clone())),
             Query::Group(name) => self.touched.contains(&Subject::Group(name.clone())),
             Query::User(name) => self.touched.contains(&Subject::User(name.clone())),
             Query::Unit(name) => self.touched.contains(&Subject::Unit(name.clone())),
@@ -224,9 +225,59 @@ impl Prediction {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum Fault {
+    Fail(Failure),
+    CrashBefore,
+    CrashAfter,
+}
+
+#[derive(Default)]
+pub struct Faults {
+    plan: Mutex<Option<(usize, Fault)>>,
+    crashed: tokio::sync::Notify,
+}
+
+impl Faults {
+    pub fn arm(&self, at: usize, fault: Fault) {
+        *self
+            .plan
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((at, fault));
+    }
+
+    pub fn disarm(&self) {
+        *self
+            .plan
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+
+    pub async fn crashed(&self) {
+        self.crashed.notified().await;
+    }
+
+    fn next(&self) -> Option<Fault> {
+        let mut plan = self
+            .plan
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match plan.as_mut() {
+            Some((0, _)) => plan.take().map(|(_, fault)| fault),
+            Some((left, _)) => {
+                *left -= 1;
+                None
+            }
+            None => None,
+        }
+    }
+}
+
 pub struct Performer {
     files: Files,
     model: Option<std::sync::Arc<Mutex<World>>>,
+    faults: Option<std::sync::Arc<Faults>>,
+    acting_for: Option<String>,
     prediction: Option<Prediction>,
     agents: BTreeMap<u32, Agent>,
     units: Option<Units>,
@@ -241,6 +292,8 @@ impl Performer {
         Self {
             files,
             model: None,
+            faults: None,
+            acting_for: None,
             prediction: None,
             agents: BTreeMap::new(),
             units: None,
@@ -519,12 +572,37 @@ impl Performer {
         })
     }
 
+    pub fn acting_for(mut self, request: &str) -> Self {
+        self.acting_for = Some(request.to_string());
+        self
+    }
+
+    pub fn with_faults(mut self, faults: Option<std::sync::Arc<Faults>>) -> Self {
+        self.faults = faults;
+        self
+    }
+
+    pub(crate) fn model(&self) -> Option<std::sync::Arc<Mutex<World>>> {
+        self.model.clone()
+    }
+
     fn modelled_world(&self) -> Option<std::sync::MutexGuard<'_, World>> {
         self.model.as_ref().map(|world| {
-            world
+            let mut world = world
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(request) = &self.acting_for {
+                world.acting_for.clone_from(request);
+            }
+            world
         })
+    }
+
+    async fn crash(&self) -> Outcome {
+        if let Some(faults) = &self.faults {
+            faults.crashed.notify_one();
+        }
+        std::future::pending().await
     }
 
     pub fn predicting(files: Files) -> Self {
@@ -667,6 +745,11 @@ impl Performer {
             match query {
                 Query::Unit(unit) => Fact::Unit(self.units().await?.observe(unit).await?),
                 Query::Journals(dir) => Fact::Journals(crate::effect::journal::abandoned(dir)),
+                Query::ActiveList(user) => Fact::Contents(
+                    std::fs::read(mix_core::paths::active_list_path(&user.home))
+                        .ok()
+                        .map(Into::into),
+                ),
                 Query::Program { path, source } => {
                     Fact::Program(crate::effect::program::observe(path, source))
                 }
@@ -701,6 +784,10 @@ impl Performer {
         prepared: &mut Prepared<'_>,
     ) -> Outcome {
         if self.model.is_some() {
+            let fault = self.faults.as_ref().and_then(|faults| faults.next());
+            if let Some(Fault::Fail(failure)) = fault {
+                return Err(failure);
+            }
             let undo = self
                 .modelled_world()
                 .expect("checked above")
@@ -708,7 +795,14 @@ impl Performer {
                 .apply(action)?
                 .undo;
             prepared(&undo)?;
-            return self.modelled_world().expect("checked above").apply(action);
+            if matches!(fault, Some(Fault::CrashBefore)) {
+                return self.crash().await;
+            }
+            let performed = self.modelled_world().expect("checked above").apply(action);
+            if matches!(fault, Some(Fault::CrashAfter)) {
+                return self.crash().await;
+            }
+            return performed;
         }
         if self.prediction.is_some() {
             return Box::pin(self.predict(action, scope, prepared)).await;
@@ -833,6 +927,10 @@ impl Performer {
     }
 
     pub async fn adopt(&mut self, pending: Vec<PathBuf>, scope: &Scope) -> Result<(), Failure> {
+        if let Some(mut world) = self.modelled_world() {
+            world.adopt(pending);
+            return Ok(());
+        }
         let mut theirs: BTreeMap<u32, Vec<PathBuf>> = BTreeMap::new();
         let mut ours = Vec::new();
         let running = nix::unistd::geteuid().as_raw();

@@ -9,6 +9,8 @@ use std::path::Path;
 
 use mix_core::action::Failure;
 use mix_core::health;
+
+use crate::profile::config::observed_user_config;
 use mix_core::plan::{Runner, StepOutcome, Verdict};
 use mix_core::targets::targets;
 use mix_events::v1::{Cancellation, Code, RepairRequest, RepairResult, node_finished};
@@ -95,9 +97,7 @@ async fn repaired(
     stopped: &Stopped,
     observer: &mut Relay,
 ) -> Repair {
-    let user_config = ctx.user.as_ref();
     let scope = &ctx.scope;
-    let items = targets(user_config, &ctx.policy);
     let performer = match ctx.performer() {
         Ok(performer) => performer,
         Err(source) => {
@@ -116,6 +116,15 @@ async fn repaired(
     let mut performer = performer.with_profile(ProfileContext {
         mirror: ctx.mirror().map(str::to_string),
     });
+    let journals = ctx.journals.as_path();
+    crate::ops::recover_interrupted(ctx, tree, &mut performer, true).await;
+    let user_config = match &ctx.user {
+        Some(cfg) => observed_user_config(cfg.user.clone(), &mut performer, scope)
+            .await
+            .or_else(|| ctx.user.clone()),
+        None => None,
+    };
+    let items = targets(user_config.as_ref(), &ctx.policy);
     if ctx.dry_run {
         let (reports, interrupted) = put_back(
             health::repair_steps(items, request),
@@ -133,20 +142,6 @@ async fn repaired(
             reports,
             interrupted,
         };
-    }
-    let journals = ctx.journals.as_path();
-    let recovered = ctx
-        .recover(journals, &mut performer, &scope.shielded())
-        .await;
-    for (_, failure) in &recovered.failures {
-        let _ = tree.warn(
-            ROOT,
-            mix_core::diagnose::warning(
-                Code::CleanupIncomplete,
-                "could not finish an interrupted request",
-                failure,
-            ),
-        );
     }
     let mut journal = match ctx.journal(journals) {
         Ok(journal) => journal,
