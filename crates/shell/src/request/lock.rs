@@ -41,6 +41,23 @@ pub struct Locks {
     path: PathBuf,
     users: Mutex<HashMap<u32, Arc<tokio::sync::Mutex<()>>>>,
     registry: Arc<Mutex<Registry>>,
+    waiting: tokio::sync::watch::Sender<usize>,
+}
+
+/// Counts one request as waiting for a lock for as long as it lives.
+struct Waiting<'a>(&'a tokio::sync::watch::Sender<usize>);
+
+impl<'a> Waiting<'a> {
+    fn begin(count: &'a tokio::sync::watch::Sender<usize>) -> Self {
+        count.send_modify(|waiting| *waiting += 1);
+        Self(count)
+    }
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        self.0.send_modify(|waiting| *waiting -= 1);
+    }
 }
 
 pub struct Held {
@@ -77,7 +94,13 @@ impl Locks {
             path: path.into(),
             users: Mutex::new(HashMap::new()),
             registry: Arc::new(Mutex::new(Registry::default())),
+            waiting: tokio::sync::watch::Sender::new(0),
         }
+    }
+
+    /// How many requests wait for a lock right now, updated as each wait begins and ends.
+    pub fn waiting(&self) -> tokio::sync::watch::Receiver<usize> {
+        self.waiting.subscribe()
     }
 
     fn named_machine_holder(&self, file: &mut File) -> Option<Holder> {
@@ -116,7 +139,11 @@ impl Locks {
                         let _ = sender.send(flock);
                     }
                 });
-                match scope.guard(receiver).await {
+                let waited = {
+                    let _waiting = Waiting::begin(&self.waiting);
+                    scope.guard(receiver).await
+                };
+                match waited {
                     Ok(Ok(flock)) => {
                         let _ = tree.finish(node, Ending::succeeded());
                         flock
@@ -164,7 +191,11 @@ impl Locks {
                         .cloned();
                     let node =
                         start_wait(tree, "user-lock", &format!("user {}", holder.user), named);
-                    match scope.guard(mutex.lock_owned()).await {
+                    let waited = {
+                        let _waiting = Waiting::begin(&self.waiting);
+                        scope.guard(mutex.lock_owned()).await
+                    };
+                    match waited {
                         Ok(guard) => {
                             let _ = tree.finish(node, Ending::succeeded());
                             guard

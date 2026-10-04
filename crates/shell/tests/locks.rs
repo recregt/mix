@@ -255,3 +255,39 @@ async fn another_process_reads_the_exclusive_holder_from_the_lock_file() {
     assert!(task.await.unwrap());
     assert_eq!(std::fs::read_to_string(lock_in(&dir)).unwrap(), "");
 }
+
+#[tokio::test]
+async fn every_request_waiting_for_a_lock_is_counted_while_it_waits() {
+    let dir = tempfile::tempdir().unwrap();
+    let locks = Arc::new(Locks::new(lock_in(&dir)));
+    let mut waiting = locks.waiting();
+    let mut first = request();
+    let held = acquire(
+        &locks,
+        &mut first,
+        holder(1, "install"),
+        Need::SharedForUser,
+    )
+    .await
+    .unwrap();
+    assert_eq!(*waiting.borrow_and_update(), 0);
+
+    let mut queued = Vec::new();
+    for command in ["remove", "clean"] {
+        let mut next = request();
+        let shared = Arc::clone(&locks);
+        queued.push(tokio::spawn(async move {
+            acquire(&shared, &mut next, holder(1, command), Need::SharedForUser)
+                .await
+                .map(drop)
+                .is_ok()
+        }));
+    }
+    waiting.wait_for(|count| *count == 2).await.unwrap();
+
+    drop(held);
+    for done in queued {
+        assert!(done.await.unwrap());
+    }
+    assert_eq!(*locks.waiting().borrow(), 0);
+}
