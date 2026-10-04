@@ -63,6 +63,10 @@ pub const STATE_FILE: &str = "state";
 pub const GIT_DIR: &str = ".git";
 pub const INDEX_LOCK: &str = "index.lock";
 pub const REPOSITORY_HEAD: &str = "HEAD";
+pub const GITIGNORE: &str = ".gitignore";
+pub const GITIGNORE_CONTENTS: &str = "# Managed by mix -- do not edit, changes are overwritten.\n/*\n!/.gitignore\n!/flake.lock\n!/flake.nix\n!/home.nix\n!/state\n";
+
+pub const MANAGED_FILES: [&str; 5] = [GITIGNORE, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, STATE_FILE];
 
 pub const GENERATION_STATE_FILE: &str = "mix-state";
 

@@ -731,6 +731,15 @@ expression: "run.case(&before, &world)"
         "operation": "OPERATION_PUT_FILE",
         "status": "STATUS_SUCCEEDED",
         "step": "write-home-config",
+        "subject": "/home/alice/.local/state/mix/.gitignore",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_PUT_FILE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "write-home-config",
         "subject": "/home/alice/.local/state/mix/state",
         "undone": false,
         "unknown": []
@@ -994,17 +1003,16 @@ expression: "run.case(&before, &world)"
           "owner": "1000:1000"
         }
       },
-      "/home/alice/.local/state/mix/.git": {
-        "added": {
-          "directory": true,
-          "mode": "0755",
-          "owner": "1000:1000"
-        }
-      },
-      "/home/alice/.local/state/mix/.git/HEAD": {
+      "/home/alice/.local/state/mix/.gitignore": {
         "added": {
           "contents": [
-            "ref: refs/heads/main"
+            "# Managed by mix -- do not edit, changes are overwritten.",
+            "/*",
+            "!/.gitignore",
+            "!/flake.lock",
+            "!/flake.nix",
+            "!/home.nix",
+            "!/state"
           ],
           "mode": "0644",
           "owner": "1000:1000"
@@ -1328,6 +1336,20 @@ expression: "run.case(&before, &world)"
           "generations": [
             1
           ]
+        }
+      }
+    },
+    "repositories": {
+      "/home/alice/.local/state/mix/.git": {
+        "added": {
+          "records": {
+            ".gitignore": "as on disk",
+            "flake.lock": "as on disk",
+            "flake.nix": "as on disk",
+            "home.nix": "as on disk",
+            "state": "as on disk"
+          },
+          "verifies": true
         }
       }
     },
@@ -1808,6 +1830,7 @@ expression: "run.case(&before, &world)"
     "PutFile /home/alice/.local/state/mix/home.nix",
     "PutFile /home/alice/.local/state/mix/flake.nix",
     "PutFile /home/alice/.local/state/mix/flake.lock",
+    "PutFile /home/alice/.local/state/mix/.gitignore",
     "PutFile /home/alice/.local/state/mix/state",
     "AddMember alice in mix-users",
     "ActivateProfile alice's profile",

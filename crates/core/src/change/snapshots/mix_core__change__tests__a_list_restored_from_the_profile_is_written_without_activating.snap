@@ -48,6 +48,30 @@ expression: "run.case(&before, &world)"
           "+}"
         ]
       }
+    },
+    "repositories": {
+      "/home/mix-user/.local/state/mix/.git": {
+        "after": {
+          "records": {
+            ".gitignore": "as on disk",
+            "flake.lock": "as on disk",
+            "flake.nix": "as on disk",
+            "home.nix": "as on disk",
+            "state": "as on disk"
+          },
+          "verifies": true
+        },
+        "before": {
+          "records": {
+            ".gitignore": "as on disk",
+            "flake.lock": "as on disk",
+            "flake.nix": "as on disk",
+            "home.nix": "as on disk",
+            "state": "older"
+          },
+          "verifies": true
+        }
+      }
     }
   },
   "performed": [

@@ -11,13 +11,13 @@ use crate::identity::{
     NIXBLD_UID_BASE, NIXBLD_USER_COUNT, user_name,
 };
 use crate::paths::{
-    DEFAULT_PROFILE_NIX_ENV, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, MIX_BIN_DIR, MIX_DAEMON_BIN,
-    MIX_DAEMON_BIN_MODE, MIX_DAEMON_SERVICE_DEST, MIX_DAEMON_SERVICE_UNIT, MIX_DAEMON_SOCKET_DEST,
-    MIX_DAEMON_SOCKET_UNIT, MIX_STATE_DIR_MODE, MIX_VAR_DIR, NIX_CONF_DEST,
-    NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SERVICE_UNIT,
-    NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC, NIX_DAEMON_SOCKET_UNIT, NIX_OWNERSHIP_MARKER,
-    NIX_PROFILES_DIR_MODE, NIX_TREE_MODE, NIX_TREE_PATHS, POLICY_FILE, PROFILE_SNIPPET_DEST,
-    STATE_FILE, mix_state_dir, nix_profiles_dir,
+    DEFAULT_PROFILE_NIX_ENV, FLAKE_LOCK, FLAKE_NIX, GITIGNORE, GITIGNORE_CONTENTS, HOME_NIX,
+    MIX_BIN_DIR, MIX_DAEMON_BIN, MIX_DAEMON_BIN_MODE, MIX_DAEMON_SERVICE_DEST,
+    MIX_DAEMON_SERVICE_UNIT, MIX_DAEMON_SOCKET_DEST, MIX_DAEMON_SOCKET_UNIT, MIX_STATE_DIR_MODE,
+    MIX_VAR_DIR, NIX_CONF_DEST, NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC,
+    NIX_DAEMON_SERVICE_UNIT, NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC, NIX_DAEMON_SOCKET_UNIT,
+    NIX_OWNERSHIP_MARKER, NIX_PROFILES_DIR_MODE, NIX_TREE_MODE, NIX_TREE_PATHS, POLICY_FILE,
+    PROFILE_SNIPPET_DEST, STATE_FILE, mix_state_dir, nix_profiles_dir,
 };
 use crate::plan::{StepSpec, Title};
 use crate::policy::Policy;
@@ -711,12 +711,13 @@ impl WriteHomeConfig {
         ]
     }
 
-    fn files(&self) -> [(PathBuf, &str); 3] {
+    fn files(&self) -> [(PathBuf, &str); 4] {
         let state = mix_state_dir(&self.0.user.home);
         [
             (state.join(HOME_NIX), &self.0.home),
             (state.join(FLAKE_NIX), &self.0.flake),
             (state.join(FLAKE_LOCK), &self.0.lock),
+            (state.join(GITIGNORE), GITIGNORE_CONTENTS),
         ]
     }
 }
@@ -779,25 +780,26 @@ impl StepSpec for WriteHomeConfig {
                 owner,
             )?);
         }
+        let after_files = 6 + 2 * self.files().len();
         let state = mix_state_dir(home).join(STATE_FILE);
         actions.extend(match &self.0.restored_state {
             Some(restored) => ensure_file(
                 &state,
-                facts.path(12),
-                facts.contents(13),
+                facts.path(after_files),
+                facts.contents(after_files + 1),
                 restored.as_bytes(),
                 FILE_MODE,
                 owner,
             )?,
             None => ensure_seeded(
                 &state,
-                facts.path(12),
+                facts.path(after_files),
                 StateManifest::seed_rendered().as_bytes(),
                 owner,
             )?,
         });
         let enrolled = facts
-            .group(14)
+            .group(after_files + 2)
             .is_some_and(|group| group.members.contains(&self.0.user.name));
         if !enrolled {
             actions.push(Action::AddMember {

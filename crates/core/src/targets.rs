@@ -7,12 +7,13 @@ use crate::identity::{
     NIXBLD_USER_COUNT,
 };
 use crate::paths::{
-    DEFAULT_PROFILE_NIX_ENV, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, MIX_DAEMON_SERVICE_DEST,
-    MIX_DAEMON_SERVICE_UNIT, MIX_DAEMON_SOCKET_DEST, MIX_DAEMON_SOCKET_UNIT, MIX_STATE_DIR_MODE,
-    NIX_CONF_DEST, NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SERVICE_UNIT,
-    NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC, NIX_DAEMON_SOCKET_UNIT, NIX_OWNERSHIP_MARKER,
-    NIX_PROFILES_DIR_MODE, NIX_STORE, NIX_TREE_MODE, NIX_TREE_PATHS, POLICY_FILE,
-    PROFILE_SNIPPET_DEST, STATE_FILE, mix_state_dir, nix_profiles_dir, repository_dir,
+    DEFAULT_PROFILE_NIX_ENV, FLAKE_LOCK, FLAKE_NIX, GITIGNORE, GITIGNORE_CONTENTS, HOME_NIX,
+    MIX_DAEMON_SERVICE_DEST, MIX_DAEMON_SERVICE_UNIT, MIX_DAEMON_SOCKET_DEST,
+    MIX_DAEMON_SOCKET_UNIT, MIX_STATE_DIR_MODE, NIX_CONF_DEST, NIX_DAEMON_SERVICE_DEST,
+    NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SERVICE_UNIT, NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC,
+    NIX_DAEMON_SOCKET_UNIT, NIX_OWNERSHIP_MARKER, NIX_PROFILES_DIR_MODE, NIX_STORE, NIX_TREE_MODE,
+    NIX_TREE_PATHS, POLICY_FILE, PROFILE_SNIPPET_DEST, STATE_FILE, mix_state_dir, nix_profiles_dir,
+    repository_dir,
 };
 use crate::paths::{
     HOME_MANAGER_PROFILE_NAME, INDEX_LOCK, JOURNAL_DIR, MIX_DAEMON_BIN, MIX_DAEMON_BIN_MODE,
@@ -311,6 +312,11 @@ fn push_user_targets<'a>(items: &mut Vec<Target<'a>>, cfg: &'a UserConfig) {
         expected: Some(Cow::Borrowed(&cfg.lock)),
         owner,
     });
+    items.push(Target::File {
+        path: Cow::Owned(state_dir.join(GITIGNORE)),
+        expected: Some(Cow::Borrowed(GITIGNORE_CONTENTS)),
+        owner,
+    });
     match &cfg.restored_state {
         Some(restored) => items.push(Target::File {
             path: Cow::Owned(state_dir.join(STATE_FILE)),
@@ -386,7 +392,7 @@ pub fn written_dirs(user: Option<&InvokingUser>) -> Vec<PathBuf> {
 }
 
 const SYSTEM_TARGET_COUNT: usize = 16 + NIX_TREE_PATHS.len() + NIXBLD_USER_COUNT as usize;
-const USER_TARGET_COUNT: usize = 10;
+const USER_TARGET_COUNT: usize = 11;
 
 pub fn user_targets(cfg: &UserConfig) -> Vec<Target<'_>> {
     let mut items = Vec::with_capacity(USER_TARGET_COUNT);
@@ -769,9 +775,9 @@ mod tests {
     }
 
     #[test]
-    fn user_targets_returns_exactly_the_ten_per_user_entries() {
+    fn user_targets_returns_exactly_the_eleven_per_user_entries() {
         let cfg = sample_user_config();
-        assert_eq!(user_targets(&cfg).len(), 10);
+        assert_eq!(user_targets(&cfg).len(), 11);
     }
 
     #[test]

@@ -2,6 +2,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod repository;
+
+pub use repository::Snapshot;
+
 use crate::action::{
     Action, Expect, Fact, Failure, FileId, GroupFacts, Kind, Outcome, Owner, PathFacts, Performed,
     ProfileFacts, Query, UnitFacts, UnitFailure, UnitOperation, UserFacts, UserSpec,
@@ -9,7 +13,6 @@ use crate::action::{
 use crate::identity::InvokingUser;
 use crate::paths::{
     DEFAULT_PROFILE_NIX_ENV, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SOCKET_SRC, is_leftover,
-    repository_dir,
 };
 
 pub use crate::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
@@ -940,19 +943,8 @@ impl World {
                 done(vec![Action::ApplyGeneration { user: user.clone() }])
             }
             Action::CollectGarbage { .. } => done(Vec::new()),
-            Action::RecordState { user } => {
-                if self.files.contains_key(&repository_dir(&user.home)) {
-                    return done(Vec::new());
-                }
-                done(self.create_repository(user)?)
-            }
-            Action::CreateRepository { user } => {
-                let repository = repository_dir(&user.home);
-                if let Some(found) = self.files.get(&repository) {
-                    return Err(conflict(&repository, "nothing", found.content_kind()));
-                }
-                done(self.create_repository(user)?)
-            }
+            Action::RecordState { user } => done(self.record_state(user)),
+            Action::CreateRepository { user } => done(self.create_repository(user)?),
             Action::Commit => {
                 for pending in std::mem::take(&mut self.pending) {
                     for path in self.subtree(&pending) {
@@ -1142,36 +1134,6 @@ impl World {
         }])
     }
 
-    fn create_repository(&mut self, user: &InvokingUser) -> Result<Vec<Action>, Failure> {
-        let repository = repository_dir(&user.home);
-        self.parent_is_dir(&repository)?;
-        let owner = (user.uid, user.gid);
-        let id = self.fresh();
-        self.files.insert(
-            repository.clone(),
-            Entry {
-                content: Content::Directory,
-                mode: 0o755,
-                owner,
-                id,
-                changed: id.ino,
-            },
-        );
-        self.put(
-            &repository.join(REPOSITORY_HEAD),
-            &Arc::from(&b"ref: refs/heads/main\n"[..]),
-            0o644,
-            owner,
-            Expect::Absent,
-        )?;
-        Ok(vec![Action::RemoveCreatedTree {
-            path: repository,
-            expect: id,
-        }])
-    }
-
-    /// Takes in what `path` was found to be on the machine, with its real id, so actions that
-    /// expect that id apply to the model as they would to the machine.
     pub fn seed_path(&mut self, path: &Path, facts: &PathFacts, contents: Option<Arc<[u8]>>) {
         let content = match facts.kind {
             Kind::Missing => {
@@ -1220,7 +1182,6 @@ impl World {
         }
     }
 
-    /// Takes in a unit as systemd reported it, `file` being its installed unit file.
     pub fn seed_unit(&mut self, name: &str, found: &UnitFacts, file: Option<Arc<[u8]>>) {
         let loaded = (found.load_state == "loaded").then_some(file).flatten();
         let running = matches!(found.active_state.as_str(), "active" | "reloading")
@@ -1286,20 +1247,9 @@ impl World {
                     .map(|entry| entry.owner.0)
                     .find(|uid| *uid != 0),
             ),
-            Query::Repository(user) => {
-                let repository = repository_dir(&user.home);
-                Fact::Repository {
-                    intact: matches!(
-                        self.files.get(&repository).map(|entry| &entry.content),
-                        Some(Content::Directory)
-                    ) && matches!(
-                        self.files
-                            .get(&repository.join(REPOSITORY_HEAD))
-                            .map(|entry| &entry.content),
-                        Some(Content::File(_))
-                    ),
-                }
-            }
+            Query::Repository(user) => Fact::Repository {
+                intact: self.verifies(user),
+            },
             Query::Profile(user) => Fact::Profile(
                 self.profiles
                     .get(&user.uid)

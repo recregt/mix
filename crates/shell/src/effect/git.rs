@@ -8,21 +8,19 @@ use std::path::{Path, PathBuf};
 
 use mix_core::Result;
 use mix_core::identity::InvokingUser;
-use mix_core::paths::{FLAKE_LOCK, FLAKE_NIX, GIT_DIR, HOME_NIX, STATE_FILE};
+use mix_core::paths::{GIT_DIR, MANAGED_FILES};
 use mix_exec::Scope;
 
 use mix_exec::Command;
 
 use crate::effect::exec::{command_as, run, status};
 use crate::effect::fs::exists;
-use crate::effect::home;
 
 const AUTHOR_NAME: &str = "mix";
 const AUTHOR_EMAIL: &str = "mix@localhost";
 const COMMIT_MESSAGE: &str = "mix: sync generated home-manager config";
 
 const PROFILE_GIT: &str = ".nix-profile/bin/git";
-const GITIGNORE: &str = ".gitignore";
 
 /// Settings given to every `git` call: no hook runs, no file-system monitor is started and no
 /// commit is signed.
@@ -40,17 +38,11 @@ const ISOLATED_ENV: &[(&str, &str)] = &[
     ("GIT_TERMINAL_PROMPT", "0"),
 ];
 
-/// Checks a repository passes: `HEAD` resolves to a commit, every object of its tree reads, and
-/// the index reads.
 const VERIFY: &[&[&str]] = &[
     &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
     &["archive", "--format=tar", "HEAD"],
     &["ls-files", "--stage"],
 ];
-
-const MANAGED_FILES: &[&str] = &[GITIGNORE, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, STATE_FILE];
-
-const GITIGNORE_CONTENTS: &str = "# Managed by mix -- do not edit, changes are overwritten.\n/*\n!/.gitignore\n!/flake.lock\n!/flake.nix\n!/home.nix\n!/state\n";
 
 pub struct Git {
     binary: String,
@@ -66,8 +58,8 @@ impl Git {
     pub async fn init(&self, user: &InvokingUser, state_dir: &Path, scope: &Scope) -> Result<()> {
         let state_dir_str = state_dir.to_string_lossy().into_owned();
         self.run_as(user, &["-C", &state_dir_str, "init", "-q"], scope)
-            .await?;
-        write_gitignore(state_dir, scope).await
+            .await
+            .map(|_| ())
     }
 
     /// Creates the repository and commits the generated config into it.
@@ -157,7 +149,7 @@ impl Git {
 
         let mut paths: Vec<&str> = Vec::new();
         for file in MANAGED_FILES {
-            if tracked.lines().any(|line| line == *file) || exists(state_dir.join(file)).await {
+            if tracked.lines().any(|line| line == file) || exists(state_dir.join(file)).await {
                 paths.push(file);
             }
         }
@@ -205,13 +197,6 @@ async fn resolve_binary(user: &InvokingUser) -> String {
 
 fn profile_git(user: &InvokingUser) -> PathBuf {
     user.home.join(PROFILE_GIT)
-}
-
-async fn write_gitignore(state_dir: &Path, scope: &Scope) -> Result<()> {
-    let path = state_dir.join(GITIGNORE);
-    home::write_file(&path, GITIGNORE_CONTENTS.as_bytes(), 0o644, scope)
-        .await
-        .map_err(|failure| home::core_error(failure, &path))
 }
 
 #[cfg(test)]
@@ -264,7 +249,7 @@ pub(crate) mod testing {
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod tests {
-    use mix_core::paths::INDEX_LOCK;
+    use mix_core::paths::{FLAKE_NIX, HOME_NIX, INDEX_LOCK};
 
     use super::*;
 
@@ -340,22 +325,6 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires git"]
-    async fn init_bounds_the_repository_with_a_gitignore() {
-        let home = tempfile::tempdir().unwrap();
-        let state_dir = repository(home.path()).await;
-
-        let contents = std::fs::read_to_string(state_dir.join(GITIGNORE)).unwrap();
-        assert!(contents.contains("/*"));
-        for file in [FLAKE_NIX, HOME_NIX, FLAKE_LOCK, STATE_FILE, GITIGNORE] {
-            assert!(
-                contents.contains(&format!("!/{file}")),
-                "{file} should stay tracked"
-            );
-        }
-    }
-
-    #[tokio::test]
-    #[ignore = "requires git"]
     async fn sync_commits_the_generated_config() {
         let home = tempfile::tempdir().unwrap();
         let state_dir = repository(home.path()).await;
@@ -370,11 +339,7 @@ mod tests {
         assert!(committed);
         assert_eq!(
             committed_files(&state_dir).await,
-            vec![
-                GITIGNORE.to_string(),
-                FLAKE_NIX.to_string(),
-                HOME_NIX.to_string()
-            ]
+            vec![FLAKE_NIX.to_string(), HOME_NIX.to_string()]
         );
     }
 
@@ -396,7 +361,7 @@ mod tests {
 
         assert_eq!(
             committed_files(&state_dir).await,
-            vec![GITIGNORE.to_string(), FLAKE_NIX.to_string()]
+            vec![FLAKE_NIX.to_string()]
         );
     }
 
@@ -498,7 +463,7 @@ mod tests {
         assert!(committed);
         assert_eq!(
             committed_files(&state_dir).await,
-            vec![GITIGNORE.to_string(), FLAKE_NIX.to_string()]
+            vec![FLAKE_NIX.to_string()]
         );
     }
 
@@ -645,11 +610,7 @@ mod tests {
         assert!(verified(home.path(), &state_dir).await);
         assert_eq!(
             committed_files(&state_dir).await,
-            vec![
-                GITIGNORE.to_string(),
-                FLAKE_NIX.to_string(),
-                HOME_NIX.to_string()
-            ]
+            vec![FLAKE_NIX.to_string(), HOME_NIX.to_string()]
         );
     }
 

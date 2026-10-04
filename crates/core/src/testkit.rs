@@ -1,9 +1,6 @@
-//! One way to run a command's steps against the world model, inject faults into it, and describe
-//! what came out for a snapshot: the result document, the actions performed and how the machine
-//! changed.
-
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::path::Path;
 use std::sync::Arc;
 
 use mix_events::v1::command::Request;
@@ -16,33 +13,20 @@ use crate::journal::{Record, Recovery};
 use crate::plan::{Input, Next, Report, Runner, Verdict, describe, diagnostic, make_guard};
 use crate::world::{Content, Entry, Unit, World};
 
-/// The request id every driven command reports, so documents compare across runs.
 pub const REQUEST: &str = "request";
 
-/// Answers a set of queries with a failure instead of facts, when it returns one.
 pub type Refusal = fn(&[Query]) -> Option<Failure>;
 
-/// Where a driven command meets trouble. Counts start at zero and leave the commit out.
 #[derive(Clone)]
 pub struct Script {
-    /// The forward change that fails.
     pub fail_at: Option<usize>,
-    /// Fails every forward change it accepts.
     pub fail_when: Option<fn(&Action) -> bool>,
-    /// The forward change after which the command is interrupted.
     pub stop_after: Option<usize>,
-    /// The undo that fails.
     pub fail_undo_at: Option<usize>,
-    /// The forward change that takes effect and then reports a cancellation, leaving the runner
-    /// in doubt whether it happened.
     pub in_doubt_at: Option<usize>,
-    /// Answers a set of queries with this failure instead of facts, when it returns one.
     pub unobservable: Option<Refusal>,
-    /// Whether the commit fails, after every change took effect.
     pub fail_commit: bool,
-    /// The action, counted with undos and the commit, at which the machine loses power.
     pub crash: Option<Crash>,
-    /// What a failing change or undo reports.
     pub failure: Failure,
 }
 
@@ -111,33 +95,23 @@ impl Script {
     }
 }
 
-/// A power cut at one action: before it touches the machine, or after it did but before the
-/// journal records it done.
 #[derive(Debug, Clone, Copy)]
 pub struct Crash {
     pub at: usize,
     pub after: bool,
 }
 
-/// What one driven command did.
 pub struct Run {
-    /// How the runner ended, or `None` when the machine crashed first.
     pub ended: Option<Report>,
     pub stream: Vec<Envelope>,
     pub performed: Vec<Action>,
-    /// Whether each performed action ran shielded from a stop.
     pub shielded: Vec<bool>,
-    /// Forward changes performed or attempted, the commit left out.
     pub changes: usize,
-    /// Undos performed or attempted.
     pub undos: usize,
-    /// What the request's journal holds, as the real journal writes it.
     pub journal: Vec<Record>,
-    /// Whether the run ended in a crash, so nothing after it ran.
     pub crashed: bool,
 }
 
-/// Runs `runner` to its end against `world`, as `command` with the request id [`REQUEST`].
 #[expect(
     clippy::too_many_lines,
     reason = "one loop answers every kind of fault"
@@ -257,7 +231,6 @@ pub fn drive(world: &mut World, mut runner: Runner, command: Start, script: &Scr
     }
 }
 
-/// Puts `world` where the next command's recovery of `journal` leaves it.
 pub fn recover(world: &mut World, journal: &[Record]) {
     match crate::journal::recover(journal) {
         Recovery::Nothing => {}
@@ -275,7 +248,6 @@ pub fn recover(world: &mut World, journal: &[Record]) {
     }
 }
 
-/// The start of a command that asks for `request`, named as `mix` names it.
 pub fn requested(request: Request) -> Start {
     Start::command(
         mix_events::key_of(Some(&request)),
@@ -287,14 +259,12 @@ pub fn requested(request: Request) -> Start {
 }
 
 impl Run {
-    /// How the runner ended; a crashed run has no report.
     pub fn report(&self) -> &Report {
         self.ended
             .as_ref()
             .expect("the run crashed before it ended")
     }
 
-    /// The document `--json` prints for this run.
     #[cfg(test)]
     pub fn document(&self) -> Value {
         let document =
@@ -302,7 +272,6 @@ impl Run {
         serde_json::to_value(document).expect("a document always serialises")
     }
 
-    /// Every action the run performed, in order, as an operation and its subject.
     pub fn performed(&self) -> Vec<String> {
         self.performed
             .iter()
@@ -313,8 +282,6 @@ impl Run {
             .collect()
     }
 
-    /// The run for a snapshot: its document, every action it performed in order, and what it
-    /// changed on the machine it started from.
     #[cfg(test)]
     pub fn case(&self, before: &World, after: &World) -> Value {
         json!({
@@ -325,8 +292,6 @@ impl Run {
     }
 }
 
-/// What differs between two machines, by kind and then by name; equal machines give an empty
-/// object.
 pub fn difference(before: &World, after: &World) -> Value {
     let mut changed = serde_json::Map::new();
     let mut add = |kind: &str, entries: BTreeMap<String, Value>| {
@@ -337,17 +302,12 @@ pub fn difference(before: &World, after: &World) -> Value {
             );
         }
     };
+    add("repositories", repositories(before, after));
     add(
         "files",
         compare_with(
-            before
-                .files
-                .iter()
-                .map(|(path, entry)| (path.display().to_string(), entry)),
-            after
-                .files
-                .iter()
-                .map(|(path, entry)| (path.display().to_string(), entry)),
+            outside_repositories(before),
+            outside_repositories(after),
             |left, right| {
                 left.content == right.content
                     && left.mode == right.mode
@@ -437,6 +397,53 @@ pub fn difference(before: &World, after: &World) -> Value {
     Value::Object(changed)
 }
 
+fn inside_a_repository(path: &Path) -> bool {
+    path.components().any(|part| part.as_os_str() == ".git")
+}
+
+fn outside_repositories(world: &World) -> impl Iterator<Item = (String, &Entry)> {
+    world
+        .files
+        .iter()
+        .filter(|(path, _)| !inside_a_repository(path))
+        .map(|(path, entry)| (path.display().to_string(), entry))
+}
+
+fn repositories(before: &World, after: &World) -> BTreeMap<String, Value> {
+    let describe = |world: &World| -> BTreeMap<String, Value> {
+        world
+            .repositories()
+            .into_iter()
+            .map(|repository| {
+                let (verifies, snapshot) = world.repository_at(&repository);
+                let state = repository.parent().unwrap_or(&repository).to_path_buf();
+                let recorded: BTreeMap<String, Value> = snapshot
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(name, bytes)| {
+                        let current = world.contents(state.join(&name)) == Some(bytes.as_ref());
+                        (
+                            name,
+                            Value::String(if current { "as on disk" } else { "older" }.into()),
+                        )
+                    })
+                    .collect();
+                (
+                    repository.display().to_string(),
+                    json!({ "verifies": verifies, "records": recorded }),
+                )
+            })
+            .collect()
+    };
+    let (before, after) = (describe(before), describe(after));
+    compare(
+        before.iter().map(|(path, value)| (path.clone(), value)),
+        after.iter().map(|(path, value)| (path.clone(), value)),
+        |left, right| left == right,
+        Value::clone,
+    )
+}
+
 fn meaningful(world: &World) -> impl Iterator<Item = (String, &Unit)> {
     world
         .units
@@ -515,8 +522,6 @@ fn file(entry: &Entry) -> Value {
     }
 }
 
-/// A changed file as what changed: a line diff of its contents, and its mode and owner as
-/// before and after.
 fn file_change(before: &Entry, after: &Entry) -> Value {
     let mut changed = serde_json::Map::new();
     match (&before.content, &after.content) {
