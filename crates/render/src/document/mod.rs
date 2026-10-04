@@ -144,6 +144,17 @@ impl Builder {
         if let Some(found) = &root.diagnostic {
             document.problems.push(problem_of(found));
         }
+        if let Some(node_finished::Result::Repair(repair)) = &root.result {
+            for report in &repair.reports {
+                if let Some(failure) = &report.failure {
+                    let mut problem = problem_of(failure);
+                    if problem.subject.is_empty() {
+                        problem.subject.clone_from(&report.target);
+                    }
+                    document.problems.push(problem);
+                }
+            }
+        }
         let mut undone = Vec::new();
         for step in &self.rolled_back {
             if let Some(index) = self.steps.get(step) {

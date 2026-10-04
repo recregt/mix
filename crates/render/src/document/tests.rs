@@ -311,3 +311,43 @@ fn every_wait_is_kept_with_what_held_it() {
 
     assert_eq!(document.waits, [lock]);
 }
+
+#[test]
+fn a_target_repair_could_not_fix_is_a_problem_named_after_it() {
+    let document = document_of(false, |tree| {
+        tree.finish(
+            ROOT,
+            Ending::succeeded()
+                .with_result(node_finished::Result::Repair(
+                    mix_events::v1::RepairResult {
+                        reports: vec![
+                            mix_events::v1::RepairReport {
+                                target: "/etc/nix".into(),
+                                fixed: true,
+                                failure: None,
+                            },
+                            mix_events::v1::RepairReport {
+                                target: "mix-users".into(),
+                                fixed: false,
+                                failure: Some(Diagnostic {
+                                    code: Code::Unspecified as i32,
+                                    severity: Severity::Error as i32,
+                                    message: "the group could not be read".into(),
+                                    ..Diagnostic::default()
+                                }),
+                            },
+                        ],
+                    },
+                ))
+                .for_root(true),
+        )
+        .unwrap();
+    });
+
+    let subjects: Vec<&str> = document
+        .problems
+        .iter()
+        .map(|problem| problem.subject.as_str())
+        .collect();
+    assert_eq!(subjects, ["mix-users"]);
+}
