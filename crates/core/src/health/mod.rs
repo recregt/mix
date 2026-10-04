@@ -203,7 +203,7 @@ pub fn queries(target: &Target<'_>) -> Vec<Query> {
         Target::Repository { path, user } => vec![
             Query::Path(path.join(INDEX_LOCK)),
             Query::Path(path.to_path_buf()),
-            Query::Repository(user.clone()),
+            Query::Repository(user.clone().into_owned()),
             Query::Strangers {
                 path: path.to_path_buf(),
                 owner: (user.uid, user.gid),
@@ -216,13 +216,17 @@ pub fn queries(target: &Target<'_>) -> Vec<Query> {
             Query::Contents((*source).into()),
         ],
         Target::Journals { path } => vec![Query::Journals((*path).into())],
-        Target::Leftovers { dirs, journals } => {
+        Target::Leftovers { user, journals } => {
             let mut queries = vec![Query::Journals((*journals).into())];
-            queries.extend(dirs.iter().map(|dir| Query::Leftovers(dir.clone())));
+            queries.extend(
+                crate::targets::written_dirs(user.as_deref())
+                    .into_iter()
+                    .map(Query::Leftovers),
+            );
             queries
         }
-        Target::Generations { user, .. } => vec![Query::Profile(user.clone())],
-        Target::HomeFiles { user, .. } => vec![Query::Clobbered(user.clone())],
+        Target::Generations { user, .. } => vec![Query::Profile(user.clone().into_owned())],
+        Target::HomeFiles { user, .. } => vec![Query::Clobbered(user.clone().into_owned())],
     }
 }
 
@@ -726,7 +730,9 @@ pub fn fix(
             let mut actions: Vec<Action> = aside(path.to_path_buf(), path_facts(facts, 1))
                 .into_iter()
                 .collect();
-            actions.push(Action::CreateRepository { user: user.clone() });
+            actions.push(Action::CreateRepository {
+                user: user.clone().into_owned(),
+            });
             actions
         }
         Target::Program { path, mode, .. } => {
@@ -774,7 +780,7 @@ pub fn fix(
                 .is_some_and(|active| profile.dangling.contains(&active))
             {
                 actions.push(Action::ActivateProfile {
-                    user: user.clone(),
+                    user: user.clone().into_owned(),
                     source: crate::action::FlakeSource::Git,
                 });
             }
@@ -783,7 +789,7 @@ pub fn fix(
                     .dangling
                     .iter()
                     .map(|generation| Action::DeleteGeneration {
-                        user: user.clone(),
+                        user: user.clone().into_owned(),
                         generation: *generation,
                     }),
             );

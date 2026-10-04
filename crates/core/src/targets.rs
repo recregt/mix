@@ -151,7 +151,7 @@ pub enum Target<'a> {
     },
     Repository {
         path: Cow<'a, Path>,
-        user: InvokingUser,
+        user: Cow<'a, InvokingUser>,
     },
     Program {
         path: &'static str,
@@ -162,16 +162,16 @@ pub enum Target<'a> {
         path: &'static str,
     },
     Leftovers {
-        dirs: Vec<PathBuf>,
+        user: Option<Cow<'a, InvokingUser>>,
         journals: &'static str,
     },
     Generations {
         path: Cow<'a, Path>,
-        user: InvokingUser,
+        user: Cow<'a, InvokingUser>,
     },
     HomeFiles {
         path: Cow<'a, Path>,
-        user: InvokingUser,
+        user: Cow<'a, InvokingUser>,
     },
 }
 
@@ -218,18 +218,21 @@ impl Target<'_> {
             Target::PathExists { name, path } => Target::PathExists { name, path },
             Target::Repository { path, user } => Target::Repository {
                 path: own_path(path),
-                user,
+                user: Cow::Owned(user.into_owned()),
             },
             Target::Program { path, source, mode } => Target::Program { path, source, mode },
             Target::Journals { path } => Target::Journals { path },
-            Target::Leftovers { dirs, journals } => Target::Leftovers { dirs, journals },
+            Target::Leftovers { user, journals } => Target::Leftovers {
+                user: user.map(|user| Cow::Owned(user.into_owned())),
+                journals,
+            },
             Target::Generations { path, user } => Target::Generations {
                 path: own_path(path),
-                user,
+                user: Cow::Owned(user.into_owned()),
             },
             Target::HomeFiles { path, user } => Target::HomeFiles {
                 path: own_path(path),
-                user,
+                user: Cow::Owned(user.into_owned()),
             },
         }
     }
@@ -322,7 +325,7 @@ fn push_user_targets<'a>(items: &mut Vec<Target<'a>>, cfg: &'a UserConfig) {
     }
     items.push(Target::Repository {
         path: Cow::Owned(repository_dir(&cfg.user.home)),
-        user: cfg.user.clone(),
+        user: Cow::Borrowed(&cfg.user),
     });
     items.push(Target::GroupMember {
         group: MIX_USERS_GROUP,
@@ -330,26 +333,33 @@ fn push_user_targets<'a>(items: &mut Vec<Target<'a>>, cfg: &'a UserConfig) {
     });
     items.push(Target::Generations {
         path: Cow::Owned(nix_profiles_dir(&cfg.user.home).join(HOME_MANAGER_PROFILE_NAME)),
-        user: cfg.user.clone(),
+        user: Cow::Borrowed(&cfg.user),
     });
     items.push(Target::HomeFiles {
         path: Cow::Borrowed(&cfg.user.home),
-        user: cfg.user.clone(),
+        user: Cow::Borrowed(&cfg.user),
     });
 }
 
-/// Every directory mix writes into among `items`: where a write it was interrupted in leaves its
-/// siblings.
-fn written_dirs(items: &[Target<'_>]) -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = Vec::new();
+/// Every directory mix writes into for the machine and `user`: where a write it was
+/// interrupted in leaves its siblings.
+pub fn written_dirs(user: Option<&InvokingUser>) -> Vec<PathBuf> {
+    let policy = Policy::default();
+    let config = user.map(|user| UserConfig {
+        user: user.clone(),
+        flake: String::new(),
+        lock: String::new(),
+        home: String::new(),
+        restored_state: None,
+    });
+    let items = targets(config.as_ref(), &policy);
+    let mut dirs: Vec<PathBuf> = Vec::with_capacity(items.len());
     let mut add = |path: &Path| {
-        if let Some(parent) = path.parent()
-            && !dirs.iter().any(|dir| dir == parent)
-        {
+        if let Some(parent) = path.parent() {
             dirs.push(parent.to_path_buf());
         }
     };
-    for item in items {
+    for item in &items {
         match item {
             Target::Directory { path, .. }
             | Target::File { path, .. }
@@ -371,6 +381,7 @@ fn written_dirs(items: &[Target<'_>]) -> Vec<PathBuf> {
         }
     }
     dirs.sort();
+    dirs.dedup();
     dirs
 }
 
@@ -479,7 +490,7 @@ pub fn targets<'a>(user_config: Option<&'a UserConfig>, policy: &'a Policy) -> V
         push_user_targets(&mut items, cfg);
     }
     items.push(Target::Leftovers {
-        dirs: written_dirs(&items),
+        user: user_config.map(|cfg| Cow::Borrowed(&cfg.user)),
         journals: JOURNAL_DIR,
     });
 
@@ -766,11 +777,7 @@ mod tests {
     #[test]
     fn leftovers_are_looked_for_beside_everything_mix_writes() {
         let cfg = sample_user_config();
-        let policy = default_policy();
-        let items = targets(Some(&cfg), policy);
-        let Some(Target::Leftovers { dirs, .. }) = items.last() else {
-            panic!("the leftovers come last");
-        };
+        let dirs = written_dirs(Some(&cfg.user));
 
         for dir in [
             "/etc/nix",
@@ -792,7 +799,7 @@ mod tests {
             |wanted: &dyn Fn(&Target<'_>) -> bool| targets.iter().position(wanted).unwrap();
 
         let repository = position(
-            &|target| matches!(target, Target::Repository { user, .. } if *user == cfg.user),
+            &|target| matches!(target, Target::Repository { user, .. } if **user == cfg.user),
         );
         let state = position(&|target| matches!(target, Target::SeededFile { .. }));
 

@@ -11,7 +11,7 @@ use mix_core::action::Failure;
 use mix_core::health;
 use mix_core::paths::mix_state_dir;
 use mix_core::plan::{Runner, StepOutcome, Verdict};
-use mix_core::targets::{Target, UserConfig, targets};
+use mix_core::targets::{UserConfig, targets};
 use mix_events::v1::{Cancellation, Code, RepairRequest, RepairResult, node_finished};
 use mix_events::{Diagnose, Ending, Fault, ROOT, Stopped, Tree};
 use mix_exec::Scope;
@@ -144,8 +144,7 @@ async fn repaired(
         }
     };
     let (mut reports, interrupted) = put_back(
-        items,
-        request,
+        health::repair_steps(items, request),
         &mut performer,
         &mut journal,
         scope,
@@ -191,14 +190,13 @@ struct Events<'a> {
 }
 
 async fn put_back(
-    items: Vec<Target<'_>>,
-    request: &str,
+    steps: Vec<Box<dyn mix_core::plan::StepSpec>>,
     performer: &mut Performer,
     journal: &mut dyn Journal,
     scope: &Scope,
     events: Events<'_>,
 ) -> (Vec<RepairReport>, bool) {
-    let mut runner = Runner::new(ROOT, health::repair_steps(items, request)).independent();
+    let mut runner = Runner::new(ROOT, steps).independent();
     let report = drive(
         &mut runner,
         events.tree,
@@ -256,6 +254,7 @@ async fn commit_the_tracked_state(
 #[allow(clippy::disallowed_methods)]
 mod tests {
     use mix_core::journal::Record;
+    use mix_core::targets::Target;
 
     use std::sync::Arc;
 
@@ -305,8 +304,7 @@ mod tests {
             Start::command("repair", Command::default()),
         );
         put_back(
-            targets,
-            "r1",
+            health::target_steps(targets, "r1"),
             &mut performer,
             &mut journal,
             scope,
@@ -412,7 +410,7 @@ mod tests {
     fn repository_target(user: &mix_core::identity::InvokingUser) -> Vec<Target<'static>> {
         vec![Target::Repository {
             path: mix_core::paths::repository_dir(&user.home).into(),
-            user: user.clone(),
+            user: std::borrow::Cow::Owned(user.clone()),
         }]
     }
 
