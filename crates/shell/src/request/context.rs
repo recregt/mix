@@ -25,7 +25,6 @@ pub struct Context {
     pub render: crate::request::sink::Shared,
     pub locked: Locked,
     pub journals: std::path::PathBuf,
-    /// The request only shows what it would change: nothing on the machine is written.
     pub dry_run: bool,
 }
 

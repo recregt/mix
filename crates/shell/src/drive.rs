@@ -189,8 +189,6 @@ impl DownloadProgress for Relay<'_> {
     }
 }
 
-/// A dry run's view of the machine: the real machine as observed, with every predicted action
-/// applied to a model of it instead.
 #[derive(Default)]
 struct Prediction {
     world: mix_core::world::World,
@@ -199,7 +197,6 @@ struct Prediction {
 }
 
 impl Prediction {
-    /// Whether a predicted action changed what `query` asks about, so the model answers it.
     fn answers(&self, query: &Query) -> bool {
         let near = |path: &Path| {
             self.touched.iter().any(|subject| {
@@ -512,8 +509,6 @@ impl Performer {
         Ok(Performed { undo })
     }
 
-    /// A performer that changes nothing: it observes the machine and applies every action to a
-    /// model of it, to show what a request would do.
     pub fn predicting(files: Files) -> Self {
         Self {
             prediction: Some(Prediction::default()),

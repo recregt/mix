@@ -14,7 +14,6 @@ struct Running {
     lines: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
 }
 
-/// A child of `request` that echoes what it is sent, returned once it runs.
 async fn running(request: &Scope) -> Running {
     let (session, stdin, stdout) = child(["pid", "echo:got ", "sleep"])
         .session(request)

@@ -26,7 +26,6 @@ pub mod result {
         include!(concat!(env!("OUT_DIR"), "/mix.result.v1.serde.rs"));
     }
 
-    /// Version of the result document: minor versions only add, a major version breaks.
     pub const FORMAT_VERSION: &str = "1.0";
 }
 mod root;

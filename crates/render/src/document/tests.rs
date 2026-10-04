@@ -45,7 +45,6 @@ fn io(path: &str) -> Diagnostic {
     }
 }
 
-/// The document a request's stream ends in, the stream written by `run` on a real tree.
 fn document_of(dry_run: bool, run: impl FnOnce(&mut Tree)) -> Document {
     let outbox = Arc::new(Outbox::new("r1", || {}));
     let mut tree = Tree::new(

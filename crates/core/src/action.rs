@@ -206,7 +206,6 @@ pub enum Action {
     Commit,
 }
 
-/// Something on the machine an action reads or changes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Subject {
     Path(PathBuf),
@@ -217,8 +216,6 @@ pub enum Subject {
 }
 
 impl Action {
-    /// What the action reads or changes: what a prediction must know of the machine before it
-    /// applies the action to the model.
     pub fn subjects(&self) -> Vec<Subject> {
         use crate::paths::{
             DEFAULT_PROFILE_NIX_ENV, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, NIX_DAEMON_SERVICE_SRC,
@@ -477,8 +474,6 @@ impl UnitFacts {
     }
 }
 
-/// A request that was interrupted and that no running request holds, with the subjects its
-/// recovery still has to put back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Abandoned {
     pub request: String,
@@ -502,8 +497,6 @@ pub enum Fact {
     Program(ProgramFacts),
 }
 
-/// Whether an installed program is the one at its source, and the source's contents when it
-/// is not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProgramFacts {
     pub same: bool,

@@ -7,7 +7,6 @@ pub const TRUSTED_DIRS: [&str; 4] = ["/usr/sbin", "/usr/bin", "/sbin", "/bin"];
 
 const WRITABLE_BY_OTHERS: u32 = 0o022;
 
-/// What the trust rules read of a path: who owns it, its permission bits and what it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Entry {
     uid: u32,
@@ -16,11 +15,8 @@ struct Entry {
     link: bool,
 }
 
-/// Where the trust rules read paths from.
 trait Inspect {
-    /// The path with every link on it resolved, or `None` when nothing is there.
     fn resolve(&self, path: &Path) -> Option<PathBuf>;
-    /// The entry at `path`, read through a link at its end when `follow` is set.
     fn entry(&self, path: &Path, follow: bool) -> std::io::Result<Entry>;
 }
 
@@ -100,7 +96,6 @@ fn vetted_dirs(host: &impl Inspect, dir: &Path, owner: u32) -> Result<(), Failur
     Ok(())
 }
 
-/// Refuses a path someone other than root or `owner` could change.
 fn owned(path: &Path, entry: Entry, owner: u32) -> Result<(), Failure> {
     if entry.uid != owner && entry.uid != 0 {
         return Err(untrusted(
@@ -143,7 +138,6 @@ mod tests {
     const USER: u32 = 1000;
     const STRANGER: u32 = 1001;
 
-    /// A file system of entries and links that the trust rules read instead of the host's.
     #[derive(Default)]
     struct Tree {
         entries: BTreeMap<PathBuf, Entry>,
@@ -151,7 +145,6 @@ mod tests {
     }
 
     impl Tree {
-        /// `/opt/tools`, root's down to `/opt` and the user's below it.
         fn new() -> Self {
             let mut tree = Self::default();
             tree.dir("/", 0, 0o755);

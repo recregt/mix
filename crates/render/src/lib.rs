@@ -29,7 +29,6 @@ pub fn restore() {
     mix_ui::restore_terminal();
 }
 
-/// Where the result document goes.
 #[derive(Clone, Default)]
 pub enum Json {
     #[default]

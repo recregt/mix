@@ -35,7 +35,6 @@ pub fn record(fields: &[(&str, String)]) {
 
 pub type Entry = Vec<(&'static str, String)>;
 
-/// What a node was started as, kept to name it when it finishes.
 enum Node {
     Step(String),
     Rollback(NodeId),
@@ -43,7 +42,6 @@ enum Node {
     Other,
 }
 
-/// Turns one request's events into journal entries as they arrive.
 pub struct Steps {
     who: String,
     command: String,
@@ -61,7 +59,6 @@ impl Steps {
         }
     }
 
-    /// The entries `envelope` adds to the journal; a dry run changes nothing and adds none.
     pub fn entries(&mut self, envelope: &Envelope) -> Vec<Entry> {
         match envelope.event.as_ref() {
             Some(envelope::Event::NodeStarted(started)) => {

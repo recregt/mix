@@ -44,7 +44,6 @@ pub struct Locks {
     waiting: tokio::sync::watch::Sender<usize>,
 }
 
-/// Counts one request as waiting for a lock for as long as it lives.
 struct Waiting<'a>(&'a tokio::sync::watch::Sender<usize>);
 
 impl<'a> Waiting<'a> {
@@ -98,7 +97,6 @@ impl Locks {
         }
     }
 
-    /// How many requests wait for a lock right now, updated as each wait begins and ends.
     pub fn waiting(&self) -> tokio::sync::watch::Receiver<usize> {
         self.waiting.subscribe()
     }

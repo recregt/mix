@@ -548,8 +548,6 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
     }
 }
 
-/// The leftovers in `facts`, less the ones an interrupted request named: those belong to its
-/// recovery, not to cleaning up.
 fn leftovers(facts: &[Fact]) -> impl Iterator<Item = &(std::path::PathBuf, crate::action::FileId)> {
     let abandoned: &[crate::action::Abandoned] = match &facts[0] {
         Fact::Journals(abandoned) => abandoned,

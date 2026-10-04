@@ -1,14 +1,8 @@
-//! Whether an installed program is the one that is running.
-
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use mix_core::action::ProgramFacts;
 
-/// Compares the installed program at `path` with the one at `source`.
-///
-/// Note: The same file (device and inode) is the same program without reading either; only
-/// different files are compared byte for byte, and only then is `source` kept for a fix.
 pub fn observe(path: &Path, source: &Path) -> ProgramFacts {
     let installed = std::fs::symlink_metadata(path).ok();
     let running = std::fs::metadata(source).ok();

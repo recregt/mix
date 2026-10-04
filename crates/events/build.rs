@@ -204,8 +204,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ignore_unknown_enum_variants()
         .build(&[".mix.events.v1", ".mix.capture.v1"])?;
 
-    // A result document states every field, defaults included, so a reader never has to know
-    // what an absent field means.
     pbjson_build::Builder::new()
         .register_descriptors(&encoded)?
         .ignore_unknown_fields()

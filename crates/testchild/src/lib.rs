@@ -1,27 +1,3 @@
-//! A child program for tests that needs nothing from the host: the test binary starts itself.
-//!
-//! A test binary that calls [`install!`] checks its command line before `main`. Started with
-//! [`FLAG`], it does the steps that follow it and exits, so the test harness never runs and
-//! writes nothing of its own. Every step that waits says so on stdout first, so a test waits for
-//! what the child reports instead of for time to pass.
-//!
-//! The steps, done in order:
-//!
-//! - `print:TEXT` and `eprint:TEXT` write a line to stdout or stderr.
-//! - `echo:PREFIX` reads a line from stdin and writes it back after `PREFIX`.
-//! - `pid` writes the child's process id.
-//! - `env` writes the child's environment, a `NAME=value` line each.
-//! - `trap-term` turns a SIGTERM into a `term` line on stdout instead of an exit.
-//! - `spawn` starts a grandchild that sleeps, in the same process group, and writes its id.
-//! - `wait` waits for every grandchild.
-//! - `sleep` waits for signals until one ends the child.
-//! - `count-stderr:N` writes the numbers 1 to N to stderr, a line each.
-//! - `zeros:N` writes N zero bytes to stdout.
-//! - `exit:N` exits with status N; without it the child exits with 0 after its last step.
-//!
-//! Note: The command line is read from the arguments glibc hands to initialisers, so the child
-//! works on glibc only.
-
 #![expect(
     clippy::disallowed_methods,
     reason = "the child is a program of its own, and stdout and stderr are what it says"
@@ -35,10 +11,8 @@ use std::process::Child;
 
 use nix::sys::signal::{SigHandler, Signal, signal};
 
-/// The first argument that makes a test binary the child.
 pub const FLAG: &str = "--mix-test-child";
 
-/// Makes the test binary it is called in able to start as the child.
 #[macro_export]
 macro_rules! install {
     () => {
@@ -52,12 +26,10 @@ macro_rules! install {
     };
 }
 
-/// The program to start: the running test binary.
 pub fn program() -> PathBuf {
     std::env::current_exe().expect("a test binary knows where it is")
 }
 
-/// The arguments that make [`program`] the child doing `steps`.
 pub fn args<'s>(steps: impl IntoIterator<Item = &'s str>) -> Vec<String> {
     std::iter::once(FLAG)
         .chain(steps)
@@ -65,11 +37,10 @@ pub fn args<'s>(steps: impl IntoIterator<Item = &'s str>) -> Vec<String> {
         .collect()
 }
 
-/// Runs the steps and exits when the process was started as the child; returns otherwise.
-///
-/// # Safety
-///
-/// `argv` holds `argc` valid NUL-terminated strings, as glibc hands every initialiser.
+#[expect(
+    clippy::missing_safety_doc,
+    reason = "glibc calls it before main with the arguments it was started with"
+)]
 pub unsafe extern "C" fn serve(argc: c_int, argv: *const *const c_char, _: *const *const c_char) {
     let count = usize::try_from(argc).unwrap_or(0);
     if count < 2 || argv.is_null() {
@@ -77,7 +48,6 @@ pub unsafe extern "C" fn serve(argc: c_int, argv: *const *const c_char, _: *cons
     }
     let args: Vec<String> = (0..count)
         .map(|index| {
-            // SAFETY: the caller hands `argc` valid NUL-terminated strings in `argv`.
             unsafe { CStr::from_ptr(*argv.add(index)) }
                 .to_string_lossy()
                 .into_owned()
@@ -90,7 +60,6 @@ pub unsafe extern "C" fn serve(argc: c_int, argv: *const *const c_char, _: *cons
 }
 
 extern "C" fn on_term(_: c_int) {
-    // SAFETY: stdout stays open for the life of the child.
     let stdout = unsafe { BorrowedFd::borrow_raw(1) };
     let _ = nix::unistd::write(stdout, b"term\n");
 }
@@ -125,7 +94,6 @@ fn run(steps: &[String]) -> i32 {
                 }
             }
             "trap-term" => {
-                // SAFETY: the handler only writes to a descriptor, which is safe in a handler.
                 unsafe { signal(Signal::SIGTERM, SigHandler::Handler(on_term)) }
                     .expect("SIGTERM can be handled");
             }
@@ -164,18 +132,15 @@ fn run(steps: &[String]) -> i32 {
     0
 }
 
-/// Returns once process `pid` has ended, at once when it is already gone.
 pub fn ended(pid: i32) {
     use std::os::fd::{FromRawFd, OwnedFd};
 
     use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 
-    // SAFETY: pidfd_open takes a process id and flags and returns a new descriptor or -1.
     let fd = unsafe { nix::libc::syscall(nix::libc::SYS_pidfd_open, pid, 0) };
     if fd < 0 {
         return;
     }
-    // SAFETY: the descriptor was just returned to us and nothing else owns it.
     let pidfd = unsafe { OwnedFd::from_raw_fd(fd as i32) };
     let mut ready = [PollFd::new(
         std::os::fd::AsFd::as_fd(&pidfd),

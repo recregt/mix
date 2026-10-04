@@ -1,6 +1,3 @@
-//! The result document `--json` prints: what a request changed, or would change, and how it
-//! ended, built from the request's events.
-
 use std::collections::HashMap;
 
 use mix_events::result::FORMAT_VERSION;
@@ -13,7 +10,6 @@ use mix_events::v1::{
 };
 use mix_events::{NodeId, ROOT};
 
-/// What a node was started as, kept to place the actions under it.
 enum Node {
     Step(String),
     Rollback(NodeId),
@@ -30,7 +26,6 @@ pub(crate) struct Builder {
 }
 
 impl Builder {
-    /// Takes in one envelope, and returns the document once the request's root has ended.
     pub(crate) fn envelope(&mut self, envelope: &Envelope) -> Option<Document> {
         if self.document.request.is_empty() {
             self.document.request.clone_from(&envelope.request);
@@ -176,7 +171,6 @@ fn result_of(found: node_finished::Result) -> Option<result::Result> {
     })
 }
 
-/// What a dry run cannot tell about an operation's result until it is carried out.
 fn known_after(operation: Operation) -> Vec<String> {
     let unknown: &[&str] = match operation {
         Operation::ActivateProfile => &["generation", "build"],
@@ -220,8 +214,6 @@ fn known_after(operation: Operation) -> Vec<String> {
     unknown.iter().map(|field| (*field).to_string()).collect()
 }
 
-/// What an operation does to its subject, or `None` for bookkeeping that changes nothing a
-/// reader manages.
 fn change_action(operation: Operation) -> Option<ChangeAction> {
     Some(match operation {
         Operation::CreateDir
@@ -336,8 +328,6 @@ pub(crate) fn problem_of(found: &Diagnostic) -> Problem {
     }
 }
 
-/// The document for a command line `mix` could not read: no request ran, so it is only the
-/// problem.
 pub fn usage(request: String, detail: &str) -> Document {
     Document {
         format_version: FORMAT_VERSION.to_string(),
@@ -354,7 +344,6 @@ pub fn usage(request: String, detail: &str) -> Document {
     }
 }
 
-/// The document a finished request's events describe, or `None` while its root is still open.
 pub fn of<'e>(envelopes: impl IntoIterator<Item = &'e Envelope>) -> Option<Document> {
     let mut builder = Builder::default();
     envelopes

@@ -1,6 +1,3 @@
-//! What the client may depend on directly: arguments, routing, transport and signals. Anything
-//! else belongs in the crates it uses.
-
 const ALLOWED: &[&str] = &[
     "clap",
     "mix-events",

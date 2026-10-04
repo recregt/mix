@@ -603,7 +603,6 @@ mod tests {
         assert!(pin_for(&host_target_key()).is_some());
     }
 
-    /// The xz-compressed tar of everything in `dir`, as `tar cJf - -C dir .` writes it.
     fn tar_of(dir: &std::path::Path) -> Vec<u8> {
         let mut archive = tar::Builder::new(Vec::new());
         archive.append_dir_all(".", dir).unwrap();

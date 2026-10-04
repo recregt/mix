@@ -15,7 +15,6 @@ pub enum Route {
     OneShot,
 }
 
-/// The command to send for what was asked: the request, and whether to only show it.
 pub fn command_of(
     command: &Command,
     dry_run: bool,

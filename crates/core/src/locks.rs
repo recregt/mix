@@ -7,7 +7,6 @@ pub enum Need {
     SharedForUser,
 }
 
-/// The locks a request holds. A dry run changes nothing, so it only ever shares them.
 pub fn locks_for(request: &Request, dry_run: bool) -> Need {
     if dry_run {
         return match request {

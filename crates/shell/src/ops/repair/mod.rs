@@ -325,7 +325,6 @@ mod tests {
         repairing(Performer::new(files), targets, scope).await.0
     }
 
-    /// Runs the repair of `targets` with `performer`, and the actions it performed in order.
     async fn repairing(
         mut performer: Performer,
         targets: Vec<Target<'_>>,

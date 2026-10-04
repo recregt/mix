@@ -232,13 +232,10 @@ impl Args {
 
     /// Whether output may be drawn in place.
     ///
-    /// `--no-progress` and `--json` are explicit requests for plain output, and so is running
-    /// under CI.
     pub fn draws_progress(&self, ci: bool) -> bool {
         !self.no_progress && !self.json && !ci
     }
 
-    /// Whether the command asks to be shown rather than carried out.
     pub fn dry_run(&self) -> bool {
         match self.command {
             Command::Bootstrap { dry_run, .. }
