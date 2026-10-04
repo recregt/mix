@@ -175,7 +175,10 @@ impl Side for Real {
     fn facts(&mut self, path: &str) -> PathFacts {
         let facts = self
             .runtime
-            .block_on(self.performer.observe(&[Query::Path(path.into())]))
+            .block_on(
+                self.performer
+                    .observe(&[Query::Path(path.into())], &mix_exec::Scope::root()),
+            )
             .unwrap();
         match facts.into_iter().next() {
             Some(Fact::Path(facts)) => facts,

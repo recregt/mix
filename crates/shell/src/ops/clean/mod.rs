@@ -34,7 +34,6 @@ pub(crate) async fn clean(ctx: &Context, root: &mut Root, request: &CleanRequest
                 freed_bytes: before.zip(available()).map(|(b, a)| a.saturating_sub(b)),
             })
         },
-        &mut Vec::new(),
     )
     .await
 }
@@ -49,8 +48,9 @@ mod tests {
     use crate::request::ran::{Ran, ran};
 
     fn context(home: &std::path::Path) -> crate::Session {
-        crate::Session::new(mix_exec::Scope::root()).with_user(Some(
-            mix_core::targets::UserConfig {
+        crate::Session::new(mix_exec::Scope::root())
+            .with_journals(home.join("journal"))
+            .with_user(Some(mix_core::targets::UserConfig {
                 user: InvokingUser {
                     uid: 1000,
                     gid: 1000,
@@ -61,8 +61,7 @@ mod tests {
                 lock: String::new(),
                 home: String::new(),
                 restored_state: None,
-            },
-        ))
+            }))
     }
 
     async fn cleaned(session: crate::Session) -> Ran {
@@ -78,6 +77,12 @@ mod tests {
         assert_eq!(
             ran.result(),
             Some(&node_finished::Result::Clean(CleanResult::default()))
+        );
+        assert_eq!(
+            std::fs::read_dir(home.path().join("journal"))
+                .unwrap()
+                .count(),
+            0
         );
     }
 

@@ -7,9 +7,13 @@ use mix_events::v1::{InstallResult, RemoveResult, node_finished};
 use mix_events::{Ending, ROOT};
 
 use crate::Context;
-use crate::drive::{Journal, Performer, drive};
+use mix_events::v1::Code;
+
+use crate::drive::{Performer, drive};
 use crate::effect::files::Files;
 use crate::effect::generations::ProfileContext;
+use crate::effect::home::core_error;
+use crate::effect::journal::FileJournal;
 use crate::profile::state::{self, Invalid, Settled, Source};
 use crate::request::{Concluded, Root};
 
@@ -91,13 +95,12 @@ pub async fn run(
     cfg: &UserConfig,
     verb: Verb,
     change: &Change,
-    journal: &mut dyn Journal,
 ) -> Concluded {
     let steps = match mix_core::change::steps(&cfg.user, change, verb.doing()) {
         Ok(steps) => steps,
         Err(error) => return root.refuse(Error::from(error)),
     };
-    perform(ctx, root, steps, || verb.result(change), journal).await
+    perform(ctx, root, steps, || verb.result(change)).await
 }
 
 pub async fn perform(
@@ -105,7 +108,6 @@ pub async fn perform(
     root: &mut Root,
     steps: Vec<Box<dyn StepSpec>>,
     result: impl FnOnce() -> node_finished::Result,
-    journal: &mut dyn Journal,
 ) -> Concluded {
     let verdict = if steps.is_empty() {
         Verdict::Succeeded
@@ -122,19 +124,34 @@ pub async fn perform(
         let mut performer = Performer::new(files).with_profile(ProfileContext {
             mirror: ctx.mirror().map(str::to_string),
         });
+        let mut journal = match FileJournal::create(&ctx.journals, &ctx.request.id) {
+            Ok(journal) => journal,
+            Err(failure) => return root.refuse(Error::Core(core_error(failure, &ctx.journals))),
+        };
         let mut runner = Runner::new(ROOT, steps);
-        drive(
+        let verdict = drive(
             &mut runner,
             &mut root.tree,
             &mut performer,
             &ctx.scope,
             &root.stopped,
-            journal,
+            &mut journal,
             &mut ctx.relay(),
         )
         .await
         .verdict
-        .clone()
+        .clone();
+        if let Err(failure) = journal.finish() {
+            let _ = root.tree.warn(
+                ROOT,
+                mix_core::diagnose::warning(
+                    Code::CleanupIncomplete,
+                    "could not remove the finished journal",
+                    &failure,
+                ),
+            );
+        }
+        verdict
     };
     root.conclude(match verdict {
         Verdict::Succeeded => Ending::succeeded().with_result(result()),

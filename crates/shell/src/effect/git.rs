@@ -8,10 +8,12 @@ use std::path::{Path, PathBuf};
 
 use mix_core::Result;
 use mix_core::identity::InvokingUser;
-use mix_core::paths::{FLAKE_LOCK, FLAKE_NIX, HOME_NIX, STATE_FILE};
+use mix_core::paths::{FLAKE_LOCK, FLAKE_NIX, GIT_DIR, HOME_NIX, STATE_FILE};
 use mix_exec::Scope;
 
-use crate::effect::exec::{run_as, status_as};
+use mix_exec::Command;
+
+use crate::effect::exec::{command_as, run, status};
 use crate::effect::fs::exists;
 use crate::effect::home;
 
@@ -21,6 +23,27 @@ const COMMIT_MESSAGE: &str = "mix: sync generated home-manager config";
 
 const PROFILE_GIT: &str = ".nix-profile/bin/git";
 const GITIGNORE: &str = ".gitignore";
+
+/// Settings given to every `git` call: no hook runs, no file-system monitor is started and no
+/// commit is signed.
+const ISOLATION: &[&str] = &[
+    "core.hooksPath=/dev/null",
+    "core.fsmonitor=false",
+    "commit.gpgsign=false",
+];
+
+/// Environment of every `git` call besides the user's `HOME`, `USER` and `PATH`: no global or
+/// system configuration is read and no credential is asked for.
+const ISOLATED_ENV: &[(&str, &str)] = &[
+    ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ("GIT_CONFIG_NOSYSTEM", "1"),
+    ("GIT_TERMINAL_PROMPT", "0"),
+];
+
+const VERIFY: &[&[&str]] = &[
+    &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+    &["fsck", "--no-progress", "--no-dangling"],
+];
 
 const MANAGED_FILES: &[&str] = &[GITIGNORE, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, STATE_FILE];
 
@@ -44,8 +67,35 @@ impl Git {
         write_gitignore(state_dir, scope).await
     }
 
+    /// Creates the repository and commits the generated config into it.
+    pub async fn create(&self, user: &InvokingUser, state_dir: &Path, scope: &Scope) -> Result<()> {
+        self.init(user, state_dir, scope).await?;
+        self.sync(user, state_dir, scope).await.map(|_| ())
+    }
+
+    /// Whether `HEAD` resolves to a commit and `git fsck` finds every object it reaches intact.
+    ///
+    /// Note: The repository is named with `--git-dir`, so a missing one is never answered by a
+    /// repository further up.
+    pub async fn verify(
+        &self,
+        user: &InvokingUser,
+        repository: &Path,
+        scope: &Scope,
+    ) -> Result<bool> {
+        let repository = repository.to_string_lossy();
+        for check in VERIFY {
+            let mut args = vec!["--git-dir", &repository];
+            args.extend(check.iter());
+            if !self.status_as(user, &args, scope).await? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     pub async fn sync(&self, user: &InvokingUser, state_dir: &Path, scope: &Scope) -> Result<bool> {
-        let git_dir = state_dir.join(".git");
+        let git_dir = state_dir.join(GIT_DIR);
         if !exists(&git_dir).await {
             return Ok(false);
         }
@@ -118,11 +168,26 @@ impl Git {
     }
 
     async fn run_as(&self, user: &InvokingUser, args: &[&str], scope: &Scope) -> Result<String> {
-        run_as(user, &self.binary, args, scope).await
+        run(self.command(user, args), scope).await
     }
 
     async fn status_as(&self, user: &InvokingUser, args: &[&str], scope: &Scope) -> Result<bool> {
-        status_as(user, &self.binary, args, scope).await
+        status(self.command(user, args), scope).await
+    }
+
+    /// A `git` run as `user` that reads no configuration, hook or credential of the user's.
+    ///
+    /// Note: The `-c` overrides also win over the repository's own `.git/config`.
+    fn command(&self, user: &InvokingUser, args: &[&str]) -> Command {
+        let mut isolated: Vec<&str> = ISOLATION
+            .iter()
+            .flat_map(|setting| ["-c", setting])
+            .collect();
+        isolated.extend(args);
+        let command = command_as(user, &self.binary, &isolated);
+        ISOLATED_ENV
+            .iter()
+            .fold(command, |command, (key, value)| command.env(key, value))
     }
 }
 
@@ -147,7 +212,56 @@ async fn write_gitignore(state_dir: &Path, scope: &Scope) -> Result<()> {
 
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
+pub(crate) mod testing {
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+
+    use mix_core::identity::InvokingUser;
+
+    use super::PROFILE_GIT;
+
+    pub fn on_path() -> PathBuf {
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        std::env::split_paths(&path)
+            .map(|directory| directory.join("git"))
+            .find(|candidate| candidate.is_file())
+            .expect("the tests need git on PATH")
+    }
+
+    /// The running account with `home` as its home, whose profile's `git` is the one on `PATH`,
+    /// failing every `refused` subcommand.
+    pub fn user(home: &Path, refused: Option<&str>) -> InvokingUser {
+        let profile_git = home.join(PROFILE_GIT);
+        std::fs::create_dir_all(profile_git.parent().unwrap()).unwrap();
+        match refused {
+            None => std::os::unix::fs::symlink(on_path(), &profile_git).unwrap(),
+            Some(refused) => {
+                std::fs::write(
+                    &profile_git,
+                    format!(
+                        "#!/bin/sh\nfor arg; do [ \"$arg\" = {refused} ] && exit 1; done\nexec '{}' \"$@\"\n",
+                        on_path().display()
+                    ),
+                )
+                .unwrap();
+                std::fs::set_permissions(&profile_git, std::fs::Permissions::from_mode(0o755))
+                    .unwrap();
+            }
+        }
+        InvokingUser {
+            uid: nix::unistd::Uid::current().as_raw(),
+            gid: nix::unistd::Gid::current().as_raw(),
+            name: "mix-user".to_string(),
+            home: home.to_path_buf(),
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
+    use mix_core::paths::INDEX_LOCK;
+
     use super::*;
 
     fn user(home: &Path) -> InvokingUser {
@@ -160,13 +274,8 @@ mod tests {
     }
 
     fn git() -> Git {
-        let path = std::env::var_os("PATH").unwrap_or_default();
-        let binary = std::env::split_paths(&path)
-            .map(|directory| directory.join("git"))
-            .find(|candidate| candidate.is_file())
-            .expect("the tests need git on PATH");
         Git {
-            binary: binary.to_string_lossy().into_owned(),
+            binary: testing::on_path().to_string_lossy().into_owned(),
         }
     }
 
@@ -319,5 +428,214 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    fn hook(path: &Path, marker: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            path,
+            format!("#!/bin/sh\ntouch '{}'\nexit 1\n", marker.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[tokio::test]
+    async fn sync_runs_no_hook_of_the_repository_or_the_user() {
+        let home = tempfile::tempdir().unwrap();
+        let state_dir = repository(home.path()).await;
+        let marker = home.path().join("hook-ran");
+        hook(&state_dir.join(".git/hooks/pre-commit"), &marker);
+        hook(&home.path().join("hooks/pre-commit"), &marker);
+        std::fs::write(
+            home.path().join(".gitconfig"),
+            format!("[core]\n\thooksPath = {}/hooks\n", home.path().display()),
+        )
+        .unwrap();
+        std::fs::write(state_dir.join(FLAKE_NIX), "flake-content").unwrap();
+
+        let committed = git()
+            .sync(&user(home.path()), &state_dir, &mix_exec::Scope::root())
+            .await
+            .unwrap();
+
+        assert!(committed);
+        assert!(!marker.exists());
+    }
+
+    #[tokio::test]
+    async fn sync_commits_unsigned_whatever_the_user_configured() {
+        let home = tempfile::tempdir().unwrap();
+        let state_dir = repository(home.path()).await;
+        let settings = "[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = /bin/false\n";
+        std::fs::write(home.path().join(".gitconfig"), settings).unwrap();
+        std::fs::create_dir_all(home.path().join(".config/git")).unwrap();
+        std::fs::write(home.path().join(".config/git/config"), settings).unwrap();
+        let local = state_dir.join(".git/config");
+        let mut config = std::fs::read_to_string(&local).unwrap();
+        config.push_str(settings);
+        std::fs::write(&local, config).unwrap();
+        std::fs::write(state_dir.join(FLAKE_NIX), "flake-content").unwrap();
+
+        let committed = git()
+            .sync(&user(home.path()), &state_dir, &mix_exec::Scope::root())
+            .await
+            .unwrap();
+
+        assert!(committed);
+        assert_eq!(
+            committed_files(&state_dir).await,
+            vec![GITIGNORE.to_string(), FLAKE_NIX.to_string()]
+        );
+    }
+
+    async fn committed(home: &Path) -> PathBuf {
+        let state_dir = repository(home).await;
+        std::fs::write(state_dir.join(FLAKE_NIX), "flake-content").unwrap();
+        git()
+            .sync(&user(home), &state_dir, &mix_exec::Scope::root())
+            .await
+            .unwrap();
+        state_dir
+    }
+
+    async fn verified(home: &Path, state_dir: &Path) -> bool {
+        git()
+            .verify(
+                &user(home),
+                &state_dir.join(GIT_DIR),
+                &mix_exec::Scope::root(),
+            )
+            .await
+            .unwrap()
+    }
+
+    fn objects(repository: &Path) -> Vec<PathBuf> {
+        std::fs::read_dir(repository.join("objects"))
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.file_name().is_some_and(|name| name.len() == 2))
+            .flat_map(|fanout| {
+                std::fs::read_dir(fanout)
+                    .unwrap()
+                    .filter_map(std::result::Result::ok)
+            })
+            .map(|entry| entry.path())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_committed_repository_verifies() {
+        let home = tempfile::tempdir().unwrap();
+        let state_dir = committed(home.path()).await;
+
+        assert!(verified(home.path(), &state_dir).await);
+    }
+
+    #[tokio::test]
+    async fn a_repository_whose_commit_lost_its_tree_does_not_verify() {
+        let home = tempfile::tempdir().unwrap();
+        let state_dir = committed(home.path()).await;
+        let head = mix_exec::Command::new("git")
+            .args(["-C", &state_dir.to_string_lossy(), "rev-parse", "HEAD"])
+            .output(&mix_exec::Scope::root())
+            .await
+            .unwrap();
+        let head = String::from_utf8_lossy(&head.stdout).trim().to_string();
+        for object in objects(&state_dir.join(GIT_DIR)) {
+            let name = format!(
+                "{}{}",
+                object
+                    .parent()
+                    .unwrap()
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy(),
+                object.file_name().unwrap().to_string_lossy()
+            );
+            if name != head {
+                std::fs::remove_file(object).unwrap();
+            }
+        }
+
+        assert!(!verified(home.path(), &state_dir).await);
+    }
+
+    #[tokio::test]
+    async fn a_repository_whose_head_does_not_resolve_does_not_verify() {
+        let home = tempfile::tempdir().unwrap();
+        let state_dir = committed(home.path()).await;
+        std::fs::write(state_dir.join(GIT_DIR).join("HEAD"), "garbage\n").unwrap();
+
+        assert!(!verified(home.path(), &state_dir).await);
+    }
+
+    #[tokio::test]
+    async fn a_repository_with_an_unreadable_config_does_not_verify() {
+        let home = tempfile::tempdir().unwrap();
+        let state_dir = committed(home.path()).await;
+        std::fs::write(state_dir.join(GIT_DIR).join("config"), "[[[ not a config\n").unwrap();
+
+        assert!(!verified(home.path(), &state_dir).await);
+    }
+
+    #[tokio::test]
+    async fn a_repository_with_nothing_committed_does_not_verify() {
+        let home = tempfile::tempdir().unwrap();
+        let state_dir = repository(home.path()).await;
+
+        assert!(!verified(home.path(), &state_dir).await);
+    }
+
+    #[tokio::test]
+    async fn a_missing_repository_is_not_answered_by_one_further_up() {
+        let home = tempfile::tempdir().unwrap();
+        let outer = committed(home.path()).await;
+        let nested_home = outer.join("nested");
+        let state_dir = mix_core::paths::mix_state_dir(&nested_home);
+        std::fs::create_dir_all(&state_dir).unwrap();
+
+        assert!(!verified(home.path(), &state_dir).await);
+    }
+
+    #[tokio::test]
+    async fn create_commits_the_files_already_there() {
+        let home = tempfile::tempdir().unwrap();
+        let state_dir = mix_core::paths::mix_state_dir(home.path());
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(state_dir.join(FLAKE_NIX), "flake-content").unwrap();
+        std::fs::write(state_dir.join(HOME_NIX), "home-content").unwrap();
+
+        git()
+            .create(&user(home.path()), &state_dir, &mix_exec::Scope::root())
+            .await
+            .unwrap();
+
+        assert!(verified(home.path(), &state_dir).await);
+        assert_eq!(
+            committed_files(&state_dir).await,
+            vec![
+                GITIGNORE.to_string(),
+                FLAKE_NIX.to_string(),
+                HOME_NIX.to_string()
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_fails_while_a_stale_index_lock_is_left_behind() {
+        let home = tempfile::tempdir().unwrap();
+        let state_dir = committed(home.path()).await;
+        std::fs::write(state_dir.join(GIT_DIR).join(INDEX_LOCK), "").unwrap();
+        std::fs::write(state_dir.join(FLAKE_NIX), "changed").unwrap();
+
+        let synced = git()
+            .sync(&user(home.path()), &state_dir, &mix_exec::Scope::root())
+            .await;
+
+        assert!(synced.is_err());
+        assert!(verified(home.path(), &state_dir).await);
     }
 }

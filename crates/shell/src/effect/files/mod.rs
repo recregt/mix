@@ -8,6 +8,7 @@ use std::path::{Component, Path, PathBuf};
 use mix_core::action::{
     Action, Expect, Fact, Failure, FileId, Kind, Outcome, Owner, PathFacts, Performed, Query,
 };
+use mix_core::paths::is_leftover;
 use rustix::fs::{
     self as sys, AtFlags, FileType, Gid, Mode, OFlags, RenameFlags, ResolveFlags, Statx,
     StatxFlags, Uid,
@@ -1125,8 +1126,53 @@ impl Files {
             Query::Path(path) => Fact::Path(self.path_facts(path)),
             Query::Contents(path) => Fact::Contents(self.contents(path).map(Into::into)),
             Query::TreeOwner(path) => Fact::TreeOwner(self.tree_owner(path)),
+            Query::Leftovers(dir) => Fact::Leftovers(self.leftovers(dir)),
+            Query::Strangers { path, owner } => Fact::Stranger(self.stranger(path, *owner)),
             _ => return None,
         })
+    }
+
+    fn open_dir(&self, path: &Path) -> Option<OwnedFd> {
+        let (parent, name) = self.resolve(path, false).ok()?;
+        sys::openat(
+            &parent,
+            &*name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .ok()
+    }
+
+    /// The siblings in `dir` that an interrupted write of mix's left behind.
+    fn leftovers(&self, dir: &Path) -> Vec<(PathBuf, FileId)> {
+        let Some(fd) = self.open_dir(dir) else {
+            return Vec::new();
+        };
+        let mut found: Vec<(PathBuf, FileId)> = entries(&fd)
+            .into_iter()
+            .filter(|name| is_leftover(&name.to_string_lossy()))
+            .filter_map(|name| {
+                let stat = sys::statx(&fd, &name, AtFlags::SYMLINK_NOFOLLOW, WANTED).ok()?;
+                Some((dir.join(&name), id(&stat)))
+            })
+            .collect();
+        found.sort_by(|(a, _), (b, _)| a.cmp(b));
+        found
+    }
+
+    /// The first entry under `path`, itself included, that is not owned by `owner`.
+    fn stranger(&self, path: &Path, owner: Owner) -> Option<(PathBuf, Owner)> {
+        let (parent, name) = self.resolve(path, false).ok()?;
+        stranger_at(&parent, &name, path, &|found| found != owner)
+    }
+
+    /// Whether anything under `path`, itself included, is owned by another user than `uid`.
+    pub fn holds_other_than(&self, path: &Path, uid: u32) -> bool {
+        self.resolve(path, false)
+            .ok()
+            .is_some_and(|(parent, name)| {
+                stranger_at(&parent, &name, path, &|(found, _)| found != uid).is_some()
+            })
     }
 
     fn path_facts(&self, path: &Path) -> PathFacts {
@@ -1305,6 +1351,43 @@ fn copy_tree_at(
         }
         _ => Err(Errno::OPNOTSUPP),
     }
+}
+
+fn entries(dir: &OwnedFd) -> Vec<OsString> {
+    let Ok(listing) = sys::Dir::read_from(dir) else {
+        return Vec::new();
+    };
+    listing
+        .filter_map(Result::ok)
+        .map(|entry| OsStr::from_bytes(entry.file_name().to_bytes()).to_os_string())
+        .filter(|entry| entry != "." && entry != "..")
+        .collect()
+}
+
+fn stranger_at(
+    dir: &OwnedFd,
+    name: &OsStr,
+    path: &Path,
+    foreign: &dyn Fn(Owner) -> bool,
+) -> Option<(PathBuf, Owner)> {
+    let stat = sys::statx(dir, name, AtFlags::SYMLINK_NOFOLLOW, WANTED).ok()?;
+    let found = owner_of(&stat);
+    if foreign(found) {
+        return Some((path.to_path_buf(), found));
+    }
+    if kind(&stat) != Kind::Directory {
+        return None;
+    }
+    let child = sys::openat(
+        dir,
+        name,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .ok()?;
+    entries(&child)
+        .into_iter()
+        .find_map(|entry| stranger_at(&child, &entry, &path.join(&entry), foreign))
 }
 
 fn walk(root: &OwnedFd, path: &Path) -> Option<u32> {

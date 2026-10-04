@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::identity::InvokingUser;
 use crate::identity::{
@@ -12,7 +12,11 @@ use crate::paths::{
     NIX_CONF_DEST, NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SERVICE_UNIT,
     NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC, NIX_DAEMON_SOCKET_UNIT, NIX_OWNERSHIP_MARKER,
     NIX_PROFILES_DIR_MODE, NIX_STORE, NIX_TREE_MODE, NIX_TREE_PATHS, POLICY_FILE,
-    PROFILE_SNIPPET_DEST, STATE_FILE, mix_state_dir, nix_profiles_dir,
+    PROFILE_SNIPPET_DEST, STATE_FILE, mix_state_dir, nix_profiles_dir, repository_dir,
+};
+use crate::paths::{
+    HOME_MANAGER_PROFILE_NAME, INDEX_LOCK, JOURNAL_DIR, MIX_DAEMON_BIN, MIX_DAEMON_BIN_MODE,
+    RUNNING_PROGRAM,
 };
 use crate::policy::Policy;
 
@@ -145,7 +149,34 @@ pub enum Target<'a> {
         name: &'static str,
         path: &'static str,
     },
+    Repository {
+        path: Cow<'a, Path>,
+        user: InvokingUser,
+    },
+    Program {
+        path: &'static str,
+        source: &'static str,
+        mode: u32,
+    },
+    Journals {
+        path: &'static str,
+    },
+    Leftovers {
+        dirs: Vec<PathBuf>,
+        journals: &'static str,
+    },
+    Generations {
+        path: Cow<'a, Path>,
+        user: InvokingUser,
+    },
+    HomeFiles {
+        path: Cow<'a, Path>,
+        user: InvokingUser,
+    },
 }
+
+/// Name of the target that collects what interrupted writes left behind.
+pub const LEFTOVERS: &str = "leftovers of interrupted writes";
 
 impl Target<'_> {
     pub fn into_owned(self) -> Target<'static> {
@@ -185,6 +216,21 @@ impl Target<'_> {
                 must_be_active,
             },
             Target::PathExists { name, path } => Target::PathExists { name, path },
+            Target::Repository { path, user } => Target::Repository {
+                path: own_path(path),
+                user,
+            },
+            Target::Program { path, source, mode } => Target::Program { path, source, mode },
+            Target::Journals { path } => Target::Journals { path },
+            Target::Leftovers { dirs, journals } => Target::Leftovers { dirs, journals },
+            Target::Generations { path, user } => Target::Generations {
+                path: own_path(path),
+                user,
+            },
+            Target::HomeFiles { path, user } => Target::HomeFiles {
+                path: own_path(path),
+                user,
+            },
         }
     }
 
@@ -198,6 +244,11 @@ impl Target<'_> {
             Target::User { n, .. } => identity::user_name(*n),
             Target::SystemdUnit { name, .. } => Cow::Borrowed(name),
             Target::PathExists { name, .. } => Cow::Borrowed(name),
+            Target::Repository { path, .. }
+            | Target::Generations { path, .. }
+            | Target::HomeFiles { path, .. } => path.to_string_lossy(),
+            Target::Program { path, .. } | Target::Journals { path } => Cow::Borrowed(path),
+            Target::Leftovers { .. } => Cow::Borrowed(LEFTOVERS),
         }
     }
 
@@ -211,7 +262,13 @@ impl Target<'_> {
                 Category::Identity
             }
             Target::SystemdUnit { .. } => Category::Services,
-            Target::PathExists { .. } => Category::Filesystem,
+            Target::PathExists { .. }
+            | Target::Repository { .. }
+            | Target::Journals { .. }
+            | Target::Leftovers { .. }
+            | Target::HomeFiles { .. } => Category::Filesystem,
+            Target::Program { .. } => Category::Services,
+            Target::Generations { .. } => Category::Configuration,
         }
     }
 }
@@ -263,14 +320,62 @@ fn push_user_targets<'a>(items: &mut Vec<Target<'a>>, cfg: &'a UserConfig) {
             owner,
         }),
     }
+    items.push(Target::Repository {
+        path: Cow::Owned(repository_dir(&cfg.user.home)),
+        user: cfg.user.clone(),
+    });
     items.push(Target::GroupMember {
         group: MIX_USERS_GROUP,
         user: cfg.user.name.clone(),
     });
+    items.push(Target::Generations {
+        path: Cow::Owned(nix_profiles_dir(&cfg.user.home).join(HOME_MANAGER_PROFILE_NAME)),
+        user: cfg.user.clone(),
+    });
+    items.push(Target::HomeFiles {
+        path: Cow::Borrowed(&cfg.user.home),
+        user: cfg.user.clone(),
+    });
 }
 
-const SYSTEM_TARGET_COUNT: usize = 13 + NIX_TREE_PATHS.len() + NIXBLD_USER_COUNT as usize;
-const USER_TARGET_COUNT: usize = 7;
+/// Every directory mix writes into among `items`: where a write it was interrupted in leaves its
+/// siblings.
+fn written_dirs(items: &[Target<'_>]) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut add = |path: &Path| {
+        if let Some(parent) = path.parent()
+            && !dirs.iter().any(|dir| dir == parent)
+        {
+            dirs.push(parent.to_path_buf());
+        }
+    };
+    for item in items {
+        match item {
+            Target::Directory { path, .. }
+            | Target::File { path, .. }
+            | Target::SeededFile { path, .. } => add(path),
+            Target::SystemdUnit { dest, .. } => add(Path::new(dest)),
+            Target::Program { path, .. } => add(Path::new(path)),
+            Target::Repository { path, .. } => {
+                add(path);
+                add(&path.join(INDEX_LOCK));
+            }
+            Target::Group { .. }
+            | Target::GroupMember { .. }
+            | Target::User { .. }
+            | Target::PathExists { .. }
+            | Target::Journals { .. }
+            | Target::Leftovers { .. }
+            | Target::Generations { .. }
+            | Target::HomeFiles { .. } => {}
+        }
+    }
+    dirs.sort();
+    dirs
+}
+
+const SYSTEM_TARGET_COUNT: usize = 16 + NIX_TREE_PATHS.len() + NIXBLD_USER_COUNT as usize;
+const USER_TARGET_COUNT: usize = 10;
 
 pub fn user_targets(cfg: &UserConfig) -> Vec<Target<'_>> {
     let mut items = Vec::with_capacity(USER_TARGET_COUNT);
@@ -363,10 +468,20 @@ pub fn targets<'a>(user_config: Option<&'a UserConfig>, policy: &'a Policy) -> V
         name: "default profile",
         path: DEFAULT_PROFILE_NIX_ENV,
     });
+    items.push(Target::Program {
+        path: MIX_DAEMON_BIN,
+        source: RUNNING_PROGRAM,
+        mode: MIX_DAEMON_BIN_MODE,
+    });
+    items.push(Target::Journals { path: JOURNAL_DIR });
 
     if let Some(cfg) = user_config {
         push_user_targets(&mut items, cfg);
     }
+    items.push(Target::Leftovers {
+        dirs: written_dirs(&items),
+        journals: JOURNAL_DIR,
+    });
 
     items
 }
@@ -643,9 +758,49 @@ mod tests {
     }
 
     #[test]
-    fn user_targets_returns_exactly_the_seven_per_user_entries() {
+    fn user_targets_returns_exactly_the_ten_per_user_entries() {
         let cfg = sample_user_config();
-        assert_eq!(user_targets(&cfg).len(), 7);
+        assert_eq!(user_targets(&cfg).len(), 10);
+    }
+
+    #[test]
+    fn leftovers_are_looked_for_beside_everything_mix_writes() {
+        let cfg = sample_user_config();
+        let policy = default_policy();
+        let items = targets(Some(&cfg), policy);
+        let Some(Target::Leftovers { dirs, .. }) = items.last() else {
+            panic!("the leftovers come last");
+        };
+
+        for dir in [
+            "/etc/nix",
+            "/etc/systemd/system",
+            "/var/lib/mix/bin",
+            "/home/mix-user/.local/state",
+            "/home/mix-user/.local/state/mix",
+            "/home/mix-user/.local/state/mix/.git",
+        ] {
+            assert!(dirs.iter().any(|found| found == Path::new(dir)), "{dir}");
+        }
+    }
+
+    #[test]
+    fn user_targets_check_the_repository_after_the_files_it_commits() {
+        let cfg = sample_user_config();
+        let targets = user_targets(&cfg);
+        let position =
+            |wanted: &dyn Fn(&Target<'_>) -> bool| targets.iter().position(wanted).unwrap();
+
+        let repository = position(
+            &|target| matches!(target, Target::Repository { user, .. } if *user == cfg.user),
+        );
+        let state = position(&|target| matches!(target, Target::SeededFile { .. }));
+
+        assert!(state < repository);
+        assert_eq!(
+            targets[repository].label(),
+            "/home/mix-user/.local/state/mix/.git"
+        );
     }
 
     #[test]

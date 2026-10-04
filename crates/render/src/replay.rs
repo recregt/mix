@@ -208,6 +208,11 @@ fn installed() -> Vec<Envelope> {
         .unwrap();
     tree.finish(activity, Ending::succeeded()).unwrap();
     for progress in [
+        Progress::Waiting(LockWait {
+            lock: "/home/ciuser/.local/state/nix/profiles/profile.lock".into(),
+            holder: Some("ciuser".into()),
+            command: Some("nix-env -i hello".into()),
+        }),
         Progress::Command(CommandStarted {
             line: "/nix/var/nix/profiles/default/bin/nix build".into(),
         }),
@@ -501,7 +506,7 @@ fn doctored(findings: &[(&str, Option<mix_core::health::Finding>)]) -> Vec<Envel
                 mix_core::health::wire::report(&mix_core::health::HealthReport {
                     name: (*target).into(),
                     category: mix_core::Category::Filesystem,
-                    finding: *finding,
+                    finding: finding.clone(),
                     drift: drift(target),
                 })
             })
@@ -582,11 +587,12 @@ fn slot(envelope: &Envelope) -> Option<usize> {
             Progress::Observed(_) => 21,
             Progress::Journaled(_) => 22,
             Progress::Substitution(_) => 23,
+            Progress::Waiting(_) => 24,
         },
     })
 }
 
-const SLOTS: usize = 24;
+const SLOTS: usize = 25;
 
 fn captured(envelopes: &[Envelope]) -> (Vec<u8>, Captured) {
     let mut capture = Capture::start(

@@ -577,3 +577,57 @@ fn a_reclaim_is_only_carried_out_by_the_new_owner() {
     assert!(matches!(refused, Err(Failure::Conflict { .. })));
     assert_eq!(root.tree(), before);
 }
+
+#[test]
+fn only_what_an_interrupted_write_left_is_a_leftover() {
+    let root = root();
+    for name in [
+        ".nix.conf.mix-backup-r9-1",
+        "nix.conf",
+        ".nix.conf.mix-later",
+    ] {
+        std::fs::write(root.real("/etc").join(name), "x").unwrap();
+    }
+    std::fs::create_dir(root.real("/etc/.git.mix-aside-r9")).unwrap();
+    std::os::unix::fs::symlink(root.real("/etc"), root.real("/var/linked")).unwrap();
+
+    let found: Vec<PathBuf> = root
+        .files
+        .leftovers(Path::new("/etc"))
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect();
+
+    assert_eq!(
+        found,
+        [
+            PathBuf::from("/etc/.git.mix-aside-r9"),
+            PathBuf::from("/etc/.nix.conf.mix-backup-r9-1")
+        ]
+    );
+    assert!(root.files.leftovers(Path::new("/var/linked")).is_empty());
+}
+
+#[test]
+fn a_tree_is_searched_for_an_entry_another_owner_holds() {
+    let root = root();
+    std::fs::create_dir_all(root.real("/var/repo/objects/ab")).unwrap();
+    std::fs::write(root.real("/var/repo/objects/ab/cd"), "x").unwrap();
+    let gid = nix::unistd::Gid::current().as_raw();
+
+    assert_eq!(
+        root.files.stranger(Path::new("/var/repo"), (me(), gid)),
+        None
+    );
+    assert!(!root.files.holds_other_than(Path::new("/var/repo"), me()));
+    assert_eq!(
+        root.files
+            .stranger(Path::new("/var/repo"), (me() + 1, gid))
+            .map(|(path, _)| path),
+        Some(PathBuf::from("/var/repo"))
+    );
+    assert!(
+        root.files
+            .holds_other_than(Path::new("/var/repo"), me() + 1)
+    );
+}

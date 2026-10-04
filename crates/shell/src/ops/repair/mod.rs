@@ -19,9 +19,10 @@ use mix_exec::Scope;
 use crate::Context;
 use crate::drive::{Journal, Observer, Performer, drive};
 use crate::effect::files::Files;
+use crate::effect::generations::ProfileContext;
 use crate::effect::git;
 use crate::effect::home::core_error;
-use crate::effect::journal::{FileJournal, JOURNAL_DIR, recover_all};
+use crate::effect::journal::{FileJournal, recover_all};
 use crate::request::sink::Relay;
 use crate::request::{Concluded, Root};
 use crate::target::Error;
@@ -115,8 +116,10 @@ async fn repaired(
             };
         }
     };
-    let mut performer = Performer::new(files);
-    let journals = Path::new(JOURNAL_DIR);
+    let mut performer = Performer::new(files).with_profile(ProfileContext {
+        mirror: ctx.mirror().map(str::to_string),
+    });
+    let journals = ctx.journals.as_path();
     let recovered = recover_all(journals, &mut performer, &scope.shielded()).await;
     for (_, failure) in &recovered.failures {
         let _ = tree.warn(
@@ -133,8 +136,8 @@ async fn repaired(
         Err(failure) => {
             return Repair {
                 reports: vec![RepairReport::failed(
-                    JOURNAL_DIR,
-                    error_of(failure, JOURNAL_DIR),
+                    journals.display().to_string(),
+                    error_of(failure, &journals.display().to_string()),
                 )],
                 interrupted: false,
             };
@@ -376,5 +379,141 @@ mod tests {
             std::fs::read_to_string(dir.path().join("one")).unwrap(),
             "expected"
         );
+    }
+
+    fn user_with_git(home: &Path) -> mix_core::identity::InvokingUser {
+        git::testing::user(home, None)
+    }
+
+    async fn with_history(user: &mix_core::identity::InvokingUser) -> std::path::PathBuf {
+        let state_dir = mix_state_dir(&user.home);
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(state_dir.join(mix_core::paths::FLAKE_NIX), "flake-content").unwrap();
+        git::Git::resolve(user)
+            .await
+            .create(user, &state_dir, &mix_exec::Scope::root())
+            .await
+            .unwrap();
+        state_dir
+    }
+
+    async fn intact(user: &mix_core::identity::InvokingUser) -> bool {
+        git::Git::resolve(user)
+            .await
+            .verify(
+                user,
+                &mix_core::paths::repository_dir(&user.home),
+                &mix_exec::Scope::root(),
+            )
+            .await
+            .unwrap()
+    }
+
+    fn repository_target(user: &mix_core::identity::InvokingUser) -> Vec<Target<'static>> {
+        vec![Target::Repository {
+            path: mix_core::paths::repository_dir(&user.home).into(),
+            user: user.clone(),
+        }]
+    }
+
+    fn fixed(reports: &[RepairReport]) -> Vec<&str> {
+        reports
+            .iter()
+            .filter(|report| report.fixed)
+            .map(|report| report.name.as_str())
+            .collect()
+    }
+
+    fn entries(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[tokio::test]
+    async fn a_damaged_repository_is_replaced_by_a_new_history_of_the_current_config() {
+        let home = tempfile::tempdir().unwrap();
+        let user = user_with_git(home.path());
+        let state_dir = with_history(&user).await;
+        let repository = mix_core::paths::repository_dir(&user.home);
+        std::fs::write(repository.join("HEAD"), "garbage\n").unwrap();
+        std::fs::write(state_dir.join(mix_core::paths::HOME_NIX), "home-content").unwrap();
+
+        let (reports, _) = repair_in(repository_target(&user), &mix_exec::Scope::root()).await;
+
+        assert_eq!(fixed(&reports), [repository.to_string_lossy()]);
+        assert!(intact(&user).await);
+        assert_eq!(
+            entries(&state_dir),
+            [".git", ".gitignore", "flake.nix", "home.nix"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_repository_is_created_from_the_current_config() {
+        let home = tempfile::tempdir().unwrap();
+        let user = user_with_git(home.path());
+        let state_dir = mix_state_dir(&user.home);
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(state_dir.join(mix_core::paths::FLAKE_NIX), "flake-content").unwrap();
+
+        let (reports, _) = repair_in(repository_target(&user), &mix_exec::Scope::root()).await;
+
+        assert_eq!(reports.len(), 1);
+        assert!(reports[0].fixed);
+        assert!(intact(&user).await);
+    }
+
+    #[tokio::test]
+    async fn a_stale_index_lock_is_removed_and_the_history_kept() {
+        let home = tempfile::tempdir().unwrap();
+        let user = user_with_git(home.path());
+        with_history(&user).await;
+        let repository = mix_core::paths::repository_dir(&user.home);
+        let head = std::fs::read_to_string(repository.join("HEAD")).unwrap();
+        let before = entries(&repository.join("refs/heads"));
+        std::fs::write(repository.join(mix_core::paths::INDEX_LOCK), "").unwrap();
+
+        let (reports, _) = repair_in(repository_target(&user), &mix_exec::Scope::root()).await;
+
+        assert!(
+            reports.iter().all(|report| report.fixed),
+            "{}",
+            reports.len()
+        );
+        assert!(!repository.join(mix_core::paths::INDEX_LOCK).exists());
+        assert_eq!(
+            std::fs::read_to_string(repository.join("HEAD")).unwrap(),
+            head
+        );
+        assert_eq!(entries(&repository.join("refs/heads")), before);
+        assert!(
+            !entries(&repository)
+                .iter()
+                .any(|name| name.contains("mix-"))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_new_history_that_cannot_be_committed_puts_the_old_repository_back() {
+        let home = tempfile::tempdir().unwrap();
+        let user = user_with_git(home.path());
+        let state_dir = with_history(&user).await;
+        let repository = mix_core::paths::repository_dir(&user.home);
+        std::fs::write(repository.join("HEAD"), "garbage\n").unwrap();
+        std::fs::remove_file(home.path().join(".nix-profile/bin/git")).unwrap();
+        git::testing::user(home.path(), Some("commit"));
+
+        let (reports, _) = repair_in(repository_target(&user), &mix_exec::Scope::root()).await;
+
+        assert!(reports.iter().any(|report| !report.fixed));
+        assert_eq!(
+            std::fs::read_to_string(repository.join("HEAD")).unwrap(),
+            "garbage\n"
+        );
+        assert_eq!(entries(&state_dir), [".git", ".gitignore", "flake.nix"]);
     }
 }

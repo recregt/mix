@@ -52,7 +52,10 @@ impl Machine {
 
     fn real(&mut self, query: &Query) -> Fact {
         self.runtime
-            .block_on(self.performer.observe(std::slice::from_ref(query)))
+            .block_on(
+                self.performer
+                    .observe(std::slice::from_ref(query), &mix_exec::Scope::root()),
+            )
             .unwrap()
             .remove(0)
     }
@@ -347,6 +350,7 @@ fn every_profile_action_and_its_undo_match_the_model() {
             generations: real.generations.clone(),
             active: real.active,
             built: BTreeMap::from([(last, config.clone())]),
+            dangling: Vec::new(),
         },
     );
     let home_nix = state.join(HOME_NIX);

@@ -1,11 +1,13 @@
 use mix_events::Timestamp;
 use mix_events::v1::{
     Began, ContentsFact, FileIdentity, GroupFact, Journaled, Observation, Observed, PathFact,
-    PathKind, ProfileFact, Sequenced, TreeOwnerFact, UnitFact, UserFact, journaled, observation,
+    PathKind, PathsFact, ProfileFact, RepositoryFact, Sequenced, StrangerFact, TreeOwnerFact,
+    UnitFact, UserFact, journaled, observation,
 };
 
 use crate::action::{Action, Fact, FileId, Kind, PathFacts, Query};
 use crate::journal::Record;
+use crate::paths::repository_dir;
 use crate::plan::describe;
 
 pub fn observed(queries: &[Query], facts: &[Fact]) -> Observed {
@@ -71,6 +73,11 @@ fn query_of(query: &Query) -> observation::Query {
         Query::Unit(name) => Wire::Unit(name.clone()),
         Query::Profile(user) => Wire::Profile(user.name.clone()),
         Query::TreeOwner(at) => Wire::TreeOwner(path(at)),
+        Query::Repository(user) => Wire::Repository(path(&repository_dir(&user.home))),
+        Query::Journals(at) => Wire::Journals(path(at)),
+        Query::Leftovers(at) => Wire::Leftovers(path(at)),
+        Query::Strangers { path: at, .. } => Wire::Strangers(path(at)),
+        Query::Clobbered(user) => Wire::Clobbered(user.name.clone()),
     }
 }
 
@@ -144,8 +151,30 @@ fn fact_of(fact: &Fact) -> observation::Fact {
         Fact::Profile(profile) => Wire::ProfileFact(ProfileFact {
             generations: profile.generations.clone(),
             active: profile.active,
+            dangling: profile.dangling.clone(),
         }),
         Fact::TreeOwner(uid) => Wire::TreeOwnerFact(TreeOwnerFact { uid: *uid }),
+        Fact::Repository { intact } => Wire::RepositoryFact(RepositoryFact { intact: *intact }),
+        Fact::Journals(requests) => Wire::JournalsFact(PathsFact {
+            paths: requests.clone(),
+        }),
+        Fact::Leftovers(found) => Wire::LeftoversFact(PathsFact {
+            paths: found
+                .iter()
+                .map(|(at, _)| at.display().to_string())
+                .collect(),
+        }),
+        Fact::Stranger(found) => Wire::StrangerFact(match found {
+            Some((at, (uid, gid))) => StrangerFact {
+                path: Some(at.display().to_string()),
+                uid: *uid,
+                gid: *gid,
+            },
+            None => StrangerFact::default(),
+        }),
+        Fact::Clobbered(found) => Wire::ClobberedFact(PathsFact {
+            paths: found.iter().map(|at| at.display().to_string()).collect(),
+        }),
     }
 }
 

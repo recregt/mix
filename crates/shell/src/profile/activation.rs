@@ -11,7 +11,7 @@ use std::sync::Arc;
 use mix_core::ActivityReporter;
 use mix_core::identity::InvokingUser;
 use mix_core::paths::{
-    DEFAULT_PROFILE_NIX, HOME_MANAGER_PROFILE_NAME, mix_state_dir, nix_profiles_dir,
+    DEFAULT_PROFILE_NIX, GIT_DIR, HOME_MANAGER_PROFILE_NAME, mix_state_dir, nix_profiles_dir,
 };
 use mix_exec::Scope;
 use mix_nixgen::{AttrPath, FlakeRef, Installable};
@@ -110,7 +110,7 @@ pub async fn activate_generation(
 pub async fn record(user: &InvokingUser, scope: &Scope) -> Result<()> {
     let state_dir = mix_state_dir(&user.home);
     let git = git::Git::resolve(user).await;
-    if !fs::exists(state_dir.join(".git")).await {
+    if !fs::exists(state_dir.join(GIT_DIR)).await {
         git.init(user, &state_dir, scope).await?;
     }
     git.sync(user, &state_dir, scope).await.map(|_| ())

@@ -32,6 +32,9 @@ pub trait ActivityReporter: Send + Sync {
     fn build_started(&self, _derivation: &str) {}
 
     fn fetch_started(&self, _path: &str) {}
+
+    /// Called when the process waits for `lock`, which `holder` running `command` holds.
+    fn waiting(&self, _lock: &str, _holder: Option<&str>, _command: Option<&str>) {}
 }
 
 pub struct NoopActivity;

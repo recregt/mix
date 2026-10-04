@@ -1,7 +1,7 @@
 //! Running another program, and following what it writes while it runs.
 //!
 //! Everything `mix` cannot do itself is done by a process: nix, systemd, the user and group
-//! tools, git. A command either answers a question — [`status_as`] — or does work
+//! tools, git. A command either answers a question ([`status`]) or does work
 //! worth watching, and a failure is named by the command line that produced it.
 
 pub mod output;
@@ -35,10 +35,18 @@ pub(crate) fn exec_error(error: mix_exec::Error) -> mix_core::Error {
     }
 }
 
-fn command_as(user: &InvokingUser, program: &str, args: &[&str]) -> Command {
+/// Nix configuration files read besides the system's `nix.conf`: none, so a user's own settings
+/// never change what mix builds.
+const NIX_USER_CONF_FILES: &str = "/dev/null";
+
+/// A process run as `user` in an environment of its own: `HOME`, `USER`, `PATH` and no user
+/// Nix configuration, whatever the process that started mix had set.
+pub(crate) fn command_as(user: &InvokingUser, program: &str, args: &[&str]) -> Command {
     Command::new(program)
         .args(args)
         .as_user(user.uid, user.gid)
+        .env_clear()
+        .env("NIX_USER_CONF_FILES", NIX_USER_CONF_FILES)
         .env("HOME", &user.home)
         .env("USER", &user.name)
         .env("PATH", search_path(user))
@@ -94,19 +102,15 @@ pub async fn run_as_reporting(
     if let Some(activity) = activity {
         command = command.stderr(reported(activity));
     }
+    run(command, scope).await
+}
+
+pub(crate) async fn run(command: Command, scope: &Scope) -> Result<String> {
     Ok(stdout_of(&command.run(scope).await.map_err(exec_error)?))
 }
 
-pub async fn status_as(
-    user: &InvokingUser,
-    program: &str,
-    args: &[&str],
-    scope: &Scope,
-) -> Result<bool> {
-    let output = command_as(user, program, args)
-        .output(scope)
-        .await
-        .map_err(exec_error)?;
+pub(crate) async fn status(command: Command, scope: &Scope) -> Result<bool> {
+    let output = command.output(scope).await.map_err(exec_error)?;
     Ok(output.status.success())
 }
 
@@ -325,6 +329,29 @@ mod tests {
 
         assert_eq!(bytes, b"error: attribute 'nope' missing\n");
         assert_eq!(recorder.lines(), ["error: attribute 'nope' missing"]);
+    }
+
+    #[tokio::test]
+    async fn a_command_run_as_a_user_sees_only_the_environment_mix_gives_it() {
+        let home = tempfile::tempdir().unwrap();
+        let user = InvokingUser {
+            uid: nix::unistd::Uid::current().as_raw(),
+            gid: nix::unistd::Gid::current().as_raw(),
+            name: "mix-user".to_string(),
+            home: home.path().to_path_buf(),
+        };
+
+        let output = run_as(&user, "/usr/bin/env", &[], &mix_exec::Scope::root())
+            .await
+            .unwrap();
+
+        let mut names: Vec<&str> = output
+            .lines()
+            .filter_map(|line| line.split_once('=').map(|(name, _)| name))
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, ["HOME", "NIX_USER_CONF_FILES", "PATH", "USER"]);
+        assert!(output.contains("NIX_USER_CONF_FILES=/dev/null"));
     }
 
     #[tokio::test]

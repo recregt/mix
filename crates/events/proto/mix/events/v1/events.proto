@@ -171,6 +171,7 @@ enum Operation {
   OPERATION_CREATE_DIRS = 34;
   OPERATION_COLLECT_GARBAGE = 35;
   OPERATION_DRAIN_SERVICE = 36;
+  OPERATION_CREATE_REPOSITORY = 37;
 }
 
 message Action {
@@ -197,6 +198,7 @@ message NodeProgress {
     Observed observed = 10;
     Journaled journaled = 11;
     SubstitutionStarted substitution = 12;
+    LockWait waiting = 13;
   }
 }
 
@@ -219,6 +221,11 @@ message Observation {
     string unit = 5;
     string profile = 6;
     string tree_owner = 7;
+    string repository = 8;
+    string journals = 22;
+    string leftovers = 23;
+    string strangers = 24;
+    string clobbered = 25;
   }
   oneof fact {
     PathFact path_fact = 10;
@@ -228,6 +235,11 @@ message Observation {
     UnitFact unit_fact = 14;
     ProfileFact profile_fact = 15;
     TreeOwnerFact tree_owner_fact = 16;
+    RepositoryFact repository_fact = 17;
+    PathsFact journals_fact = 18;
+    PathsFact leftovers_fact = 19;
+    StrangerFact stranger_fact = 20;
+    PathsFact clobbered_fact = 21;
   }
 }
 
@@ -289,10 +301,25 @@ message UnitFact {
 message ProfileFact {
   repeated uint64 generations = 1;
   optional uint64 active = 2;
+  repeated uint64 dangling = 3;
 }
 
 message TreeOwnerFact {
   optional uint32 uid = 1;
+}
+
+message RepositoryFact {
+  bool intact = 1;
+}
+
+message PathsFact {
+  repeated string paths = 1;
+}
+
+message StrangerFact {
+  optional string path = 1;
+  uint32 uid = 2;
+  uint32 gid = 3;
 }
 
 message Journaled {
@@ -486,7 +513,21 @@ message Finding {
     google.protobuf.Empty unit_drift = 14;
     google.protobuf.Empty unit_inactive = 15;
     google.protobuf.Empty runtime_missing = 16;
+    google.protobuf.Empty repository_broken = 17;
+    google.protobuf.Empty repository_locked = 18;
+    Paths interrupted = 19;
+    Paths leftovers = 20;
+    Generation generation_dangling = 21;
+    Paths in_the_way = 22;
   }
+}
+
+message Paths {
+  repeated string paths = 1;
+}
+
+message Generation {
+  uint64 generation = 1;
 }
 
 message Unreadable {
@@ -587,6 +628,8 @@ enum Unfixable {
   UNFIXABLE_NOT_A_DIRECTORY = 1;
   UNFIXABLE_MISSING_USER = 2;
   UNFIXABLE_MISSING_RUNTIME = 3;
+  UNFIXABLE_UNRECOVERED = 4;
+  UNFIXABLE_IN_THE_WAY = 5;
 }
 
 message Diagnostic {

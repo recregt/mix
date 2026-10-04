@@ -2,6 +2,7 @@ pub const IMPERATIVES: &[&str] = &[
     "check",
     "install",
     "make",
+    "move",
     "pass",
     "press",
     "recreate",

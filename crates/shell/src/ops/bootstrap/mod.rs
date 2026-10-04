@@ -20,7 +20,7 @@ use crate::Context;
 use crate::drive::{Performer, drive};
 use crate::effect::files::Files;
 use crate::effect::generations::ProfileContext;
-use crate::effect::journal::{FileJournal, JOURNAL_DIR, recover_all, unfinished};
+use crate::effect::journal::{FileJournal, recover_all, unfinished};
 use crate::effect::mirror::{filter_mirror, mirror_url};
 use crate::request::{Concluded, Root};
 
@@ -145,7 +145,7 @@ pub(crate) async fn bootstrap(
     };
     let scope = &ctx.scope;
     let tree = &mut root.tree;
-    let journals = Path::new(JOURNAL_DIR);
+    let journals = ctx.journals.as_path();
     if !unfinished(journals).is_empty() {
         let node = tree
             .start(

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::action::{Action, Expect, Fact, Failure, Kind, Owner, PathFacts, Query, UserSpec};
 use crate::bootstrap::stale_restart;
 use crate::identity;
-use crate::paths::{NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT};
+use crate::paths::{INDEX_LOCK, NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT};
 use crate::plan::{StepSpec, Title};
 use crate::targets::{Target, UnitSource};
 use mix_events::v1::Verb;
@@ -47,13 +47,21 @@ pub enum Unfixable {
     /// Part of the Nix runtime itself, which repair does not install.
     #[error("missing, and `mix repair` can't restore it")]
     MissingRuntime,
+
+    /// An interrupted request whose recovery keeps failing.
+    #[error("an interrupted request couldn't be put back")]
+    Unrecovered,
+
+    /// A user's file where a file mix manages belongs, which repair will not delete.
+    #[error("in the way of a file `mix` manages")]
+    InTheWay,
 }
 
 /// What an inspection measured about an artifact that is not as it should be.
 ///
 /// Every variant is a fact and nothing else: no advice, no sentence, no name. The artifact is
 /// named by the report that carries the finding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Finding {
     /// Nothing is at the path.
     Missing,
@@ -108,6 +116,24 @@ pub enum Finding {
 
     /// Part of the Nix runtime itself is not there.
     RuntimeMissing,
+
+    /// The repository's `HEAD` does not resolve to a commit, or `git fsck` fails.
+    RepositoryBroken,
+
+    /// The repository's index lock is there while no mix command holds the repository.
+    RepositoryLocked,
+
+    /// Journals of requests that were interrupted and that no running request holds.
+    Interrupted { requests: Vec<String> },
+
+    /// Siblings an interrupted write left beside the files it was replacing.
+    Leftovers { paths: Vec<String> },
+
+    /// A generation of the user's profile whose link no longer resolves.
+    GenerationDangling { generation: u64 },
+
+    /// Files in the user's home where the active generation links a managed file.
+    InTheWay { paths: Vec<String> },
 }
 
 impl Finding {
@@ -116,11 +142,13 @@ impl Finding {
     /// Repair's reach is a fact about repair, not a choice of words, so it is bound to the
     /// finding here. The daemon sends the answer with every report, so the client never decides
     /// for itself what the reader can be promised.
-    pub fn unfixable(self) -> Option<Unfixable> {
+    pub fn unfixable(&self) -> Option<Unfixable> {
         match self {
             Finding::NotADirectory => Some(Unfixable::NotADirectory),
             Finding::NoSuchUser => Some(Unfixable::MissingUser),
             Finding::RuntimeMissing => Some(Unfixable::MissingRuntime),
+            Finding::Interrupted { .. } => Some(Unfixable::Unrecovered),
+            Finding::InTheWay { .. } => Some(Unfixable::InTheWay),
             _ => None,
         }
     }
@@ -172,6 +200,29 @@ pub fn queries(target: &Target<'_>) -> Vec<Query> {
             queries
         }
         Target::PathExists { path, .. } => vec![Query::Path((*path).into())],
+        Target::Repository { path, user } => vec![
+            Query::Path(path.join(INDEX_LOCK)),
+            Query::Path(path.to_path_buf()),
+            Query::Repository(user.clone()),
+            Query::Strangers {
+                path: path.to_path_buf(),
+                owner: (user.uid, user.gid),
+            },
+            Query::TreeOwner(path.to_path_buf()),
+        ],
+        Target::Program { path, source, .. } => vec![
+            Query::Path((*path).into()),
+            Query::Contents((*path).into()),
+            Query::Contents((*source).into()),
+        ],
+        Target::Journals { path } => vec![Query::Journals((*path).into())],
+        Target::Leftovers { dirs, journals } => {
+            let mut queries = vec![Query::Journals((*journals).into())];
+            queries.extend(dirs.iter().map(|dir| Query::Leftovers(dir.clone())));
+            queries
+        }
+        Target::Generations { user, .. } => vec![Query::Profile(user.clone())],
+        Target::HomeFiles { user, .. } => vec![Query::Clobbered(user.clone())],
     }
 }
 
@@ -293,7 +344,13 @@ pub fn drift(target: &Target<'_>, facts: &[Fact]) -> Option<Drift> {
         | Target::Group { .. }
         | Target::GroupMember { .. }
         | Target::User { .. }
-        | Target::PathExists { .. } => None,
+        | Target::PathExists { .. }
+        | Target::Repository { .. }
+        | Target::Program { .. }
+        | Target::Journals { .. }
+        | Target::Leftovers { .. }
+        | Target::Generations { .. }
+        | Target::HomeFiles { .. } => None,
     }
 }
 
@@ -398,7 +455,82 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
         Target::PathExists { .. } => {
             (path_facts(facts, 0).kind == Kind::Missing).then_some(Finding::RuntimeMissing)
         }
+        Target::Repository { user, .. } => {
+            let repository = path_facts(facts, 1);
+            if let Some(finding) = absent(repository.kind) {
+                return Some(finding);
+            }
+            if repository.kind != Kind::Directory {
+                return Some(Finding::RepositoryBroken);
+            }
+            if let Fact::Stranger(Some((_, actual))) = &facts[3] {
+                return Some(Finding::Owner {
+                    actual: *actual,
+                    expected: (user.uid, user.gid),
+                });
+            }
+            if !matches!(facts[2], Fact::Repository { intact: true }) {
+                return Some(Finding::RepositoryBroken);
+            }
+            (path_facts(facts, 0).kind != Kind::Missing).then_some(Finding::RepositoryLocked)
+        }
+        Target::Program { mode, .. } => {
+            let found = path_facts(facts, 0);
+            if let Some(finding) = absent(found.kind) {
+                return Some(finding);
+            }
+            if let Some(running) = contents(facts, 2)
+                && contents(facts, 1) != Some(running)
+            {
+                return Some(Finding::ContentDrift);
+            }
+            if found.mode != *mode {
+                return Some(Finding::Mode {
+                    actual: found.mode,
+                    expected: *mode,
+                });
+            }
+            owner_drift(found.owner, Some((0, 0)))
+        }
+        Target::Journals { .. } => match &facts[0] {
+            Fact::Journals(requests) if !requests.is_empty() => Some(Finding::Interrupted {
+                requests: requests.clone(),
+            }),
+            _ => None,
+        },
+        Target::Leftovers { .. } => {
+            let paths: Vec<String> = leftovers(facts)
+                .map(|(path, _)| path.display().to_string())
+                .collect();
+            (!paths.is_empty()).then_some(Finding::Leftovers { paths })
+        }
+        Target::Generations { .. } => {
+            let Fact::Profile(profile) = &facts[0] else {
+                return None;
+            };
+            let generation = profile
+                .active
+                .filter(|active| profile.dangling.contains(active))
+                .or_else(|| profile.dangling.first().copied())?;
+            Some(Finding::GenerationDangling { generation })
+        }
+        Target::HomeFiles { .. } => match &facts[0] {
+            Fact::Clobbered(paths) if !paths.is_empty() => Some(Finding::InTheWay {
+                paths: paths
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect(),
+            }),
+            _ => None,
+        },
     }
+}
+
+fn leftovers(facts: &[Fact]) -> impl Iterator<Item = &(std::path::PathBuf, crate::action::FileId)> {
+    facts[1..].iter().flat_map(|fact| match fact {
+        Fact::Leftovers(found) => found.as_slice(),
+        _ => &[],
+    })
 }
 
 fn tree_owner(facts: &[Fact], index: usize) -> Option<u32> {
@@ -570,6 +702,93 @@ pub fn fix(
             actions
         }
         Target::PathExists { .. } => return Err(Unfixable::MissingRuntime),
+        Target::Repository { path, user } => {
+            let aside =
+                |path, found: &PathFacts| found.id.map(|expect| Action::SetAside { path, expect });
+            if let Finding::Owner { expected, .. } = finding {
+                let found = path_facts(facts, 1);
+                return Ok(found
+                    .id
+                    .map(|expect| Action::ReclaimTree {
+                        path: path.to_path_buf(),
+                        expect,
+                        owner: expected,
+                        mode: found.mode,
+                    })
+                    .into_iter()
+                    .collect());
+            }
+            if finding == Finding::RepositoryLocked {
+                return Ok(aside(path.join(INDEX_LOCK), path_facts(facts, 0))
+                    .into_iter()
+                    .collect());
+            }
+            let mut actions: Vec<Action> = aside(path.to_path_buf(), path_facts(facts, 1))
+                .into_iter()
+                .collect();
+            actions.push(Action::CreateRepository { user: user.clone() });
+            actions
+        }
+        Target::Program { path, mode, .. } => {
+            let found = path_facts(facts, 0);
+            match finding {
+                Finding::Mode { actual, .. } => vec![Action::SetMode {
+                    path: (*path).into(),
+                    mode: *mode,
+                    expect: actual,
+                }],
+                Finding::Owner { actual, expected } => vec![Action::SetOwner {
+                    path: (*path).into(),
+                    owner: expected,
+                    expect: actual,
+                }],
+                _ => vec![Action::PutFile {
+                    path: (*path).into(),
+                    contents: Arc::from(contents(facts, 2).ok_or(Unfixable::MissingRuntime)?),
+                    mode: *mode,
+                    owner: None,
+                    expect: found.id.map_or(Expect::Absent, Expect::Present),
+                }],
+            }
+        }
+        Target::Journals { .. } => return Err(Unfixable::Unrecovered),
+        Target::HomeFiles { .. } => return Err(Unfixable::InTheWay),
+        Target::Leftovers { .. } => {
+            if matches!(&facts[0], Fact::Journals(requests) if !requests.is_empty()) {
+                return Err(Unfixable::Unrecovered);
+            }
+            leftovers(facts)
+                .map(|(path, expect)| Action::RemoveCreatedTree {
+                    path: path.clone(),
+                    expect: *expect,
+                })
+                .collect()
+        }
+        Target::Generations { user, .. } => {
+            let Fact::Profile(profile) = &facts[0] else {
+                return Ok(Vec::new());
+            };
+            let mut actions = Vec::new();
+            if profile
+                .active
+                .is_some_and(|active| profile.dangling.contains(&active))
+            {
+                actions.push(Action::ActivateProfile {
+                    user: user.clone(),
+                    source: crate::action::FlakeSource::Git,
+                });
+            }
+            actions.extend(
+                profile
+                    .dangling
+                    .iter()
+                    .map(|generation| Action::DeleteGeneration {
+                        user: user.clone(),
+                        generation: *generation,
+                    }),
+            );
+            actions
+        }
     })
 }
 
@@ -656,8 +875,8 @@ pub fn target_steps(targets: Vec<Target<'_>>, request: &str) -> Vec<Box<dyn Step
 pub mod wire {
     use mix_events::v1::finding::Kind;
     use mix_events::v1::{
-        Category as WireCategory, Finding as WireFinding, Gid, Ids, InspectionReport, Mode,
-        NotAMember, Unfixable as WireUnfixable, Unreadable,
+        Category as WireCategory, Finding as WireFinding, Generation, Gid, Ids, InspectionReport,
+        Mode, NotAMember, Paths, Unfixable as WireUnfixable, Unreadable,
     };
 
     use super::{Drift, Finding, HealthReport, Unfixable};
@@ -667,10 +886,11 @@ pub mod wire {
         InspectionReport {
             target: report.name.clone(),
             category: category(report.category) as i32,
-            finding: report.finding.map(finding),
+            finding: report.finding.clone().map(finding),
             drift: report.drift.as_ref().map(drift),
             unfixable: report
                 .finding
+                .as_ref()
                 .and_then(Finding::unfixable)
                 .map_or(WireUnfixable::Unspecified, unfixable) as i32,
         }
@@ -681,6 +901,8 @@ pub mod wire {
             Unfixable::NotADirectory => WireUnfixable::NotADirectory,
             Unfixable::MissingUser => WireUnfixable::MissingUser,
             Unfixable::MissingRuntime => WireUnfixable::MissingRuntime,
+            Unfixable::Unrecovered => WireUnfixable::Unrecovered,
+            Unfixable::InTheWay => WireUnfixable::InTheWay,
         }
     }
 
@@ -739,6 +961,14 @@ pub mod wire {
             Finding::UnitDrift => Kind::UnitDrift(Default::default()),
             Finding::UnitInactive => Kind::UnitInactive(Default::default()),
             Finding::RuntimeMissing => Kind::RuntimeMissing(Default::default()),
+            Finding::RepositoryBroken => Kind::RepositoryBroken(Default::default()),
+            Finding::RepositoryLocked => Kind::RepositoryLocked(Default::default()),
+            Finding::Interrupted { requests } => Kind::Interrupted(Paths { paths: requests }),
+            Finding::Leftovers { paths } => Kind::Leftovers(Paths { paths }),
+            Finding::GenerationDangling { generation } => {
+                Kind::GenerationDangling(Generation { generation })
+            }
+            Finding::InTheWay { paths } => Kind::InTheWay(Paths { paths }),
         };
         WireFinding { kind: Some(kind) }
     }

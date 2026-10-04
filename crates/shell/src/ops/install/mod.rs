@@ -16,15 +16,7 @@ pub(crate) async fn install(ctx: &Context, root: &mut Root, request: &InstallReq
             Ok(decided) => decided,
             Err(refused) => return root.refuse(change::Error::from(refused)),
         };
-    change::run(
-        ctx,
-        root,
-        cfg,
-        change::Verb::Install,
-        &decided,
-        &mut Vec::new(),
-    )
-    .await
+    change::run(ctx, root, cfg, change::Verb::Install, &decided).await
 }
 
 #[cfg(test)]
@@ -51,7 +43,9 @@ mod tests {
     }
 
     fn context(home: &std::path::Path) -> crate::Session {
-        crate::Session::new(mix_exec::Scope::root()).with_user(Some(user_config(home)))
+        crate::Session::new(mix_exec::Scope::root())
+            .with_user(Some(user_config(home)))
+            .with_journals(home.join("journal"))
     }
 
     fn user_config(home: &std::path::Path) -> mix_core::targets::UserConfig {

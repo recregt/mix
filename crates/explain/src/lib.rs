@@ -144,6 +144,7 @@ pub fn evidence(fault: &mix_events::Fault) -> Vec<String> {
             Some(mix_events::v1::diagnostic::Detail::Command(command)) => {
                 command.output_tail.trim()
             }
+            Some(mix_events::v1::diagnostic::Detail::Io(_)) => diagnostic.message.trim(),
             _ if cause || unworded(diagnostic.code()) => diagnostic.message.trim(),
             _ => "",
         };

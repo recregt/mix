@@ -110,7 +110,10 @@ fn inspect_the_declared_targets(bencher: divan::Bencher, n: usize) {
         rt.block_on(async {
             let mut drifted = 0usize;
             for item in divan::black_box(&targets) {
-                let facts = performer.observe(&health::queries(item)).await.unwrap();
+                let facts = performer
+                    .observe(&health::queries(item), &mix_exec::Scope::root())
+                    .await
+                    .unwrap();
                 drifted += usize::from(health::classify(item, &facts).is_some());
             }
             drifted

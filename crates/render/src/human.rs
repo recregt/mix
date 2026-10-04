@@ -291,6 +291,18 @@ impl Human {
         use node_progress::Progress;
 
         match progress {
+            Progress::Waiting(wait) => {
+                let subject = match (&wait.holder, &wait.command) {
+                    (Some(holder), Some(command)) => {
+                        format!(
+                            "waiting for {holder}'s `{command}` to release {}",
+                            wait.lock
+                        )
+                    }
+                    _ => format!("waiting for another program to release {}", wait.lock),
+                };
+                self.status(Detail::Step, Status::Blocking, &subject);
+            }
             Progress::Stopping(_) => {
                 if self.shows(Detail::Step)
                     && let Some(note) = self.request.as_ref().and_then(crate::words::stopping)

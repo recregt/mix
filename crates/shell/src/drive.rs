@@ -9,20 +9,21 @@ use mix_core::action::{Action, Fact, Failure, Kind, Outcome, PathFacts, Performe
 use mix_core::identity::InvokingUser;
 use mix_core::journal::Record;
 use mix_core::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
-use mix_core::paths::mix_state_dir;
+use mix_core::paths::{RUNNING_PROGRAM, mix_state_dir, repository_dir};
 use mix_core::plan::{Input, Next, Report, Runner, make_guard};
 use mix_core::{ActivityReporter, BuildProgress, DownloadProgress};
 use mix_events::v1::node_progress::Progress;
 use mix_events::v1::{
     BuildStarted, Builds, Bytes, Cancellation, Code, CommandFinished, CommandStarted, Diagnostic,
-    FetchStarted, Stream, SubstitutionStarted,
+    FetchStarted, LockWait, Stream, SubstitutionStarted,
 };
 use mix_events::{NodeId, ROOT, Stopped, Tree, output};
 use mix_exec::Scope;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::effect::files::{Files, Prepared};
-use crate::effect::generations::{self, ProfileContext};
+use crate::effect::generations::{self, ProfileContext, core_failure};
+use crate::effect::git::Git;
 use crate::effect::home::{self, Agent};
 use crate::effect::identity;
 use crate::effect::runtime;
@@ -135,6 +136,14 @@ impl ActivityReporter for Activity {
         self.send(Progress::Substitution(SubstitutionStarted {
             path: path.to_string(),
             name: mix_core::nix_log::package_name(path).to_string(),
+        }));
+    }
+
+    fn waiting(&self, lock: &str, holder: Option<&str>, command: Option<&str>) {
+        self.send(Progress::Waiting(LockWait {
+            lock: lock.to_string(),
+            holder: holder.map(str::to_string),
+            command: command.map(str::to_string),
         }));
     }
 }
@@ -254,9 +263,11 @@ impl Performer {
             _ => None,
         };
         let running = nix::unistd::geteuid().as_raw();
+        let tree_removal = matches!(action, Action::RemoveCreatedTree { .. });
         match removed
             .or_else(|| self.files.tree_owner(path))
             .filter(|uid| *uid != running)
+            .filter(|uid| !(tree_removal && self.files.holds_other_than(path, *uid)))
         {
             Some(uid) => {
                 let agent = self.agent(uid, path, scope)?;
@@ -305,6 +316,53 @@ impl Performer {
         Ok(Performed { undo: Vec::new() })
     }
 
+    /// Sets `path` aside where a rename cannot, as for a directory in a lower overlayfs layer: the
+    /// tree is copied aside, the original removed, and the copy removed when the request commits.
+    async fn set_aside_by_copy(
+        &mut self,
+        path: &Path,
+        expect: mix_core::action::FileId,
+        scope: &Scope,
+        prepared: &mut Prepared<'_>,
+    ) -> Outcome {
+        let Some(Fact::Path(found)) = self.files.observe(&Query::Path(path.to_path_buf())) else {
+            return Err(Failure::Conflict {
+                subject: path.display().to_string(),
+                expected: format!("{expect:?}"),
+                found: "nothing".to_string(),
+            });
+        };
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let aside = path.with_file_name(format!(".{name}.mix-aside-{}", self.files.request()));
+        let copy = Action::CopyTree {
+            from: path.to_path_buf(),
+            to: aside.clone(),
+            owner: found.owner,
+            mode: found.mode,
+        };
+        self.perform_file(&copy, &aside, scope, prepared).await?;
+        let restore = Action::Restore {
+            path: path.to_path_buf(),
+            from: aside.clone(),
+            expect: mix_core::action::Expect::Absent,
+        };
+        prepared(std::slice::from_ref(&restore))?;
+        let mut announced = |_: &[Action]| Ok(());
+        let removal = Action::RemoveCreatedTree {
+            path: path.to_path_buf(),
+            expect,
+        };
+        self.perform_file(&removal, path, scope, &mut announced)
+            .await?;
+        Box::pin(self.adopt(vec![aside], scope)).await?;
+        Ok(Performed {
+            undo: vec![restore],
+        })
+    }
+
     async fn commit(&mut self, prepared: &mut Prepared<'_>) -> Outcome {
         let mut first = None;
         for agent in self.agents.values_mut() {
@@ -334,7 +392,7 @@ impl Performer {
         report: &mut (dyn FnMut(Signal) + Send),
         scope: &Scope,
     ) -> Outcome {
-        let git = mix_state_dir(&user.home).join(".git");
+        let git = repository_dir(&user.home);
         let existed = !matches!(
             self.files.observe(&Query::Path(git.clone())),
             Some(Fact::Path(PathFacts {
@@ -369,11 +427,70 @@ impl Performer {
         Ok(self.units.as_ref().expect("connected above"))
     }
 
-    pub async fn observe(&mut self, queries: &[Query]) -> Result<Vec<Fact>, Failure> {
+    async fn create_repository(
+        &mut self,
+        user: &InvokingUser,
+        prepared: &mut Prepared<'_>,
+        scope: &Scope,
+    ) -> Outcome {
+        let repository = repository_dir(&user.home);
+        let found = self.files.observe(&Query::Path(repository.clone()));
+        if !matches!(
+            found,
+            Some(Fact::Path(PathFacts {
+                kind: Kind::Missing,
+                ..
+            }))
+        ) {
+            return Err(Failure::Conflict {
+                subject: repository.display().to_string(),
+                expected: "nothing".to_string(),
+                found: "something already there".to_string(),
+            });
+        }
+        prepared(&[])?;
+        let created = Git::resolve(user)
+            .await
+            .create(user, &mix_state_dir(&user.home), scope)
+            .await;
+        let undo = match self.files.observe(&Query::Path(repository.clone())) {
+            Some(Fact::Path(PathFacts { id: Some(id), .. })) => vec![Action::RemoveCreatedTree {
+                path: repository.clone(),
+                expect: id,
+            }],
+            _ => Vec::new(),
+        };
+        if let Err(error) = created {
+            let mut announced = |_: &[Action]| Ok(());
+            for removal in &undo {
+                self.perform_file(removal, &repository, &scope.shielded(), &mut announced)
+                    .await?;
+            }
+            return Err(core_failure(error));
+        }
+        Ok(Performed { undo })
+    }
+
+    pub async fn observe(
+        &mut self,
+        queries: &[Query],
+        scope: &Scope,
+    ) -> Result<Vec<Fact>, Failure> {
         let mut facts = Vec::with_capacity(queries.len());
         for query in queries {
             let fact = match query {
                 Query::Unit(unit) => Fact::Unit(self.units().await?.observe(unit).await?),
+                Query::Journals(dir) => Fact::Journals(crate::effect::journal::abandoned(dir)),
+                Query::Contents(path) if path.as_os_str() == RUNNING_PROGRAM => {
+                    Fact::Contents(std::fs::read(RUNNING_PROGRAM).ok().map(Into::into))
+                }
+                Query::Repository(user) => Fact::Repository {
+                    intact: Git::resolve(user)
+                        .await
+                        .verify(user, &repository_dir(&user.home), scope)
+                        .await
+                        .map_err(core_failure)?,
+                },
                 query => self
                     .files
                     .observe(query)
@@ -437,6 +554,9 @@ impl Performer {
                 performed.undo.push(Action::DaemonReload);
                 return Ok(performed);
             }
+            Action::CreateRepository { user } => {
+                return Box::pin(self.create_repository(user, prepared, scope)).await;
+            }
             Action::Commit => return Box::pin(self.commit(prepared)).await,
             _ => {}
         }
@@ -458,6 +578,13 @@ impl Performer {
                     Box::pin(self.reclaim_by_copy(path, *expect, *owner, *mode, scope, prepared))
                         .await
                 }
+                (
+                    Action::SetAside { path, expect },
+                    Err(Failure::Io {
+                        kind: std::io::ErrorKind::CrossesDevices,
+                        ..
+                    }),
+                ) => Box::pin(self.set_aside_by_copy(path, *expect, scope, prepared)).await,
                 (Action::ReclaimTree { .. }, Ok(performed)) => {
                     let asides = performed
                         .undo
@@ -512,7 +639,9 @@ impl Performer {
                 .owner_of(&path)
                 .or(home::owner(&self.files, &path))
             {
-                Some(uid) if uid != running => theirs.entry(uid).or_default().push(path),
+                Some(uid) if uid != running && !self.files.holds_other_than(&path, uid) => {
+                    theirs.entry(uid).or_default().push(path);
+                }
                 _ => ours.push(path),
             }
         }
@@ -611,7 +740,7 @@ pub async fn drive<'r>(
         let next = runner.step(tree, input.take());
         match next {
             Next::Observe(queries) => {
-                let facts = performer.observe(&queries).await;
+                let facts = performer.observe(&queries, scope).await;
                 if traced && let Ok(found) = &facts {
                     let _ = tree.progress(
                         runner.current_node().unwrap_or(ROOT),
@@ -1077,5 +1206,46 @@ mod tests {
                 }))
             ]
         );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn a_change_git_cannot_record_still_takes_effect_and_says_so() {
+        let home = tempfile::tempdir().unwrap();
+        let user = crate::effect::git::testing::user(home.path(), Some("commit"));
+        let state_dir = mix_state_dir(&user.home);
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(state_dir.join(mix_core::paths::FLAKE_NIX), "flake-content").unwrap();
+        let mut performer = Performer::new(Files::open(Path::new("/"), "r1").unwrap());
+        let mut signals = Vec::new();
+
+        let outcome = performer
+            .perform(
+                &Action::RecordState { user: user.clone() },
+                &Scope::root(),
+                &mut |signal| signals.push(signal),
+                &mut |_: &[Action]| Ok(()),
+            )
+            .await;
+
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(matches!(
+            signals.as_slice(),
+            [Signal::Warning(warning)] if warning.code() == Code::GitRecordFailed
+        ));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn the_running_program_is_read_through_its_proc_link() {
+        let mut performer = Performer::new(Files::open(Path::new("/"), "r1").unwrap());
+
+        let facts = performer
+            .observe(&[Query::Contents(RUNNING_PROGRAM.into())], &Scope::root())
+            .await
+            .unwrap();
+
+        let running = std::fs::read(std::env::current_exe().unwrap()).unwrap();
+        assert_eq!(facts, [Fact::Contents(Some(running.into()))]);
     }
 }

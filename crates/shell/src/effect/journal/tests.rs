@@ -204,3 +204,48 @@ async fn a_crash_while_committing_is_finished_by_the_next_process() {
         "trusted-users = root\n"
     );
 }
+
+#[tokio::test]
+async fn only_a_journal_no_running_request_holds_is_an_interrupted_request() {
+    let root = machine();
+    let journals = tempfile::tempdir().unwrap();
+    let running = FileJournal::create(journals.path(), "r1").unwrap();
+    drop(FileJournal::create(journals.path(), "r2").unwrap());
+
+    assert_eq!(abandoned(journals.path()), ["r2"]);
+
+    let mut next = Performer::new(Files::open(root.path(), "r3").unwrap());
+    let recovered = recover_all(journals.path(), &mut next, &Scope::root()).await;
+
+    assert_eq!(recovered.requests, 1);
+    assert_eq!(
+        unfinished(journals.path()),
+        [journals.path().join("r1.ndjson")]
+    );
+    drop(running);
+}
+
+#[tokio::test]
+async fn a_journal_recovery_could_not_put_back_is_kept_for_the_next_try() {
+    let root = machine();
+    let journals = tempfile::tempdir().unwrap();
+    let mut journal = FileJournal::create(journals.path(), "r1").unwrap();
+    journal
+        .append(&Record::Prepared {
+            seq: 0,
+            undo: vec![Action::Restore {
+                path: "/etc/nix.conf".into(),
+                from: "/etc/.nix.conf.mix-backup-r1-1".into(),
+                expect: Expect::Absent,
+            }],
+        })
+        .unwrap();
+    journal.append(&Record::Done { seq: 0 }).unwrap();
+    drop(journal);
+
+    let mut next = Performer::new(Files::open(root.path(), "r2").unwrap());
+    let recovered = recover_all(journals.path(), &mut next, &Scope::root()).await;
+
+    assert_eq!(recovered.failures.len(), 1, "{:?}", recovered.failures);
+    assert_eq!(abandoned(journals.path()), ["r1"]);
+}

@@ -200,6 +200,9 @@ pub enum Action {
     CollectGarbage {
         user: InvokingUser,
     },
+    CreateRepository {
+        user: InvokingUser,
+    },
     Commit,
 }
 
@@ -313,12 +316,18 @@ pub enum Query {
     Unit(String),
     Profile(InvokingUser),
     TreeOwner(PathBuf),
+    Repository(InvokingUser),
+    Journals(PathBuf),
+    Leftovers(PathBuf),
+    Strangers { path: PathBuf, owner: Owner },
+    Clobbered(InvokingUser),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProfileFacts {
     pub generations: Vec<u64>,
     pub active: Option<u64>,
+    pub dangling: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -380,6 +389,11 @@ pub enum Fact {
     Unit(UnitFacts),
     Profile(ProfileFacts),
     TreeOwner(Option<u32>),
+    Repository { intact: bool },
+    Journals(Vec<String>),
+    Leftovers(Vec<(PathBuf, FileId)>),
+    Stranger(Option<(PathBuf, Owner)>),
+    Clobbered(Vec<PathBuf>),
 }
 
 pub fn rollback_order(journal: &[Vec<Action>]) -> Vec<Action> {

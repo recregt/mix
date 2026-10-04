@@ -41,6 +41,10 @@ pub const PROFILE_SNIPPET_DEST: &str = "/etc/profile.d/mix-nix.sh";
 pub const POLICY_FILE: &str = "/etc/mix/policy.json";
 
 pub const LOCK_FILE: &str = "/var/lib/mix/lock";
+pub const JOURNAL_DIR: &str = "/var/lib/mix/journal";
+pub const RUNNING_PROGRAM: &str = "/proc/self/exe";
+pub const USER_PROFILE_NAME: &str = "profile";
+pub const PROFILE_LOCK_SUFFIX: &str = ".lock";
 pub const MIX_VAR_DIR: &str = "/var/lib/mix";
 pub const MIX_BIN_DIR: &str = "/var/lib/mix/bin";
 pub const MIX_DAEMON_BIN: &str = "/var/lib/mix/bin/mix-daemon";
@@ -56,6 +60,8 @@ pub const FLAKE_NIX: &str = "flake.nix";
 pub const HOME_NIX: &str = "home.nix";
 pub const FLAKE_LOCK: &str = "flake.lock";
 pub const STATE_FILE: &str = "state";
+pub const GIT_DIR: &str = ".git";
+pub const INDEX_LOCK: &str = "index.lock";
 
 pub const GENERATION_STATE_FILE: &str = "mix-state";
 
@@ -70,8 +76,30 @@ pub const NIX_PROFILES_DIR: &str = ".local/state/nix/profiles";
 pub const NIX_PROFILES_DIR_MODE: u32 = 0o755;
 pub const HOME_MANAGER_PROFILE_NAME: &str = "home-manager";
 
+/// What a write mix was interrupted in names the siblings it leaves: `.<name>.mix-<purpose>-...`.
+pub const LEFTOVER_PURPOSES: [&str; 5] = ["backup", "aside", "new", "remove", "reclaim"];
+
+/// Whether `name` is a sibling an interrupted write of mix's left behind.
+pub fn is_leftover(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix('.') else {
+        return false;
+    };
+    rest.match_indices(".mix-").any(|(at, marker)| {
+        at > 0
+            && LEFTOVER_PURPOSES.iter().any(|purpose| {
+                rest[at + marker.len()..]
+                    .strip_prefix(purpose)
+                    .is_some_and(|tail| tail.starts_with('-') && tail.len() > 1)
+            })
+    })
+}
+
 pub fn mix_state_dir(home: &std::path::Path) -> std::path::PathBuf {
     home.join(MIX_STATE_DIR)
+}
+
+pub fn repository_dir(home: &std::path::Path) -> std::path::PathBuf {
+    mix_state_dir(home).join(GIT_DIR)
 }
 
 pub fn nix_profiles_dir(home: &std::path::Path) -> std::path::PathBuf {

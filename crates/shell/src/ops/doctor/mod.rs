@@ -33,7 +33,10 @@ pub(crate) async fn audit(ctx: &Context, root: &mut Root, _request: &DoctorReque
     let mut reports = Vec::with_capacity(items.len());
     for target in &items {
         let (finding, drift) = match &mut performer {
-            Ok(performer) => match performer.observe(&health::queries(target)).await {
+            Ok(performer) => match performer
+                .observe(&health::queries(target), &ctx.scope)
+                .await
+            {
                 Ok(facts) => (
                     health::classify(target, &facts),
                     health::drift(target, &facts),
@@ -62,7 +65,7 @@ pub(crate) async fn audit(ctx: &Context, root: &mut Root, _request: &DoctorReque
                 node,
                 Ending::succeeded().with_result(node_finished::Result::Inspection(
                     InspectionResult {
-                        finding: finding.map(wire::finding),
+                        finding: finding.clone().map(wire::finding),
                         drift: drift.as_ref().map(wire::drift),
                     },
                 )),

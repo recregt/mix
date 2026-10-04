@@ -873,6 +873,21 @@ fn an_install_over_a_broken_list_restores_it_and_adds_the_package() {
 }
 
 #[test]
+fn a_remove_over_a_broken_list_restores_it_and_drops_the_package() {
+    let mut world = bootstrapped();
+    let generation = manifest(&["git", "fd"]).render();
+    world.with_file(state_path(), b"{broken", 0o644, (1000, 1000));
+    let requested = names(&["fd"]);
+    let change = remove(&requested, settle(Some("{broken"), Some(&generation))).unwrap();
+
+    let (report, _) = performed(&mut world, &change, None);
+
+    assert_eq!(report.verdict, Verdict::Succeeded);
+    assert_eq!(change.source, Source::Generation);
+    assert_eq!(listed(&world), names(&["git"]));
+}
+
+#[test]
 fn an_invalid_package_name_is_refused_before_any_action() {
     let requested = names(&["not a valid ident"]);
     let change = install(&requested, current(manifest(&["git"]), Source::File)).unwrap();
@@ -1077,6 +1092,7 @@ fn old_generations_are_all_but_the_active_one() {
     let profile = ProfileFacts {
         generations: vec![1, 2, 3, 4],
         active: Some(3),
+        ..ProfileFacts::default()
     };
 
     assert_eq!(old_generations(&profile), vec![1, 2, 4]);

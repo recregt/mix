@@ -138,6 +138,24 @@ fn a_failure_mix_has_no_words_for_keeps_its_producers_words() {
 }
 
 #[test]
+fn a_failed_file_operation_names_its_path_and_error() {
+    let fault = mix_events::Fault::Failed(Wire {
+        code: mix_events::v1::Code::Io as i32,
+        message: "/home/alice/.local/state/mix/.git: cross-device link or rename".into(),
+        detail: Some(Detail::Io(mix_events::v1::IoDetail {
+            path: "/home/alice/.local/state/mix/.git".into(),
+            kind: "CrossesDevices".into(),
+        })),
+        ..Wire::default()
+    });
+
+    assert_eq!(
+        evidence(&fault),
+        ["/home/alice/.local/state/mix/.git: cross-device link or rename"]
+    );
+}
+
+#[test]
 fn a_missing_privilege_names_the_command_to_re_run() {
     let message = says(
         BOOTSTRAP,

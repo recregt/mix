@@ -47,6 +47,10 @@ pub(crate) fn unfixable(reason: Unfixable) -> Option<Help> {
             help!("recreate the user, or ignore this if it was removed on purpose")
         }
         Unfixable::MissingRuntime => help!("run `mix bootstrap` to reinstall it"),
+        Unfixable::Unrecovered => {
+            help!("see `journalctl -u mix-daemon` for what failed, then run `mix repair` again")
+        }
+        Unfixable::InTheWay => help!("move them somewhere else, then run `mix doctor` again"),
         Unfixable::Unspecified => return None,
     })
 }
@@ -56,6 +60,8 @@ fn unfixable_reason(reason: Unfixable) -> Option<&'static str> {
         Unfixable::NotADirectory => "exists but is not a directory",
         Unfixable::MissingUser => "the user no longer exists",
         Unfixable::MissingRuntime => "missing, and `mix repair` can't restore it",
+        Unfixable::Unrecovered => "an interrupted request couldn't be put back",
+        Unfixable::InTheWay => "in the way of a file `mix` manages",
         Unfixable::Unspecified => return None,
     })
 }

@@ -24,6 +24,7 @@ pub struct Context {
     pub policy: Policy,
     pub render: crate::request::sink::Shared,
     pub locked: Locked,
+    pub journals: std::path::PathBuf,
 }
 
 impl Context {

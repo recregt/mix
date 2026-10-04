@@ -707,6 +707,10 @@ pub fn describe(action: &Action) -> (Operation, String) {
             Operation::RecordState,
             format!("{}'s package list", user.name),
         ),
+        Action::CreateRepository { user } => (
+            Operation::CreateRepository,
+            format!("{}'s config history", user.name),
+        ),
         Action::ApplyGeneration { user } => (
             Operation::ApplyGeneration,
             format!("{}'s current generation", user.name),

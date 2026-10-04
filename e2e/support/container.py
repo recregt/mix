@@ -271,7 +271,11 @@ class Container:
             ("units", ["systemctl", "list-units", "--all", "--no-pager", "nix-*", "mix*"]),
             (
                 "daemon journal",
-                ["journalctl", "--no-pager", "-u", "nix-daemon.service", "-u", "nix-daemon.socket"],
+                [
+                    "journalctl", "--no-pager",
+                    "-u", "nix-daemon.service", "-u", "nix-daemon.socket",
+                    "-u", "mix-daemon.service", "-u", "mix-daemon.socket",
+                ],
             ),
             ("processes", ["ps", "-eo", "pid,ppid,stat,wchan:24,etime,args", "--forest"]),
             ("mix journal", ["sh", "-c", "ls -la /var/lib/mix/journal && cat /var/lib/mix/journal/*"]),

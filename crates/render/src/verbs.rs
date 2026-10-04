@@ -37,7 +37,9 @@ pub(crate) fn undone(verb: Verb, subject: &str) -> String {
 
 pub(crate) fn action(operation: Operation) -> Status {
     match operation {
-        Operation::CreateDir | Operation::CreateDirs => Status::Creating,
+        Operation::CreateDir | Operation::CreateDirs | Operation::CreateRepository => {
+            Status::Creating
+        }
         Operation::PutFile => Status::Writing,
         Operation::SetMode
         | Operation::SetOwner

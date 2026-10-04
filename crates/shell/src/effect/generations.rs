@@ -1,11 +1,12 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mix_core::ActivityReporter;
 use mix_core::action::{Action, Fact, Failure, Outcome, Performed, ProfileFacts, Query};
 use mix_core::identity::InvokingUser;
 use mix_core::paths::{
-    DEFAULT_PROFILE_NIX_ENV, DEFAULT_PROFILE_NIX_STORE, HOME_MANAGER_PROFILE_NAME, nix_profiles_dir,
+    DEFAULT_PROFILE_NIX_ENV, DEFAULT_PROFILE_NIX_STORE, HOME_MANAGER_PROFILE_NAME, NIX_STORE,
+    nix_profiles_dir,
 };
 use mix_exec::Scope;
 
@@ -32,15 +33,69 @@ pub fn generation_of(link_name: &str) -> Option<u64> {
 }
 
 pub fn observe(query: &Query) -> Option<Fact> {
-    let Query::Profile(user) = query else {
-        return None;
+    match query {
+        Query::Profile(user) => {
+            let mut generations = existing(user);
+            generations.sort_unstable();
+            let dangling = generations
+                .iter()
+                .copied()
+                .filter(|generation| std::fs::metadata(generation_link(user, *generation)).is_err())
+                .collect();
+            Some(Fact::Profile(ProfileFacts {
+                generations,
+                active: current(user),
+                dangling,
+            }))
+        }
+        Query::Clobbered(user) => Some(Fact::Clobbered(clobbered(user))),
+        _ => None,
+    }
+}
+
+fn generation_link(user: &InvokingUser, generation: u64) -> PathBuf {
+    nix_profiles_dir(&user.home).join(format!("{HOME_MANAGER_PROFILE_NAME}-{generation}-link"))
+}
+
+/// Files of the active generation's `home-files` tree: what home-manager links into the home.
+const HOME_FILES: &str = "home-files";
+
+/// Paths in the user's home where the active generation links a file and something else is:
+/// a file, a directory, or a link that does not point into the Nix store.
+fn clobbered(user: &InvokingUser) -> Vec<PathBuf> {
+    let Ok(generation) = std::fs::canonicalize(profile_link(user)) else {
+        return Vec::new();
     };
-    let mut generations = existing(user);
-    generations.sort_unstable();
-    Some(Fact::Profile(ProfileFacts {
-        generations,
-        active: current(user),
-    }))
+    let mut found = Vec::new();
+    in_the_way(&generation.join(HOME_FILES), &user.home, &mut found);
+    found.sort();
+    found
+}
+
+fn in_the_way(managed: &Path, home: &Path, found: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(managed) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let source = entry.path();
+        let destination = home.join(entry.file_name());
+        let Ok(there) = std::fs::symlink_metadata(&destination) else {
+            continue;
+        };
+        if std::fs::metadata(&source).is_ok_and(|source| source.is_dir()) {
+            if there.is_dir() {
+                in_the_way(&source, &destination, found);
+            } else {
+                found.push(destination);
+            }
+            continue;
+        }
+        let ours = there.file_type().is_symlink()
+            && std::fs::read_link(&destination).is_ok_and(|target| target.starts_with(NIX_STORE));
+        if !ours {
+            found.push(destination);
+        }
+    }
 }
 
 fn current(user: &InvokingUser) -> Option<u64> {
@@ -135,6 +190,14 @@ pub async fn perform(
     scope: &Scope,
     prepared: &mut Prepared<'_>,
 ) -> Option<Outcome> {
+    if let Action::ActivateProfile { user, .. }
+    | Action::SwitchGeneration { user, .. }
+    | Action::DeleteGeneration { user, .. }
+    | Action::ApplyGeneration { user } = action
+        && let Err(failure) = crate::effect::profile_lock::wait(user, activity, scope).await
+    {
+        return Some(Err(failure));
+    }
     Some(match action {
         Action::ActivateProfile { user, source } => {
             activate(user, *source, built, context, activity, scope, prepared).await
@@ -329,8 +392,72 @@ async fn activate(
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+
+    fn user_in(home: &Path) -> InvokingUser {
+        InvokingUser {
+            uid: nix::unistd::Uid::current().as_raw(),
+            gid: nix::unistd::Gid::current().as_raw(),
+            name: "mix-user".into(),
+            home: home.to_path_buf(),
+        }
+    }
+
+    #[test]
+    fn a_generation_whose_link_no_longer_resolves_is_dangling() {
+        let home = tempfile::tempdir().unwrap();
+        let user = user_in(home.path());
+        let generation = home.path().join("generation-2");
+        std::fs::create_dir_all(&generation).unwrap();
+        std::fs::create_dir_all(nix_profiles_dir(&user.home)).unwrap();
+        std::os::unix::fs::symlink(home.path().join("gone"), generation_link(&user, 1)).unwrap();
+        std::os::unix::fs::symlink(&generation, generation_link(&user, 2)).unwrap();
+        std::os::unix::fs::symlink("home-manager-2-link", profile_link(&user)).unwrap();
+
+        let Some(Fact::Profile(profile)) = observe(&Query::Profile(user)) else {
+            panic!("a profile is observed");
+        };
+
+        assert_eq!(profile.generations, [1, 2]);
+        assert_eq!(profile.active, Some(2));
+        assert_eq!(profile.dangling, [1]);
+    }
+
+    #[test]
+    fn only_what_is_not_a_store_link_where_a_managed_file_goes_is_in_the_way() {
+        let home = tempfile::tempdir().unwrap();
+        let user = user_in(home.path());
+        let generation = home.path().join("store/generation");
+        let managed = generation.join(HOME_FILES);
+        std::fs::create_dir_all(managed.join(".config/app")).unwrap();
+        for file in [".bashrc", ".profile", ".gitconfig", ".config/app/settings"] {
+            std::os::unix::fs::symlink("/nix/store/x-home-manager-files/f", managed.join(file))
+                .unwrap();
+        }
+        std::fs::create_dir_all(nix_profiles_dir(&user.home)).unwrap();
+        std::os::unix::fs::symlink(&generation, profile_link(&user)).unwrap();
+        std::fs::write(home.path().join(".bashrc"), "mine").unwrap();
+        std::os::unix::fs::symlink(
+            "/nix/store/y-home-manager-files/f",
+            home.path().join(".profile"),
+        )
+        .unwrap();
+        std::fs::create_dir_all(home.path().join(".config/app/settings")).unwrap();
+
+        let Some(Fact::Clobbered(found)) = observe(&Query::Clobbered(user)) else {
+            panic!("the home is observed");
+        };
+
+        assert_eq!(
+            found,
+            [
+                home.path().join(".bashrc"),
+                home.path().join(".config/app/settings")
+            ]
+        );
+    }
 
     #[test]
     fn a_generation_number_is_read_from_its_link_name() {

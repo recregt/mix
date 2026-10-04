@@ -15,6 +15,11 @@ fn query(query: &observation::Query) -> (&'static str, &str) {
         Query::Unit(name) => ("unit", name),
         Query::Profile(name) => ("profile of", name),
         Query::TreeOwner(path) => ("owner of", path),
+        Query::Repository(path) => ("history in", path),
+        Query::Journals(path) => ("interrupted requests in", path),
+        Query::Leftovers(path) => ("leftovers in", path),
+        Query::Strangers(path) => ("other owners in", path),
+        Query::Clobbered(name) => ("files in the way for", name),
     }
 }
 
@@ -78,6 +83,20 @@ fn fact(out: &mut String, fact: &observation::Fact) {
         },
         Fact::TreeOwnerFact(owner) => match owner.uid {
             Some(uid) => write!(out, "uid {uid}"),
+            None => write!(out, "none"),
+        },
+        Fact::RepositoryFact(repository) if repository.intact => write!(out, "intact"),
+        Fact::RepositoryFact(_) => write!(out, "damaged"),
+        Fact::JournalsFact(found) | Fact::LeftoversFact(found) | Fact::ClobberedFact(found)
+            if found.paths.is_empty() =>
+        {
+            write!(out, "none")
+        }
+        Fact::JournalsFact(found) | Fact::LeftoversFact(found) | Fact::ClobberedFact(found) => {
+            write!(out, "{}", found.paths.join(", "))
+        }
+        Fact::StrangerFact(stranger) => match &stranger.path {
+            Some(path) => write!(out, "{path} owned by {}:{}", stranger.uid, stranger.gid),
             None => write!(out, "none"),
         },
     };

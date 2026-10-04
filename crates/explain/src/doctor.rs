@@ -127,6 +127,38 @@ pub fn check(report: &InspectionReport) -> Diagnostic {
             around!("", " is missing"),
             Some(note!("`mix repair` can't restore it")),
         ),
+        Kind::RepositoryBroken(_) => (
+            around!("the history in ", " is damaged"),
+            Some(note!(
+                "`git` can't read all of it, and `mix repair` starts a new one from the current config"
+            )),
+        ),
+        Kind::Interrupted(interrupted) => (
+            around!("an interrupted request in ", " couldn't be put back"),
+            Some(note!("request {}", interrupted.paths.join(", "))),
+        ),
+        Kind::Leftovers(leftovers) => (
+            around!("", " are still there"),
+            Some(note!("{}", leftovers.paths.join(", "))),
+        ),
+        Kind::GenerationDangling(dangling) => (
+            around!("a generation in ", " no longer exists"),
+            Some(note_parts![
+                "generation ",
+                decimal(&mut a, dangling.generation),
+                " links to a store path that is gone"
+            ]),
+        ),
+        Kind::InTheWay(in_the_way) => (
+            around!("files in ", " are in the way of files `mix` manages"),
+            Some(note!("{}", in_the_way.paths.join(", "))),
+        ),
+        Kind::RepositoryLocked(_) => (
+            around!("", " is locked"),
+            Some(note!(
+                "a `git` command left `index.lock` behind, and no `mix` command is using it"
+            )),
+        ),
     };
     let mut words = Diagnostic::new(summary.around(&report.target));
     if let Some(note) = note {
@@ -161,7 +193,13 @@ pub fn labels(finding: &Finding) -> Labels {
             | Kind::UserIds(_)
             | Kind::UnitMissing(_)
             | Kind::UnitInactive(_)
-            | Kind::RuntimeMissing(_),
+            | Kind::RuntimeMissing(_)
+            | Kind::RepositoryBroken(_)
+            | Kind::RepositoryLocked(_)
+            | Kind::Interrupted(_)
+            | Kind::Leftovers(_)
+            | Kind::GenerationDangling(_)
+            | Kind::InTheWay(_),
         )
         | None => Labels {
             added: phrase!("not written by `mix`"),
@@ -247,9 +285,24 @@ mod tests {
             Finding::UnitDrift,
             Finding::UnitInactive,
             Finding::RuntimeMissing,
+            Finding::RepositoryBroken,
+            Finding::RepositoryLocked,
+            Finding::Interrupted {
+                requests: vec!["01a1041e-1236-7480-a44a-0892d5aff06a".into()],
+            },
+            Finding::Leftovers {
+                paths: vec![
+                    "/etc/nix/.nix.conf.mix-backup-r1-1".into(),
+                    "/home/alice/.local/state/mix/.state.mix-new-r1-2".into(),
+                ],
+            },
+            Finding::GenerationDangling { generation: 3 },
+            Finding::InTheWay {
+                paths: vec!["/home/alice/.bashrc".into()],
+            },
         ];
         for finding in findings {
-            match finding {
+            match &finding {
                 Finding::Missing
                 | Finding::Unreadable { .. }
                 | Finding::NotADirectory
@@ -265,9 +318,15 @@ mod tests {
                 | Finding::UnitMissing
                 | Finding::UnitDrift
                 | Finding::UnitInactive
-                | Finding::RuntimeMissing => {}
+                | Finding::RuntimeMissing
+                | Finding::RepositoryBroken
+                | Finding::RepositoryLocked
+                | Finding::Interrupted { .. }
+                | Finding::Leftovers { .. }
+                | Finding::GenerationDangling { .. }
+                | Finding::InTheWay { .. } => {}
             }
-            let reports = [report("/nix", Some(finding))];
+            let reports = [report("/nix", Some(finding.clone()))];
             for words in [check(&reports[0]), unhealthy(&reports)] {
                 for line in words.message().lines() {
                     assert!(mix_ui::text::is_phrase(line), "{finding:?}: {line:?}");

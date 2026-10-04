@@ -3,6 +3,7 @@ mod delivery;
 pub mod lock;
 pub mod sink;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use mix_core::identity::InvokingUser;
@@ -43,6 +44,7 @@ pub struct Session {
     pub locks: Option<Arc<Locks>>,
     pub caller: Caller,
     pub policy: Option<Policy>,
+    pub journals: PathBuf,
 }
 
 impl Session {
@@ -53,7 +55,13 @@ impl Session {
             locks: None,
             caller: Caller::Fixed(None),
             policy: None,
+            journals: PathBuf::from(crate::effect::journal::JOURNAL_DIR),
         }
+    }
+
+    pub fn with_journals(mut self, journals: impl Into<PathBuf>) -> Self {
+        self.journals = journals.into();
+        self
     }
 
     pub fn with_render(mut self, render: impl Render + 'static) -> Self {
@@ -222,6 +230,7 @@ async fn host(
             .unwrap_or_else(stored_policy),
         render: Arc::clone(&session.render),
         locked,
+        journals: session.journals.clone(),
     };
     let mut root = Root { tree, stopped };
     let concluded = op(&ctx, &mut root).await;
@@ -275,7 +284,13 @@ pub async fn recover(
         path: "/".into(),
         source,
     })?;
-    let mut performer = crate::drive::Performer::new(files);
+    let mut performer = crate::drive::Performer::new(files).with_profile(
+        crate::effect::generations::ProfileContext {
+            mirror: stored_policy()
+                .mirror()
+                .map(|mirror| mirror.url().to_string()),
+        },
+    );
     Ok(crate::effect::journal::recover_all(
         std::path::Path::new(crate::effect::journal::JOURNAL_DIR),
         &mut performer,

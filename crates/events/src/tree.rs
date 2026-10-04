@@ -166,6 +166,7 @@ impl Open {
             | Progress::Build(_)
             | Progress::Substitution(_)
             | Progress::Stopping(_)
+            | Progress::Waiting(_)
             | Progress::CommandFinished(_)
             | Progress::Observed(_)
             | Progress::Journaled(_) => true,

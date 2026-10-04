@@ -7,11 +7,17 @@ use crate::action::{
     ProfileFacts, Query, UnitFacts, UnitFailure, UnitOperation, UserFacts, UserSpec,
 };
 use crate::identity::InvokingUser;
-use crate::paths::{DEFAULT_PROFILE_NIX_ENV, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SOCKET_SRC};
+use crate::paths::{
+    DEFAULT_PROFILE_NIX_ENV, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SOCKET_SRC, is_leftover,
+    repository_dir,
+};
 
 pub use crate::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
 
 const ROOT: Owner = (0, 0);
+
+/// File whose absence makes the model's repository fail to verify, as it makes a real one.
+pub const REPOSITORY_HEAD: &str = "HEAD";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Content {
@@ -80,6 +86,7 @@ pub struct Profile {
     pub generations: Vec<u64>,
     pub active: Option<u64>,
     pub built: BTreeMap<u64, Vec<Option<Arc<[u8]>>>>,
+    pub dangling: Vec<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +96,8 @@ pub struct World {
     pub users: BTreeMap<String, UserFacts>,
     pub units: BTreeMap<String, Unit>,
     pub profiles: BTreeMap<u32, Profile>,
+    pub journals: Vec<String>,
+    pub clobbered: BTreeMap<u32, Vec<PathBuf>>,
     pending: Vec<PathBuf>,
     next_ino: u64,
 }
@@ -100,6 +109,8 @@ impl PartialEq for World {
             && self.users == other.users
             && self.meaningful_units().eq(other.meaningful_units())
             && self.profiles == other.profiles
+            && self.journals == other.journals
+            && self.clobbered == other.clobbered
             && self.pending == other.pending
     }
 }
@@ -122,6 +133,8 @@ impl Default for World {
             users: BTreeMap::new(),
             units: BTreeMap::new(),
             profiles: BTreeMap::new(),
+            journals: Vec::new(),
+            clobbered: BTreeMap::new(),
             pending: Vec::new(),
             next_ino: 1,
         };
@@ -844,6 +857,7 @@ impl World {
                     .generations
                     .iter()
                     .copied()
+                    .filter(|generation| !profile.dangling.contains(generation))
                     .filter(|generation| profile.built.get(generation) == Some(&config))
                     .max();
                 if let Some(built) = built {
@@ -895,6 +909,7 @@ impl World {
                     ));
                 }
                 profile.generations.retain(|kept| kept != generation);
+                profile.dangling.retain(|kept| kept != generation);
                 profile.built.remove(generation);
                 if profile.generations.is_empty() && profile.active.is_none() {
                     self.profiles.remove(&user.uid);
@@ -926,26 +941,17 @@ impl World {
             }
             Action::CollectGarbage { .. } => done(Vec::new()),
             Action::RecordState { user } => {
-                let git = crate::paths::mix_state_dir(&user.home).join(".git");
-                if self.files.contains_key(&git) {
+                if self.files.contains_key(&repository_dir(&user.home)) {
                     return done(Vec::new());
                 }
-                self.parent_is_dir(&git)?;
-                let id = self.fresh();
-                self.files.insert(
-                    git.clone(),
-                    Entry {
-                        content: Content::Directory,
-                        mode: 0o755,
-                        owner: (user.uid, user.gid),
-                        id,
-                        changed: id.ino,
-                    },
-                );
-                done(vec![Action::RemoveCreatedTree {
-                    path: git,
-                    expect: id,
-                }])
+                done(self.create_repository(user)?)
+            }
+            Action::CreateRepository { user } => {
+                let repository = repository_dir(&user.home);
+                if let Some(found) = self.files.get(&repository) {
+                    return Err(conflict(&repository, "nothing", found.content_kind()));
+                }
+                done(self.create_repository(user)?)
             }
             Action::Commit => {
                 for pending in std::mem::take(&mut self.pending) {
@@ -1136,6 +1142,34 @@ impl World {
         }])
     }
 
+    fn create_repository(&mut self, user: &InvokingUser) -> Result<Vec<Action>, Failure> {
+        let repository = repository_dir(&user.home);
+        self.parent_is_dir(&repository)?;
+        let owner = (user.uid, user.gid);
+        let id = self.fresh();
+        self.files.insert(
+            repository.clone(),
+            Entry {
+                content: Content::Directory,
+                mode: 0o755,
+                owner,
+                id,
+                changed: id.ino,
+            },
+        );
+        self.put(
+            &repository.join(REPOSITORY_HEAD),
+            &Arc::from(&b"ref: refs/heads/main\n"[..]),
+            0o644,
+            owner,
+            Expect::Absent,
+        )?;
+        Ok(vec![Action::RemoveCreatedTree {
+            path: repository,
+            expect: id,
+        }])
+    }
+
     pub fn observe(&self, query: &Query) -> Fact {
         match query {
             Query::Path(path) => Fact::Path(match self.files.get(path) {
@@ -1172,19 +1206,61 @@ impl World {
                     .map(|entry| entry.owner.0)
                     .find(|uid| *uid != 0),
             ),
+            Query::Repository(user) => {
+                let repository = repository_dir(&user.home);
+                Fact::Repository {
+                    intact: matches!(
+                        self.files.get(&repository).map(|entry| &entry.content),
+                        Some(Content::Directory)
+                    ) && matches!(
+                        self.files
+                            .get(&repository.join(REPOSITORY_HEAD))
+                            .map(|entry| &entry.content),
+                        Some(Content::File(_))
+                    ),
+                }
+            }
             Query::Profile(user) => Fact::Profile(
                 self.profiles
                     .get(&user.uid)
                     .map(|profile| {
                         let mut generations = profile.generations.clone();
                         generations.sort_unstable();
+                        let mut dangling = profile.dangling.clone();
+                        dangling.sort_unstable();
                         ProfileFacts {
                             generations,
                             active: profile.active,
+                            dangling,
                         }
                     })
                     .unwrap_or_default(),
             ),
+            Query::Journals(_) => Fact::Journals(self.journals.clone()),
+            Query::Leftovers(dir) => Fact::Leftovers(
+                self.files
+                    .iter()
+                    .filter(|(path, _)| {
+                        path.parent() == Some(dir.as_path())
+                            && path
+                                .file_name()
+                                .is_some_and(|name| is_leftover(&name.to_string_lossy()))
+                    })
+                    .map(|(path, entry)| (path.clone(), entry.id))
+                    .collect(),
+            ),
+            Query::Strangers { path, owner } => Fact::Stranger(
+                self.subtree(path)
+                    .into_iter()
+                    .map(|at| {
+                        let found = self.files[&at].owner;
+                        (at, found)
+                    })
+                    .find(|(_, found)| found != owner),
+            ),
+            Query::Clobbered(user) => {
+                Fact::Clobbered(self.clobbered.get(&user.uid).cloned().unwrap_or_default())
+            }
             Query::Unit(name) => {
                 let facts = self.units.get(name).cloned().unwrap_or_default();
                 let file = self.contents(unit_path(name)).map(Arc::from);
