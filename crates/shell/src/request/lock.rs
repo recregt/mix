@@ -120,7 +120,23 @@ impl Locks {
         stopped: &Stopped,
     ) -> Result<Held, Blocked> {
         let exclusive = need == Need::Exclusive;
-        let file = open(&self.path).map_err(Blocked::Failed)?;
+        let file = if need == Need::Observe {
+            match open_existing(&self.path).map_err(Blocked::Failed)? {
+                Some(file) => file,
+                None => {
+                    return Ok(Held {
+                        flock: None,
+                        exclusive: false,
+                        _user: None,
+                        registry: Arc::clone(&self.registry),
+                        ticket: 0,
+                        uid: None,
+                    });
+                }
+            }
+        } else {
+            open(&self.path).map_err(Blocked::Failed)?
+        };
         let mut flock = match Flock::lock(file, flock_arg(exclusive, false)) {
             Ok(flock) => flock,
             Err((mut file, Errno::EWOULDBLOCK)) => {
@@ -168,7 +184,7 @@ impl Locks {
         if exclusive {
             let _ = write_holder(&mut flock, &holder);
         }
-        let user_uid = uid.filter(|_| need == Need::SharedForUser);
+        let user_uid = uid.filter(|_| matches!(need, Need::SharedForUser | Need::Observe));
         let user = if let Some(uid) = user_uid {
             let mutex = Arc::clone(
                 self.users
@@ -278,6 +294,17 @@ fn written(file: &mut File) -> Option<Holder> {
     let command = fields.next()?.to_string();
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).ok()?;
     Some(Holder { user, command })
+}
+
+fn open_existing(path: &Path) -> Result<Option<File>, Error> {
+    match File::open(path) {
+        Ok(file) => Ok(Some(file)),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(Error::Io {
+            path: path.to_path_buf(),
+            source: error,
+        }),
+    }
 }
 
 #[allow(clippy::disallowed_methods)]

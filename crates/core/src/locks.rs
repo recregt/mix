@@ -5,6 +5,7 @@ pub enum Need {
     Nothing,
     Exclusive,
     SharedForUser,
+    Observe,
 }
 
 pub fn locks_for(request: &Request, dry_run: bool) -> Need {
@@ -16,7 +17,7 @@ pub fn locks_for(request: &Request, dry_run: bool) -> Need {
             | Request::Clean(_)
             | Request::Install(_)
             | Request::Remove(_)
-            | Request::Doctor(_) => Need::SharedForUser,
+            | Request::Doctor(_) => Need::Observe,
         };
     }
     match request {
@@ -79,11 +80,7 @@ mod tests {
             Request::Clean(CleanRequest { all: true }),
             Request::Install(InstallRequest::default()),
         ] {
-            assert_eq!(
-                locks_for(&request, true),
-                Need::SharedForUser,
-                "{request:?}"
-            );
+            assert_eq!(locks_for(&request, true), Need::Observe, "{request:?}");
         }
     }
 }
