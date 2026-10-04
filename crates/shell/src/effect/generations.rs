@@ -5,8 +5,7 @@ use mix_core::ActivityReporter;
 use mix_core::action::{Action, Fact, Failure, Outcome, Performed, ProfileFacts, Query};
 use mix_core::identity::InvokingUser;
 use mix_core::paths::{
-    DEFAULT_PROFILE_NIX_ENV, DEFAULT_PROFILE_NIX_STORE, HOME_MANAGER_PROFILE_NAME, NIX_STORE,
-    nix_profiles_dir,
+    DEFAULT_PROFILE_NIX_ENV, DEFAULT_PROFILE_NIX_STORE, HOME_MANAGER_PROFILE_NAME, nix_profiles_dir,
 };
 use mix_exec::Scope;
 
@@ -61,18 +60,22 @@ fn generation_link(user: &InvokingUser, generation: u64) -> PathBuf {
 const HOME_FILES: &str = "home-files";
 
 /// Paths in the user's home where the active generation links a file and something else is:
-/// a file, a directory, or a link that does not point into the Nix store.
+/// a file, a directory, or a link into anything but that generation's files.
 fn clobbered(user: &InvokingUser) -> Vec<PathBuf> {
     let Ok(generation) = std::fs::canonicalize(profile_link(user)) else {
         return Vec::new();
     };
+    let managed = generation.join(HOME_FILES);
+    let Ok(files) = std::fs::canonicalize(&managed) else {
+        return Vec::new();
+    };
     let mut found = Vec::new();
-    in_the_way(&generation.join(HOME_FILES), &user.home, &mut found);
+    in_the_way(&managed, &user.home, &[&files, &managed], &mut found);
     found.sort();
     found
 }
 
-fn in_the_way(managed: &Path, home: &Path, found: &mut Vec<PathBuf>) {
+fn in_the_way(managed: &Path, home: &Path, ours: &[&Path], found: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(managed) else {
         return;
     };
@@ -84,15 +87,16 @@ fn in_the_way(managed: &Path, home: &Path, found: &mut Vec<PathBuf>) {
         };
         if std::fs::metadata(&source).is_ok_and(|source| source.is_dir()) {
             if there.is_dir() {
-                in_the_way(&source, &destination, found);
+                in_the_way(&source, &destination, ours, found);
             } else {
                 found.push(destination);
             }
             continue;
         }
-        let ours = there.file_type().is_symlink()
-            && std::fs::read_link(&destination).is_ok_and(|target| target.starts_with(NIX_STORE));
-        if !ours {
+        let linked = there.file_type().is_symlink()
+            && std::fs::read_link(&destination)
+                .is_ok_and(|target| ours.iter().any(|files| target.starts_with(files)));
+        if !linked {
             found.push(destination);
         }
     }
@@ -426,24 +430,27 @@ mod tests {
     }
 
     #[test]
-    fn only_what_is_not_a_store_link_where_a_managed_file_goes_is_in_the_way() {
+    fn only_what_is_not_a_link_into_the_generation_where_a_managed_file_goes_is_in_the_way() {
         let home = tempfile::tempdir().unwrap();
         let user = user_in(home.path());
         let generation = home.path().join("store/generation");
         let managed = generation.join(HOME_FILES);
         std::fs::create_dir_all(managed.join(".config/app")).unwrap();
-        for file in [".bashrc", ".profile", ".gitconfig", ".config/app/settings"] {
-            std::os::unix::fs::symlink("/nix/store/x-home-manager-files/f", managed.join(file))
-                .unwrap();
+        for file in [
+            ".bashrc",
+            ".profile",
+            ".inputrc",
+            ".gitconfig",
+            ".config/app/settings",
+        ] {
+            std::fs::write(managed.join(file), "managed").unwrap();
         }
         std::fs::create_dir_all(nix_profiles_dir(&user.home)).unwrap();
         std::os::unix::fs::symlink(&generation, profile_link(&user)).unwrap();
         std::fs::write(home.path().join(".bashrc"), "mine").unwrap();
-        std::os::unix::fs::symlink(
-            "/nix/store/y-home-manager-files/f",
-            home.path().join(".profile"),
-        )
-        .unwrap();
+        std::os::unix::fs::symlink(managed.join(".profile"), home.path().join(".profile")).unwrap();
+        std::os::unix::fs::symlink("/nix/store/y-other/inputrc", home.path().join(".inputrc"))
+            .unwrap();
         std::fs::create_dir_all(home.path().join(".config/app/settings")).unwrap();
 
         let Some(Fact::Clobbered(found)) = observe(&Query::Clobbered(user)) else {
@@ -454,7 +461,8 @@ mod tests {
             found,
             [
                 home.path().join(".bashrc"),
-                home.path().join(".config/app/settings")
+                home.path().join(".config/app/settings"),
+                home.path().join(".inputrc")
             ]
         );
     }
