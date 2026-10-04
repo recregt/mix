@@ -15,12 +15,25 @@ pub enum Route {
     OneShot,
 }
 
+/// The command to send for what was asked: the request, and whether to only show it.
+pub fn command_of(
+    command: &Command,
+    dry_run: bool,
+    environment: &Environment,
+) -> mix_events::v1::Command {
+    mix_events::v1::Command {
+        dry_run,
+        ..mix_events::command(from_args(command, environment))
+    }
+}
+
 pub fn from_args(command: &Command, environment: &Environment) -> Request {
     match command {
         Command::Bootstrap {
             mirror,
             mirror_key,
             force,
+            ..
         } => {
             let (mirror, mirror_key) = match mirror {
                 Some(url) => (Some(url.clone()), mirror_key.clone()),
@@ -37,14 +50,14 @@ pub fn from_args(command: &Command, environment: &Environment) -> Request {
                 mirror,
             }))
         }
-        Command::Install { packages } => Request::Install(InstallRequest {
+        Command::Install { packages, .. } => Request::Install(InstallRequest {
             packages: packages.clone(),
         }),
-        Command::Remove { packages } => Request::Remove(RemoveRequest {
+        Command::Remove { packages, .. } => Request::Remove(RemoveRequest {
             packages: packages.clone(),
         }),
-        Command::Clean { all } => Request::Clean(CleanRequest { all: *all }),
-        Command::Repair => Request::Repair(RepairRequest {}),
+        Command::Clean { all, .. } => Request::Clean(CleanRequest { all: *all }),
+        Command::Repair { .. } => Request::Repair(RepairRequest {}),
         Command::Doctor => Request::Doctor(DoctorRequest {}),
         Command::Explain { code, .. } => Request::Explain(ExplainRequest {
             code: code.map(|code| code as i32),
@@ -94,6 +107,7 @@ mod tests {
 
     fn bootstrap(mirror: Option<&str>, mirror_key: Option<&str>) -> Command {
         Command::Bootstrap {
+            dry_run: false,
             mirror: mirror.map(str::to_string),
             mirror_key: mirror_key.map(str::to_string),
             force: false,
@@ -153,8 +167,11 @@ mod tests {
         assert_eq!(route(&bootstrap), Route::OneShot);
         for command in [
             Command::Doctor,
-            Command::Repair,
-            Command::Clean { all: true },
+            Command::Repair { dry_run: false },
+            Command::Clean {
+                all: true,
+                dry_run: false,
+            },
             Command::Explain {
                 code: None,
                 list: true,
@@ -183,6 +200,7 @@ mod tests {
         for (command, request) in [
             (
                 Command::Bootstrap {
+                    dry_run: false,
                     mirror: None,
                     mirror_key: None,
                     force: true,
@@ -195,6 +213,7 @@ mod tests {
             ),
             (
                 Command::Install {
+                    dry_run: false,
                     packages: packages.clone(),
                 },
                 Request::Install(InstallRequest {
@@ -203,6 +222,7 @@ mod tests {
             ),
             (
                 Command::Remove {
+                    dry_run: false,
                     packages: packages.clone(),
                 },
                 Request::Remove(RemoveRequest {
@@ -210,14 +230,23 @@ mod tests {
                 }),
             ),
             (
-                Command::Clean { all: true },
+                Command::Clean {
+                    all: true,
+                    dry_run: false,
+                },
                 Request::Clean(CleanRequest { all: true }),
             ),
             (
-                Command::Clean { all: false },
+                Command::Clean {
+                    all: false,
+                    dry_run: false,
+                },
                 Request::Clean(CleanRequest { all: false }),
             ),
-            (Command::Repair, Request::Repair(RepairRequest {})),
+            (
+                Command::Repair { dry_run: false },
+                Request::Repair(RepairRequest {}),
+            ),
             (Command::Doctor, Request::Doctor(DoctorRequest {})),
             (
                 Command::Explain {

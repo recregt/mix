@@ -27,6 +27,7 @@ pub fn command(request: Request) -> Command {
     Command {
         mix_version: env!("CARGO_PKG_VERSION").to_string(),
         schema_minor: crate::SCHEMA_MINOR,
+        dry_run: false,
         request: Some(request),
     }
 }

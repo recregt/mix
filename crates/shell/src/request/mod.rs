@@ -173,6 +173,7 @@ fn command_of(request: command::Request) -> Command {
     Command {
         mix_version: env!("CARGO_PKG_VERSION").to_string(),
         schema_minor: mix_events::SCHEMA_MINOR,
+        dry_run: false,
         request: Some(request),
     }
 }

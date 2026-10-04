@@ -62,6 +62,7 @@ fn command() -> Start {
         Command {
             mix_version: "0.1.0".into(),
             schema_minor: mix_events::SCHEMA_MINOR,
+            dry_run: false,
             request: Some(Request::Install(InstallRequest {
                 packages: vec!["hello".into()],
             })),
@@ -495,6 +496,7 @@ fn doctored(findings: &[(&str, Option<mix_core::health::Finding>)]) -> Vec<Envel
             Command {
                 mix_version: "0.1.0".into(),
                 schema_minor: mix_events::SCHEMA_MINOR,
+                dry_run: false,
                 request: Some(Request::Doctor(mix_events::v1::DoctorRequest::default())),
             },
         ),

@@ -37,5 +37,6 @@ Failure codes:
     privileges-unavailable `mix` could not get administrator rights
     worker-ended           The privileged helper stopped before it answered
     version-mismatch       The privileged helper is a different version of `mix` than the command that started it
+    usage                  The command line was not one `mix` understands
 
 Run `mix explain <code>` to read about one of them.

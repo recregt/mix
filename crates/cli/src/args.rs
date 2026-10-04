@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 
@@ -39,13 +37,9 @@ pub struct Args {
     )]
     pub no_progress: bool,
 
-    /// Write output for people, or as one JSON event per line
-    #[arg(long, global = true, value_enum, default_value_t = Output::Human)]
-    pub output: Output,
-
-    /// Also record every event to this file
-    #[arg(long, global = true, value_name = "PATH")]
-    pub events_file: Option<PathBuf>,
+    /// Print the result as JSON on stdout
+    #[arg(long, global = true)]
+    pub json: bool,
 
     /// Choose when to color the output
     #[arg(long, global = true, value_enum, value_name = "WHEN", default_value_t = Color::Auto)]
@@ -60,12 +54,6 @@ pub enum Color {
     Auto,
     Always,
     Never,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum Output {
-    Human,
-    Json,
 }
 
 #[derive(Subcommand)]
@@ -83,6 +71,10 @@ pub enum Command {
         /// Wipe any existing managed installation before bootstrapping
         #[arg(short, long)]
         force: bool,
+
+        /// Show what would change without changing it
+        #[arg(short = 'n', long)]
+        dry_run: bool,
     },
 
     /// Add packages to your profile
@@ -90,6 +82,10 @@ pub enum Command {
         /// Packages to add
         #[arg(required = true)]
         packages: Vec<String>,
+
+        /// Show what would change without changing it
+        #[arg(short = 'n', long)]
+        dry_run: bool,
     },
 
     /// Remove packages from your profile
@@ -97,6 +93,10 @@ pub enum Command {
         /// Packages to remove
         #[arg(required = true)]
         packages: Vec<String>,
+
+        /// Show what would change without changing it
+        #[arg(short = 'n', long)]
+        dry_run: bool,
     },
 
     /// Remove old generations of your profile
@@ -104,13 +104,21 @@ pub enum Command {
         /// Also remove store paths nothing uses any more
         #[arg(short, long)]
         all: bool,
+
+        /// Show what would change without changing it
+        #[arg(short = 'n', long)]
+        dry_run: bool,
     },
 
     /// Check the health of the system
     Doctor,
 
     /// Repair configuration drift
-    Repair,
+    Repair {
+        /// Show what would change without changing it
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+    },
 
     /// Describe a failure code, such as `network`
     Explain {
@@ -128,6 +136,19 @@ fn code(name: &str) -> Result<mix_events::v1::Code, String> {
     mix_events::code::parse(name).ok_or_else(|| {
         "it isn't a code `mix` uses; `mix explain --list` shows them all".to_string()
     })
+}
+
+/// Whether `--json` was given, found before clap reads the arguments so that a command line
+/// clap refuses still answers in JSON.
+pub fn json_requested<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    args.into_iter()
+        .map(|arg| arg.as_ref().to_os_string())
+        .take_while(|arg| arg != "--")
+        .any(|arg| arg == "--json")
 }
 
 pub fn color_requested<I, S>(args: I) -> Color
@@ -193,19 +214,40 @@ impl Args {
         use clap::{CommandFactory, FromArgMatches};
 
         let color = color_requested(std::env::args_os().skip(1));
-        let matches = Self::command()
+        let parsed = Self::command()
             .color(color.clap())
             .after_long_help(exit_status())
-            .get_matches();
-        Self::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
+            .try_get_matches()
+            .and_then(|matches| Self::from_arg_matches(&matches));
+        parsed.unwrap_or_else(|error| {
+            if error.use_stderr() && json_requested(std::env::args_os().skip(1)) {
+                mix_render::Json::Stdout.write(mix_render::document::usage(
+                    uuid::Uuid::now_v7().to_string(),
+                    error.to_string().trim(),
+                ));
+            }
+            error.exit()
+        })
     }
 
     /// Whether output may be drawn in place.
     ///
-    /// `--no-progress` and `--output json` are explicit requests for plain output, and so is
-    /// running under CI.
+    /// `--no-progress` and `--json` are explicit requests for plain output, and so is running
+    /// under CI.
     pub fn draws_progress(&self, ci: bool) -> bool {
-        !self.no_progress && self.output == Output::Human && !ci
+        !self.no_progress && !self.json && !ci
+    }
+
+    /// Whether the command asks to be shown rather than carried out.
+    pub fn dry_run(&self) -> bool {
+        match self.command {
+            Command::Bootstrap { dry_run, .. }
+            | Command::Install { dry_run, .. }
+            | Command::Remove { dry_run, .. }
+            | Command::Clean { dry_run, .. }
+            | Command::Repair { dry_run } => dry_run,
+            Command::Doctor | Command::Explain { .. } => false,
+        }
     }
 }
 
@@ -262,6 +304,34 @@ mod tests {
     }
 
     #[test]
+    fn a_json_request_is_found_before_clap_reads_the_arguments() {
+        assert!(json_requested(["install", "--json", "hello"]));
+        assert!(json_requested(["--json", "instal"]));
+        assert!(!json_requested(["install", "hello"]));
+        assert!(!json_requested(["install", "--", "--json"]));
+    }
+
+    #[test]
+    fn dry_run_is_asked_only_of_commands_that_change_something() {
+        for (args, dry_run) in [
+            (&["mix", "install", "-n", "hello"][..], true),
+            (&["mix", "remove", "--dry-run", "hello"], true),
+            (&["mix", "clean", "-n"], true),
+            (&["mix", "repair", "-n"], true),
+            (&["mix", "bootstrap", "-n"], true),
+            (&["mix", "install", "hello"], false),
+        ] {
+            assert_eq!(parse(args).dry_run(), dry_run, "{args:?}");
+        }
+        for args in [
+            &["mix", "doctor", "-n"][..],
+            &["mix", "explain", "-n", "network"],
+        ] {
+            assert!(Args::try_parse_from(args).is_err(), "{args:?}");
+        }
+    }
+
+    #[test]
     fn a_color_request_is_found_before_clap_reads_the_arguments() {
         assert_eq!(color_requested(["install", "hello"]), Color::Auto);
         assert_eq!(
@@ -305,7 +375,7 @@ mod tests {
         for (args, ci, drawn) in [
             (&["mix", "doctor"][..], false, true),
             (&["mix", "--no-progress", "doctor"], false, false),
-            (&["mix", "--output", "json", "doctor"], false, false),
+            (&["mix", "--json", "doctor"], false, false),
             (&["mix", "doctor"], true, false),
         ] {
             assert_eq!(parse(args).draws_progress(ci), drawn, "{args:?}, CI {ci}");
@@ -315,14 +385,7 @@ mod tests {
     #[test]
     fn every_flag_that_shapes_output_works_before_or_after_the_subcommand() {
         let command = Args::command();
-        for id in [
-            "output",
-            "events_file",
-            "no_progress",
-            "verbose",
-            "quiet",
-            "color",
-        ] {
+        for id in ["json", "no_progress", "verbose", "quiet", "color"] {
             let arg = command
                 .get_arguments()
                 .find(|arg| arg.get_id() == id)

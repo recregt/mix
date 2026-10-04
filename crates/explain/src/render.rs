@@ -217,6 +217,8 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
         ))
         .note(note!("nothing was changed"))
         .help(help!("run the same command again")),
+        Code::Usage => Diagnostic::new(phrase!("the command line isn't one `mix` understands"))
+            .help(help!("run `mix help` to see the commands and their flags")),
         Code::PermissionDenied
         | Code::Conflict
         | Code::InvalidMirror

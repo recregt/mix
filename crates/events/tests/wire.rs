@@ -18,6 +18,7 @@ fn started() -> Envelope {
             kind: Some(node_started::Kind::Command(Command {
                 mix_version: "0.1.0".to_string(),
                 schema_minor: mix_events::SCHEMA_MINOR,
+                dry_run: false,
                 request: Some(command::Request::Install(InstallRequest {
                     packages: vec!["ripgrep".to_string()],
                 })),
