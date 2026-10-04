@@ -141,6 +141,12 @@ impl Machine {
     }
 }
 
+fn warned(document: &Value, code: &str) -> bool {
+    document["warnings"]
+        .as_array()
+        .is_some_and(|warnings| warnings.iter().any(|warning| warning["code"] == code))
+}
+
 fn succeeded(document: &Value) -> bool {
     document["status"] == "STATUS_SUCCEEDED"
 }
@@ -419,8 +425,15 @@ async fn walk(healthy: World, breakages: Vec<Breakage>, steps: Vec<Step>) -> Vec
                 let atomic = matches!(**command, Step::Install(_) | Step::Remove(_));
                 if atomic && !succeeded(&done) && before.logs.is_empty() {
                     let mut after = machine.snapshot();
+                    let kept = !after.logs.is_empty();
                     after.logs.clear();
-                    if after != before {
+                    let incomplete = warned(&done, "CODE_ROLLBACK_INCOMPLETE");
+                    if kept != incomplete {
+                        found.push(format!(
+                            "{at}: kept a journal {kept} but said the rollback was incomplete {incomplete}"
+                        ));
+                    }
+                    if !kept && after != before {
                         found.push(format!("{at}: a failed change was not rolled back"));
                     }
                 }
@@ -506,7 +519,16 @@ async fn walk(healthy: World, breakages: Vec<Breakage>, steps: Vec<Step>) -> Vec
 }
 
 proptest::proptest! {
-    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(256))]
+    #![proptest_config(proptest::prelude::ProptestConfig {
+        cases: 256,
+        failure_persistence: Some(Box::new(
+            proptest::test_runner::FileFailurePersistence::Direct(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/model.proptest-regressions"
+            ))
+        )),
+        ..proptest::prelude::ProptestConfig::default()
+    })]
     #[test]
     fn any_sequence_of_commands_and_damage_keeps_every_invariant(
         steps in proptest::collection::vec(step(), 1..8)

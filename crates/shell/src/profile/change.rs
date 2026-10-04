@@ -177,7 +177,7 @@ pub async fn perform(
             Ok(journal) => journal,
             Err(failure) => return root.refuse(Error::Core(core_error(failure, &ctx.journals))),
         };
-        let verdict = drive(
+        let report = drive(
             &mut runner,
             &mut root.tree,
             &mut performer,
@@ -186,10 +186,11 @@ pub async fn perform(
             &mut journal,
             &mut ctx.relay(),
         )
-        .await
-        .verdict
-        .clone();
-        if let Err(failure) = journal.finish() {
+        .await;
+        let verdict = report.verdict.clone();
+        if report.rollback_failures.is_empty()
+            && let Err(failure) = journal.finish()
+        {
             let _ = root.tree.warn(
                 ROOT,
                 mix_core::diagnose::warning(

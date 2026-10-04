@@ -126,7 +126,7 @@ async fn repaired(
     };
     let items = targets(user_config.as_ref(), &ctx.policy);
     if ctx.dry_run {
-        let (reports, interrupted) = put_back(
+        let (reports, interrupted, _) = put_back(
             health::repair_steps(items, request),
             &mut performer,
             &mut Vec::new(),
@@ -155,7 +155,7 @@ async fn repaired(
             };
         }
     };
-    let (reports, interrupted) = put_back(
+    let (reports, interrupted, unfinished) = put_back(
         health::repair_steps(items, request),
         &mut performer,
         &mut journal,
@@ -167,7 +167,7 @@ async fn repaired(
         },
     )
     .await;
-    if let Err(failure) = journal.finish() {
+    if !unfinished && let Err(failure) = journal.finish() {
         let _ = tree.warn(
             ROOT,
             mix_core::diagnose::warning(
@@ -203,7 +203,7 @@ async fn put_back(
     journal: &mut dyn Journal,
     scope: &Scope,
     events: Events<'_>,
-) -> (Vec<RepairReport>, bool) {
+) -> (Vec<RepairReport>, bool, bool) {
     let mut runner = Runner::new(ROOT, steps).independent();
     let report = drive(
         &mut runner,
@@ -234,11 +234,16 @@ async fn put_back(
             StepOutcome::Satisfied | StepOutcome::Cancelled(_) => {}
         }
     }
+    let unfinished = !report.rollback_failures.is_empty();
     for (name, failure) in std::mem::take(&mut report.rollback_failures) {
         let error = error_of(failure, &name);
         reports.push(RepairReport::failed(name, error));
     }
-    (reports, matches!(report.verdict, Verdict::Cancelled(_)))
+    (
+        reports,
+        matches!(report.verdict, Verdict::Cancelled(_)),
+        unfinished,
+    )
 }
 
 #[cfg(test)]
@@ -294,14 +299,15 @@ mod tests {
 
     async fn repair_in(targets: Vec<Target<'_>>, scope: &Scope) -> (Vec<RepairReport>, bool) {
         let files = Files::open(Path::new("/"), "r1").unwrap();
-        repairing(Performer::new(files), targets, scope).await.0
+        let (reports, interrupted, _) = repairing(Performer::new(files), targets, scope).await.0;
+        (reports, interrupted)
     }
 
     async fn repairing(
         mut performer: Performer,
         targets: Vec<Target<'_>>,
         scope: &Scope,
-    ) -> ((Vec<RepairReport>, bool), Vec<mix_events::v1::Action>) {
+    ) -> ((Vec<RepairReport>, bool, bool), Vec<mix_events::v1::Action>) {
         let mut journal: Vec<Record> = Vec::new();
         let stopped = stopped_by(scope);
         let outbox = Arc::new(mix_events::Outbox::new("r1", || {}));

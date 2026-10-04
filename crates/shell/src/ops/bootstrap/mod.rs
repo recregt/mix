@@ -188,7 +188,9 @@ pub(crate) async fn bootstrap(
     )
     .await;
     let ending = ending_of(&report.verdict);
-    if let Err(failure) = journal.finish() {
+    if report.rollback_failures.is_empty()
+        && let Err(failure) = journal.finish()
+    {
         let _ = root.tree.warn(
             ROOT,
             mix_core::diagnose::warning(
