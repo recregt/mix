@@ -107,6 +107,12 @@ pub fn repository_dir(home: &std::path::Path) -> std::path::PathBuf {
     mix_state_dir(home).join(GIT_DIR)
 }
 
+pub fn active_list_path(home: &std::path::Path) -> std::path::PathBuf {
+    nix_profiles_dir(home)
+        .join(HOME_MANAGER_PROFILE_NAME)
+        .join(GENERATION_STATE_FILE)
+}
+
 pub fn nix_profiles_dir(home: &std::path::Path) -> std::path::PathBuf {
     home.join(NIX_PROFILES_DIR)
 }

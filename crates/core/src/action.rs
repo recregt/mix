@@ -410,6 +410,7 @@ pub enum Query {
     Profile(InvokingUser),
     TreeOwner(PathBuf),
     Repository(InvokingUser),
+    ActiveList(InvokingUser),
     Journals(PathBuf),
     Leftovers(PathBuf),
     Strangers { path: PathBuf, owner: Owner },

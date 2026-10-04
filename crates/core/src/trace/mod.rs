@@ -74,6 +74,9 @@ fn query_of(query: &Query) -> observation::Query {
         Query::Profile(user) => Wire::Profile(user.name.clone()),
         Query::TreeOwner(at) => Wire::TreeOwner(path(at)),
         Query::Repository(user) => Wire::Repository(path(&repository_dir(&user.home))),
+        Query::ActiveList(user) => {
+            Wire::Contents(path(&crate::paths::active_list_path(&user.home)))
+        }
         Query::Journals(at) => Wire::Journals(path(at)),
         Query::Leftovers(at) => Wire::Leftovers(path(at)),
         Query::Strangers { path: at, .. } => Wire::Strangers(path(at)),

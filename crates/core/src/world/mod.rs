@@ -102,8 +102,9 @@ pub struct World {
     pub journals: Vec<crate::action::Abandoned>,
     pub logs: BTreeMap<String, Vec<crate::journal::Record>>,
     pub held: std::collections::BTreeSet<String>,
+    pub acting_for: String,
     pub clobbered: BTreeMap<u32, Vec<PathBuf>>,
-    pending: Vec<PathBuf>,
+    pending: BTreeMap<String, Vec<PathBuf>>,
     next_ino: u64,
 }
 
@@ -117,7 +118,7 @@ impl PartialEq for World {
             && self.journals == other.journals
             && self.logs == other.logs
             && self.clobbered == other.clobbered
-            && self.pending == other.pending
+            && self.pending() == other.pending()
     }
 }
 
@@ -142,8 +143,9 @@ impl Default for World {
             journals: Vec::new(),
             logs: BTreeMap::new(),
             held: std::collections::BTreeSet::new(),
+            acting_for: "model".to_string(),
             clobbered: BTreeMap::new(),
-            pending: Vec::new(),
+            pending: BTreeMap::new(),
             next_ino: 1,
         };
         for dir in [
@@ -252,8 +254,26 @@ impl World {
         self.next_ino
     }
 
-    pub fn pending(&self) -> &[PathBuf] {
-        &self.pending
+    pub fn pending(&self) -> Vec<PathBuf> {
+        self.pending.values().flatten().cloned().collect()
+    }
+
+    pub fn adopt(&mut self, paths: Vec<PathBuf>) {
+        self.pending
+            .entry(self.acting_for.clone())
+            .or_default()
+            .extend(paths);
+    }
+
+    pub fn forget(&mut self, request: &str) {
+        self.pending.remove(request);
+    }
+
+    fn pend(&mut self, path: PathBuf) {
+        self.pending
+            .entry(self.acting_for.clone())
+            .or_default()
+            .push(path);
     }
 
     fn fresh(&mut self) -> FileId {
@@ -310,7 +330,7 @@ impl World {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
         let n = self.fresh().ino;
-        path.with_file_name(format!(".{name}.mix-{purpose}-{n}"))
+        path.with_file_name(format!(".{name}.mix-{purpose}-{}-{n}", self.acting_for))
     }
 
     fn matches(&self, path: &Path, expect: Expect) -> Result<(), Failure> {
@@ -352,7 +372,7 @@ impl World {
             Expect::Present(_) => {
                 let backup = self.sibling(path, "backup");
                 self.move_tree(path, &backup);
-                self.pending.push(backup.clone());
+                self.pend(backup.clone());
                 self.files.insert(path.to_path_buf(), entry);
                 Ok(vec![Action::Restore {
                     path: path.to_path_buf(),
@@ -468,7 +488,7 @@ impl World {
                 self.matches(path, Expect::Present(*expect))?;
                 let aside = self.sibling(path, "aside");
                 self.move_tree(path, &aside);
-                self.pending.push(aside.clone());
+                self.pend(aside.clone());
                 done(vec![Action::Restore {
                     path: path.clone(),
                     from: aside,
@@ -512,7 +532,7 @@ impl World {
                     }
                     self.files.insert(at, entry);
                 }
-                self.pending.push(aside.clone());
+                self.pend(aside.clone());
                 done(vec![
                     Action::RemoveCreatedTree {
                         path: path.clone(),
@@ -600,7 +620,9 @@ impl World {
                     self.files.remove(&discarded);
                 }
                 self.move_tree(from, path);
-                self.pending.retain(|pending| pending != from);
+                for pending in self.pending.values_mut() {
+                    pending.retain(|pending| pending != from);
+                }
                 done(Vec::new())
             }
             Action::AddGroup { name, gid } => {
@@ -951,7 +973,8 @@ impl World {
             Action::RecordState { user } => done(self.record_state(user)),
             Action::CreateRepository { user } => done(self.create_repository(user)?),
             Action::Commit => {
-                for pending in std::mem::take(&mut self.pending) {
+                let committed = self.pending.remove(&self.acting_for).unwrap_or_default();
+                for pending in committed {
                     for path in self.subtree(&pending) {
                         self.files.remove(&path);
                     }
@@ -1274,6 +1297,7 @@ impl World {
                     })
                     .unwrap_or_default(),
             ),
+            Query::ActiveList(user) => Fact::Contents(self.active_list(user).map(Arc::from)),
             Query::Journals(_) => Fact::Journals(
                 self.journals
                     .iter()

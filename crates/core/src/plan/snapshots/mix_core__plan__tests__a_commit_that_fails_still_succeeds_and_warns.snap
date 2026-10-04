@@ -119,7 +119,7 @@ expression: "run.case(&before, &world)"
   },
   "machine": {
     "files": {
-      "/etc/.nix.conf.mix-backup-14": {
+      "/etc/.nix.conf.mix-backup-model-14": {
         "added": {
           "contents": [
             "legacy"
