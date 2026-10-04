@@ -206,13 +206,16 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
                 let state = mix_state_dir(Path::new("/home/alice"));
                 world.files.get_mut(&state).unwrap().owner = (0, 0);
             },
-            vec![(
-                "/home/alice/.local/state/mix",
-                Finding::Owner {
-                    actual: (0, 0),
-                    expected: (1000, 1000),
-                },
-            )],
+            vec![
+                (
+                    "/home/alice/.local/state/mix",
+                    Finding::Owner {
+                        actual: (0, 0),
+                        expected: (1000, 1000),
+                    },
+                ),
+                (ALICE_REPOSITORY, Finding::RepositoryBroken),
+            ],
         ),
         (
             "a rewritten configuration file",
@@ -577,7 +580,10 @@ fn every_finding_is_found_on_its_target_and_fixed_or_refused() {
                 .find(|(step, _)| step == target)
                 .map(|(_, outcome)| outcome.clone());
             match finding.unfixable() {
-                None => assert_eq!(outcome, Some(StepOutcome::Changed), "{what}: {target}"),
+                None => assert!(
+                    matches!(outcome, Some(StepOutcome::Changed | StepOutcome::Satisfied)),
+                    "{what}: {target}: {outcome:?}"
+                ),
                 Some(reason) => assert!(
                     matches!(
                         &outcome,

@@ -27,12 +27,20 @@ impl World {
         let Content::File(bytes) = &entry.content else {
             return None;
         };
-        let bits = if entry.owner.0 == uid {
-            entry.mode >> 6
-        } else {
-            entry.mode
+        let allowed = |entry: &Entry, bit: u32| {
+            let bits = if entry.owner.0 == uid {
+                entry.mode >> 6
+            } else {
+                entry.mode
+            };
+            uid == 0 || bits & bit != 0
         };
-        (uid == 0 || bits & 0o4 != 0).then_some(bytes)
+        let searchable = path
+            .ancestors()
+            .skip(1)
+            .filter_map(|dir| self.files.get(dir))
+            .all(|dir| allowed(dir, 0o1));
+        (searchable && allowed(entry, 0o4)).then_some(bytes)
     }
 
     fn is_dir(&self, path: &Path) -> bool {
