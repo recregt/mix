@@ -1482,6 +1482,7 @@ dependencies = [
 name = "mix-exec"
 version = "0.1.0"
 dependencies = [
+ "mix-testchild",
  "nix",
  "thiserror",
  "tokio",
@@ -1545,6 +1546,7 @@ dependencies = [
  "hyper-util",
  "mix-events",
  "mix-exec",
+ "mix-testchild",
  "prost",
  "protox",
  "thiserror",
@@ -1568,6 +1570,7 @@ dependencies = [
  "mix-exec",
  "mix-nixgen",
  "mix-pins",
+ "mix-testchild",
  "mockito",
  "nix",
  "reqwest",
@@ -1581,6 +1584,13 @@ dependencies = [
  "tokio",
  "uuid",
  "zbus",
+]
+
+[[package]]
+name = "mix-testchild"
+version = "0.1.0"
+dependencies = [
+ "nix",
 ]
 
 [[package]]

@@ -11,5 +11,8 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { version = "0.7", default-features = false }
 
+[dev-dependencies]
+mix-testchild = { path = "../testchild" }
+
 [lints]
 workspace = true

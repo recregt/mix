@@ -120,6 +120,16 @@ mod tests {
 
     use super::*;
 
+    mix_testchild::install!();
+
+    fn program() -> String {
+        mix_testchild::program().display().to_string()
+    }
+
+    fn child<'s>(steps: impl IntoIterator<Item = &'s str>) -> Command {
+        Command::new(program()).args(mix_testchild::args(steps))
+    }
+
     async fn stream(
         mut pipe: impl tokio::io::AsyncRead + Unpin,
         activity: Arc<dyn ActivityReporter>,
@@ -148,14 +158,14 @@ mod tests {
         let scope = mix_exec::Scope::root();
         match run_as(
             &current_user(),
-            "false",
-            &["--gid", "30000", "nixbld1"],
+            &program(),
+            &[mix_testchild::FLAG, "exit:1"],
             &scope,
         )
         .await
         {
             Err(Error::Command { command, .. }) => {
-                assert_eq!(command, "false --gid 30000 nixbld1");
+                assert_eq!(command, format!("{} --mix-test-child exit:1", program()));
             }
             other => panic!("expected Command error, got {other:?}"),
         }
@@ -185,9 +195,16 @@ mod tests {
         let scope = mix_exec::Scope::root();
         scope.cancel(mix_exec::Reason::Interrupted);
 
-        match run_as(&current_user(), "sleep", &["5"], &scope).await {
+        match run_as(
+            &current_user(),
+            &program(),
+            &[mix_testchild::FLAG, "sleep"],
+            &scope,
+        )
+        .await
+        {
             Err(Error::Cancelled { command }) => {
-                assert_eq!(command, "sleep 5");
+                assert_eq!(command, format!("{} --mix-test-child sleep", program()));
             }
             other => panic!("expected Cancelled error, got {other:?}"),
         }
@@ -197,21 +214,16 @@ mod tests {
     async fn run_does_not_deadlock_on_output_larger_than_a_pipe_buffer() {
         let scope = mix_exec::Scope::root();
 
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            run_as(
-                &current_user(),
-                "sh",
-                &["-c", "head -c 200000 /dev/zero"],
-                &scope,
-            ),
+        let output = run_as(
+            &current_user(),
+            &program(),
+            &[mix_testchild::FLAG, "zeros:200000"],
+            &scope,
         )
-        .await;
+        .await
+        .unwrap();
 
-        match result {
-            Ok(run_result) => drop(run_result.unwrap()),
-            Err(_) => panic!("run() did not return within the timeout, likely deadlocked"),
-        }
+        assert_eq!(output.len(), 200_000);
     }
 
     #[derive(Default)]
@@ -341,9 +353,14 @@ mod tests {
             home: home.path().to_path_buf(),
         };
 
-        let output = run_as(&user, "/usr/bin/env", &[], &mix_exec::Scope::root())
-            .await
-            .unwrap();
+        let output = run_as(
+            &user,
+            &program(),
+            &[mix_testchild::FLAG, "env"],
+            &mix_exec::Scope::root(),
+        )
+        .await
+        .unwrap();
 
         let mut names: Vec<&str> = output
             .lines()
@@ -373,8 +390,7 @@ mod tests {
     async fn a_streamed_command_reports_its_progress_and_still_returns_its_output() {
         let scope = mix_exec::Scope::root();
         let recorder = Arc::new(Recorder::default());
-        let cmd = Command::new("sh")
-            .args(["-c", "echo building >&2; echo done >&2; echo /nix/store/x"])
+        let cmd = child(["eprint:building", "eprint:done", "print:/nix/store/x"])
             .stderr(reported(Arc::clone(&recorder) as Arc<dyn ActivityReporter>));
 
         let output = cmd.output(&scope).await.unwrap();
@@ -393,16 +409,12 @@ mod tests {
     async fn a_streamed_command_reports_structured_progress_end_to_end() {
         let scope = mix_exec::Scope::root();
         let recorder = Arc::new(Recorder::default());
-        let cmd = Command::new("sh")
-            .args([
-            "-c",
-            concat!(
-                r#"echo '@nix {"action":"msg","level":3,"msg":"these 37 paths will be fetched (91.0 MiB download, 300.0 MiB unpacked):"}' >&2;"#,
-                r#"echo '@nix {"action":"start","id":1,"level":3,"text":"","type":103,"fields":[]}' >&2;"#,
-                r#"echo '@nix {"action":"result","id":1,"type":105,"fields":[12,40,1,0]}' >&2;"#,
-                r#"echo '@nix {"action":"start","id":2,"level":3,"text":"","type":101,"fields":[]}' >&2;"#,
-                r#"echo '@nix {"action":"result","id":2,"type":105,"fields":[50525798,95420416,0,0]}' >&2"#,
-            ),
+        let cmd = child([
+            r#"eprint:@nix {"action":"msg","level":3,"msg":"these 37 paths will be fetched (91.0 MiB download, 300.0 MiB unpacked):"}"#,
+            r#"eprint:@nix {"action":"start","id":1,"level":3,"text":"","type":103,"fields":[]}"#,
+            r#"eprint:@nix {"action":"result","id":1,"type":105,"fields":[12,40,1,0]}"#,
+            r#"eprint:@nix {"action":"start","id":2,"level":3,"text":"","type":101,"fields":[]}"#,
+            r#"eprint:@nix {"action":"result","id":2,"type":105,"fields":[50525798,95420416,0,0]}"#,
         ])
             .stderr(reported(Arc::clone(&recorder) as Arc<dyn ActivityReporter>));
 
@@ -428,14 +440,10 @@ mod tests {
     async fn a_streamed_command_keeps_only_the_tail_of_a_flood_of_output() {
         let scope = mix_exec::Scope::root();
         let recorder = Arc::new(Recorder::default());
-        let cmd = Command::new("sh")
-            .args(["-c", "seq 1 60000 >&2"])
+        let cmd = child(["count-stderr:60000"])
             .stderr(reported(Arc::clone(&recorder) as Arc<dyn ActivityReporter>));
 
-        let output = tokio::time::timeout(std::time::Duration::from_secs(30), cmd.output(&scope))
-            .await
-            .expect("streaming a flood of output should not deadlock")
-            .unwrap();
+        let output = cmd.output(&scope).await.unwrap();
 
         assert!(output.status.success());
         assert_eq!(recorder.lines().len(), 60000);
