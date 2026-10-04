@@ -7,18 +7,62 @@ pub const TRUSTED_DIRS: [&str; 4] = ["/usr/sbin", "/usr/bin", "/sbin", "/bin"];
 
 const WRITABLE_BY_OTHERS: u32 = 0o022;
 
-pub fn trusted(name: &str) -> Result<PathBuf, Failure> {
-    trusted_in(name, &TRUSTED_DIRS.map(Path::new), 0)
+/// What the trust rules read of a path: who owns it, its permission bits and what it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Entry {
+    uid: u32,
+    mode: u32,
+    file: bool,
+    link: bool,
 }
 
-pub fn trusted_in(name: &str, dirs: &[&Path], owner: u32) -> Result<PathBuf, Failure> {
+/// Where the trust rules read paths from.
+trait Inspect {
+    /// The path with every link on it resolved, or `None` when nothing is there.
+    fn resolve(&self, path: &Path) -> Option<PathBuf>;
+    /// The entry at `path`, read through a link at its end when `follow` is set.
+    fn entry(&self, path: &Path, follow: bool) -> std::io::Result<Entry>;
+}
+
+struct Host;
+
+impl Inspect for Host {
+    fn resolve(&self, path: &Path) -> Option<PathBuf> {
+        std::fs::canonicalize(path).ok()
+    }
+
+    fn entry(&self, path: &Path, follow: bool) -> std::io::Result<Entry> {
+        let meta = if follow {
+            std::fs::metadata(path)?
+        } else {
+            std::fs::symlink_metadata(path)?
+        };
+        Ok(Entry {
+            uid: meta.uid(),
+            mode: meta.mode(),
+            file: meta.is_file(),
+            link: meta.file_type().is_symlink(),
+        })
+    }
+}
+
+pub fn trusted(name: &str) -> Result<PathBuf, Failure> {
+    trusted_in(&Host, name, &TRUSTED_DIRS.map(Path::new), 0)
+}
+
+fn trusted_in(
+    host: &impl Inspect,
+    name: &str,
+    dirs: &[&Path],
+    owner: u32,
+) -> Result<PathBuf, Failure> {
     let mut refused = None;
     for dir in dirs {
         let candidate = dir.join(name);
-        let Ok(resolved) = std::fs::canonicalize(&candidate) else {
+        let Some(resolved) = host.resolve(&candidate) else {
             continue;
         };
-        match vetted(&resolved, owner).and_then(|()| vetted_dirs(dir, owner)) {
+        match vetted(host, &resolved, owner).and_then(|()| vetted_dirs(host, dir, owner)) {
             Ok(()) => return Ok(candidate),
             Err(failure) => {
                 refused.get_or_insert(failure);
@@ -31,57 +75,46 @@ pub fn trusted_in(name: &str, dirs: &[&Path], owner: u32) -> Result<PathBuf, Fai
     }))
 }
 
-fn vetted(binary: &Path, owner: u32) -> Result<(), Failure> {
-    let meta = std::fs::metadata(binary).map_err(|error| Failure::Io {
-        path: binary.to_path_buf(),
+fn read(host: &impl Inspect, path: &Path, follow: bool) -> Result<Entry, Failure> {
+    host.entry(path, follow).map_err(|error| Failure::Io {
+        path: path.to_path_buf(),
         kind: error.kind(),
-    })?;
-    if !meta.is_file() || meta.mode() & 0o111 == 0 {
+    })
+}
+
+fn vetted(host: &impl Inspect, binary: &Path, owner: u32) -> Result<(), Failure> {
+    let entry = read(host, binary, true)?;
+    if !entry.file || entry.mode & 0o111 == 0 {
         return Err(untrusted(binary, "an executable file", "something else"));
     }
     for path in binary.ancestors() {
-        let meta = std::fs::metadata(path).map_err(|error| Failure::Io {
-            path: path.to_path_buf(),
-            kind: error.kind(),
-        })?;
-        if meta.uid() != owner && meta.uid() != 0 {
-            return Err(untrusted(
-                path,
-                format!("owned by root or uid {owner}"),
-                format!("owned by uid {}", meta.uid()),
-            ));
-        }
-        if meta.mode() & WRITABLE_BY_OTHERS != 0 {
-            return Err(untrusted(
-                path,
-                "writable by its owner alone",
-                format!("mode {:o}", meta.mode() & 0o7777),
-            ));
-        }
+        owned(path, read(host, path, true)?, owner)?;
     }
     Ok(())
 }
 
-fn vetted_dirs(dir: &Path, owner: u32) -> Result<(), Failure> {
+fn vetted_dirs(host: &impl Inspect, dir: &Path, owner: u32) -> Result<(), Failure> {
     for path in dir.ancestors() {
-        let meta = std::fs::symlink_metadata(path).map_err(|error| Failure::Io {
-            path: path.to_path_buf(),
-            kind: error.kind(),
-        })?;
-        if meta.uid() != owner && meta.uid() != 0 {
-            return Err(untrusted(
-                path,
-                format!("owned by root or uid {owner}"),
-                format!("owned by uid {}", meta.uid()),
-            ));
-        }
-        if !meta.file_type().is_symlink() && meta.mode() & WRITABLE_BY_OTHERS != 0 {
-            return Err(untrusted(
-                path,
-                "writable by its owner alone",
-                format!("mode {:o}", meta.mode() & 0o7777),
-            ));
-        }
+        owned(path, read(host, path, false)?, owner)?;
+    }
+    Ok(())
+}
+
+/// Refuses a path someone other than root or `owner` could change.
+fn owned(path: &Path, entry: Entry, owner: u32) -> Result<(), Failure> {
+    if entry.uid != owner && entry.uid != 0 {
+        return Err(untrusted(
+            path,
+            format!("owned by root or uid {owner}"),
+            format!("owned by uid {}", entry.uid),
+        ));
+    }
+    if !entry.link && entry.mode & WRITABLE_BY_OTHERS != 0 {
+        return Err(untrusted(
+            path,
+            "writable by its owner alone",
+            format!("mode {:o}", entry.mode & 0o7777),
+        ));
     }
     Ok(())
 }
@@ -102,42 +135,92 @@ pub fn root_command(name: &str) -> Result<mix_exec::Command, Failure> {
 }
 
 #[cfg(test)]
-#[allow(clippy::disallowed_methods)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt;
+    use std::collections::BTreeMap;
 
     use super::*;
 
-    fn target() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target")
+    const USER: u32 = 1000;
+    const STRANGER: u32 = 1001;
+
+    /// A file system of entries and links that the trust rules read instead of the host's.
+    #[derive(Default)]
+    struct Tree {
+        entries: BTreeMap<PathBuf, Entry>,
+        links: BTreeMap<PathBuf, PathBuf>,
     }
 
-    fn me() -> u32 {
-        nix::unistd::Uid::current().as_raw()
+    impl Tree {
+        /// `/opt/tools`, root's down to `/opt` and the user's below it.
+        fn new() -> Self {
+            let mut tree = Self::default();
+            tree.dir("/", 0, 0o755);
+            tree.dir("/opt", 0, 0o755);
+            tree.dir("/opt/tools", USER, 0o755);
+            tree
+        }
+
+        fn dir(&mut self, path: &str, uid: u32, mode: u32) {
+            self.entries.insert(
+                path.into(),
+                Entry {
+                    uid,
+                    mode,
+                    file: false,
+                    link: false,
+                },
+            );
+        }
+
+        fn tool(&mut self, path: &str, uid: u32, mode: u32) {
+            self.entries.insert(
+                path.into(),
+                Entry {
+                    uid,
+                    mode,
+                    file: true,
+                    link: false,
+                },
+            );
+        }
+
+        fn link(&mut self, path: &str, target: &str) {
+            self.links.insert(path.into(), target.into());
+        }
     }
 
-    fn checkout() -> u32 {
-        target()
-            .canonicalize()
-            .unwrap()
-            .ancestors()
-            .map(|dir| std::fs::metadata(dir).unwrap().uid())
-            .find(|uid| *uid != 0)
-            .unwrap_or(0)
+    impl Inspect for Tree {
+        fn resolve(&self, path: &Path) -> Option<PathBuf> {
+            let resolved = self.links.get(path).map_or(path, PathBuf::as_path);
+            self.entries
+                .contains_key(resolved)
+                .then(|| resolved.to_path_buf())
+        }
+
+        fn entry(&self, path: &Path, follow: bool) -> std::io::Result<Entry> {
+            if let Some(target) = self.links.get(path) {
+                if follow {
+                    return self.entry(target, true);
+                }
+                return Ok(Entry {
+                    uid: 0,
+                    mode: 0o777,
+                    file: false,
+                    link: true,
+                });
+            }
+            self.entries
+                .get(path)
+                .copied()
+                .ok_or_else(|| std::io::ErrorKind::NotFound.into())
+        }
     }
 
-    fn scratch() -> tempfile::TempDir {
-        let target = target();
-        std::fs::create_dir_all(&target).unwrap();
-        let dir = tempfile::tempdir_in(target).unwrap();
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-        dir
-    }
-
-    fn tool(dir: &Path, name: &str, mode: u32) {
-        let path = dir.join(name);
-        std::fs::write(&path, "#!/bin/sh\n").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+    fn refused_at(result: Result<PathBuf, Failure>) -> String {
+        match result {
+            Err(Failure::Conflict { subject, .. }) => subject,
+            other => panic!("expected a refusal, got {other:?}"),
+        }
     }
 
     #[test]
@@ -150,73 +233,105 @@ mod tests {
     }
 
     #[test]
+    fn a_tool_only_its_owner_can_change_is_accepted() {
+        let mut tree = Tree::new();
+        tree.tool("/opt/tools/useradd", USER, 0o755);
+
+        let accepted = trusted_in(&tree, "useradd", &[Path::new("/opt/tools")], USER);
+
+        assert_eq!(accepted.unwrap(), Path::new("/opt/tools/useradd"));
+    }
+
+    #[test]
     fn a_tool_owned_by_someone_else_is_refused() {
-        if me() == 0 {
-            return;
-        }
-        let dir = scratch();
-        tool(dir.path(), "useradd", 0o755);
+        let mut tree = Tree::new();
+        tree.tool("/opt/tools/useradd", STRANGER, 0o755);
 
-        let refused = trusted_in("useradd", &[dir.path()], 0);
+        let refused = trusted_in(&tree, "useradd", &[Path::new("/opt/tools")], USER);
 
-        assert!(
-            matches!(refused, Err(Failure::Conflict { .. })),
-            "{refused:?}"
-        );
+        assert_eq!(refused_at(refused), "/opt/tools/useradd");
     }
 
     #[test]
     fn a_tool_others_can_rewrite_is_refused() {
-        let dir = scratch();
-        tool(dir.path(), "useradd", 0o777);
+        let mut tree = Tree::new();
+        tree.tool("/opt/tools/useradd", USER, 0o777);
 
-        let refused = trusted_in("useradd", &[dir.path()], checkout());
+        let refused = trusted_in(&tree, "useradd", &[Path::new("/opt/tools")], USER);
 
-        assert!(
-            matches!(refused, Err(Failure::Conflict { .. })),
-            "{refused:?}"
-        );
+        assert_eq!(refused_at(refused), "/opt/tools/useradd");
     }
 
     #[test]
     fn a_tool_in_a_directory_others_can_write_is_refused() {
-        let dir = scratch();
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
-        tool(dir.path(), "useradd", 0o755);
+        let mut tree = Tree::new();
+        tree.dir("/opt/tools", USER, 0o777);
+        tree.tool("/opt/tools/useradd", USER, 0o755);
 
-        let refused = trusted_in("useradd", &[dir.path()], checkout());
+        let refused = trusted_in(&tree, "useradd", &[Path::new("/opt/tools")], USER);
 
-        assert!(
-            matches!(refused, Err(Failure::Conflict { .. })),
-            "{refused:?}"
-        );
+        assert_eq!(refused_at(refused), "/opt/tools");
     }
 
     #[test]
-    fn a_tool_only_its_owner_can_change_is_accepted() {
-        let dir = scratch();
-        tool(dir.path(), "useradd", 0o755);
+    fn a_tool_under_a_directory_a_stranger_owns_is_refused() {
+        let mut tree = Tree::new();
+        tree.dir("/opt", STRANGER, 0o755);
+        tree.tool("/opt/tools/useradd", USER, 0o755);
 
-        let accepted = trusted_in("useradd", &[dir.path()], checkout());
+        let refused = trusted_in(&tree, "useradd", &[Path::new("/opt/tools")], USER);
 
-        assert_eq!(accepted.unwrap(), dir.path().join("useradd"));
+        assert_eq!(refused_at(refused), "/opt");
     }
 
     #[test]
     fn a_tool_reached_through_a_link_runs_under_the_name_it_was_found_by() {
-        let dir = scratch();
-        tool(dir.path(), "pgrep", 0o755);
-        std::os::unix::fs::symlink("pgrep", dir.path().join("pkill")).unwrap();
+        let mut tree = Tree::new();
+        tree.tool("/opt/tools/pgrep", USER, 0o755);
+        tree.link("/opt/tools/pkill", "/opt/tools/pgrep");
 
-        let found = trusted_in("pkill", &[dir.path()], checkout()).unwrap();
+        let found = trusted_in(&tree, "pkill", &[Path::new("/opt/tools")], USER).unwrap();
 
-        assert_eq!(found.file_name().unwrap(), "pkill");
+        assert_eq!(found, Path::new("/opt/tools/pkill"));
+    }
+
+    #[test]
+    fn a_link_to_a_tool_someone_else_can_change_is_refused() {
+        let mut tree = Tree::new();
+        tree.dir("/tmp", STRANGER, 0o755);
+        tree.tool("/tmp/pgrep", STRANGER, 0o755);
+        tree.link("/opt/tools/pkill", "/tmp/pgrep");
+
+        let refused = trusted_in(&tree, "pkill", &[Path::new("/opt/tools")], USER);
+
+        assert_eq!(refused_at(refused), "/tmp/pgrep");
+    }
+
+    #[test]
+    fn the_first_trusted_directory_with_the_tool_wins() {
+        let mut tree = Tree::new();
+        tree.dir("/opt/other", USER, 0o755);
+        tree.tool("/opt/other/useradd", USER, 0o755);
+
+        let found = trusted_in(
+            &tree,
+            "useradd",
+            &[Path::new("/opt/tools"), Path::new("/opt/other")],
+            USER,
+        );
+
+        assert_eq!(found.unwrap(), Path::new("/opt/other/useradd"));
     }
 
     #[test]
     fn a_missing_tool_is_a_spawn_failure() {
         assert!(matches!(
-            trusted("mix-no-such-tool"),
+            trusted_in(
+                &Tree::new(),
+                "mix-no-such-tool",
+                &[Path::new("/opt/tools")],
+                USER
+            ),
             Err(Failure::SpawnFailed { .. })
         ));
     }
