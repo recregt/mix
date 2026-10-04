@@ -300,13 +300,7 @@ mod tests {
             std::fs::write(src.path().join(name), contents).unwrap();
         }
 
-        let output = tar_of(src.path());
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        output.stdout
+        tar_of(src.path())
     }
 
     #[test]
@@ -541,7 +535,7 @@ mod tests {
     async fn a_cancelled_request_stops_waiting_for_a_silent_server() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
-        let (accepted, wait_for_accept) = std::sync::mpsc::channel();
+        let (accepted, wait_for_accept) = tokio::sync::oneshot::channel();
         std::thread::spawn(move || {
             let conn = listener.accept();
             let _ = accepted.send(());
@@ -550,9 +544,10 @@ mod tests {
         });
         let scope = Scope::root();
         let cancelling = scope.clone();
-        tokio::task::spawn_blocking(move || {
-            let _ = wait_for_accept.recv();
-            cancelling.cancel(mix_exec::Reason::Interrupted);
+        tokio::spawn(async move {
+            if wait_for_accept.await.is_ok() {
+                cancelling.cancel(mix_exec::Reason::Interrupted);
+            }
         });
 
         let err = fetch_and_verify(
@@ -601,23 +596,18 @@ mod tests {
         assert!(pin_for(&host_target_key()).is_some());
     }
 
-    fn tar_of(dir: &std::path::Path) -> std::process::Output {
-        mix_exec::Command::new("tar")
-            .args(["cJf", "-", "-C"])
-            .arg(dir)
-            .arg(".")
-            .output_blocking(&mix_exec::Scope::root())
-            .expect("tar must be on PATH to build test fixtures")
+    /// The xz-compressed tar of everything in `dir`, as `tar cJf - -C dir .` writes it.
+    fn tar_of(dir: &std::path::Path) -> Vec<u8> {
+        let mut archive = tar::Builder::new(Vec::new());
+        archive.append_dir_all(".", dir).unwrap();
+        xz_compress(&archive.into_inner().unwrap())
     }
 
     fn xz_compress(bytes: &[u8]) -> Vec<u8> {
-        let output = mix_exec::Command::new("xz")
-            .args(["-z", "-c"])
-            .input(bytes.to_vec())
-            .output_blocking(&mix_exec::Scope::root())
-            .expect("xz must be on PATH to build test fixtures");
-        assert!(output.status.success());
-        output.stdout
+        use std::io::Write as _;
+        let mut encoder = liblzma::write::XzEncoder::new(Vec::new(), 6);
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
     }
 
     #[test]
@@ -644,11 +634,10 @@ mod tests {
         )
         .unwrap();
 
-        let output = tar_of(src.path());
-        assert!(output.status.success());
+        let tarball = tar_of(src.path());
 
         let dest = tempfile::tempdir().unwrap();
-        unpack(&output.stdout, dest.path()).unwrap();
+        unpack(&tarball, dest.path()).unwrap();
 
         assert_eq!(
             std::fs::read(dest.path().join("locked/first")).unwrap(),
