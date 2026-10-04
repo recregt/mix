@@ -155,8 +155,11 @@ fn fact_of(fact: &Fact) -> observation::Fact {
         }),
         Fact::TreeOwner(uid) => Wire::TreeOwnerFact(TreeOwnerFact { uid: *uid }),
         Fact::Repository { intact } => Wire::RepositoryFact(RepositoryFact { intact: *intact }),
-        Fact::Journals(requests) => Wire::JournalsFact(PathsFact {
-            paths: requests.clone(),
+        Fact::Journals(abandoned) => Wire::JournalsFact(PathsFact {
+            paths: abandoned
+                .iter()
+                .map(|request| request.request.clone())
+                .collect(),
         }),
         Fact::Leftovers(found) => Wire::LeftoversFact(PathsFact {
             paths: found

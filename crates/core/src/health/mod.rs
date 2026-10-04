@@ -123,8 +123,12 @@ pub enum Finding {
     /// The repository's index lock is there while no mix command holds the repository.
     RepositoryLocked,
 
-    /// Journals of requests that were interrupted and that no running request holds.
-    Interrupted { requests: Vec<String> },
+    /// Journals of requests that were interrupted and that no running request holds, and the
+    /// subjects their recovery still has to put back.
+    Interrupted {
+        requests: Vec<String>,
+        pending: Vec<String>,
+    },
 
     /// Siblings an interrupted write left beside the files it was replacing.
     Leftovers { paths: Vec<String> },
@@ -497,9 +501,21 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
             owner_drift(found.owner, Some((0, 0)))
         }
         Target::Journals { .. } => match &facts[0] {
-            Fact::Journals(requests) if !requests.is_empty() => Some(Finding::Interrupted {
-                requests: requests.clone(),
-            }),
+            Fact::Journals(abandoned) if !abandoned.is_empty() => {
+                let mut pending: Vec<String> = abandoned
+                    .iter()
+                    .flat_map(|request| request.pending.iter().cloned())
+                    .collect();
+                pending.sort();
+                pending.dedup();
+                Some(Finding::Interrupted {
+                    requests: abandoned
+                        .iter()
+                        .map(|request| request.request.clone())
+                        .collect(),
+                    pending,
+                })
+            }
             _ => None,
         },
         Target::Leftovers { .. } => {
@@ -530,11 +546,29 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
     }
 }
 
+/// The leftovers in `facts`, less the ones an interrupted request named: those belong to its
+/// recovery, not to cleaning up.
 fn leftovers(facts: &[Fact]) -> impl Iterator<Item = &(std::path::PathBuf, crate::action::FileId)> {
-    facts[1..].iter().flat_map(|fact| match fact {
-        Fact::Leftovers(found) => found.as_slice(),
+    let abandoned: &[crate::action::Abandoned] = match &facts[0] {
+        Fact::Journals(abandoned) => abandoned,
         _ => &[],
-    })
+    };
+    facts[1..]
+        .iter()
+        .flat_map(|fact| match fact {
+            Fact::Leftovers(found) => found.as_slice(),
+            _ => &[],
+        })
+        .filter(move |(path, _)| {
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy())
+                .unwrap_or_default();
+            !abandoned.iter().any(|request| {
+                name.contains(&format!("-{}-", request.request))
+                    || name.ends_with(&format!("-{}", request.request))
+            })
+        })
 }
 
 fn tree_owner(facts: &[Fact], index: usize) -> Option<u32> {
@@ -759,17 +793,12 @@ pub fn fix(
         }
         Target::Journals { .. } => return Err(Unfixable::Unrecovered),
         Target::HomeFiles { .. } => return Err(Unfixable::InTheWay),
-        Target::Leftovers { .. } => {
-            if matches!(&facts[0], Fact::Journals(requests) if !requests.is_empty()) {
-                return Err(Unfixable::Unrecovered);
-            }
-            leftovers(facts)
-                .map(|(path, expect)| Action::RemoveCreatedTree {
-                    path: path.clone(),
-                    expect: *expect,
-                })
-                .collect()
-        }
+        Target::Leftovers { .. } => leftovers(facts)
+            .map(|(path, expect)| Action::RemoveCreatedTree {
+                path: path.clone(),
+                expect: *expect,
+            })
+            .collect(),
         Target::Generations { user, .. } => {
             let Fact::Profile(profile) = &facts[0] else {
                 return Ok(Vec::new());
@@ -882,7 +911,8 @@ pub mod wire {
     use mix_events::v1::finding::Kind;
     use mix_events::v1::{
         Category as WireCategory, Finding as WireFinding, Generation, Gid, Ids, InspectionReport,
-        Mode, NotAMember, Paths, Unfixable as WireUnfixable, Unreadable,
+        Interrupted as WireInterrupted, Mode, NotAMember, Paths, Unfixable as WireUnfixable,
+        Unreadable,
     };
 
     use super::{Drift, Finding, HealthReport, Unfixable};
@@ -969,7 +999,9 @@ pub mod wire {
             Finding::RuntimeMissing => Kind::RuntimeMissing(Default::default()),
             Finding::RepositoryBroken => Kind::RepositoryBroken(Default::default()),
             Finding::RepositoryLocked => Kind::RepositoryLocked(Default::default()),
-            Finding::Interrupted { requests } => Kind::Interrupted(Paths { paths: requests }),
+            Finding::Interrupted { requests, pending } => {
+                Kind::Interrupted(WireInterrupted { requests, pending })
+            }
             Finding::Leftovers { paths } => Kind::Leftovers(Paths { paths }),
             Finding::GenerationDangling { generation } => {
                 Kind::GenerationDangling(Generation { generation })

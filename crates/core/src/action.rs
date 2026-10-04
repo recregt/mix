@@ -380,6 +380,14 @@ impl UnitFacts {
     }
 }
 
+/// A request that was interrupted and that no running request holds, with the subjects its
+/// recovery still has to put back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Abandoned {
+    pub request: String,
+    pub pending: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fact {
     Path(PathFacts),
@@ -390,7 +398,7 @@ pub enum Fact {
     Profile(ProfileFacts),
     TreeOwner(Option<u32>),
     Repository { intact: bool },
-    Journals(Vec<String>),
+    Journals(Vec<Abandoned>),
     Leftovers(Vec<(PathBuf, FileId)>),
     Stranger(Option<(PathBuf, Owner)>),
     Clobbered(Vec<PathBuf>),

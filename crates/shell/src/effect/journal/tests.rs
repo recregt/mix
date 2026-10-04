@@ -212,7 +212,11 @@ async fn only_a_journal_no_running_request_holds_is_an_interrupted_request() {
     let running = FileJournal::create(journals.path(), "r1").unwrap();
     drop(FileJournal::create(journals.path(), "r2").unwrap());
 
-    assert_eq!(abandoned(journals.path()), ["r2"]);
+    let found: Vec<String> = abandoned(journals.path())
+        .into_iter()
+        .map(|request| request.request)
+        .collect();
+    assert_eq!(found, ["r2"]);
 
     let mut next = Performer::new(Files::open(root.path(), "r3").unwrap());
     let recovered = recover_all(journals.path(), &mut next, &Scope::root()).await;
@@ -247,5 +251,11 @@ async fn a_journal_recovery_could_not_put_back_is_kept_for_the_next_try() {
     let recovered = recover_all(journals.path(), &mut next, &Scope::root()).await;
 
     assert_eq!(recovered.failures.len(), 1, "{:?}", recovered.failures);
-    assert_eq!(abandoned(journals.path()), ["r1"]);
+    assert_eq!(
+        abandoned(journals.path()),
+        [Abandoned {
+            request: "r1".into(),
+            pending: vec!["/etc/nix.conf".into()],
+        }]
+    );
 }

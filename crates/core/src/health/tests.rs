@@ -462,12 +462,13 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
         (
             "an interrupted request recovery could not put back",
             |world: &mut World| {
-                world.journals = vec!["r9".into()];
+                world.journals = vec![r9()];
             },
             vec![(
                 crate::paths::JOURNAL_DIR,
                 Finding::Interrupted {
                     requests: vec!["r9".into()],
+                    pending: vec!["/etc/nix/nix.conf".into()],
                 },
             )],
         ),
@@ -620,27 +621,47 @@ fn an_unfixable_finding_does_not_stop_the_others_being_fixed() {
     );
 }
 
+fn r9() -> crate::action::Abandoned {
+    crate::action::Abandoned {
+        request: "r9".into(),
+        pending: vec!["/etc/nix/nix.conf".into()],
+    }
+}
+
 #[test]
-fn a_leftover_an_unrecovered_request_may_need_is_kept() {
+fn what_an_unrecovered_request_left_belongs_to_it_and_everything_else_is_cleaned() {
     let alice = user("alice", 1000);
     let mut world = bootstrapped(std::slice::from_ref(&alice));
-    let backup = mix_state_dir(Path::new("/home/alice")).join(".state.mix-backup-r9-1");
-    world.with_file(&backup, b"{}", 0o644, (1000, 1000));
-    world.journals = vec!["r9".into()];
+    let state = mix_state_dir(Path::new("/home/alice"));
+    let its_backup = state.join(".state.mix-backup-r9-1");
+    let stray = state.join(".home.nix.mix-new-r7-2");
+    world.with_file(&its_backup, b"{}", 0o644, (1000, 1000));
+    world.with_file(&stray, b"{}", 0o644, (1000, 1000));
+    world.journals = vec![r9()];
 
-    let report = repair(&mut world, &alice);
+    let before = audit(&world, &alice);
+    repair(&mut world, &alice);
 
-    assert!(world.files.contains_key(&backup));
-    assert!(report.steps.iter().any(|(step, outcome)| {
-        step == crate::targets::LEFTOVERS
-            && matches!(
-                outcome,
-                StepOutcome::Failed(Failure::Unrepairable {
-                    reason: Unfixable::Unrecovered,
-                    ..
-                })
-            )
-    }));
+    assert_eq!(
+        before,
+        [
+            (
+                crate::paths::JOURNAL_DIR.to_string(),
+                Finding::Interrupted {
+                    requests: vec!["r9".into()],
+                    pending: vec!["/etc/nix/nix.conf".into()],
+                }
+            ),
+            (
+                crate::targets::LEFTOVERS.to_string(),
+                Finding::Leftovers {
+                    paths: vec![stray.display().to_string()],
+                }
+            ),
+        ]
+    );
+    assert!(world.files.contains_key(&its_backup));
+    assert!(!world.files.contains_key(&stray));
 }
 
 #[test]
@@ -735,6 +756,7 @@ fn every_finding_and_category_reach_the_event_stream_as_their_own_kind() {
         Finding::RepositoryLocked,
         Finding::Interrupted {
             requests: vec!["r1".into()],
+            pending: vec!["/etc/nix/nix.conf".into()],
         },
         Finding::Leftovers {
             paths: vec!["/etc/nix/.nix.conf.mix-backup-r1-1".into()],

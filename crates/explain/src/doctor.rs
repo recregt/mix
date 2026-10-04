@@ -135,7 +135,11 @@ pub fn check(report: &InspectionReport) -> Diagnostic {
         ),
         Kind::Interrupted(interrupted) => (
             around!("an interrupted request in ", " couldn't be put back"),
-            Some(note!("request {}", interrupted.paths.join(", "))),
+            Some(note!(
+                "request {} still has to put back {}",
+                interrupted.requests.join(", "),
+                interrupted.pending.join(", ")
+            )),
         ),
         Kind::Leftovers(leftovers) => (
             around!("", " are still there"),
@@ -289,6 +293,7 @@ mod tests {
             Finding::RepositoryLocked,
             Finding::Interrupted {
                 requests: vec!["01a1041e-1236-7480-a44a-0892d5aff06a".into()],
+                pending: vec!["/etc/nix/nix.conf".into()],
             },
             Finding::Leftovers {
                 paths: vec![

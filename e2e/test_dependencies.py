@@ -107,7 +107,9 @@ def test_an_interrupted_request_recovery_cannot_put_back_is_reported(container):
 
     found = container.mix("doctor", user=USER)
     assert found.exit_code == 3, found
-    assert _findings(found) == {JOURNALS: {"interrupted": {"paths": ["r9"]}}}
+    assert _findings(found) == {
+        JOURNALS: {"interrupted": {"requests": ["r9"], "pending": ["/etc/mix/policy.json"]}}
+    }
     repaired = container.mix("repair", user=USER)
     assert repaired.exit_code == 3, repaired
     assert container.path_exists(f"{JOURNALS}/r9.ndjson")

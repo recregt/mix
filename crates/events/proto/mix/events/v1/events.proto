@@ -515,11 +515,16 @@ message Finding {
     google.protobuf.Empty runtime_missing = 16;
     google.protobuf.Empty repository_broken = 17;
     google.protobuf.Empty repository_locked = 18;
-    Paths interrupted = 19;
+    Interrupted interrupted = 19;
     Paths leftovers = 20;
     Generation generation_dangling = 21;
     Paths in_the_way = 22;
   }
+}
+
+message Interrupted {
+  repeated string requests = 1;
+  repeated string pending = 2;
 }
 
 message Paths {

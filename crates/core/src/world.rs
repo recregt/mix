@@ -96,7 +96,7 @@ pub struct World {
     pub users: BTreeMap<String, UserFacts>,
     pub units: BTreeMap<String, Unit>,
     pub profiles: BTreeMap<u32, Profile>,
-    pub journals: Vec<String>,
+    pub journals: Vec<crate::action::Abandoned>,
     pub clobbered: BTreeMap<u32, Vec<PathBuf>>,
     pending: Vec<PathBuf>,
     next_ino: u64,

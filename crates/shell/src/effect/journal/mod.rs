@@ -5,7 +5,7 @@ use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
-use mix_core::action::{Action, Failure};
+use mix_core::action::{Abandoned, Action, Failure};
 use mix_core::journal::{Record, Recovery, recover};
 use mix_exec::Scope;
 
@@ -82,12 +82,28 @@ fn unheld(path: &Path) -> Option<Flock<File>> {
     Flock::lock(file, FlockArg::LockExclusiveNonblock).ok()
 }
 
-/// The requests in `dir` that were interrupted: their journals are there and nothing holds them.
-pub fn abandoned(dir: &Path) -> Vec<String> {
+/// The requests in `dir` that were interrupted: their journals are there and nothing holds them,
+/// with the subjects their recovery still has to put back.
+pub fn abandoned(dir: &Path) -> Vec<Abandoned> {
     unfinished(dir)
         .into_iter()
         .filter(|path| unheld(path).is_some())
-        .filter_map(|path| Some(path.file_stem()?.to_string_lossy().into_owned()))
+        .filter_map(|path| {
+            let request = path.file_stem()?.to_string_lossy().into_owned();
+            let pending = match read(&path).map(|records| recover(&records)) {
+                Ok(Recovery::RollBack { uncertain, certain }) => certain
+                    .iter()
+                    .chain(&uncertain)
+                    .map(|action| mix_core::plan::describe(action).1)
+                    .collect(),
+                Ok(Recovery::FinishCommit { pending }) => pending
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect(),
+                Ok(Recovery::Nothing) | Err(_) => Vec::new(),
+            };
+            Some(Abandoned { request, pending })
+        })
         .collect()
 }
 
