@@ -1,0 +1,57 @@
+---
+source: crates/core/src/change/tests.rs
+expression: "run.case(&before, &world)"
+---
+{
+  "document": {
+    "cancellation": "CANCELLATION_UNSPECIFIED",
+    "changes": [
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_PUT_FILE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "write-config",
+        "subject": "/home/mix-user/.local/state/mix/state",
+        "undone": false,
+        "unknown": []
+      }
+    ],
+    "command": "install",
+    "dryRun": false,
+    "exit": 0,
+    "formatVersion": "1.0",
+    "problems": [],
+    "request": "request",
+    "status": "STATUS_SUCCEEDED",
+    "steps": [
+      {
+        "key": "write-config",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "package list",
+        "undone": false,
+        "verb": "VERB_WRITING"
+      }
+    ],
+    "waits": [],
+    "warnings": []
+  },
+  "machine": {
+    "files": {
+      "/home/mix-user/.local/state/mix/state": {
+        "contents": [
+          "-{broken",
+          "+{",
+          "+  \"version\": 1,",
+          "+  \"packages\": [",
+          "+    \"git\"",
+          "+  ]",
+          "+}"
+        ]
+      }
+    }
+  },
+  "performed": [
+    "PutFile /home/mix-user/.local/state/mix/state",
+    "Commit changes"
+  ]
+}

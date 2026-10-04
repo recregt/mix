@@ -15,6 +15,8 @@ pub mod progress;
 pub mod state;
 pub mod system;
 pub mod targets;
+#[cfg(any(test, feature = "testkit"))]
+pub mod testkit;
 pub mod trace;
 pub mod vocabulary;
 pub mod world;

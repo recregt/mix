@@ -1,0 +1,18 @@
+---
+source: crates/explain/src/codes/tests.rs
+expression: shown(code)
+---
+$ mix install ripgrep
+error: "rm -rf" isn't a valid package name
+
+note: package names look like `ripgrep` or `python3`
+
+$ mix explain invalid-state
+INVALID_STATE
+
+The package list `mix` would write is not valid.
+
+`mix` checks what it writes, and this list failed the check. This is a bug in `mix`.
+
+To fix it:
+  - report it at https://github.com/recregt/mix/issues with the output of the command run with `-v`

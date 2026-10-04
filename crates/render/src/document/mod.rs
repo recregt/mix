@@ -354,6 +354,14 @@ pub fn usage(request: String, detail: &str) -> Document {
     }
 }
 
+/// The document a finished request's events describe, or `None` while its root is still open.
+pub fn of<'e>(envelopes: impl IntoIterator<Item = &'e Envelope>) -> Option<Document> {
+    let mut builder = Builder::default();
+    envelopes
+        .into_iter()
+        .find_map(|envelope| builder.envelope(envelope))
+}
+
 pub(crate) fn print(document: &Document) {
     if let Ok(text) = serde_json::to_string_pretty(document) {
         mix_ui::data(&text);

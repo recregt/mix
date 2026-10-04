@@ -1,0 +1,104 @@
+---
+source: crates/core/src/bootstrap/tests.rs
+expression: "upgraded.case(&before, &world)"
+---
+{
+  "document": {
+    "cancellation": "CANCELLATION_UNSPECIFIED",
+    "changes": [
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_PUT_FILE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "install-mix-daemon",
+        "subject": "/var/lib/mix/bin/mix-daemon",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_DRAIN_SERVICE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "install-mix-daemon",
+        "subject": "mix-daemon.service",
+        "undone": false,
+        "unknown": []
+      }
+    ],
+    "command": "bootstrap",
+    "dryRun": false,
+    "exit": 0,
+    "formatVersion": "1.0",
+    "problems": [],
+    "request": "request",
+    "status": "STATUS_SUCCEEDED",
+    "steps": [
+      {
+        "key": "create-nix-dir",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "Nix directory",
+        "undone": false,
+        "verb": "VERB_CREATING"
+      },
+      {
+        "key": "create-nix-tree",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "runtime directories",
+        "undone": false,
+        "verb": "VERB_CREATING"
+      },
+      {
+        "key": "create-users-and-groups",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "build users and groups",
+        "undone": false,
+        "verb": "VERB_CREATING"
+      },
+      {
+        "key": "fetch-runtime",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "Nix runtime",
+        "undone": false,
+        "verb": "VERB_INSTALLING"
+      },
+      {
+        "key": "write-nix-conf",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "runtime configuration",
+        "undone": false,
+        "verb": "VERB_WRITING"
+      },
+      {
+        "key": "configure-daemon",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "Nix daemon service",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "install-mix-daemon",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "mix daemon service",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      }
+    ],
+    "waits": [],
+    "warnings": []
+  },
+  "machine": {
+    "files": {
+      "/var/lib/mix/bin/mix-daemon": {
+        "contents": [
+          "-mix-daemon",
+          "+mix-daemon 2"
+        ]
+      }
+    }
+  },
+  "performed": [
+    "PutFile /var/lib/mix/bin/mix-daemon",
+    "DrainService mix-daemon.service",
+    "Commit changes"
+  ]
+}

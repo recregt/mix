@@ -25,6 +25,7 @@ self_named_module_files = "deny"
 divan = { version = "=5.0.2", package = "codspeed-divan-compat" }
 futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
 nix = { version = "0.31.3", features = ["user", "fs"] }
+insta = { version = "1.49.0", features = ["json"] }
 proptest = "1.11.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.145", features = ["raw_value"] }

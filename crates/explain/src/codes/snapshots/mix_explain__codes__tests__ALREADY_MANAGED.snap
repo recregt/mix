@@ -1,0 +1,20 @@
+---
+source: crates/explain/src/codes/tests.rs
+expression: shown(code)
+---
+$ mix install ripgrep
+error: this system already has Nix, set up by something other than `mix`
+
+note: `mix` needs to set up its own, and uninstalling the existing one removes everything you installed with it
+help: uninstall it, then run `mix install` again
+
+$ mix explain already-managed
+ALREADY_MANAGED
+
+Nix is already installed here by something other than `mix`.
+
+`mix` needs to own its installation. Uninstalling the existing one removes everything installed with it.
+
+To fix it:
+  - uninstall the existing Nix
+  - run the command again

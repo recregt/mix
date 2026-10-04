@@ -1,0 +1,50 @@
+---
+source: crates/render/src/replay.rs
+expression: "std::str::from_utf8(observed).expect(\"what mix prints is UTF-8\")"
+---
+     Checked /nix
+warning: /etc/nix/nix.conf was changed outside `mix`
+ --> /etc/nix/nix.conf:1:1
+  |
+1 | build-users-group = nixbuild
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ differs from what `mix` wrote
+  |
+ ::: /etc/nix/nix.conf:4:1
+  |
+4 | trusted-users = ciuser
+  | ^^^^^^^^^^^^^^^^^^^^^^ not written by `mix`
+  |
+  = note: lines `mix` wrote are missing at line 3
+help: `mix repair` puts back what `mix` wrote
+  |
+1 - build-users-group = nixbuild
+1 + build-users-group = nixbld
+  |
+3 + max-jobs = auto
+  |
+4 - trusted-users = ciuser
+  |
+
+warning: the unit file for nix-daemon.service was changed outside `mix`
+  --> /etc/systemd/system/nix-daemon.service:18:1
+   |
+18 | Nice=10
+   | ^^^^^^^ not in the Nix runtime's copy
+   |
+help: `mix repair` puts back the Nix runtime's copy
+   |
+18 - Nice=10
+   |
+
+warning: /nix/var/nix/profiles has the wrong permissions
+  |
+  = note: its mode is 700, and `mix` set 755
+
+warning: default profile is missing
+  |
+  = note: `mix repair` can't restore it
+  = help: run `mix bootstrap` to reinstall it
+
+error: found 4 problems
+  |
+  = help: run `mix repair` to fix the ones it can

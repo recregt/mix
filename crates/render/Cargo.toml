@@ -12,6 +12,7 @@ mix-ui = { path = "../ui" }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+insta = { workspace = true }
 mix-core = { path = "../core" }
 tempfile = { workspace = true }
 

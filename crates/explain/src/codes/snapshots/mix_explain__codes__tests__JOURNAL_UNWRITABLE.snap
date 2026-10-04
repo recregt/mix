@@ -1,0 +1,18 @@
+---
+source: crates/explain/src/codes/tests.rs
+expression: shown(code)
+---
+$ mix install ripgrep
+error: `mix` couldn't record its progress
+
+note: if this command is interrupted, `mix repair` may not be able to finish it
+
+$ mix explain journal-unwritable
+JOURNAL_UNWRITABLE
+
+`mix` could not record its progress.
+
+`mix` writes down each change before making it, so an interrupted command can be finished or undone later. Writing that record failed, usually because `/var/lib/mix` is full or read-only. The command itself went on, but if it is interrupted before it ends, `mix repair` may not be able to finish it.
+
+To fix it:
+  - make room in `/var/lib/mix`, or make it writable

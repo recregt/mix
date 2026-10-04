@@ -1,0 +1,18 @@
+---
+source: crates/explain/src/codes/tests.rs
+expression: shown(code)
+---
+$ mix install ripgrep
+error: couldn't install ripgrep
+
+help: run it again with `-v` to see what went wrong
+
+$ mix explain spawn-failed
+SPAWN_FAILED
+
+`mix` could not start a program it needs, such as `nix`.
+
+The program is missing, or it is not executable.
+
+To fix it:
+  - run `mix doctor` to see whether the runtime is installed

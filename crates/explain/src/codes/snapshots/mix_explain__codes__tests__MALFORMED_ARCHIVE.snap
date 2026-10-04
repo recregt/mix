@@ -1,0 +1,18 @@
+---
+source: crates/explain/src/codes/tests.rs
+expression: shown(code)
+---
+$ mix install ripgrep
+error: the downloaded setup files aren't in the expected format
+
+help: check that the mirror given with `--mirror` serves the right files
+
+$ mix explain malformed-archive
+MALFORMED_ARCHIVE
+
+A downloaded archive is not laid out the way the Nix runtime is.
+
+The archive unpacked, but its contents are not what `mix` installs. This usually means the mirror serves a different file.
+
+To fix it:
+  - check that the mirror given with `--mirror` serves the official Nix release

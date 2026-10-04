@@ -1,0 +1,5 @@
+---
+source: crates/render/src/replay.rs
+expression: "std::str::from_utf8(observed).expect(\"what mix prints is UTF-8\")"
+---
+

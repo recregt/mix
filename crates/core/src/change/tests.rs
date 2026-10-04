@@ -1,19 +1,18 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 
-use mix_events::v1::Command;
-use mix_events::{Outbox, ROOT, Start, Tree};
+use insta::assert_json_snapshot;
+use mix_events::ROOT;
+use mix_events::v1::command::Request;
+use mix_events::v1::{CleanRequest, InstallRequest, RemoveRequest};
 
 use super::*;
-use crate::action::Digest;
-use crate::action::{Expect, Kind};
+use crate::action::{Digest, Expect};
 use crate::bootstrap::{Runtime, Settings};
-use crate::journal::{Record, Recovery, recover};
-use crate::plan::{Input, Next, Report, Runner, Verdict, make_guard};
+use crate::plan::{Runner, Verdict};
 use crate::policy::Policy;
 use crate::targets::UserConfig;
+use crate::testkit::{Run, Script, drive, recover, requested};
 use crate::world::World;
-use mix_events::v1::Cancellation;
 
 fn manifest(packages: &[&str]) -> StateManifest {
     StateManifest {
@@ -352,34 +351,21 @@ fn config() -> UserConfig {
     }
 }
 
-fn drive(world: &mut World, mut runner: Runner, fail: impl Fn(&Action) -> bool) -> Report {
-    make_guard!(guard);
-    let mut runner = runner.brand(guard);
-    let mut tree = Tree::new(
-        Arc::new(Outbox::new("request", || {})),
-        Arc::new(|| None),
-        Start::command("install", Command::default()),
-    );
-    let mut input = None;
-    loop {
-        match runner.step(&mut tree, input.take()) {
-            Next::Observe(queries) => {
-                input = Some(Input::Facts(Ok(queries
-                    .iter()
-                    .map(|query| world.observe(query))
-                    .collect())));
-            }
-            Next::Perform(action) if fail(&action) => {
-                input = Some(Input::Done(Err(Failure::CommandFailed {
-                    program: "nix build".into(),
-                    status: Some(1),
-                    output_tail: "error: attribute missing".into(),
-                })));
-            }
-            Next::Perform(action) => input = Some(Input::Done(world.apply(&action))),
-            Next::Finished(closed) => return runner.report(closed).clone(),
-        }
-    }
+fn install_request(packages: &[String]) -> Request {
+    Request::Install(InstallRequest {
+        packages: packages.to_vec(),
+    })
+}
+
+fn remove_request(packages: &[String]) -> Request {
+    Request::Remove(RemoveRequest {
+        packages: packages.to_vec(),
+    })
+}
+
+fn run(world: &mut World, request: Request, change: &Change, script: &Script) -> Run {
+    let steps = steps(&user(), change, mix_events::v1::Verb::Installing).unwrap();
+    drive(world, Runner::new(ROOT, steps), requested(request), script)
 }
 
 fn bootstrapped() -> World {
@@ -409,12 +395,13 @@ fn bootstrapped() -> World {
         request: "bootstrap".into(),
         daemon: "/usr/local/bin/mix-daemon".into(),
     };
-    let report = drive(
+    let run = drive(
         &mut world,
         Runner::new(ROOT, crate::bootstrap::steps(&settings)),
-        |_| false,
+        requested(Request::Bootstrap(Box::default())),
+        &Script::default(),
     );
-    assert_eq!(report.verdict, Verdict::Succeeded);
+    assert_eq!(run.report().verdict, Verdict::Succeeded);
     world
 }
 
@@ -439,89 +426,80 @@ fn active(world: &World) -> Option<u64> {
     world.profile(&user()).and_then(|profile| profile.active)
 }
 
+fn id_of(world: &World, path: PathBuf) -> crate::action::FileId {
+    match world.observe(&Query::Path(path)) {
+        Fact::Path(facts) => facts.id.unwrap(),
+        other => panic!("a file is observed as a path, not {other:?}"),
+    }
+}
+
 #[test]
 fn an_install_writes_the_list_activates_it_and_records_it() {
     let mut world = bootstrapped();
-    let before = active(&world);
+    let before = world.clone();
+    let expected = vec![
+        Expect::Present(id_of(&world, state_path())),
+        Expect::Present(id_of(&world, home_nix_path())),
+    ];
     let requested = names(&["ripgrep"]);
     let change = install(&requested, settled_in(&world)).unwrap();
 
-    let report = drive(
+    let run = run(
         &mut world,
-        Runner::new(
-            ROOT,
-            steps(&user(), &change, mix_events::v1::Verb::Installing).unwrap(),
-        ),
-        |_| false,
+        install_request(&requested),
+        &change,
+        &Script::default(),
     );
 
-    assert_eq!(report.verdict, Verdict::Succeeded);
-    let rendered = render(&user(), &manifest(&["git", "ripgrep"])).unwrap();
-    assert_eq!(
-        world.contents(state_path()),
-        Some(rendered.state.as_bytes())
-    );
-    assert_eq!(
-        world.contents(home_nix_path()),
-        Some(rendered.home_nix.as_bytes())
-    );
-    assert_ne!(active(&world), before);
-    assert!(matches!(
-        world.observe(&Query::Path(mix_state_dir(&user().home).join(".git"))),
-        Fact::Path(facts) if facts.kind == crate::action::Kind::Directory
-    ));
+    assert_json_snapshot!(run.case(&before, &world));
+    let expects: Vec<Expect> = run
+        .performed
+        .iter()
+        .filter_map(|action| match action {
+            Action::PutFile { expect, .. } => Some(*expect),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(expects, expected, "a write replaces only the file it read");
 }
 
 #[test]
 fn a_failed_activation_puts_both_files_back() {
     let mut world = bootstrapped();
-    let state_before = world.contents(state_path()).map(<[u8]>::to_vec);
-    let home_before = world.contents(home_nix_path()).map(<[u8]>::to_vec);
-    let active_before = active(&world);
+    let before = world.clone();
     let requested = names(&["doesnotexistinnixpkgs"]);
     let change = install(&requested, settled_in(&world)).unwrap();
-
-    let report = drive(
-        &mut world,
-        Runner::new(
-            ROOT,
-            steps(&user(), &change, mix_events::v1::Verb::Installing).unwrap(),
-        ),
+    let script = Script::failing_when(
         |action| matches!(action, Action::ActivateProfile { .. }),
+        Failure::CommandFailed {
+            program: "nix build".into(),
+            status: Some(1),
+            output_tail: "error: attribute missing".into(),
+        },
     );
 
-    assert!(matches!(report.verdict, Verdict::Failed { .. }));
-    assert!(report.rollback_failures.is_empty());
-    assert_eq!(
-        world.contents(state_path()).map(<[u8]>::to_vec),
-        state_before
-    );
-    assert_eq!(
-        world.contents(home_nix_path()).map(<[u8]>::to_vec),
-        home_before
-    );
-    assert_eq!(active(&world), active_before);
+    let run = run(&mut world, install_request(&requested), &change, &script);
+
+    assert_json_snapshot!(run.case(&before, &world));
 }
 
 #[test]
 fn a_list_restored_from_the_profile_is_written_without_activating() {
     let mut world = bootstrapped();
     world.with_file(state_path(), b"{broken", 0o644, (1000, 1000));
-    let active_before = active(&world);
+    let before = world.clone();
     let generation = manifest(&["git"]).render();
     let requested = names(&["git"]);
     let change = install(&requested, settle(Some("{broken"), Some(&generation))).unwrap();
-    let steps = steps(&user(), &change, mix_events::v1::Verb::Installing).unwrap();
 
-    assert_eq!(steps.len(), 1);
-    let report = drive(&mut world, Runner::new(ROOT, steps), |_| false);
-
-    assert_eq!(report.verdict, Verdict::Succeeded);
-    assert_eq!(
-        world.contents(state_path()),
-        Some(manifest(&["git"]).render().as_bytes())
+    let run = run(
+        &mut world,
+        install_request(&requested),
+        &change,
+        &Script::default(),
     );
-    assert_eq!(active(&world), active_before);
+
+    assert_json_snapshot!(run.case(&before, &world));
 }
 
 #[test]
@@ -547,99 +525,30 @@ fn settled_with_profile(world: &World) -> Settled {
     )
 }
 
-type Decide = fn(&[String], Settled) -> Change;
-
-fn installing(requested: &[String], settled: Settled) -> Change {
-    install(requested, settled).unwrap()
+#[derive(Clone, Copy)]
+enum Verb {
+    Install,
+    Remove,
 }
 
-fn removing(requested: &[String], settled: Settled) -> Change {
-    remove(requested, settled).unwrap()
-}
-
-fn command(world: &mut World, decide: Decide, requested: &[String]) {
-    let change = decide(requested, settled_with_profile(world));
-    let steps = steps(&user(), &change, mix_events::v1::Verb::Installing).unwrap();
-    let report = drive(world, Runner::new(ROOT, steps), |_| false);
-    assert_eq!(report.verdict, Verdict::Succeeded);
-}
-
-fn crashing_command(
-    world: &mut World,
-    decide: Decide,
-    requested: &[String],
-    crash_at: usize,
-    after_change: bool,
-) -> Option<Vec<Record>> {
-    let change = decide(requested, settled_with_profile(world));
-    let mut runner = Runner::new(
-        ROOT,
-        steps(&user(), &change, mix_events::v1::Verb::Installing).unwrap(),
-    );
-    make_guard!(guard);
-    let mut runner = runner.brand(guard);
-    let mut tree = Tree::new(
-        Arc::new(Outbox::new("request", || {})),
-        Arc::new(|| None),
-        Start::command("change", Command::default()),
-    );
-    let mut records = vec![Record::Began {
-        request: "r".into(),
-    }];
-    let mut input = None;
-    let mut seq = 0;
-    loop {
-        match runner.step(&mut tree, input.take()) {
-            Next::Observe(queries) => {
-                input = Some(Input::Facts(Ok(queries
-                    .iter()
-                    .map(|query| world.observe(query))
-                    .collect())));
-            }
-            Next::Perform(action) => {
-                if action == Action::Commit {
-                    records.push(Record::Committing);
-                }
-                let undo = world
-                    .clone()
-                    .apply(&action)
-                    .expect("the action applies")
-                    .undo;
-                records.push(Record::Prepared { seq, undo });
-                if seq as usize == crash_at && !after_change {
-                    return Some(records);
-                }
-                let outcome = world.apply(&action);
-                if seq as usize == crash_at && after_change {
-                    return Some(records);
-                }
-                records.push(Record::Done { seq });
-                if action == Action::Commit {
-                    records.push(Record::Ended);
-                }
-                seq += 1;
-                input = Some(Input::Done(outcome));
-            }
-            Next::Finished(_) => return None,
-        }
+fn decided(verb: Verb, requested: &[String], world: &World) -> (Request, Change) {
+    let settled = settled_with_profile(world);
+    match verb {
+        Verb::Install => (
+            install_request(requested),
+            install(requested, settled).unwrap(),
+        ),
+        Verb::Remove => (
+            remove_request(requested),
+            remove(requested, settled).unwrap(),
+        ),
     }
 }
 
-fn recovered(world: &mut World, records: &[Record]) {
-    match recover(records) {
-        Recovery::Nothing => {}
-        Recovery::RollBack { uncertain, certain } => {
-            for action in uncertain {
-                let _ = world.apply(&action);
-            }
-            for action in certain {
-                world.apply(&action).expect("a certain undo applies");
-            }
-        }
-        Recovery::FinishCommit { .. } => {
-            world.apply(&Action::Commit).expect("the commit finishes");
-        }
-    }
+fn command(world: &mut World, verb: Verb, requested: &[String]) {
+    let (request, change) = decided(verb, requested, world);
+    let run = run(world, request, &change, &Script::default());
+    assert_eq!(run.report().verdict, Verdict::Succeeded);
 }
 
 fn listed(world: &World) -> Vec<String> {
@@ -651,7 +560,7 @@ fn listed(world: &World) -> Vec<String> {
 struct Scenario {
     name: &'static str,
     base: World,
-    decide: Decide,
+    verb: Verb,
     requested: Vec<String>,
     wanted: Vec<String>,
 }
@@ -659,21 +568,21 @@ struct Scenario {
 fn scenarios() -> Vec<Scenario> {
     let installed = {
         let mut world = bootstrapped();
-        command(&mut world, installing, &names(&["ripgrep", "fd"]));
+        command(&mut world, Verb::Install, &names(&["ripgrep", "fd"]));
         world
     };
     vec![
         Scenario {
             name: "install",
             base: bootstrapped(),
-            decide: installing,
+            verb: Verb::Install,
             requested: names(&["ripgrep", "fd"]),
             wanted: names(&["fd", "git", "ripgrep"]),
         },
         Scenario {
             name: "remove",
             base: installed,
-            decide: removing,
+            verb: Verb::Remove,
             requested: names(&["ripgrep"]),
             wanted: names(&["fd", "git"]),
         },
@@ -685,7 +594,7 @@ fn a_crash_at_any_action_of_a_change_is_settled_by_the_next_command() {
     for Scenario {
         name,
         base,
-        decide,
+        verb,
         requested,
         wanted,
     } in scenarios()
@@ -693,25 +602,29 @@ fn a_crash_at_any_action_of_a_change_is_settled_by_the_next_command() {
         let mut crash_at = 0;
         loop {
             let mut tried = false;
-            for (after_change, recovering) in
-                [(false, true), (true, true), (false, false), (true, false)]
+            for (after, recovering) in [(false, true), (true, true), (false, false), (true, false)]
             {
                 let mut world = base.clone();
-                let Some(records) =
-                    crashing_command(&mut world, decide, &requested, crash_at, after_change)
-                else {
+                let (request, change) = decided(verb, &requested, &world);
+                let crashed = run(
+                    &mut world,
+                    request,
+                    &change,
+                    &Script::crashing(crash_at, after),
+                );
+                if !crashed.crashed {
                     continue;
-                };
+                }
                 tried = true;
                 let at = format!(
-                    "{name}: crash at action {crash_at}, after it: {after_change}, \
+                    "{name}: crash at action {crash_at}, after it: {after}, \
                      journal recovered: {recovering}"
                 );
 
                 if recovering {
-                    recovered(&mut world, &records);
+                    recover(&mut world, &crashed.journal);
                 }
-                command(&mut world, decide, &requested);
+                command(&mut world, verb, &requested);
 
                 assert_eq!(
                     world.contents(state_path()),
@@ -737,12 +650,12 @@ fn a_finished_change_leaves_the_list_equal_to_the_profile() {
     for Scenario {
         name,
         base: mut world,
-        decide,
+        verb,
         requested,
         wanted,
     } in scenarios()
     {
-        command(&mut world, decide, &requested);
+        command(&mut world, verb, &requested);
 
         assert_eq!(
             world.contents(state_path()),
@@ -751,93 +664,6 @@ fn a_finished_change_leaves_the_list_equal_to_the_profile() {
         );
         assert_eq!(listed(&world), wanted, "{name}");
     }
-}
-
-fn performed(
-    world: &mut World,
-    change: &Change,
-    stop_before: Option<usize>,
-) -> (Report, Vec<Action>) {
-    let mut runner = Runner::new(
-        ROOT,
-        steps(&user(), change, mix_events::v1::Verb::Installing).unwrap(),
-    );
-    make_guard!(guard);
-    let mut runner = runner.brand(guard);
-    let mut tree = Tree::new(
-        Arc::new(Outbox::new("request", || {})),
-        Arc::new(|| None),
-        Start::command("install", Command::default()),
-    );
-    let mut input = None;
-    let mut actions = Vec::new();
-    let mut forward = 0;
-    loop {
-        match runner.step(&mut tree, input.take()) {
-            Next::Observe(queries) => {
-                input = Some(Input::Facts(Ok(queries
-                    .iter()
-                    .map(|query| world.observe(query))
-                    .collect())));
-            }
-            Next::Perform(action) => {
-                if !runner.rolling_back() && action != Action::Commit {
-                    if Some(forward) == stop_before {
-                        runner.stop(Cancellation::Interrupted);
-                    }
-                    forward += 1;
-                }
-                actions.push(action.clone());
-                input = Some(Input::Done(world.apply(&action)));
-            }
-            Next::Finished(closed) => return (runner.report(closed).clone(), actions),
-        }
-    }
-}
-
-#[test]
-fn an_install_performs_exactly_the_writes_the_activation_the_record_and_the_commit() {
-    let mut world = bootstrapped();
-    let state_id = match world.observe(&Query::Path(state_path())) {
-        Fact::Path(facts) => facts.id.unwrap(),
-        other => panic!("the state file is observed as a path, not {other:?}"),
-    };
-    let home_id = match world.observe(&Query::Path(home_nix_path())) {
-        Fact::Path(facts) => facts.id.unwrap(),
-        other => panic!("home.nix is observed as a path, not {other:?}"),
-    };
-    let requested = names(&["ripgrep"]);
-    let change = install(&requested, settled_in(&world)).unwrap();
-    let rendered = render(&user(), &change.manifest).unwrap();
-
-    let (report, actions) = performed(&mut world, &change, None);
-
-    assert_eq!(report.verdict, Verdict::Succeeded);
-    assert_eq!(
-        actions,
-        vec![
-            Action::PutFile {
-                path: state_path(),
-                contents: Arc::from(rendered.state.as_bytes()),
-                mode: 0o644,
-                owner: Some((1000, 1000)),
-                expect: Expect::Present(state_id),
-            },
-            Action::PutFile {
-                path: home_nix_path(),
-                contents: Arc::from(rendered.home_nix.as_bytes()),
-                mode: 0o644,
-                owner: Some((1000, 1000)),
-                expect: Expect::Present(home_id),
-            },
-            Action::ActivateProfile {
-                user: user(),
-                source: crate::action::FlakeSource::Git,
-            },
-            Action::RecordState { user: user() },
-            Action::Commit,
-        ]
-    );
 }
 
 #[test]
@@ -858,18 +684,19 @@ fn an_install_over_a_broken_list_restores_it_and_adds_the_package() {
     let mut world = bootstrapped();
     let generation = manifest(&["git", "fd"]).render();
     world.with_file(state_path(), b"{broken", 0o644, (1000, 1000));
+    let before = world.clone();
     let requested = names(&["ripgrep"]);
     let change = install(&requested, settle(Some("{broken"), Some(&generation))).unwrap();
 
-    let (report, actions) = performed(&mut world, &change, None);
+    let run = run(
+        &mut world,
+        install_request(&requested),
+        &change,
+        &Script::default(),
+    );
 
-    assert_eq!(report.verdict, Verdict::Succeeded);
     assert_eq!(change.source, Source::Generation);
-    assert_eq!(listed(&world), names(&["fd", "git", "ripgrep"]));
-    assert!(actions.contains(&Action::ActivateProfile {
-        user: user(),
-        source: crate::action::FlakeSource::Git,
-    }));
+    assert_json_snapshot!(run.case(&before, &world));
 }
 
 #[test]
@@ -877,14 +704,19 @@ fn a_remove_over_a_broken_list_restores_it_and_drops_the_package() {
     let mut world = bootstrapped();
     let generation = manifest(&["git", "fd"]).render();
     world.with_file(state_path(), b"{broken", 0o644, (1000, 1000));
+    let before = world.clone();
     let requested = names(&["fd"]);
     let change = remove(&requested, settle(Some("{broken"), Some(&generation))).unwrap();
 
-    let (report, _) = performed(&mut world, &change, None);
+    let run = run(
+        &mut world,
+        remove_request(&requested),
+        &change,
+        &Script::default(),
+    );
 
-    assert_eq!(report.verdict, Verdict::Succeeded);
     assert_eq!(change.source, Source::Generation);
-    assert_eq!(listed(&world), names(&["git"]));
+    assert_json_snapshot!(run.case(&before, &world));
 }
 
 #[test]
@@ -899,69 +731,51 @@ fn an_invalid_package_name_is_refused_before_any_action() {
 }
 
 #[test]
-fn an_interrupt_before_any_action_puts_the_change_back_unless_only_the_record_is_left() {
+fn an_interrupt_at_any_change_puts_the_change_back_unless_only_the_record_is_left() {
     let base = bootstrapped();
     let requested = names(&["ripgrep"]);
     let change = install(&requested, settled_in(&base)).unwrap();
-    let mut finished = base.clone();
-    let (_, actions) = performed(&mut finished, &change, None);
-    let forward = actions
-        .iter()
-        .filter(|action| **action != Action::Commit)
-        .count();
+    let finished = run(
+        &mut base.clone(),
+        install_request(&requested),
+        &change,
+        &Script::default(),
+    );
 
-    for stop_before in 0..forward {
+    for stop in 0..finished.changes {
         let mut world = base.clone();
 
-        let (report, actions) = performed(&mut world, &change, Some(stop_before));
+        let stopped = run(
+            &mut world,
+            install_request(&requested),
+            &change,
+            &Script::stopping_after(stop),
+        );
 
-        let record_left = actions
+        let record_left = finished
+            .performed
             .iter()
             .filter(|action| **action != Action::Commit)
             .position(|action| matches!(action, Action::RecordState { .. }))
-            == Some(stop_before);
+            == Some(stop);
+        let report = stopped.report();
         if record_left {
-            assert_eq!(
-                report.verdict,
-                Verdict::Succeeded,
-                "stop before {stop_before}"
-            );
+            assert_eq!(report.verdict, Verdict::Succeeded, "stop at {stop}");
             assert_eq!(listed(&world), names(&["git", "ripgrep"]));
         } else {
             assert!(
                 matches!(report.verdict, Verdict::Cancelled(_)),
-                "stop before {stop_before}: {:?}",
+                "stop at {stop}: {:?}",
                 report.verdict
             );
-            assert!(
-                report.rollback_failures.is_empty(),
-                "stop before {stop_before}"
-            );
+            assert!(report.rollback_failures.is_empty(), "stop at {stop}");
             assert_eq!(world.contents(state_path()), base.contents(state_path()));
             assert_eq!(
                 world.contents(home_nix_path()),
                 base.contents(home_nix_path())
             );
-            assert_eq!(active(&world), active(&base), "stop before {stop_before}");
+            assert_eq!(active(&world), active(&base), "stop at {stop}");
         }
-    }
-}
-
-#[test]
-fn the_written_files_keep_their_kind_and_owner() {
-    let mut world = bootstrapped();
-    let requested = names(&["ripgrep"]);
-    let change = install(&requested, settled_in(&world)).unwrap();
-
-    performed(&mut world, &change, None);
-
-    for path in [state_path(), home_nix_path()] {
-        let Fact::Path(facts) = world.observe(&Query::Path(path.clone())) else {
-            panic!("{} is observed as a path", path.display());
-        };
-        assert_eq!(facts.kind, Kind::File, "{}", path.display());
-        assert_eq!(facts.owner, (1000, 1000), "{}", path.display());
-        assert_eq!(facts.mode, 0o644, "{}", path.display());
     }
 }
 
@@ -1031,60 +845,45 @@ fn the_same_packages_requested_in_any_order_render_the_same_files() {
 #[test]
 fn a_list_written_in_another_order_returns_to_the_generation_already_built() {
     let mut world = bootstrapped();
-    command(&mut world, installing, &names(&["hello", "jq"]));
+    command(&mut world, Verb::Install, &names(&["hello", "jq"]));
     let built = active(&world);
-    command(&mut world, removing, &names(&["hello", "jq"]));
+    command(&mut world, Verb::Remove, &names(&["hello", "jq"]));
 
-    command(&mut world, installing, &names(&["jq", "hello"]));
+    command(&mut world, Verb::Install, &names(&["jq", "hello"]));
 
     assert_eq!(active(&world), built);
 }
 
-fn clean(world: &mut World, all: bool) -> Vec<Action> {
-    let performed = std::cell::RefCell::new(Vec::new());
-    let report = drive(
+fn clean(world: &mut World, all: bool) -> Run {
+    drive(
         world,
         Runner::new(ROOT, clean_steps(&user(), all)),
-        |action| {
-            performed.borrow_mut().push(action.clone());
-            false
-        },
-    );
-    assert_eq!(report.verdict, Verdict::Succeeded);
-    performed.into_inner()
+        requested(Request::Clean(CleanRequest { all })),
+        &Script::default(),
+    )
 }
 
 #[test]
 fn changes_keep_every_generation_until_a_clean() {
     let mut world = bootstrapped();
     for package in ["fd", "jq", "bat"] {
-        command(&mut world, installing, &names(&[package]));
+        command(&mut world, Verb::Install, &names(&[package]));
     }
-    let before = world.profile(&user()).unwrap().generations.len();
-    assert!(before >= 4);
+    let before = world.clone();
 
-    let performed = clean(&mut world, false);
+    let run = clean(&mut world, false);
 
-    let profile = world.profile(&user()).unwrap();
-    assert_eq!(
-        profile.generations,
-        profile.active.into_iter().collect::<Vec<_>>()
-    );
-    assert_eq!(listed(&world), names(&["bat", "fd", "git", "jq"]));
-    assert!(
-        !performed
-            .iter()
-            .any(|action| matches!(action, Action::CollectGarbage { .. }))
-    );
+    assert_json_snapshot!(run.case(&before, &world));
 }
 
 #[test]
 fn a_clean_with_all_also_collects_the_store() {
     let mut world = bootstrapped();
+    let before = world.clone();
 
-    let performed = clean(&mut world, true);
+    let run = clean(&mut world, true);
 
-    assert!(performed.contains(&Action::CollectGarbage { user: user() }));
+    assert_json_snapshot!(run.case(&before, &world));
 }
 
 #[test]

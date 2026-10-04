@@ -1,0 +1,85 @@
+---
+source: crates/core/src/change/tests.rs
+expression: "run.case(&before, &world)"
+---
+{
+  "document": {
+    "cancellation": "CANCELLATION_UNSPECIFIED",
+    "changes": [
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_GENERATION",
+        "status": "STATUS_SUCCEEDED",
+        "step": "prune",
+        "subject": "generation 1 of mix-user's profile",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_GENERATION",
+        "status": "STATUS_SUCCEEDED",
+        "step": "prune",
+        "subject": "generation 2 of mix-user's profile",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_GENERATION",
+        "status": "STATUS_SUCCEEDED",
+        "step": "prune",
+        "subject": "generation 3 of mix-user's profile",
+        "undone": false,
+        "unknown": []
+      }
+    ],
+    "command": "clean",
+    "dryRun": false,
+    "exit": 0,
+    "formatVersion": "1.0",
+    "problems": [],
+    "request": "request",
+    "status": "STATUS_SUCCEEDED",
+    "steps": [
+      {
+        "key": "prune",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "old generations",
+        "undone": false,
+        "verb": "VERB_REMOVING"
+      }
+    ],
+    "waits": [],
+    "warnings": []
+  },
+  "machine": {
+    "profiles": {
+      "1000": {
+        "after": {
+          "active": 4,
+          "dangling": [],
+          "generations": [
+            4
+          ]
+        },
+        "before": {
+          "active": 4,
+          "dangling": [],
+          "generations": [
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      }
+    }
+  },
+  "performed": [
+    "DeleteGeneration generation 1 of mix-user's profile",
+    "DeleteGeneration generation 2 of mix-user's profile",
+    "DeleteGeneration generation 3 of mix-user's profile",
+    "Commit changes"
+  ]
+}

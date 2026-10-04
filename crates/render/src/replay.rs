@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -553,7 +552,7 @@ fn doctor_reads_at_every_level_as_recorded() {
             (Detail::Action, "v"),
         ] {
             golden(
-                &format!("{name}-{suffix}.txt"),
+                &format!("{name}-{suffix}"),
                 rendered(&captured, level).as_bytes(),
             );
         }
@@ -635,19 +634,9 @@ fn rendered(captured: &Captured, level: Detail) -> String {
 }
 
 fn golden(name: &str, observed: &[u8]) {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/golden/events")
-        .join(name);
-    if std::env::var("MIX_UPDATE_GOLDEN").is_ok_and(|value| value == "1") {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, observed).unwrap();
-    }
-    let expected = std::fs::read(&path).unwrap_or_else(|_| panic!("{} is missing", path.display()));
-    assert_eq!(
-        String::from_utf8_lossy(observed),
-        String::from_utf8_lossy(&expected),
-        "{}",
-        path.display()
+    insta::assert_snapshot!(
+        name,
+        std::str::from_utf8(observed).expect("what mix prints is UTF-8")
     );
 }
 
@@ -664,7 +653,7 @@ fn every_kind_of_event_renders_at_every_level_as_recorded() {
             seen[index] = true;
         }
         let (bytes, captured) = captured(&envelopes);
-        golden(&format!("{name}.ndjson"), &bytes);
+        golden(&format!("{name}-events"), &bytes);
         for (level, suffix) in [
             (Detail::Outcome, "quiet"),
             (Detail::Step, "default"),
@@ -672,7 +661,7 @@ fn every_kind_of_event_renders_at_every_level_as_recorded() {
             (Detail::Trace, "vv"),
         ] {
             golden(
-                &format!("{name}-{suffix}.txt"),
+                &format!("{name}-{suffix}"),
                 rendered(&captured, level).as_bytes(),
             );
         }

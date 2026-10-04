@@ -509,17 +509,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_the_golden_files() {
-        for source in [
-            include_str!("../tests/golden/flake.nix"),
-            include_str!("../tests/golden/home.nix"),
-        ] {
-            let parsed = parse(source).unwrap();
-            assert_eq!(parsed.print() + "\n", source.split_once("\n\n").unwrap().1);
-        }
-    }
-
-    #[test]
     fn rejects_what_nix_rejects() {
         assert!(parse("{ a = 1; a = 2; }").is_err());
         assert!(parse("{ a = true; a = false; }").is_err());

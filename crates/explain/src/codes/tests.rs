@@ -1,7 +1,4 @@
-#![allow(clippy::disallowed_methods)]
-
-use std::path::PathBuf;
-
+use insta::assert_snapshot;
 use mix_events::Fault;
 use mix_events::v1::diagnostic::Detail;
 use mix_events::v1::{
@@ -76,7 +73,7 @@ fn sample(code: Code) -> Fault {
     Fault::Failed(diagnostic(code))
 }
 
-fn golden(code: Code) -> String {
+fn shown(code: Code) -> String {
     let words = render(
         &sample(code),
         &Context {
@@ -92,10 +89,6 @@ fn golden(code: Code) -> String {
     )
 }
 
-fn golden_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/explain")
-}
-
 #[test]
 fn every_code_has_a_long_text() {
     for code in every_code() {
@@ -104,37 +97,18 @@ fn every_code_has_a_long_text() {
 }
 
 #[test]
-fn the_list_reads_as_its_golden_file() {
-    let path = golden_dir().with_file_name("explain-list.txt");
-    let rendered = format!("$ mix explain --list\n{}\n", list_text(defined()));
-    if std::env::var("MIX_UPDATE_GOLDEN").is_ok_and(|value| value == "1") {
-        std::fs::write(&path, &rendered).unwrap();
-    }
-    let expected =
-        std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("{} is missing", path.display()));
-    assert_eq!(rendered, expected, "{}", path.display());
+fn the_list_reads_as_recorded() {
+    assert_snapshot!(
+        "explain-list",
+        format!("$ mix explain --list\n{}\n", list_text(defined()))
+    );
 }
 
 #[test]
-fn every_code_reads_as_its_golden_file() {
-    let update = std::env::var("MIX_UPDATE_GOLDEN").is_ok_and(|value| value == "1");
-    let dir = golden_dir();
+fn every_code_reads_as_recorded() {
     for code in every_code() {
-        let path = dir.join(format!("{}.txt", name(code)));
-        let rendered = golden(code);
-        if update {
-            std::fs::write(&path, &rendered).unwrap();
-        }
-        let expected = std::fs::read_to_string(&path).unwrap_or_else(|_| {
-            panic!(
-                "{} is missing; run with MIX_UPDATE_GOLDEN=1",
-                path.display()
-            )
-        });
-        assert_eq!(rendered, expected, "{}", path.display());
+        assert_snapshot!(name(code), shown(code));
     }
-    let recorded = std::fs::read_dir(&dir).unwrap().count();
-    assert_eq!(recorded, every_code().len(), "a golden file has no code");
 }
 
 #[test]

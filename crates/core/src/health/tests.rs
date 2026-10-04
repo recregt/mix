@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
-use mix_events::v1::Command;
-use mix_events::{Outbox, ROOT, Start, Tree};
+use insta::assert_json_snapshot;
+use mix_events::ROOT;
+use mix_events::v1::RepairRequest;
+use mix_events::v1::command::Request;
 
 use super::*;
 use crate::action::Digest;
@@ -12,9 +13,10 @@ use crate::paths::{
     DEFAULT_PROFILE_NIX_ENV, INDEX_LOCK, NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_UNIT,
     POLICY_FILE, STATE_FILE, mix_state_dir, repository_dir,
 };
-use crate::plan::{Input, Next, Report, Runner, StepOutcome, make_guard};
+use crate::plan::{Runner, StepOutcome};
 use crate::policy::Policy;
 use crate::targets::{UserConfig, targets};
+use crate::testkit::{Run, Script, drive, requested};
 use crate::world::World;
 
 /// The binding between what an inspection found and what repair can do about it.
@@ -90,30 +92,6 @@ fn user(name: &str, uid: u32) -> UserConfig {
     }
 }
 
-fn drive(world: &mut World, mut runner: Runner) -> Report {
-    make_guard!(guard);
-    let mut runner = runner.brand(guard);
-    let outbox = Arc::new(Outbox::new("request", || {}));
-    let mut tree = Tree::new(
-        outbox,
-        Arc::new(|| None),
-        Start::command("health", Command::default()),
-    );
-    let mut input = None;
-    loop {
-        match runner.step(&mut tree, input.take()) {
-            Next::Observe(queries) => {
-                input = Some(Input::Facts(Ok(queries
-                    .iter()
-                    .map(|query| world.observe(query))
-                    .collect())));
-            }
-            Next::Perform(action) => input = Some(Input::Done(world.apply(&action))),
-            Next::Finished(closed) => return runner.report(closed).clone(),
-        }
-    }
-}
-
 fn bootstrapped(users: &[UserConfig]) -> World {
     let mut world = World::default();
     world.with_file("/usr/local/bin/mix-daemon", b"mix-daemon", 0o755, (0, 0));
@@ -142,8 +120,13 @@ fn bootstrapped(users: &[UserConfig]) -> World {
             request: "bootstrap".into(),
             daemon: "/usr/local/bin/mix-daemon".into(),
         };
-        let report = drive(&mut world, Runner::new(ROOT, steps(&settings)));
-        assert_eq!(report.verdict, crate::plan::Verdict::Succeeded);
+        let run = drive(
+            &mut world,
+            Runner::new(ROOT, steps(&settings)),
+            requested(Request::Bootstrap(Box::default())),
+            &Script::default(),
+        );
+        assert_eq!(run.report().verdict, crate::plan::Verdict::Succeeded);
     }
     world
 }
@@ -162,11 +145,13 @@ fn audit(world: &World, config: &UserConfig) -> Vec<(String, Finding)> {
         .collect()
 }
 
-fn repair(world: &mut World, config: &UserConfig) -> Report {
+fn repair(world: &mut World, config: &UserConfig) -> Run {
     let policy = policy();
     drive(
         world,
         Runner::new(ROOT, repair_steps(targets(Some(config), &policy), "repair")).independent(),
+        requested(Request::Repair(RepairRequest {})),
+        &Script::default(),
     )
 }
 
@@ -577,7 +562,8 @@ fn every_finding_is_found_on_its_target_and_fixed_or_refused() {
             .collect();
 
         assert_eq!(audit(&world, &alice), expected, "{what}");
-        let report = repair(&mut world, &alice);
+        let run = repair(&mut world, &alice);
+        let report = run.report();
         let left: Vec<(String, Finding)> = expected
             .iter()
             .filter(|(_, finding)| finding.unfixable().is_some())
@@ -639,11 +625,13 @@ fn what_an_unrecovered_request_left_belongs_to_it_and_everything_else_is_cleaned
     world.with_file(&stray, b"{}", 0o644, (1000, 1000));
     world.journals = vec![r9()];
 
-    let before = audit(&world, &alice);
-    repair(&mut world, &alice);
+    let found = audit(&world, &alice);
+    let before = world.clone();
+    let run = repair(&mut world, &alice);
 
+    assert_json_snapshot!(run.case(&before, &world));
     assert_eq!(
-        before,
+        found,
         [
             (
                 crate::paths::JOURNAL_DIR.to_string(),
@@ -660,8 +648,6 @@ fn what_an_unrecovered_request_left_belongs_to_it_and_everything_else_is_cleaned
             ),
         ]
     );
-    assert!(world.files.contains_key(&its_backup));
-    assert!(!world.files.contains_key(&stray));
 }
 
 #[test]
@@ -674,14 +660,11 @@ fn a_rewritten_nix_conf_restarts_a_running_daemon() {
         })
         .unwrap();
     world.with_file(NIX_CONF_DEST, b"trusted-users = *\n", 0o644, (0, 0));
+    let before = world.clone();
 
-    let report = repair(&mut world, &alice);
+    let run = repair(&mut world, &alice);
 
-    assert!(
-        report
-            .steps
-            .contains(&(Cow::Borrowed(RESTART_NIX_DAEMON), StepOutcome::Changed))
-    );
+    assert_json_snapshot!(run.case(&before, &world));
 }
 
 #[test]
@@ -702,21 +685,12 @@ fn repairing_one_user_leaves_the_other_alone() {
         0o644,
         (1000, 1000),
     );
-    let before = world
-        .files
-        .get(&bob_state.join(crate::paths::HOME_NIX))
-        .cloned();
+    let before = world.clone();
 
-    repair(&mut world, &alice);
+    let run = repair(&mut world, &alice);
 
+    assert_json_snapshot!(run.case(&before, &world));
     assert_eq!(audit(&world, &alice), []);
-    assert_eq!(
-        world
-            .files
-            .get(&bob_state.join(crate::paths::HOME_NIX))
-            .cloned(),
-        before
-    );
 }
 
 #[test]

@@ -13,8 +13,14 @@ serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 generativity = "1.2.1"
+mix-render = { path = "../render", optional = true }
+
+[features]
+testkit = ["dep:mix-render"]
 
 [dev-dependencies]
+insta = { workspace = true }
+mix-render = { path = "../render" }
 proptest = { workspace = true }
 divan = { workspace = true }
 trybuild = "=1.0.121"

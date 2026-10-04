@@ -1,12 +1,15 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use mix_events::v1::{Cancellation, Command, NotRunReason, Status};
-use mix_events::{Ending, Outbox, Outcome as EventOutcome, ROOT, Start, Tree, validate};
+use insta::assert_json_snapshot;
+use mix_events::v1::command::Request;
+use mix_events::v1::{BootstrapRequest, Cancellation, NotRunReason};
+use mix_events::{Outcome as EventOutcome, ROOT, validate};
 
 use super::*;
 use crate::identity::InvokingUser;
-use crate::plan::{Input, Next, Report, Runner, Verdict, diagnostic, make_guard};
+use crate::plan::{Runner, Verdict};
+use crate::testkit::{Run, Script, difference, drive, requested};
 use crate::world::World;
 
 fn settings(user: Option<UserConfig>, force: bool) -> Settings {
@@ -46,177 +49,27 @@ fn machine() -> World {
     world
 }
 
-#[derive(Default, Clone, Copy)]
-struct Script {
-    fail_at: Option<usize>,
-    stop_after: Option<usize>,
-    fail_undo_at: Option<usize>,
-}
-
-struct Run {
-    report: Report,
-    stream: Vec<mix_events::v1::Envelope>,
-    changes: usize,
-    undos: usize,
-}
-
 fn run(world: &mut World, settings: &Settings, script: Script) -> Run {
-    let outbox = Arc::new(Outbox::new("request", || {}));
-    let mut tree = Tree::new(
-        outbox.clone(),
-        Arc::new(|| None),
-        Start::command("bootstrap", Command::default()),
-    );
-    let mut runner = Runner::new(ROOT, steps(settings));
-    make_guard!(guard);
-    let mut runner = runner.brand(guard);
-    let mut input = None;
-    let mut changes = 0;
-    let mut undos = 0;
-    let report = loop {
-        match runner.step(&mut tree, input.take()) {
-            Next::Observe(queries) => {
-                input = Some(Input::Facts(Ok(queries
-                    .iter()
-                    .map(|query| world.observe(query))
-                    .collect())));
-            }
-            Next::Perform(action) => {
-                let forward = !runner.rolling_back() && action != Action::Commit;
-                let undoing = runner.rolling_back();
-                let outcome = if (forward && script.fail_at == Some(changes))
-                    || (undoing && script.fail_undo_at == Some(undos))
-                {
-                    Err(Failure::Io {
-                        path: "/injected".into(),
-                        kind: std::io::ErrorKind::Other,
-                    })
-                } else {
-                    world.apply(&action)
-                };
-                if undoing {
-                    undos += 1;
-                }
-                if forward {
-                    if script.stop_after == Some(changes) {
-                        runner.stop(Cancellation::Interrupted);
-                    }
-                    changes += 1;
-                }
-                input = Some(Input::Done(outcome));
-            }
-            Next::Finished(closed) => break runner.report(closed).clone(),
-        }
-    };
-    let ending = match &report.verdict {
-        Verdict::Succeeded => Ending::succeeded(),
-        Verdict::Failed { failure, .. } => Ending::failed(diagnostic(failure)),
-        Verdict::Cancelled(cause) => Ending::cancelled(*cause),
-    };
-    tree.finish(ROOT, ending).unwrap();
-    drop(tree);
-    Run {
-        report,
-        stream: outbox.drain(),
-        changes,
-        undos,
-    }
-}
-
-fn difference(left: &World, right: &World) -> String {
-    let mut lines = Vec::new();
-    for (path, entry) in &left.files {
-        if right.files.get(path) != Some(entry) {
-            lines.push(format!(
-                "left has {}: {:?}",
-                path.display(),
-                entry.content_kind()
-            ));
-        }
-    }
-    for path in right.files.keys() {
-        if !left.files.contains_key(path) {
-            lines.push(format!("right has {}", path.display()));
-        }
-    }
-    for (name, unit) in &left.units {
-        if right.units.get(name).unwrap_or(&Default::default()) != unit {
-            lines.push(format!(
-                "unit {name}: {unit:?} vs {:?}",
-                right.units.get(name)
-            ));
-        }
-    }
-    if left.groups != right.groups {
-        lines.push(format!("groups {:?} vs {:?}", left.groups, right.groups));
-    }
-    if left.users.len() != right.users.len() {
-        lines.push(format!(
-            "{} users vs {}",
-            left.users.len(),
-            right.users.len()
-        ));
-    }
-    if left.profiles != right.profiles {
-        lines.push(format!(
-            "profiles {:?} vs {:?}",
-            left.profiles, right.profiles
-        ));
-    }
-    if left.pending() != right.pending() {
-        lines.push(format!(
-            "pending {:?} vs {:?}",
-            left.pending(),
-            right.pending()
-        ));
-    }
-    lines.join("\n")
-}
-
-fn contents(world: &World, path: &str) -> Option<String> {
-    world
-        .contents(path)
-        .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+    let request = Request::Bootstrap(Box::new(BootstrapRequest {
+        force: settings.force,
+        ..BootstrapRequest::default()
+    }));
+    drive(
+        world,
+        Runner::new(ROOT, steps(settings)),
+        requested(request),
+        &script,
+    )
 }
 
 #[test]
 fn a_fresh_bootstrap_builds_the_whole_machine() {
     let mut world = machine();
-    let settings = settings(None, false);
+    let before = world.clone();
 
-    let run = run(&mut world, &settings, Script::default());
+    let run = run(&mut world, &settings(None, false), Script::default());
 
-    assert_eq!(run.report.verdict, Verdict::Succeeded);
-    assert!(validate(&run.stream).is_ok());
-    assert_eq!(world.files[Path::new("/nix")].mode, 0o755);
-    assert!(world.contents(NIX_OWNERSHIP_MARKER).is_some());
-    for path in NIX_TREE_PATHS {
-        assert!(world.files.contains_key(Path::new(path)), "{path}");
-    }
-    assert_eq!(world.files[Path::new(NIXBLD_HOME)].mode, NIXBLD_HOME_MODE);
-    assert_eq!(world.groups[NIXBLD_GROUP].gid, NIXBLD_GID);
-    assert_eq!(world.groups[MIX_USERS_GROUP].gid, MIX_USERS_GID);
-    assert_eq!(world.users.len(), NIXBLD_USER_COUNT as usize);
-    assert_eq!(world.users["nixbld7"].uid, NIXBLD_UID_BASE + 7);
-    assert_eq!(
-        world.groups[NIXBLD_GROUP].members.len(),
-        NIXBLD_USER_COUNT as usize
-    );
-    assert_eq!(
-        contents(&world, NIX_CONF_DEST),
-        Some(settings.policy.nix_conf().to_string())
-    );
-    assert_eq!(
-        contents(&world, POLICY_FILE),
-        Some(settings.policy.render().to_string())
-    );
-    let Fact::Unit(unit) = world.observe(&Query::Unit(NIX_DAEMON_SOCKET_UNIT.into())) else {
-        panic!("a unit query is answered with unit facts");
-    };
-    assert_eq!(unit.load_state, "loaded");
-    assert_eq!(unit.active_state, "active");
-    assert!(unit.enabled());
-    assert!(!unit.needs_reload);
+    assert_json_snapshot!(run.case(&before, &world));
     assert!(world.pending().is_empty());
 }
 
@@ -229,48 +82,22 @@ fn a_second_bootstrap_changes_nothing() {
 
     let again = run(&mut world, &settings, Script::default());
 
-    assert_eq!(again.report.verdict, Verdict::Succeeded);
-    assert_eq!(again.changes, 0);
+    assert_json_snapshot!(again.case(&before, &world));
     assert_eq!(world, before);
-    let validated = validate(&again.stream).unwrap();
-    for step in steps(&settings) {
-        assert_eq!(
-            validated.outcome(&format!("bootstrap/plan/{}", step.key())),
-            Some(EventOutcome::Finished(Status::AlreadySatisfied)),
-            "{}",
-            step.key()
-        );
-    }
 }
 
 #[test]
 fn a_bootstrap_with_a_user_writes_their_files_as_theirs_and_enrols_them() {
     let mut world = machine();
-    let user = alice();
+    let before = world.clone();
 
     let run = run(
         &mut world,
-        &settings(Some(user.clone()), false),
+        &settings(Some(alice()), false),
         Script::default(),
     );
 
-    assert_eq!(run.report.verdict, Verdict::Succeeded);
-    let state = mix_state_dir(&user.user.home);
-    assert_eq!(world.files[&state].mode, MIX_STATE_DIR_MODE);
-    for file in [HOME_NIX, FLAKE_NIX, FLAKE_LOCK, STATE_FILE] {
-        assert_eq!(world.files[&state.join(file)].owner, (1000, 1000), "{file}");
-    }
-    assert_eq!(
-        contents(&world, state.join(STATE_FILE).to_str().unwrap()),
-        Some(StateManifest::seed_rendered().to_string())
-    );
-    assert!(
-        world.groups[MIX_USERS_GROUP]
-            .members
-            .contains(&"alice".to_string())
-    );
-    assert_eq!(world.profile(&user.user).and_then(|p| p.active), Some(1));
-    assert!(world.files.contains_key(&state.join(".git")));
+    assert_json_snapshot!(run.case(&before, &world));
 }
 
 #[test]
@@ -282,30 +109,22 @@ fn a_failure_at_any_change_leaves_the_machine_as_it_was() {
     for fail_at in 0..changes {
         let mut world = base.clone();
 
-        let run = run(
-            &mut world,
-            &settings,
-            Script {
-                fail_at: Some(fail_at),
-                ..Script::default()
-            },
-        );
+        let run = run(&mut world, &settings, Script::failing_at(fail_at));
 
         assert!(
-            matches!(run.report.verdict, Verdict::Failed { .. }),
+            matches!(run.report().verdict, Verdict::Failed { .. }),
             "{fail_at}"
         );
         assert!(
-            run.report.rollback_failures.is_empty(),
+            run.report().rollback_failures.is_empty(),
             "{fail_at}: {:?}",
-            run.report.rollback_failures
+            run.report().rollback_failures
         );
         assert!(
             world == base,
-            "failing at change {fail_at}:\n{}",
-            difference(&world, &base)
+            "failing at change {fail_at}:\n{:#}",
+            difference(&base, &world)
         );
-        assert!(validate(&run.stream).is_ok());
     }
 }
 
@@ -314,11 +133,8 @@ fn an_undo_that_fails_is_reported_and_every_other_undo_still_runs() {
     let base = machine();
     let settings = settings(Some(alice()), false);
     let last = run(&mut base.clone(), &settings, Script::default()).changes - 1;
-    let failing_last = Script {
-        fail_at: Some(last),
-        ..Script::default()
-    };
-    let undos = run(&mut base.clone(), &settings, failing_last).undos;
+    let failing_last = Script::failing_at(last);
+    let undos = run(&mut base.clone(), &settings, failing_last.clone()).undos;
 
     for fail_undo_at in 0..undos {
         let run = run(
@@ -326,21 +142,20 @@ fn an_undo_that_fails_is_reported_and_every_other_undo_still_runs() {
             &settings,
             Script {
                 fail_undo_at: Some(fail_undo_at),
-                ..failing_last
+                ..failing_last.clone()
             },
         );
 
         assert!(
-            matches!(run.report.verdict, Verdict::Failed { .. }),
+            matches!(run.report().verdict, Verdict::Failed { .. }),
             "{fail_undo_at}"
         );
-        assert!(!run.report.rollback_failures.is_empty(), "{fail_undo_at}");
+        assert!(!run.report().rollback_failures.is_empty(), "{fail_undo_at}");
         assert!(
             run.undos >= undos,
             "{fail_undo_at}: {} of {undos}",
             run.undos
         );
-        assert!(validate(&run.stream).is_ok(), "{fail_undo_at}");
         assert!(
             run.stream.iter().any(|envelope| matches!(
                 &envelope.event,
@@ -361,24 +176,17 @@ fn a_stop_after_any_change_leaves_the_machine_as_it_was() {
     for stop_after in 0..changes {
         let mut world = base.clone();
 
-        let run = run(
-            &mut world,
-            &settings,
-            Script {
-                stop_after: Some(stop_after),
-                ..Script::default()
-            },
-        );
+        let run = run(&mut world, &settings, Script::stopping_after(stop_after));
 
         assert_eq!(
-            run.report.verdict,
+            run.report().verdict,
             Verdict::Cancelled(Cancellation::Interrupted),
             "{stop_after}"
         );
         assert!(
             world == base,
-            "stopping after change {stop_after}:\n{}",
-            difference(&world, &base)
+            "stopping after change {stop_after}:\n{:#}",
+            difference(&base, &world)
         );
     }
 }
@@ -402,33 +210,22 @@ fn forcing_over_an_installation_replaces_it_and_a_failure_brings_it_back() {
 
     let mut replaced = installed.clone();
     let forced = run(&mut replaced, &settings, Script::default());
-    assert_eq!(forced.report.verdict, Verdict::Succeeded);
-    assert_eq!(
-        contents(&replaced, NIX_CONF_DEST),
-        Some(settings.policy.nix_conf().to_string())
-    );
+    assert_json_snapshot!(forced.case(&installed, &replaced));
     assert!(replaced.pending().is_empty());
 
     for fail_at in [0, changes / 2, changes - 1] {
         let mut world = installed.clone();
-        let failed = run(
-            &mut world,
-            &settings,
-            Script {
-                fail_at: Some(fail_at),
-                ..Script::default()
-            },
-        );
-        assert!(matches!(failed.report.verdict, Verdict::Failed { .. }));
+        let failed = run(&mut world, &settings, Script::failing_at(fail_at));
+        assert!(matches!(failed.report().verdict, Verdict::Failed { .. }));
         assert!(
-            failed.report.rollback_failures.is_empty(),
+            failed.report().rollback_failures.is_empty(),
             "{:?}",
-            failed.report.rollback_failures
+            failed.report().rollback_failures
         );
         assert!(
             world == installed,
-            "failing at change {fail_at} of {changes}:\n{}",
-            difference(&world, &installed)
+            "failing at change {fail_at} of {changes}:\n{:#}",
+            difference(&installed, &world)
         );
     }
 }
@@ -441,13 +238,7 @@ fn a_file_where_nix_belongs_is_refused_and_nothing_is_touched() {
 
     let run = run(&mut world, &settings(None, false), Script::default());
 
-    assert!(matches!(
-        &run.report.verdict,
-        Verdict::Failed {
-            step,
-            failure: Failure::Conflict { .. }
-        } if step == "create-nix-dir"
-    ));
+    assert_json_snapshot!(run.case(&before, &world));
     assert_eq!(world, before);
     assert_eq!(
         validate(&run.stream)
@@ -481,23 +272,8 @@ fn a_running_daemon_is_restarted_only_when_its_configuration_changed_after_it_st
     other.policy = Policy::new(Some("https://elsewhere.internal"), None).unwrap();
     let rewritten = run(&mut world, &other, Script::default());
 
-    assert_eq!(rewritten.report.verdict, Verdict::Succeeded);
+    assert_eq!(rewritten.report().verdict, Verdict::Succeeded);
     assert!(world.units[NIX_DAEMON_SERVICE_UNIT].since > Some(started));
-}
-
-fn operations(run: &Run) -> Vec<(mix_events::v1::Operation, String)> {
-    run.stream
-        .iter()
-        .filter_map(|envelope| match &envelope.event {
-            Some(mix_events::v1::envelope::Event::NodeStarted(started)) => match &started.kind {
-                Some(mix_events::v1::node_started::Kind::Action(action)) => {
-                    Some((action.operation(), action.subject.clone()))
-                }
-                _ => None,
-            },
-            _ => None,
-        })
-        .collect()
 }
 
 #[test]
@@ -513,19 +289,11 @@ fn a_new_daemon_binary_asks_the_running_daemon_to_drain_instead_of_restarting_it
         .clone()
         .or(Some(Arc::from(&b"[Service]"[..])));
     world.with_file("/usr/local/bin/mix-daemon", b"mix-daemon 2", 0o755, (0, 0));
+    let before = world.clone();
 
     let upgraded = run(&mut world, &settings(None, false), Script::default());
 
-    assert_eq!(upgraded.report.verdict, Verdict::Succeeded);
-    let operations = operations(&upgraded);
-    assert!(operations.contains(&(
-        mix_events::v1::Operation::DrainService,
-        MIX_DAEMON_SERVICE_UNIT.to_string()
-    )));
-    assert!(!operations.contains(&(
-        mix_events::v1::Operation::RestartUnit,
-        MIX_DAEMON_SERVICE_UNIT.to_string()
-    )));
+    assert_json_snapshot!(upgraded.case(&before, &world));
 }
 
 #[test]
@@ -610,18 +378,11 @@ fn a_runtime_whose_default_profile_was_lost_is_provisioned_again() {
         })
     ));
 
+    let before = world.clone();
+
     let again = run(&mut world, &settings, Script::default());
 
-    assert_eq!(again.report.verdict, Verdict::Succeeded);
-    assert!(again.changes > 0);
-    assert!(!matches!(
-        world.observe(&Query::Path(profile)),
-        Fact::Path(PathFacts {
-            kind: Kind::Missing,
-            ..
-        })
-    ));
-    assert!(validate(&again.stream).is_ok());
+    assert_json_snapshot!(again.case(&before, &world));
 }
 
 #[test]

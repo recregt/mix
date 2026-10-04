@@ -1,13 +1,16 @@
 use std::borrow::Cow;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use mix_events::v1::{Command, Envelope, NotRunReason, Status};
-use mix_events::{Ending, Outbox, Outcome as EventOutcome, ROOT, Start, Tree, validate};
+use insta::assert_json_snapshot;
+use mix_events::v1::command::Request;
+use mix_events::v1::{Command, NotRunReason, Status};
+use mix_events::{Outbox, Outcome as EventOutcome, ROOT, Start, Tree, validate};
 use proptest::prelude::*;
 
 use super::*;
 use crate::action::{Expect, Kind as PathKind};
+use crate::testkit::{self, Run, Script, recover, requested};
 use crate::world::World;
 
 struct EnsureDir {
@@ -166,93 +169,17 @@ fn bootstrap_like() -> Vec<Box<dyn StepSpec>> {
     ]
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-struct Script {
-    fail_at: Option<usize>,
-    stop_after: Option<usize>,
-    fail_undo_at: Option<usize>,
-}
-
-struct Run {
-    report: Report,
-    stream: Vec<Envelope>,
-    performed: Vec<Action>,
-}
-
 fn drive(world: &mut World, steps: Vec<Box<dyn StepSpec>>, script: Script) -> Run {
     drive_runner(world, Runner::new(ROOT, steps), script)
 }
 
-fn drive_runner(world: &mut World, mut runner: Runner, script: Script) -> Run {
-    make_guard!(guard);
-    let mut runner = runner.brand(guard);
-    let outbox = Arc::new(Outbox::new("request", || {}));
-    let mut tree = Tree::new(
-        outbox.clone(),
-        Arc::new(|| None),
-        Start::command("bootstrap", Command::default()),
-    );
-    let mut input = None;
-    let mut performed = Vec::new();
-    let mut forward = 0;
-    let mut undone = 0;
-    let mut rolling_back = false;
-    let report = loop {
-        match runner.step(&mut tree, input.take()) {
-            Next::Observe(queries) => {
-                input = Some(Input::Facts(Ok(queries
-                    .iter()
-                    .map(|query| world.observe(query))
-                    .collect())));
-            }
-            Next::Perform(action) => {
-                performed.push(action.clone());
-                let outcome = if rolling_back {
-                    undone += 1;
-                    if script.fail_undo_at == Some(undone - 1) {
-                        Err(Failure::Io {
-                            path: "/injected".into(),
-                            kind: std::io::ErrorKind::Other,
-                        })
-                    } else {
-                        world.apply(&action)
-                    }
-                } else if action == Action::Commit {
-                    world.apply(&action)
-                } else {
-                    forward += 1;
-                    if script.fail_at == Some(forward - 1) {
-                        rolling_back = true;
-                        Err(Failure::Io {
-                            path: "/injected".into(),
-                            kind: std::io::ErrorKind::Other,
-                        })
-                    } else {
-                        let outcome = world.apply(&action);
-                        if script.stop_after == Some(forward - 1) {
-                            runner.stop(Cancellation::Interrupted);
-                            rolling_back = true;
-                        }
-                        outcome
-                    }
-                };
-                input = Some(Input::Done(outcome));
-            }
-            Next::Finished(closed) => break runner.report(closed).clone(),
-        }
-    };
-    let ending = match &report.verdict {
-        Verdict::Succeeded => Ending::succeeded(),
-        Verdict::Failed { failure, .. } => Ending::failed(diagnostic(failure)),
-        Verdict::Cancelled(cause) => Ending::cancelled(*cause),
-    };
-    tree.finish(ROOT, ending).unwrap();
-    drop(tree);
-    Run {
-        report,
-        stream: outbox.drain(),
-        performed,
-    }
+fn drive_runner(world: &mut World, runner: Runner, script: Script) -> Run {
+    testkit::drive(
+        world,
+        runner,
+        requested(Request::Bootstrap(Box::default())),
+        &script,
+    )
 }
 
 fn outcome(run: &Run, path: &str) -> Option<EventOutcome> {
@@ -271,30 +198,19 @@ fn forward_actions(world: &World) -> usize {
 #[test]
 fn a_fresh_run_does_every_step_and_commits() {
     let mut world = World::default();
+    let before = world.clone();
 
     let run = drive(&mut world, bootstrap_like(), Script::default());
 
-    assert_eq!(run.report.verdict, Verdict::Succeeded);
-    assert_eq!(run.performed.last(), Some(&Action::Commit));
+    assert_json_snapshot!(run.case(&before, &world));
     assert!(world.pending().is_empty());
-    assert_eq!(
-        outcome(&run, "bootstrap/plan/write-nix-conf"),
-        Some(EventOutcome::Finished(Status::Succeeded))
-    );
 }
 
 #[test]
 fn every_action_and_every_undo_is_a_node_under_what_ran_it() {
     let mut world = World::default();
 
-    let run = drive(
-        &mut world,
-        bootstrap_like(),
-        Script {
-            fail_at: Some(1),
-            ..Script::default()
-        },
-    );
+    let run = drive(&mut world, bootstrap_like(), Script::failing_at(1));
 
     let started: Vec<(String, ActionNode)> = run
         .stream
@@ -348,38 +264,15 @@ fn every_action_and_every_undo_is_a_node_under_what_ran_it() {
 fn an_independent_step_that_fails_is_undone_alone_and_the_others_still_run() {
     let mut world = World::default();
 
+    let before = world.clone();
+
     let run = drive_runner(
         &mut world,
         Runner::new(ROOT, bootstrap_like()).independent(),
-        Script {
-            fail_at: Some(1),
-            ..Script::default()
-        },
+        Script::failing_at(1),
     );
 
-    assert!(
-        matches!(&run.report.verdict, Verdict::Failed { step, .. } if step == "create-nix-var"),
-        "{:?}",
-        run.report.verdict
-    );
-    let outcomes: Vec<(&str, bool)> = run
-        .report
-        .steps
-        .iter()
-        .map(|(step, outcome)| (step.as_ref(), matches!(outcome, StepOutcome::Changed)))
-        .collect();
-    assert_eq!(
-        outcomes,
-        [
-            ("create-nix-dir", true),
-            ("create-nix-var", false),
-            ("create-groups", true),
-            ("write-marker", true),
-            ("write-nix-conf", true),
-        ]
-    );
-    assert!(world.files.contains_key(Path::new("/nix")));
-    assert!(!world.files.contains_key(Path::new("/nix/var")));
+    assert_json_snapshot!(run.case(&before, &world));
     assert!(world.pending().is_empty());
     assert!(validate(&run.stream).is_ok());
 }
@@ -388,19 +281,15 @@ fn an_independent_step_that_fails_is_undone_alone_and_the_others_still_run() {
 fn an_independent_run_that_is_stopped_undoes_the_step_in_progress_and_keeps_the_rest() {
     let mut world = World::default();
 
+    let before = world.clone();
+
     let run = drive_runner(
         &mut world,
         Runner::new(ROOT, bootstrap_like()).independent(),
-        Script {
-            stop_after: Some(1),
-            ..Script::default()
-        },
+        Script::stopping_after(1),
     );
 
-    assert!(matches!(run.report.verdict, Verdict::Cancelled(_)));
-    assert!(world.files.contains_key(Path::new("/nix")));
-    assert!(!world.files.contains_key(Path::new("/nix/var")));
-    assert!(!world.groups.contains_key("nixbld"));
+    assert_json_snapshot!(run.case(&before, &world));
     assert!(world.pending().is_empty());
     assert_eq!(
         outcome(&run, "bootstrap/plan/create-groups"),
@@ -417,14 +306,8 @@ fn a_second_run_finds_everything_satisfied_and_does_nothing() {
 
     let run = drive(&mut world, bootstrap_like(), Script::default());
 
-    assert!(run.performed.is_empty(), "{:?}", run.performed);
+    assert_json_snapshot!(run.case(&before, &world));
     assert_eq!(world, before);
-    for step in ["create-nix-dir", "create-groups", "write-nix-conf"] {
-        assert_eq!(
-            outcome(&run, &format!("bootstrap/plan/{step}")),
-            Some(EventOutcome::Finished(Status::AlreadySatisfied))
-        );
-    }
 }
 
 #[test]
@@ -433,23 +316,15 @@ fn a_failure_at_any_action_leaves_the_world_as_it_was() {
     for fail_at in 0..forward_actions(&base) {
         let mut world = base.clone();
 
-        let run = drive(
-            &mut world,
-            bootstrap_like(),
-            Script {
-                fail_at: Some(fail_at),
-                ..Script::default()
-            },
-        );
+        let run = drive(&mut world, bootstrap_like(), Script::failing_at(fail_at));
 
         assert!(
-            matches!(run.report.verdict, Verdict::Failed { .. }),
+            matches!(run.report().verdict, Verdict::Failed { .. }),
             "{fail_at}: {:?}",
-            run.report.verdict
+            run.report().verdict
         );
-        assert!(run.report.rollback_failures.is_empty());
+        assert!(run.report().rollback_failures.is_empty());
         assert_eq!(world, base, "failing at action {fail_at}");
-        assert!(validate(&run.stream).is_ok());
     }
 }
 
@@ -462,29 +337,18 @@ fn a_stop_at_any_point_rolls_back_and_reports_what_was_not_reached() {
         let run = drive(
             &mut world,
             bootstrap_like(),
-            Script {
-                stop_after: Some(stop_after),
-                ..Script::default()
-            },
+            Script::stopping_after(stop_after),
         );
 
         assert_eq!(
-            run.report.verdict,
+            run.report().verdict,
             Verdict::Cancelled(Cancellation::Interrupted),
             "{stop_after}"
         );
         assert_eq!(world, base, "stopping after action {stop_after}");
-        assert!(validate(&run.stream).is_ok());
     }
     let mut world = base.clone();
-    let run = drive(
-        &mut world,
-        bootstrap_like(),
-        Script {
-            stop_after: Some(0),
-            ..Script::default()
-        },
-    );
+    let run = drive(&mut world, bootstrap_like(), Script::stopping_after(0));
     assert_eq!(
         outcome(&run, "bootstrap/plan/write-nix-conf"),
         Some(EventOutcome::NotRun(NotRunReason::NotReached))
@@ -498,27 +362,28 @@ fn a_stop_at_any_point_rolls_back_and_reports_what_was_not_reached() {
 #[test]
 fn a_failed_undo_is_reported_the_others_still_run_and_nothing_foreign_is_removed() {
     let mut world = World::default();
+    let before = world.clone();
     let last = forward_actions(&world) - 1;
 
     let run = drive(
         &mut world,
         bootstrap_like(),
         Script {
-            fail_at: Some(last),
             fail_undo_at: Some(0),
-            ..Script::default()
+            ..Script::failing_at(last)
         },
     );
 
+    assert_json_snapshot!(run.case(&before, &world));
     let failed: Vec<&str> = run
-        .report
+        .report()
         .rollback_failures
         .iter()
         .map(|(step, _)| step.as_ref())
         .collect();
     assert_eq!(failed, ["write-marker", "create-nix-dir"]);
     assert!(matches!(
-        run.report.rollback_failures[1].1,
+        run.report().rollback_failures[1].1,
         Failure::Conflict { .. }
     ));
     assert!(
@@ -546,45 +411,23 @@ fn a_failed_undo_is_reported_the_others_still_run_and_nothing_foreign_is_removed
 fn a_commit_that_fails_still_succeeds_and_warns() {
     let mut world = World::default();
     world.with_file("/etc/nix.conf", b"legacy", 0o644, (0, 0));
-    let outbox = Arc::new(Outbox::new("request", || {}));
-    let mut tree = Tree::new(
-        outbox.clone(),
-        Arc::new(|| None),
-        Start::command("bootstrap", Command::default()),
-    );
-    let mut runner = Runner::new(ROOT, bootstrap_like());
-    make_guard!(guard);
-    let mut runner = runner.brand(guard);
-    let mut input = None;
-    let report = loop {
-        match runner.step(&mut tree, input.take()) {
-            Next::Observe(queries) => {
-                input = Some(Input::Facts(Ok(queries
-                    .iter()
-                    .map(|query| world.observe(query))
-                    .collect())));
-            }
-            Next::Perform(Action::Commit) => {
-                input = Some(Input::Done(Err(Failure::Io {
-                    path: "/etc/.nix.conf.mix-backup-1".into(),
-                    kind: std::io::ErrorKind::PermissionDenied,
-                })));
-            }
-            Next::Perform(action) => input = Some(Input::Done(world.apply(&action))),
-            Next::Finished(closed) => break runner.report(closed).clone(),
-        }
-    };
-    tree.finish(ROOT, Ending::succeeded()).unwrap();
-    drop(tree);
-    let stream = outbox.drain();
+    let before = world.clone();
 
-    assert_eq!(report.verdict, Verdict::Succeeded);
+    let run = drive(
+        &mut world,
+        bootstrap_like(),
+        Script {
+            fail_commit: true,
+            failure: Failure::Io {
+                path: "/etc/.nix.conf.mix-backup-1".into(),
+                kind: std::io::ErrorKind::PermissionDenied,
+            },
+            ..Script::default()
+        },
+    );
+
+    assert_json_snapshot!(run.case(&before, &world));
     assert_eq!(world.pending().len(), 1);
-    assert!(validate(&stream).is_ok());
-    assert!(stream.iter().any(|envelope| matches!(
-        &envelope.event,
-        Some(mix_events::v1::envelope::Event::Diagnostic(_))
-    )));
 }
 
 #[test]
@@ -605,19 +448,11 @@ fn a_shielded_step_finishes_before_a_stop_takes_effect() {
         }),
     ];
 
-    let run = drive(
-        &mut world,
-        steps,
-        Script {
-            stop_after: Some(0),
-            ..Script::default()
-        },
-    );
+    let before = world.clone();
 
-    assert_eq!(
-        outcome(&run, "bootstrap/plan/activate"),
-        Some(EventOutcome::Finished(Status::Succeeded))
-    );
+    let run = drive(&mut world, steps, Script::stopping_after(0));
+
+    assert_json_snapshot!(run.case(&before, &world));
     assert_eq!(
         outcome(&run, "bootstrap/plan/later"),
         Some(EventOutcome::NotRun(NotRunReason::NotReached))
@@ -688,10 +523,9 @@ proptest! {
         }
         let mut world = base.clone();
 
-        let run = drive(&mut world, build(&kinds), Script { fail_at, stop_after, fail_undo_at: None });
+        let run = drive(&mut world, build(&kinds), Script { fail_at, stop_after, ..Script::default() });
 
-        prop_assert!(validate(&run.stream).is_ok(), "{:?}", validate(&run.stream));
-        match run.report.verdict {
+        match run.report().verdict {
             Verdict::Succeeded => {
                 prop_assert!(world.pending().is_empty());
                 let again = drive(&mut world.clone(), build(&kinds[kinds.len() - 1..]), Script::default());
@@ -699,43 +533,7 @@ proptest! {
             }
             _ => prop_assert_eq!(&world, &base),
         }
-        prop_assert!(run.report.rollback_failures.is_empty());
-    }
-}
-
-fn answer(
-    mut runner: Runner,
-    world: &mut World,
-    observe: impl Fn(&World, &[Query]) -> Result<Vec<Fact>, Failure>,
-    mut fail: impl FnMut(&Action) -> bool,
-) -> (Report, Vec<(Action, bool)>) {
-    make_guard!(guard);
-    let mut runner = runner.brand(guard);
-    let outbox = Arc::new(Outbox::new("request", || {}));
-    let mut tree = Tree::new(
-        outbox,
-        Arc::new(|| None),
-        Start::command("bootstrap", Command::default()),
-    );
-    let mut input = None;
-    let mut performed = Vec::new();
-    loop {
-        match runner.step(&mut tree, input.take()) {
-            Next::Observe(queries) => input = Some(Input::Facts(observe(world, &queries))),
-            Next::Perform(action) => {
-                performed.push((action.clone(), runner.shielded()));
-                let outcome = if fail(&action) {
-                    Err(Failure::Io {
-                        path: "/injected".into(),
-                        kind: std::io::ErrorKind::Other,
-                    })
-                } else {
-                    world.apply(&action)
-                };
-                input = Some(Input::Done(outcome));
-            }
-            Next::Finished(closed) => return (runner.report(closed).clone(), performed),
-        }
+        prop_assert!(run.report().rollback_failures.is_empty());
     }
 }
 
@@ -743,23 +541,21 @@ fn answer(
 fn a_step_that_cannot_be_observed_fails_and_rolls_back_what_came_before() {
     let base = World::default();
     let mut world = base.clone();
-    let runner = Runner::new(ROOT, bootstrap_like());
 
-    let (report, _) = answer(
-        runner,
+    let run = drive(
         &mut world,
-        |world, queries| {
-            if matches!(queries.first(), Some(Query::Group(_))) {
-                Err(Failure::SystemdUnreachable)
-            } else {
-                Ok(queries.iter().map(|query| world.observe(query)).collect())
-            }
+        bootstrap_like(),
+        Script {
+            unobservable: Some(|queries| {
+                matches!(queries.first(), Some(Query::Group(_)))
+                    .then_some(Failure::SystemdUnreachable)
+            }),
+            ..Script::default()
         },
-        |_| false,
     );
 
     assert_eq!(
-        report.verdict,
+        run.report().verdict,
         Verdict::Failed {
             step: "create-groups".into(),
             failure: Failure::SystemdUnreachable
@@ -771,14 +567,21 @@ fn a_step_that_cannot_be_observed_fails_and_rolls_back_what_came_before() {
 #[test]
 fn every_undo_is_performed_shielded_and_no_forward_action_is() {
     let mut world = World::default();
-    let runner = Runner::new(ROOT, bootstrap_like());
 
-    let (_, performed) = answer(
-        runner,
+    let run = drive(
         &mut world,
-        |world, queries| Ok(queries.iter().map(|query| world.observe(query)).collect()),
-        |action| matches!(action, Action::PutFile { path, .. } if path.ends_with("nix.conf")),
+        bootstrap_like(),
+        Script::failing_when(
+            |action| matches!(action, Action::PutFile { path, .. } if path.ends_with("nix.conf")),
+            Script::default().failure,
+        ),
     );
+    let performed: Vec<(Action, bool)> = run
+        .performed
+        .iter()
+        .cloned()
+        .zip(run.shielded.iter().copied())
+        .collect();
 
     let failed_at = performed
         .iter()
@@ -797,84 +600,6 @@ fn every_undo_is_performed_shielded_and_no_forward_action_is() {
     assert!(performed.len() > failed_at + 1);
 }
 
-fn crashing_run(
-    world: &mut World,
-    crash_at: usize,
-    after_change: bool,
-) -> Vec<crate::journal::Record> {
-    use crate::journal::Record;
-    let outbox = Arc::new(Outbox::new("request", || {}));
-    let mut tree = Tree::new(
-        outbox,
-        Arc::new(|| None),
-        Start::command("bootstrap", Command::default()),
-    );
-    let mut runner = Runner::new(ROOT, bootstrap_like());
-    make_guard!(guard);
-    let mut runner = runner.brand(guard);
-    let mut records = vec![Record::Began {
-        request: "r".into(),
-    }];
-    let mut input = None;
-    let mut seq = 0;
-    loop {
-        match runner.step(&mut tree, input.take()) {
-            Next::Observe(queries) => {
-                input = Some(Input::Facts(Ok(queries
-                    .iter()
-                    .map(|query| world.observe(query))
-                    .collect())));
-            }
-            Next::Perform(action) => {
-                if action == Action::Commit {
-                    records.push(Record::Committing);
-                }
-                let undo = world
-                    .clone()
-                    .apply(&action)
-                    .expect("the action applies")
-                    .undo;
-                records.push(Record::Prepared {
-                    seq,
-                    undo: undo.clone(),
-                });
-                if seq as usize == crash_at && !after_change {
-                    return records;
-                }
-                let outcome = world.apply(&action);
-                if seq as usize == crash_at && after_change {
-                    return records;
-                }
-                records.push(Record::Done { seq });
-                if action == Action::Commit {
-                    records.push(Record::Ended);
-                }
-                seq += 1;
-                input = Some(Input::Done(outcome));
-            }
-            Next::Finished(_) => return records,
-        }
-    }
-}
-
-fn recovered(world: &mut World, records: &[crate::journal::Record]) {
-    use crate::journal::{Recovery, recover};
-    match recover(records) {
-        Recovery::Nothing => {}
-        Recovery::RollBack { uncertain, certain } => {
-            for action in uncertain {
-                let _ = world.apply(&action);
-            }
-            for action in certain {
-                world.apply(&action).expect("a certain undo applies");
-            }
-        }
-        Recovery::FinishCommit { .. } => {
-            world.apply(&Action::Commit).expect("the commit finishes");
-        }
-    }
-}
-
 #[test]
 fn a_crash_before_or_after_any_change_is_recovered_to_the_start_or_the_finish() {
     let mut base = World::default();
@@ -886,11 +611,17 @@ fn a_crash_before_or_after_any_change_is_recovered_to_the_start_or_the_finish() 
     for crash_at in 0..changes {
         for after_change in [false, true] {
             let mut world = base.clone();
-            let records = crashing_run(&mut world, crash_at, after_change);
+            let crashed = drive(
+                &mut world,
+                bootstrap_like(),
+                Script::crashing(crash_at, after_change),
+            );
 
-            recovered(&mut world, &records);
+            recover(&mut world, &crashed.journal);
 
-            let committing = records.contains(&crate::journal::Record::Committing);
+            let committing = crashed
+                .journal
+                .contains(&crate::journal::Record::Committing);
             let expected = if committing { &finished } else { &base };
             assert_eq!(
                 &world, expected,
@@ -905,42 +636,17 @@ fn an_action_that_failed_after_taking_effect_is_undone_as_one_in_doubt() {
     let base = World::default();
     for failing in 0..forward_actions(&base) {
         let mut world = base.clone();
-        let outbox = Arc::new(Outbox::new("request", || {}));
-        let mut tree = Tree::new(
-            outbox,
-            Arc::new(|| None),
-            Start::command("bootstrap", Command::default()),
-        );
-        let mut runner = Runner::new(ROOT, bootstrap_like());
-        make_guard!(guard);
-        let mut runner = runner.brand(guard);
-        let mut input = None;
-        let mut forward = 0;
-        let report = loop {
-            match runner.step(&mut tree, input.take()) {
-                Next::Observe(queries) => {
-                    input = Some(Input::Facts(Ok(queries
-                        .iter()
-                        .map(|query| world.observe(query))
-                        .collect())));
-                }
-                Next::Perform(action) => {
-                    let outcome = world.apply(&action);
-                    let counts = !runner.rolling_back() && action != Action::Commit;
-                    input = Some(Input::Done(if counts && forward == failing {
-                        runner.in_doubt(outcome.expect("the action applies").undo);
-                        Err(Failure::Cancelled)
-                    } else {
-                        outcome
-                    }));
-                    if counts {
-                        forward += 1;
-                    }
-                }
-                Next::Finished(closed) => break runner.report(closed).clone(),
-            }
-        };
 
+        let run = drive(
+            &mut world,
+            bootstrap_like(),
+            Script {
+                in_doubt_at: Some(failing),
+                ..Script::default()
+            },
+        );
+
+        let report = run.report();
         assert!(matches!(report.verdict, Verdict::Cancelled(_)), "{failing}");
         assert!(
             report.rollback_failures.is_empty(),

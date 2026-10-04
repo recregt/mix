@@ -1,0 +1,19 @@
+---
+source: crates/explain/src/codes/tests.rs
+expression: shown(code)
+---
+$ mix install ripgrep
+error: couldn't download required setup files
+
+help: check your internet connection, then run `mix install` again
+
+$ mix explain network
+NETWORK
+
+A download failed.
+
+The Nix runtime or a package could not be fetched.
+
+To fix it:
+  - check your internet connection, or the mirror given with `--mirror`
+  - run the command again

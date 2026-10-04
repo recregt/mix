@@ -1,0 +1,23 @@
+---
+source: crates/render/src/replay.rs
+expression: "std::str::from_utf8(observed).expect(\"what mix prints is UTF-8\")"
+---
+     Writing package list
+     Writing /home/ciuser/.local/state/mix/state
+  Installing hello
+  Activating ciuser's profile
+Rolling back install of hello
+Rolling back package list
+   Restoring /home/ciuser/.local/state/mix/state
+error[unknown-package]: `hello` isn't a package `mix` can find
+
+help: check the name, then run `mix install` again
+
+Caused by:
+  error: attribute 'hello' missing
+         at /nix/store/x5piy362vlnbxc71zd6alpswvgsdsv55-source/home.nix:10:7:
+              9|       pkgs.git
+             10|       pkgs.hello
+               |       ^
+             11|     ];
+         Did you mean hello2?
