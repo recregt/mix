@@ -4,7 +4,6 @@ use mix_core::action::UserFacts;
 use mix_core::identity::InvokingUser;
 use mix_core::paths::RUNNING_PROGRAM;
 use mix_core::policy::Policy;
-use mix_core::testkit::Breakage;
 use mix_core::world::World;
 use mix_events::Render;
 use mix_events::v1::command::Request;
@@ -15,8 +14,7 @@ use mix_shell::request::lock::Locks;
 use mix_shell::{Caller, Session};
 use serde_json::Value;
 
-use crate::observation::of_world;
-use crate::{Backend, FaultKind, Faulted, Observation};
+use crate::suite::FaultKind;
 
 struct Recorded(Arc<Mutex<Vec<Envelope>>>);
 
@@ -100,6 +98,32 @@ impl Model {
             .clone()
     }
 
+    pub fn user(&self) -> &InvokingUser {
+        &self.user
+    }
+
+    pub async fn run(&self, request: Request, dry_run: bool, as_root: bool) -> Value {
+        self.request(request, dry_run, as_root, None)
+            .await
+            .expect("only an armed fault crashes a request")
+    }
+
+    pub async fn faulted(
+        &self,
+        request: Request,
+        as_root: bool,
+        at: usize,
+        kind: FaultKind,
+    ) -> Option<Value> {
+        let faults = Arc::new(Faults::default());
+        faults.arm(at, kind.fault());
+        let done = self
+            .request(request, false, as_root, Some(Arc::clone(&faults)))
+            .await;
+        faults.disarm();
+        done
+    }
+
     pub fn fork(&self) -> Self {
         Self::on(self.snapshot(), self.user.clone(), self.policy.clone())
     }
@@ -154,44 +178,5 @@ impl Model {
 impl Default for Model {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl Backend for Model {
-    fn user(&self) -> &InvokingUser {
-        &self.user
-    }
-
-    async fn run(&mut self, request: Request, dry_run: bool, as_root: bool) -> Value {
-        self.request(request, dry_run, as_root, None)
-            .await
-            .expect("only an armed fault crashes a request")
-    }
-
-    async fn faulted(
-        &mut self,
-        request: Request,
-        as_root: bool,
-        at: usize,
-        kind: FaultKind,
-    ) -> Faulted {
-        let faults = Arc::new(Faults::default());
-        faults.arm(at, kind.fault());
-        let done = self
-            .request(request, false, as_root, Some(Arc::clone(&faults)))
-            .await;
-        faults.disarm();
-        match done {
-            Some(document) => Faulted::Ended(document),
-            None => Faulted::Crashed,
-        }
-    }
-
-    async fn damage(&mut self, breakage: &Breakage) -> bool {
-        breakage.apply(&mut self.world.lock().unwrap_or_else(PoisonError::into_inner))
-    }
-
-    async fn observe(&mut self) -> Observation {
-        of_world(&self.snapshot(), &self.user)
     }
 }

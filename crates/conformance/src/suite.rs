@@ -1,24 +1,26 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 
-use mix_core::testkit::Breakage;
+use mix_core::testkit::{Breakage, Damage, owned};
+use mix_core::world::World;
 use mix_events::v1::command::Request;
 use mix_events::v1::{CleanRequest, DoctorRequest, InstallRequest, RemoveRequest, RepairRequest};
 use mix_shell::drive::Fault;
 use proptest::prelude::*;
+use proptest::sample::select;
+use proptest_state_machine::{ReferenceStateMachine, StateMachineTest};
 use serde_json::Value;
 
-use crate::{Backend, Faulted};
+use crate::model::Model;
 
 pub const PACKAGES: [&str; 3] = ["hello", "jq", "ripgrep"];
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Step {
-    Install(usize),
-    Remove(usize),
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Command {
+    Install(&'static str),
+    Remove(&'static str),
     Clean(bool),
     Repair,
-    Damage(usize),
-    Faulted(Box<Step>, usize, FaultKind),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +28,13 @@ pub enum FaultKind {
     Fail,
     CrashBefore,
     CrashAfter,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Transition {
+    Run(Command),
+    Damage(Breakage),
+    Faulted(Command, usize, FaultKind),
 }
 
 impl FaultKind {
@@ -41,27 +50,24 @@ impl FaultKind {
     }
 }
 
-pub fn command() -> impl Strategy<Value = Step> {
-    prop_oneof![
-        (0..PACKAGES.len()).prop_map(Step::Install),
-        (0..PACKAGES.len()).prop_map(Step::Remove),
-        any::<bool>().prop_map(Step::Clean),
-        Just(Step::Repair),
-    ]
-}
+impl Command {
+    fn request(self) -> (Request, bool) {
+        match self {
+            Command::Install(package) => (install(&[package]), false),
+            Command::Remove(package) => (
+                Request::Remove(RemoveRequest {
+                    packages: vec![package.to_string()],
+                }),
+                false,
+            ),
+            Command::Clean(all) => (Request::Clean(CleanRequest { all }), false),
+            Command::Repair => (repair(), true),
+        }
+    }
 
-pub fn step() -> impl Strategy<Value = Step> {
-    let fault = prop_oneof![
-        Just(FaultKind::Fail),
-        Just(FaultKind::CrashBefore),
-        Just(FaultKind::CrashAfter),
-    ];
-    prop_oneof![
-        3 => command(),
-        1 => any::<usize>().prop_map(Step::Damage),
-        1 => (command(), 0..12usize, fault)
-            .prop_map(|(command, at, kind)| Step::Faulted(Box::new(command), at, kind)),
-    ]
+    fn atomic(self) -> bool {
+        matches!(self, Command::Install(_) | Command::Remove(_))
+    }
 }
 
 pub fn install(packages: &[&str]) -> Request {
@@ -80,21 +86,6 @@ pub fn doctor() -> Request {
 
 pub fn repair() -> Request {
     Request::Repair(RepairRequest {})
-}
-
-pub fn request_of(step: &Step) -> Option<(Request, bool)> {
-    Some(match step {
-        Step::Install(package) => (install(&[PACKAGES[*package]]), false),
-        Step::Remove(package) => (
-            Request::Remove(RemoveRequest {
-                packages: vec![PACKAGES[*package].to_string()],
-            }),
-            false,
-        ),
-        Step::Clean(all) => (Request::Clean(CleanRequest { all: *all }), false),
-        Step::Repair => (repair(), true),
-        Step::Damage(_) | Step::Faulted(..) => return None,
-    })
 }
 
 pub fn succeeded(document: &Value) -> bool {
@@ -157,14 +148,43 @@ fn unexplained(document: &Value) -> bool {
     document["exit"] != 0 && document["problems"].as_array().is_none_or(Vec::is_empty)
 }
 
-pub async fn violations(backend: &mut impl Backend, breakage: &Breakage) -> Vec<String> {
-    if !backend.damage(breakage).await {
+fn runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime for the model")
+}
+
+pub struct Healthy {
+    pub world: World,
+    pub owned: Arc<[PathBuf]>,
+}
+
+pub fn healthy() -> &'static Healthy {
+    static HEALTHY: OnceLock<Healthy> = OnceLock::new();
+    HEALTHY.get_or_init(|| {
+        runtime().block_on(async {
+            let model = Model::new();
+            let pristine = model.snapshot();
+            let bootstrapped = model.run(bootstrap(), false, true).await;
+            assert!(succeeded(&bootstrapped), "{bootstrapped:#}");
+            let world = model.snapshot();
+            Healthy {
+                owned: owned(&pristine, &world).into(),
+                world,
+            }
+        })
+    })
+}
+
+pub async fn violations(model: &Model, breakage: &Breakage) -> Vec<String> {
+    if !breakage.apply(&mut model.world.lock().unwrap_or_else(|e| e.into_inner())) {
         return Vec::new();
     }
     let at = format!("{:?} {}", breakage.damage, breakage.path.display());
     let mut found = Vec::new();
-    let predicted = backend.run(repair(), true, true).await;
-    let repaired = backend.run(repair(), false, true).await;
+    let predicted = model.run(repair(), true, true).await;
+    let repaired = model.run(repair(), false, true).await;
     if changes(&predicted) != changes(&repaired) {
         found.push(format!(
             "{at}: the dry run predicted {:?} but repair made {:?}",
@@ -178,15 +198,18 @@ pub async fn violations(backend: &mut impl Backend, breakage: &Breakage) -> Vec<
             repaired["exit"]
         ));
     }
-    let doctor = backend.run(doctor(), false, false).await;
-    let left = fixable(&doctor);
+    let checked = model.run(doctor(), false, false).await;
+    let left = fixable(&checked);
     if !left.is_empty() {
         found.push(format!("{at}: repair left {left:?}"));
     }
-    if !unfixable(&doctor) && !backend.observe().await.repository_records_the_config() {
-        found.push(format!("{at}: the repository does not record the config"));
+    if !unfixable(&checked) {
+        let world = model.snapshot();
+        if world.committed(model.user()) != Some(world.staged(model.user())) {
+            found.push(format!("{at}: the repository does not record the config"));
+        }
     }
-    let again = backend.run(repair(), false, true).await;
+    let again = model.run(repair(), false, true).await;
     if !changes(&again).is_empty() {
         found.push(format!(
             "{at}: a second repair changed {:?}",
@@ -196,100 +219,191 @@ pub async fn violations(backend: &mut impl Backend, breakage: &Breakage) -> Vec<
     found
 }
 
-pub async fn walk(
-    backend: &mut impl Backend,
-    breakages: &[Breakage],
-    steps: &[Step],
-) -> Vec<String> {
+async fn faulted(model: &Model, command: Command, at: usize, kind: FaultKind) -> Vec<String> {
+    let (request, as_root) = command.request();
+    let before = model.snapshot();
+    let Some(done) = model.faulted(request, as_root, at, kind).await else {
+        return Vec::new();
+    };
     let mut found = Vec::new();
-    for (index, step) in steps.iter().enumerate() {
-        let at = format!("step {index} {step:?} of {steps:?}");
-        if let Step::Faulted(command, at_action, kind) = step {
-            let (request, as_root) = request_of(command).expect("a faulted step is a command");
-            let before = backend.observe().await;
-            let done = match backend.faulted(request, as_root, *at_action, *kind).await {
-                Faulted::Ended(done) => done,
-                Faulted::Crashed | Faulted::Unsupported => continue,
-            };
-            let atomic = matches!(**command, Step::Install(_) | Step::Remove(_));
-            if atomic && !succeeded(&done) && before.journals.is_empty() {
-                let mut after = backend.observe().await;
-                let kept = !after.journals.is_empty();
-                after.journals.clear();
-                let incomplete = warned(&done, "CODE_ROLLBACK_INCOMPLETE");
-                if kept != incomplete {
-                    found.push(format!(
-                        "{at}: kept a journal {kept} but said the rollback was incomplete {incomplete}"
-                    ));
-                }
-                if !kept && after != before {
-                    found.push(format!("{at}: a failed change was not rolled back"));
-                }
-            }
-            if unexplained(&done) {
-                found.push(format!("{at}: exited {} without a problem", done["exit"]));
-            }
-            continue;
-        }
-        let Some((request, as_root)) = request_of(step) else {
-            if let Step::Damage(pick) = step
-                && !breakages.is_empty()
-            {
-                backend.damage(&breakages[pick % breakages.len()]).await;
-            }
-            continue;
-        };
-        let predicted = backend.run(request.clone(), true, as_root).await;
-        let done = backend.run(request, false, as_root).await;
-        if changes(&predicted) != changes(&done) {
+    if command.atomic() && !succeeded(&done) && before.logs.is_empty() {
+        let mut after = model.snapshot();
+        let kept = !after.logs.is_empty();
+        after.logs.clear();
+        let incomplete = warned(&done, "CODE_ROLLBACK_INCOMPLETE");
+        if kept != incomplete {
             found.push(format!(
-                "{at}: predicted {:?} but made {:?}",
-                changes(&predicted),
-                changes(&done)
+                "kept a journal {kept} but said the rollback was incomplete {incomplete}"
             ));
         }
-        if unexplained(&done) {
-            found.push(format!("{at}: exited {} without a problem", done["exit"]));
-        }
-        let seen = backend.observe().await;
-        if succeeded(&done) && !seen.journals.is_empty() {
-            found.push(format!("{at}: journals left behind {:?}", seen.journals));
-        }
-        let leftovers = seen.leftovers();
-        if !leftovers.is_empty() {
-            found.push(format!("{at}: left {leftovers:?}"));
-        }
-        let changed_packages = matches!(step, Step::Install(_) | Step::Remove(_));
-        if changed_packages && succeeded(&done) && seen.list != seen.active {
-            found.push(format!("{at}: the list differs from the active generation"));
-        }
-        if matches!(step, Step::Repair) {
-            let doctor = backend.run(doctor(), false, false).await;
-            let left = fixable(&doctor);
-            if !left.is_empty() {
-                found.push(format!("{at}: repair left {left:?}"));
-            }
-            let again = backend.run(repair(), false, true).await;
-            if !changes(&again).is_empty() {
-                found.push(format!(
-                    "{at}: a second repair changed {:?}",
-                    changes(&again)
-                ));
-            }
+        if !kept && after != before {
+            found.push("a failed change was not rolled back".to_string());
         }
     }
-    let finale = backend.run(repair(), false, true).await;
-    let seen = backend.observe().await;
-    if !seen.journals.is_empty() {
-        found.push(format!(
-            "after {steps:?}: a final repair left journals {:?}: {finale:#}",
-            seen.journals
-        ));
-    }
-    let doctor = backend.run(doctor(), false, false).await;
-    let left = fixable(&doctor);
-    if !left.is_empty() {
-        found.push(format!("after {steps:?}: a final repair left {left:?}"));
+    if unexplained(&done) {
+        found.push(format!("exited {} without a problem", done["exit"]));
     }
     found
+}
+
+async fn ran(model: &Model, command: Command) -> Vec<String> {
+    let (request, as_root) = command.request();
+    let mut found = Vec::new();
+    let predicted = model.run(request.clone(), true, as_root).await;
+    let done = model.run(request, false, as_root).await;
+    if changes(&predicted) != changes(&done) {
+        found.push(format!(
+            "predicted {:?} but made {:?}",
+            changes(&predicted),
+            changes(&done)
+        ));
+    }
+    if unexplained(&done) {
+        found.push(format!("exited {} without a problem", done["exit"]));
+    }
+    let world = model.snapshot();
+    if succeeded(&done) && !world.logs.is_empty() {
+        found.push(format!("journals left behind {:?}", world.logs.keys()));
+    }
+    if !world.pending().is_empty() {
+        found.push(format!("left pending {:?}", world.pending()));
+    }
+    if command.atomic()
+        && succeeded(&done)
+        && world.contents(
+            mix_core::paths::mix_state_dir(&model.user().home).join(mix_core::paths::STATE_FILE),
+        ) != world.active_list(model.user())
+    {
+        found.push("the list differs from the active generation".to_string());
+    }
+    if command == Command::Repair {
+        let checked = model.run(doctor(), false, false).await;
+        let left = fixable(&checked);
+        if !left.is_empty() {
+            found.push(format!("repair left {left:?}"));
+        }
+        let again = model.run(repair(), false, true).await;
+        if !changes(&again).is_empty() {
+            found.push(format!("a second repair changed {:?}", changes(&again)));
+        }
+    }
+    found
+}
+
+async fn finale(model: &Model) -> Vec<String> {
+    let mut found = Vec::new();
+    let repaired = model.run(repair(), false, true).await;
+    let world = model.snapshot();
+    if !world.logs.is_empty() {
+        found.push(format!(
+            "a final repair left journals {:?}: {repaired:#}",
+            world.logs.keys()
+        ));
+    }
+    let left = fixable(&model.run(doctor(), false, false).await);
+    if !left.is_empty() {
+        found.push(format!("a final repair left {left:?}"));
+    }
+    found
+}
+
+#[derive(Debug, Clone)]
+pub struct Spec {
+    pub owned: Arc<[PathBuf]>,
+}
+
+pub struct Mix;
+
+fn command() -> impl Strategy<Value = Command> {
+    prop_oneof![
+        select(&PACKAGES[..]).prop_map(Command::Install),
+        select(&PACKAGES[..]).prop_map(Command::Remove),
+        any::<bool>().prop_map(Command::Clean),
+        Just(Command::Repair),
+    ]
+}
+
+impl ReferenceStateMachine for Mix {
+    type State = Spec;
+    type Transition = Transition;
+
+    fn init_state() -> BoxedStrategy<Spec> {
+        Just(Spec {
+            owned: Arc::clone(&healthy().owned),
+        })
+        .boxed()
+    }
+
+    fn transitions(state: &Spec) -> BoxedStrategy<Transition> {
+        let damage = (select(state.owned.to_vec()), select(&Damage::ALL[..]))
+            .prop_map(|(path, damage)| Transition::Damage(Breakage { path, damage }));
+        let fault = prop_oneof![
+            Just(FaultKind::Fail),
+            Just(FaultKind::CrashBefore),
+            Just(FaultKind::CrashAfter),
+        ];
+        prop_oneof![
+            3 => command().prop_map(Transition::Run),
+            1 => damage,
+            1 => (command(), 0..12usize, fault)
+                .prop_map(|(command, at, kind)| Transition::Faulted(command, at, kind)),
+        ]
+        .boxed()
+    }
+
+    fn apply(state: Spec, _: &Transition) -> Spec {
+        state
+    }
+}
+
+pub struct System {
+    runtime: tokio::runtime::Runtime,
+    model: Model,
+    found: Vec<String>,
+}
+
+impl StateMachineTest for Mix {
+    type SystemUnderTest = System;
+    type Reference = Mix;
+
+    fn init_test(_: &Spec) -> System {
+        let model = Model::new();
+        *model.world.lock().unwrap_or_else(|e| e.into_inner()) = healthy().world.clone();
+        System {
+            runtime: runtime(),
+            model,
+            found: Vec::new(),
+        }
+    }
+
+    fn apply(mut system: System, _: &Spec, transition: Transition) -> System {
+        let model = &system.model;
+        let found = system.runtime.block_on(async {
+            match &transition {
+                Transition::Run(command) => ran(model, *command).await,
+                Transition::Damage(breakage) => {
+                    breakage.apply(&mut model.world.lock().unwrap_or_else(|e| e.into_inner()));
+                    Vec::new()
+                }
+                Transition::Faulted(command, at, kind) => {
+                    faulted(model, *command, *at, *kind).await
+                }
+            }
+        });
+        system.found.extend(
+            found
+                .into_iter()
+                .map(|found| format!("{transition:?}: {found}")),
+        );
+        system
+    }
+
+    fn check_invariants(system: &System, _: &Spec) {
+        assert!(system.found.is_empty(), "{}", system.found.join("\n"));
+    }
+
+    fn teardown(system: System, _: Spec) {
+        let found = system.runtime.block_on(finale(&system.model));
+        assert!(found.is_empty(), "{}", found.join("\n"));
+    }
 }
