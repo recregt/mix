@@ -167,16 +167,46 @@ def rendered_state(packages: list[str]) -> str:
     return json.dumps({"version": 1, "packages": packages}, indent=2) + "\n"
 
 
+def _cache_marker() -> pathlib.Path:
+    users = "-".join(MIRROR_TEST_USERS)
+    template = hashlib.sha256((_MIRROR_FLAKE_NIX + _MIRROR_HOME_NIX).encode()).hexdigest()[:12]
+    return CACHE_DIR / f"cache-{NIXPKGS_REV}-{HOME_MANAGER_REV}-{users}-{template}.built"
+
+
+def _closure(cache_dir: pathlib.Path, store_path: str) -> set[str]:
+    """The digests of `store_path` and everything it references, read from the cache's narinfos."""
+    seen: set[str] = set()
+    pending = [pathlib.PurePosixPath(store_path).name.split("-", 1)[0]]
+    while pending:
+        digest = pending.pop()
+        if digest in seen:
+            continue
+        seen.add(digest)
+        for line in (cache_dir / f"{digest}.narinfo").read_text().splitlines():
+            if line.startswith("References:"):
+                pending += [reference.split("-", 1)[0] for reference in line.split()[1:]]
+    return seen
+
+
+def bootstrap_activation(mirror_cache) -> str:
+    """The first narinfo a bootstrap fetches, which only its activation build asks for: the
+    runtime and the flake inputs come as tarballs."""
+    return r"\.narinfo$"
+
+
+def install_activation(mirror_cache) -> str:
+    """The narinfos only installing the test package as the first test user fetches: what its
+    generation's closure holds that no other seeded generation's does."""
+    *others, install = _cache_marker().read_text().splitlines()
+    shared = set().union(*(_closure(mirror_cache, other) for other in others))
+    digests = sorted(_closure(mirror_cache, install) - shared)
+    return rf"/({'|'.join(digests)})\.narinfo$"
+
+
 @pytest.fixture(scope="session")
 def mirror_cache(mirror_sources):
     cache_dir = CACHE_DIR / "cache"
-    users = "-".join(MIRROR_TEST_USERS)
-    template = hashlib.sha256(
-        (_MIRROR_FLAKE_NIX + _MIRROR_HOME_NIX).encode()
-    ).hexdigest()[:12]
-    marker = (
-        CACHE_DIR / f"cache-{NIXPKGS_REV}-{HOME_MANAGER_REV}-{users}-{template}.built"
-    )
+    marker = _cache_marker()
 
     with open(CACHE_DIR / "mirror-cache.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -184,8 +214,7 @@ def mirror_cache(mirror_sources):
             shutil.rmtree(cache_dir, ignore_errors=True)
             secret_key, public_key = _signing_key()
             store_paths = [
-                _seed_activation_package(user, secret_key, cache_dir)
-                for user in MIRROR_TEST_USERS
+                _seed_activation_package(user, secret_key, cache_dir) for user in MIRROR_TEST_USERS
             ]
             store_paths.append(
                 _seed_activation_package(
@@ -233,13 +262,9 @@ def _seed_activation_package(
         )
         (tmp_path / "flake.nix").write_text(flake_nix)
         extra = " ".join(f"pkgs.{pkg}" for pkg in extra_packages or [])
-        home_nix = _MIRROR_HOME_NIX.replace("__USER__", user).replace(
-            "__EXTRA_PACKAGES__", extra
-        )
+        home_nix = _MIRROR_HOME_NIX.replace("__USER__", user).replace("__EXTRA_PACKAGES__", extra)
         (tmp_path / "home.nix").write_text(home_nix)
-        (tmp_path / "state").write_text(
-            rendered_state(["git", *(extra_packages or [])])
-        )
+        (tmp_path / "state").write_text(rendered_state(["git", *(extra_packages or [])]))
 
         store_path = subprocess.run(
             [
@@ -308,7 +333,7 @@ class _MirrorHandler(http.server.SimpleHTTPRequestHandler):
     def copyfile(self, source, outputfile):
         try:
             self.connection.sendfile(source)
-        except (BrokenPipeError, ConnectionResetError):
+        except BrokenPipeError, ConnectionResetError:
             self.close_connection = True
 
 
@@ -317,21 +342,28 @@ def start_mirror_server() -> http.server.ThreadingHTTPServer:
     server = http.server.ThreadingHTTPServer(("0.0.0.0", 0), _MirrorHandler)
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    os.environ[MIRROR_URL_ENV] = (
-        f"http://host.containers.internal:{server.server_address[1]}"
-    )
+    os.environ[MIRROR_URL_ENV] = f"http://host.containers.internal:{server.server_address[1]}"
     return server
 
 
-@pytest.fixture()
+@pytest.fixture
 def mock_nix_server(nix_tarball):
     return {"url": os.environ[MIRROR_URL_ENV]}
+
+
+class SilentMirror:
+    """A mirror that accepts every connection and answers none; `connected` is set by the first."""
+
+    def __init__(self, url: str):
+        self.url = url
+        self.connected = threading.Event()
 
 
 @contextlib.contextmanager
 def silent_mirror():
     listener = socket.create_server(("0.0.0.0", 0))
     held = []
+    silent = SilentMirror(f"http://host.containers.internal:{listener.getsockname()[1]}")
 
     def accept():
         while True:
@@ -340,10 +372,11 @@ def silent_mirror():
             except OSError:
                 return
             held.append(connection)
+            silent.connected.set()
 
     threading.Thread(target=accept, daemon=True).start()
     try:
-        yield f"http://host.containers.internal:{listener.getsockname()[1]}"
+        yield silent
     finally:
         listener.close()
         for connection in held:
@@ -363,9 +396,6 @@ def mirror_args(mock_nix_server, mirror_cache):
     ]
 
 
-@contextlib.contextmanager
-
-
 def bootstrap_root(container, mock_nix_server):
     """Bootstraps as bare root: the base runtime only, no per-user profile."""
     run = container.mix("bootstrap", "--mirror", mock_nix_server["url"])
@@ -375,8 +405,6 @@ def bootstrap_root(container, mock_nix_server):
 
 def bootstrap_as(container, user: str, mock_nix_server, mirror_cache):
     """Bootstraps as an already-created sudo user, enrolling their home-manager profile."""
-    run = container.mix(
-        "bootstrap", *mirror_args(mock_nix_server, mirror_cache), user=user
-    )
+    run = container.mix("bootstrap", *mirror_args(mock_nix_server, mirror_cache), user=user)
     assert run.succeeded(), run
     return run

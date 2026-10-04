@@ -1,4 +1,5 @@
 import pytest
+
 from support.mirror import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS
 
 USER = MIRROR_TEST_USERS[0]
@@ -39,12 +40,20 @@ def test_a_repository_root_wrote_into_is_given_back_with_its_history(
 ):
     def commits() -> str:
         return container.exec(
-            f"/home/{USER}/.nix-profile/bin/git", "--git-dir", REPOSITORY, "rev-list", "--count", "HEAD", user=USER, check=True
+            f"/home/{USER}/.nix-profile/bin/git",
+            "--git-dir",
+            REPOSITORY,
+            "rev-list",
+            "--count",
+            "HEAD",
+            user=USER,
+            check=True,
         ).stdout
 
     before = commits()
     container.exec(
-        "bash", "-c",
+        "bash",
+        "-c",
         f"mkdir -p {REPOSITORY}/objects/zz && touch {REPOSITORY}/objects/zz/root",
         check=True,
     )
@@ -55,9 +64,7 @@ def test_a_repository_root_wrote_into_is_given_back_with_its_history(
     assert "owner" in finding, finding
 
     assert container.mix("repair", user=USER).succeeded()
-    strangers = container.exec(
-        "find", REPOSITORY, "!", "-user", USER, check=True
-    ).stdout
+    strangers = container.exec("find", REPOSITORY, "!", "-user", USER, check=True).stdout
     assert strangers == ""
     assert commits() == before
     assert container.mix("doctor", user=USER).exit_code == 0

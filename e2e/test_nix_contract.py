@@ -2,6 +2,7 @@ import json
 import os
 
 import pytest
+
 from support.container import NIX_BINARY
 from support.mirror import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS, bootstrap_root
 from support.paths import REPO_ROOT
@@ -42,17 +43,13 @@ def _build_starts(output: str) -> list[dict]:
         if line.startswith("@nix ")
     ]
     return [
-        record
-        for record in records
-        if record["action"] == "start" and record["type"] == ACT_BUILD
+        record for record in records if record["action"] == "start" and record["type"] == ACT_BUILD
     ]
 
 
 def test_a_build_starting_is_logged_the_way_mix_reads_it(container, mock_nix_server):
     _with_plan(container, mock_nix_server)
-    drv_path = _nix(
-        container, "eval", "--raw", "-f", PLAN, "failing.drvPath"
-    ).stdout.strip()
+    drv_path = _nix(container, "eval", "--raw", "-f", PLAN, "failing.drvPath").stdout.strip()
 
     result = _nix(
         container,

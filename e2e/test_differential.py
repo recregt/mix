@@ -32,9 +32,12 @@ def differential_binary():
     )
     for line in build.stdout.splitlines():
         message = json.loads(line)
-        if message.get("reason") == "compiler-artifact" and message.get("executable"):
-            if message["target"]["name"] == "machine":
-                return message["executable"]
+        if (
+            message.get("reason") == "compiler-artifact"
+            and message.get("executable")
+            and message["target"]["name"] == "machine"
+        ):
+            return message["executable"]
     raise RuntimeError("cargo built no machine test binary")
 
 

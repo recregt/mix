@@ -1,11 +1,10 @@
 import contextlib
 import fcntl
-import hashlib
 import functools
+import hashlib
 import json
 import os
 import pathlib
-import queue
 import re
 import shutil
 import subprocess
@@ -15,11 +14,10 @@ import time
 import pytest
 
 from support import mirror, resources, trace
-from support.events import Run, envelopes_of, progress_of, started_step
+from support.events import Run, document_of
 from support.paths import CACHE_DIR, REPO_ROOT, TESTS_ROOT
 
 NIX_BINARY = "/nix/var/nix/profiles/default/bin/nix"
-ERE_SPECIAL = set("\\.[]{}()*+?^$|")
 MIX_USERS_GROUP = "mix-users"
 NIX_CONF_DEST = "/etc/nix/nix.conf"
 
@@ -33,181 +31,194 @@ SNAPSHOT_LOCK = CACHE_DIR / "snapshot.lock"
 BOOTSTRAPPED_USER = mirror.MIRROR_TEST_USERS[0]
 
 
-def literal(text: str) -> str:
-    return "".join(f"\\{char}" if char in ERE_SPECIAL else char for char in text)
+def wait_any(*events: threading.Event) -> None:
+    """Blocks until any of `events` is set."""
+    any_set = threading.Event()
+    for event in events:
+        threading.Thread(target=lambda e=event: (e.wait(), any_set.set()), daemon=True).start()
+    any_set.wait()
+
+
+def until(wanted, what: str, unless=None):
+    """Returns `wanted()` once it is truthy; fails as soon as `unless`, a background run or
+    process, has ended instead."""
+    ended = getattr(unless, "process", unless)
+    while True:
+        found = wanted()
+        if found:
+            return found
+        if ended is not None and ended.ended.is_set():
+            raise AssertionError(f"{what} never happened before {unless.wait()!r} ended")
 
 
 class BackgroundProcess:
-    def __init__(self, container: "Container", proc: subprocess.Popen, pattern: str):
+    """A program started in the container that the test waits for, without a deadline."""
+
+    def __init__(self, container: Container, proc: subprocess.Popen, pidfile: str):
         self.container = container
         self.proc = proc
-        self.pattern = pattern
-        self.output = ""
-        self.lines: queue.Queue[str | None] = queue.Queue()
-        threading.Thread(target=self._drain, daemon=True).start()
+        self.pidfile = pidfile
+        self.ended = threading.Event()
+        self.stdout = ""
+        self.stderr = ""
+        threading.Thread(target=self._collect, daemon=True).start()
 
-    def _drain(self) -> None:
-        for line in self.proc.stdout:
-            self.lines.put(line)
-        self.lines.put(None)
+    def _collect(self) -> None:
+        self.stdout, self.stderr = self.proc.communicate()
+        self.ended.set()
 
-    def _next_line(self, timeout: float) -> str | None:
-        try:
-            return self.lines.get(timeout=timeout)
-        except queue.Empty:
-            return None
-
-    def pid(self, timeout: float = 10.0) -> str:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            result = self.container.exec("pgrep", "-f", self.pattern)
-            pids = [p for p in result.stdout.split() if p.isdigit()]
-            if pids:
-                return pids[0]
-            if self.proc.poll() is not None:
-                raise AssertionError(
-                    f"process matching {self.pattern!r} exited before it could be found "
-                    f"(returncode={self.proc.returncode})"
-                )
-            time.sleep(0.05)
-        raise TimeoutError(
-            f"process matching {self.pattern!r} never appeared in the container"
+    def pid(self) -> str:
+        """The program's own pid in the container, which it wrote before it started."""
+        while not self.ended.is_set():
+            pid = self.container.exec("cat", self.pidfile).stdout.strip()
+            if pid.isdigit():
+                return pid
+        raise AssertionError(
+            f"{self.proc.args} exited ({self.proc.returncode}) before its pid was read:\n"
+            f"{self.stdout}{self.stderr}"
         )
 
-    def wait_for_output(self, substring: str, timeout: float = 15.0) -> None:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            remaining = max(0.01, deadline - time.time())
-            line = self._next_line(remaining)
-            if line is None:
-                break
-            self.output += line
-            if substring in line:
-                return
-        if self.proc.poll() is not None:
-            raise AssertionError(
-                f"process exited ({self.proc.returncode}) before printing output containing "
-                f"{substring!r}:\n{self.output}"
-            )
-        raise TimeoutError(
-            f"{substring!r} never appeared within {timeout:g}s; processes now:\n"
-            f"{self.container.process_tree()}\noutput so far:\n{self.output}"
-        )
-
-    def signal(self, sig_name: str, timeout: float = 10.0) -> None:
-        pid = self.pid(timeout=timeout)
+    def signal(self, sig_name: str) -> None:
+        pid = self.pid()
         if self.container.exec("kill", f"-{sig_name}", pid).returncode != 0:
-            ended = self.wait(timeout=timeout)
+            self.ended.wait()
             raise AssertionError(
-                f"process matching {self.pattern!r} ended before {sig_name} "
-                f"(returncode={ended.returncode}):\n{ended.stdout}"
+                f"{self.proc.args} ended before {sig_name} ({self.proc.returncode}):\n"
+                f"{self.stdout}{self.stderr}"
             )
 
-    def wait(self, timeout: float = 30.0) -> subprocess.CompletedProcess:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            line = self._next_line(max(0.01, deadline - time.time()))
-            if line is None:
-                break
-            self.output += line
-        self.proc.wait(timeout=max(0.01, deadline - time.time()))
+    def wait(self) -> subprocess.CompletedProcess:
+        self.ended.wait()
         return subprocess.CompletedProcess(
-            self.proc.args, self.proc.returncode, self.output, ""
+            self.proc.args, self.proc.returncode, self.stdout, self.stderr
         )
 
 
 class BackgroundRun:
-    def __init__(
-        self, container: "Container", process: BackgroundProcess, capture: str
-    ):
+    def __init__(self, container: Container, process: BackgroundProcess):
         self.container = container
         self.process = process
-        self.capture = capture
 
-    def wait_for(self, found, timeout: float = 60.0) -> dict:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            line = self.process._next_line(max(0.01, deadline - time.time()))
-            if line is None:
-                break
-            self.process.output += line
-            try:
-                envelope = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if found(envelope):
-                return envelope
-        if self.process.proc.poll() is not None:
-            raise AssertionError(
-                f"mix exited ({self.process.proc.returncode}) before the awaited event:\n"
-                f"{self.process.output}"
-            )
-        raise TimeoutError(
-            f"the awaited event never came within {timeout:g}s; processes now:\n"
-            f"{self.container.process_tree()}\nstream so far:\n{self.process.output}"
+    def signal(self, sig_name: str) -> None:
+        self.process.signal(sig_name)
+
+    def pid(self) -> str:
+        return self.process.pid()
+
+    def wait(self) -> Run:
+        ended = self.process.wait()
+        return self.container.recorded(ended.returncode, ended.stdout, ended.stderr)
+
+
+class Gate:
+    """Holds the first request to the mirror whose path matches, until the test releases it."""
+
+    DIRECTORY = "/run/mix-gate"
+
+    def __init__(self, container: Container):
+        self.container = container
+
+    def reached(self, unless: BackgroundRun | None = None) -> str:
+        """The held path, once a request is held; fails if `unless` ends first."""
+        reader = subprocess.Popen(
+            ["podman", "exec", self.container.name, "cat", f"{self.DIRECTORY}/reached"],
+            stdout=subprocess.PIPE,
+            text=True,
         )
+        done = threading.Event()
+        threading.Thread(target=lambda: (reader.wait(), done.set()), daemon=True).start()
+        if unless is not None:
+            threading.Thread(
+                target=lambda: (unless.process.ended.wait(), done.set()), daemon=True
+            ).start()
+        done.wait()
+        if reader.poll() is None:
+            reader.kill()
+            ended = unless.wait()
+            raise AssertionError(f"the run ended before the gate was reached: {ended!r}")
+        return reader.stdout.read().strip()
 
-    def wait_for_step(self, key: str, timeout: float = 60.0) -> dict:
-        return self.wait_for(lambda envelope: started_step(envelope, key), timeout)
-
-    def wait_for_progress(self, kind: str, timeout: float = 60.0) -> dict:
-        return self.wait_for(
-            lambda envelope: progress_of(envelope, kind) is not None, timeout
-        )
-
-    def pid(self, timeout: float = 10.0) -> str:
-        return self.process.pid(timeout)
-
-    def signal(self, sig_name: str, timeout: float = 10.0) -> None:
-        self.process.signal(sig_name, timeout)
-
-    def wait(self, timeout: float = 60.0, complete: bool = True) -> Run:
-        ended = self.process.wait(timeout=timeout)
-        stdout = ended.stdout
-        if complete:
-            return self.container.recorded(self.capture, ended.returncode, stdout, "")
-        capture = self.container.exec("cat", self.capture).stdout
-        return Run(ended.returncode, stdout, "", envelopes_of(capture))
+    def release(self) -> None:
+        self.container.exec("sh", "-c", f"echo go > {self.DIRECTORY}/release", check=True)
 
 
 class Container:
     def __init__(self, name: str):
         self.name = name
-        self.captures: list[str] = []
+        self.runs: list[tuple[list[str], Run]] = []
+        self.background: list[str] = []
 
-    def capture(self) -> str:
-        path = f"/tmp/mix-events-{len(self.captures)}.ndjson"
-        self.captures.append(path)
-        return path
-
-    def recorded(self, capture: str, returncode: int, stdout: str, stderr: str) -> Run:
-        contents = self.exec("cat", capture).stdout
-        run = Run(returncode, stdout, stderr, envelopes_of(contents))
-        assert run.exit_code == returncode, (
-            f"the root says exit {run.exit_code}: {run!r}"
-        )
+    def recorded(self, returncode: int, stdout: str, stderr: str, args=()) -> Run:
+        run = Run(returncode, stdout, stderr, document_of(stdout) or {})
+        self.runs.append((list(args), run))
+        if run.document:
+            assert run.exit_code == returncode, f"the document says exit {run.exit_code}: {run!r}"
         return run
 
     def mix(self, *args, env=None, user=None) -> Run:
-        capture = self.capture()
-        result = self.exec("mix", "--events-file", capture, *args, env=env, user=user)
-        return self.recorded(capture, result.returncode, result.stdout, result.stderr)
+        result = self.exec("mix", "--json", *args, env=env, user=user)
+        return self.recorded(result.returncode, result.stdout, result.stderr, args)
+
+    def gate(self, pattern: str) -> Gate:
+        """Puts a gate between this container and the mirror, holding `pattern`'s first request."""
+        url = os.environ[mirror.MIRROR_URL_ENV]
+        host, port = url.removeprefix("http://").split(":")
+        upstream = self.exec("getent", "hosts", host, check=True).stdout.split()[0]
+        self.exec("mkdir", "-p", Gate.DIRECTORY, check=True)
+        for fifo in ("ready", "reached", "release"):
+            self.exec("mkfifo", f"{Gate.DIRECTORY}/{fifo}", check=True)
+        subprocess.run(
+            ["podman", "cp", str(TESTS_ROOT / "support/gate.py"), f"{self.name}:/run/mix-gate.py"],
+            check=True,
+        )
+        self.exec(
+            "sh",
+            "-c",
+            f"grep -v ' {host}$' /etc/hosts > /tmp/hosts && echo '127.0.0.2 {host}' >> /tmp/hosts"
+            " && cat /tmp/hosts > /etc/hosts",
+            check=True,
+        )
+        self.start_background(
+            "python3", "/run/mix-gate.py", "127.0.0.2", port, upstream, pattern, Gate.DIRECTORY
+        )
+        self.exec("cat", f"{Gate.DIRECTORY}/ready", check=True)
+        return Gate(self)
 
     def traced_mix(self, *args, user: str) -> tuple[Run, list[trace.Write]]:
-        capture = self.capture()
-        output = f"{capture}.strace"
+        output = f"/tmp/mix-{len(self.runs)}.strace"
         account = self.exec("getent", "passwd", user, check=True).stdout.split(":")
         setuid_root = self.exec(
-            "find", "/", "-xdev", "-type", "f", "-user", "root", "-perm", "-4000",
+            "find",
+            "/",
+            "-xdev",
+            "-type",
+            "f",
+            "-user",
+            "root",
+            "-perm",
+            "-4000",
             check=True,
         ).stdout.split()
         result = self.exec(
-            "strace", "-f", "-qq", "-y", "-o", output, "-e", f"trace={trace.SYSCALLS}",
-            "-u", user,
-            "env", f"HOME={account[5]}", f"USER={user}", f"LOGNAME={user}",
-            "mix", "--events-file", capture, *args,
+            "strace",
+            "-f",
+            "-qq",
+            "-y",
+            "-o",
+            output,
+            "-e",
+            f"trace={trace.SYSCALLS}",
+            "-u",
+            user,
+            "env",
+            f"HOME={account[5]}",
+            f"USER={user}",
+            f"LOGNAME={user}",
+            "mix",
+            "--json",
+            *args,
         )
-        run = self.recorded(capture, result.returncode, result.stdout, result.stderr)
+        run = self.recorded(result.returncode, result.stdout, result.stderr, args)
         calls = self.exec("cat", output, check=True).stdout
         return run, trace.writes(calls, int(account[2]), set(setuid_root))
 
@@ -231,40 +242,26 @@ class Container:
             "-p",
             pid,
         )
-        deadline = time.time() + 30
         while self._tracer_of(pid) == "0":
-            if time.time() > deadline:
-                raise TimeoutError(f"strace never attached to {unit} ({pid})")
-            time.sleep(0.05)
+            if tracer.ended.is_set():
+                raise AssertionError(f"strace ended before it attached to {unit}: {tracer.stderr}")
         try:
             yield writes
         finally:
             self.exec("kill", "-INT", tracer.pid(), check=True)
-            tracer.wait(timeout=30)
+            tracer.wait()
             calls = self.exec("cat", output, check=True).stdout
             writes.extend(trace.writes(calls, 0, set()))
 
     def _tracer_of(self, pid: str) -> str:
         status = self.exec("cat", f"/proc/{pid}/status", check=True).stdout
         return next(
-            line.split()[1]
-            for line in status.splitlines()
-            if line.startswith("TracerPid:")
+            line.split()[1] for line in status.splitlines() if line.startswith("TracerPid:")
         )
 
     def mix_background(self, *args, env=None, user=None) -> BackgroundRun:
-        capture = self.capture()
-        process = self.start_background(
-            "mix",
-            "--output",
-            "json",
-            "--events-file",
-            capture,
-            *args,
-            env=env,
-            user=user,
-        )
-        return BackgroundRun(self, process, capture)
+        process = self.start_background("mix", "--json", *args, env=env, user=user)
+        return BackgroundRun(self, process)
 
     def snapshot(self) -> str:
         probes = [
@@ -272,13 +269,24 @@ class Container:
             (
                 "daemon journal",
                 [
-                    "journalctl", "--no-pager",
-                    "-u", "nix-daemon.service", "-u", "nix-daemon.socket",
-                    "-u", "mix-daemon.service", "-u", "mix-daemon.socket",
+                    "journalctl",
+                    "--no-pager",
+                    "-u",
+                    "nix-daemon.service",
+                    "-u",
+                    "nix-daemon.socket",
+                    "-u",
+                    "mix-daemon.service",
+                    "-u",
+                    "mix-daemon.socket",
                 ],
             ),
             ("processes", ["ps", "-eo", "pid,ppid,stat,wchan:24,etime,args", "--forest"]),
-            ("mix journal", ["sh", "-c", "ls -la /var/lib/mix/journal && cat /var/lib/mix/journal/*"]),
+            ("gate", ["cat", f"{Gate.DIRECTORY}/log"]),
+            (
+                "mix journal",
+                ["sh", "-c", "ls -la /var/lib/mix/journal && cat /var/lib/mix/journal/*"],
+            ),
         ]
         sections = []
         for title, probe in probes:
@@ -290,11 +298,14 @@ class Container:
         folder = REPO_ROOT / "target/e2e-events" / re.sub(r"[^\w.-]+", "_", test)
         shutil.rmtree(folder, ignore_errors=True)
         folder.mkdir(parents=True)
-        for capture in self.captures:
-            name = pathlib.PurePosixPath(capture).stem
-            contents = self.exec("cat", capture).stdout
-            (folder / f"{name}.ndjson").write_text(contents)
-            report.sections.append((capture, contents))
+        for index, (args, run) in enumerate(self.runs):
+            name = f"mix-{index}"
+            contents = (
+                f"$ mix --json {' '.join(args)}\nexit {run.returncode}\n"
+                f"--- stdout\n{run.stdout}\n--- stderr\n{run.stderr}"
+            )
+            (folder / f"{name}.txt").write_text(contents)
+            report.sections.append((name, contents))
         (folder / "machine.txt").write_text(self.snapshot())
         report.user_properties.append(("failure bundle", str(folder)))
 
@@ -305,33 +316,30 @@ class Container:
         if user:
             cmd += ["-u", user]
         cmd += [self.name, *args]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if check and result.returncode != 0:
-            raise AssertionError(
-                f"{args} failed ({result.returncode}): {result.stderr}"
-            )
+            raise AssertionError(f"{args} failed ({result.returncode}): {result.stderr}")
         return result
 
     def start_background(self, *args, env=None, user=None) -> BackgroundProcess:
+        pidfile = f"/tmp/mix-background-{len(self.background)}.pid"
+        self.background.append(pidfile)
         cmd = ["podman", "exec"]
         for key, value in (env or {}).items():
             cmd += ["-e", f"{key}={value}"]
         if user:
             cmd += ["-u", user]
-        cmd += [self.name, *args]
+        cmd += [self.name, "sh", "-c", 'echo $$ > "$0" && exec "$@"', pidfile, *args]
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stderr=subprocess.PIPE,
             text=True,
-            bufsize=1,
         )
-        return BackgroundProcess(self, proc, pattern=literal(" ".join(args)))
+        return BackgroundProcess(self, proc, pidfile)
 
     def process_tree(self) -> str:
-        return self.exec(
-            "ps", "-eo", "pid,ppid,stat,wchan:24,etime,args", "--forest"
-        ).stdout
+        return self.exec("ps", "-eo", "pid,ppid,stat,wchan:24,etime,args", "--forest").stdout
 
     def path_exists(self, path: str) -> bool:
         return self.exec("test", "-e", path).returncode == 0
@@ -357,17 +365,16 @@ def _start_container(image: str, name: str, binary: pathlib.Path) -> str:
         ],
         check=True,
     )
-    for _ in range(30):
-        probe = subprocess.run(
-            ["podman", "exec", name, "systemctl", "is-system-running"],
-            capture_output=True,
-            text=True,
-        )
-        if probe.stdout.strip() in ("running", "degraded"):
-            return name
-        time.sleep(1)
-    subprocess.run(["podman", "rm", "-f", name], capture_output=True)
-    raise RuntimeError("container systemd never became ready")
+    probe = subprocess.run(
+        ["podman", "exec", name, "systemctl", "is-system-running", "--wait"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if probe.stdout.strip() in ("running", "degraded"):
+        return name
+    subprocess.run(["podman", "rm", "-f", name], capture_output=True, check=False)
+    raise RuntimeError(f"container systemd ended booting as {probe.stdout.strip()!r}")
 
 
 def create_user(container: Container, name: str, sudo: bool = False) -> None:
@@ -424,10 +431,10 @@ def container_image():
         fcntl.flock(lock, fcntl.LOCK_EX)
         if REMOTE_IMAGE:
             remote = f"{REMOTE_IMAGE}:{digest}"
-            pull = subprocess.run(["podman", "pull", remote], capture_output=True)
+            pull = subprocess.run(["podman", "pull", remote], capture_output=True, check=False)
             if pull.returncode == 0:
                 return remote
-        if subprocess.run(["podman", "image", "exists", local]).returncode != 0:
+        if subprocess.run(["podman", "image", "exists", local], check=False).returncode != 0:
             subprocess.run(
                 [
                     "podman",
@@ -446,12 +453,15 @@ def container_image():
 
 def reap_orphans() -> None:
     names = subprocess.run(
-        ["podman", "ps", "-a", "--format", "{{.Names}}"], capture_output=True, text=True
+        ["podman", "ps", "-a", "--format", "{{.Names}}"],
+        capture_output=True,
+        text=True,
+        check=False,
     ).stdout.split()
     for name in names:
         match = CONTAINER_NAME.fullmatch(name)
         if match and not resources.alive(int(match.group(1))):
-            subprocess.run(["podman", "rm", "-f", name], capture_output=True)
+            subprocess.run(["podman", "rm", "-f", name], capture_output=True, check=False)
     tags = subprocess.run(
         [
             "podman",
@@ -463,6 +473,7 @@ def reap_orphans() -> None:
         ],
         capture_output=True,
         text=True,
+        check=False,
     ).stdout.split()
     for tag in tags:
         match = SNAPSHOT_TAG.fullmatch(tag)
@@ -470,6 +481,7 @@ def reap_orphans() -> None:
             subprocess.run(
                 ["podman", "rmi", "-f", f"{SNAPSHOT_REPOSITORY}:{tag}"],
                 capture_output=True,
+                check=False,
             )
 
 
@@ -479,7 +491,7 @@ def snapshot_image() -> str:
 
 
 def remove_snapshot() -> None:
-    subprocess.run(["podman", "rmi", "-f", snapshot_image()], capture_output=True)
+    subprocess.run(["podman", "rmi", "-f", snapshot_image()], capture_output=True, check=False)
 
 
 def _bootstrapped_image(container_image, mix_binary, mirror_server, cache) -> str:
@@ -487,23 +499,18 @@ def _bootstrapped_image(container_image, mix_binary, mirror_server, cache) -> st
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     with open(SNAPSHOT_LOCK, "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if subprocess.run(["podman", "image", "exists", tag]).returncode == 0:
+        if subprocess.run(["podman", "image", "exists", tag], check=False).returncode == 0:
             return tag
         name = f"mix-test-{os.getpid()}-{time.time_ns()}"
-        waited = resources.admit(
-            name, SNAPSHOT_TEST, resources.demand_for(SNAPSHOT_TEST, _known())
-        )
+        waited = resources.admit(name, SNAPSHOT_TEST, resources.demand_for(SNAPSHOT_TEST, _known()))
         try:
             started = time.monotonic()
             _start_container(container_image, name, mix_binary)
             cgroup = _cgroup_of(name)
-            resources.attach(name, cgroup)
             built = Container(name)
             create_user(built, BOOTSTRAPPED_USER, sudo=True)
             mirror.bootstrap_as(built, BOOTSTRAPPED_USER, mirror_server, cache)
-            resources.record(
-                SNAPSHOT_TEST, cgroup, time.monotonic() - started, waited, "build"
-            )
+            resources.record(SNAPSHOT_TEST, cgroup, time.monotonic() - started, waited, "build")
             subprocess.run(["podman", "stop", name], check=True, capture_output=True)
             subprocess.run(
                 ["podman", "commit", "--quiet", name, tag],
@@ -511,7 +518,7 @@ def _bootstrapped_image(container_image, mix_binary, mirror_server, cache) -> st
                 capture_output=True,
             )
         finally:
-            subprocess.run(["podman", "rm", "-f", name], capture_output=True)
+            subprocess.run(["podman", "rm", "-f", name], capture_output=True, check=False)
             resources.release(name)
     return tag
 
@@ -531,7 +538,7 @@ def _known() -> dict[str, resources.Demand]:
     return resources.snapshotted(os.environ.get("MIX_TEST_SESSION", ""))
 
 
-@pytest.fixture()
+@pytest.fixture
 def container(request, container_image, mix_binary):
     test = request.node.nodeid
     bootstrapped = request.node.get_closest_marker("bootstrapped") is not None
@@ -550,12 +557,11 @@ def container(request, container_image, mix_binary):
     try:
         _start_container(image, name, mix_binary)
         cgroup = _cgroup_of(name)
-        resources.attach(name, cgroup)
         container = Container(name)
         yield container
     finally:
         if cgroup is not None:
             variant = "snapshot" if bootstrapped else "fresh"
             resources.record(test, cgroup, time.monotonic() - started, waited, variant)
-        subprocess.run(["podman", "rm", "-f", name], capture_output=True)
+        subprocess.run(["podman", "rm", "-f", name], capture_output=True, check=False)
         resources.release(name)

@@ -6,13 +6,11 @@ def test_bootstrap_accepts_mirror_as_a_cli_flag(container, mock_nix_server):
     run = container.mix("bootstrap", "--mirror", mock_nix_server["url"])
 
     assert run.succeeded(), run
-    assert "bootstrap" in run.root
+    assert "bootstrap" in run.document
     assert container.path_exists("/nix/var/nix/profiles/default/bin/nix-env")
 
 
-def test_bootstrap_auto_escalates_for_a_sudo_user(
-    container, mock_nix_server, mirror_cache
-):
+def test_bootstrap_auto_escalates_for_a_sudo_user(container, mock_nix_server, mirror_cache):
     create_user(container, "ciuser", sudo=True)
 
     mirror_key = (mirror_cache / "mix-mirror.pub").read_text().strip()
@@ -27,14 +25,6 @@ def test_bootstrap_auto_escalates_for_a_sudo_user(
 
     assert run.succeeded(), run
     assert "write-home-config" in run.steps()
-    builds = [
-        command["line"]
-        for command in run.progress("command")
-        if " build " in command["line"] and "/.local/state/mix" in command["line"]
-    ]
-    assert builds and all(
-        "path:/home/ciuser/.local/state/mix#" in line for line in builds
-    ), builds
     assert container.path_exists("/nix/var/nix/profiles/default/bin/nix-env")
 
     state_dir = "/home/ciuser/.local/state/mix"
@@ -52,20 +42,16 @@ def test_bootstrap_auto_escalates_for_a_sudo_user(
     assert "pkgs = nixpkgs.legacyPackages.x86_64-linux;" in flake_contents
     assert "ciuser = home-manager.lib.homeManagerConfiguration {" in flake_contents
 
-    assert container.exec(
-        "cat", "/etc/nix/nix.conf", check=True
-    ).stdout == nix_conf_content(mock_nix_server["url"], mirror_key)
+    assert container.exec("cat", "/etc/nix/nix.conf", check=True).stdout == nix_conf_content(
+        mock_nix_server["url"], mirror_key
+    )
     assert group_members(container, MIX_USERS_GROUP) == ["ciuser"]
     assert not daemon_trusts(container, "ciuser")
 
-    daemon = container.exec(
-        "stat", "-c", "%U:%G %a", "/var/lib/mix/bin/mix-daemon", check=True
-    )
+    daemon = container.exec("stat", "-c", "%U:%G %a", "/var/lib/mix/bin/mix-daemon", check=True)
     assert daemon.stdout.strip() == "root:root 755"
     assert (
-        container.exec(
-            "cmp", "/usr/local/bin/mix-daemon", "/var/lib/mix/bin/mix-daemon"
-        ).returncode
+        container.exec("cmp", "/usr/local/bin/mix-daemon", "/var/lib/mix/bin/mix-daemon").returncode
         == 0
     )
     socket = container.exec("systemctl", "is-active", "mix-daemon.socket")

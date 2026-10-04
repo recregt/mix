@@ -1,4 +1,3 @@
-
 from support.container import create_user
 from support.mirror import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS, bootstrap_as
 
@@ -41,9 +40,7 @@ def test_remove_drops_a_package_as_a_regular_user_with_no_sudo(
         git_bin, "-C", STATE_DIR, "log", "--format=%an <%ae>", user=USER, check=True
     )
     assert log.stdout.strip().splitlines()[0] == "mix <mix@localhost>"
-    status = container.exec(
-        git_bin, "-C", STATE_DIR, "status", "--short", user=USER, check=True
-    )
+    status = container.exec(git_bin, "-C", STATE_DIR, "status", "--short", user=USER, check=True)
     assert status.stdout.strip() == ""
 
     again = container.mix("remove", INSTALL_TEST_PACKAGE, user=USER)
