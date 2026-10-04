@@ -20,7 +20,7 @@ expression: "run.case(&before, &world)"
         "operation": "OPERATION_REMOVE_CREATED_TREE",
         "status": "STATUS_SUCCEEDED",
         "step": "leftovers of interrupted writes",
-        "subject": "/home/alice/.local/state/mix/.home.nix.mix-backup-102",
+        "subject": "/home/alice/.local/state/mix/.home.nix.mix-backup-model-102",
         "undone": false,
         "unknown": []
       }
@@ -559,6 +559,13 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_REPAIRING"
       },
       {
+        "key": "/home/alice/.local/state/mix/.git ownership",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/mix/.git ownership",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
         "key": "/home/alice/.local/state/mix/.git",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/home/alice/.local/state/mix/.git",
@@ -647,7 +654,7 @@ expression: "run.case(&before, &world)"
   },
   "performed": [
     "PutFile /home/alice/.local/state/mix/home.nix",
-    "RemoveCreatedTree /home/alice/.local/state/mix/.home.nix.mix-backup-102",
+    "RemoveCreatedTree /home/alice/.local/state/mix/.home.nix.mix-backup-model-102",
     "Commit changes"
   ]
 }

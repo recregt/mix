@@ -155,6 +155,10 @@ pub enum Target<'a> {
         name: &'static str,
         path: &'static str,
     },
+    RepositoryOwner {
+        path: Cow<'a, Path>,
+        user: Cow<'a, InvokingUser>,
+    },
     Repository {
         path: Cow<'a, Path>,
         user: Cow<'a, InvokingUser>,
@@ -227,6 +231,10 @@ impl Target<'_> {
                 must_be_active,
             },
             Target::PathExists { name, path } => Target::PathExists { name, path },
+            Target::RepositoryOwner { path, user } => Target::RepositoryOwner {
+                path: own_path(path),
+                user: Cow::Owned(user.into_owned()),
+            },
             Target::Repository { path, user } => Target::Repository {
                 path: own_path(path),
                 user: Cow::Owned(user.into_owned()),
@@ -258,6 +266,9 @@ impl Target<'_> {
             Target::User { n, .. } => identity::user_name(*n),
             Target::SystemdUnit { name, .. } => Cow::Borrowed(name),
             Target::PathExists { name, .. } => Cow::Borrowed(name),
+            Target::RepositoryOwner { path, .. } => {
+                Cow::Owned(format!("{} ownership", path.display()))
+            }
             Target::Repository { path, .. }
             | Target::Generations { path, .. }
             | Target::HomeFiles { path, .. } => path.to_string_lossy(),
@@ -277,6 +288,7 @@ impl Target<'_> {
             }
             Target::SystemdUnit { .. } => Category::Services,
             Target::PathExists { .. }
+            | Target::RepositoryOwner { .. }
             | Target::Repository { .. }
             | Target::Journals { .. }
             | Target::Leftovers { .. }
@@ -344,6 +356,10 @@ fn push_user_targets<'a>(items: &mut Vec<Target<'a>>, cfg: &'a UserConfig) {
             owner,
         }),
     }
+    items.push(Target::RepositoryOwner {
+        path: Cow::Owned(repository_dir(&cfg.user.home)),
+        user: Cow::Borrowed(&cfg.user),
+    });
     items.push(Target::Repository {
         path: Cow::Owned(repository_dir(&cfg.user.home)),
         user: Cow::Borrowed(&cfg.user),
@@ -388,6 +404,7 @@ pub fn written_dirs(user: Option<&InvokingUser>) -> Vec<PathBuf> {
             | Target::SeededFile { path, .. } => add(path),
             Target::SystemdUnit { dest, .. } => add(Path::new(dest)),
             Target::Program { path, .. } => add(Path::new(path)),
+            Target::RepositoryOwner { .. } => {}
             Target::Repository { path, .. } => {
                 add(path);
                 add(&path.join(INDEX_LOCK));
@@ -419,7 +436,7 @@ const USER_PARENT_BITS: u32 = 0o700;
 
 const SYSTEM_TARGET_COUNT: usize =
     16 + SYSTEM_PARENTS.len() + NIX_TREE_PATHS.len() + NIXBLD_USER_COUNT as usize;
-const USER_TARGET_COUNT: usize = 11 + USER_PARENTS.len();
+const USER_TARGET_COUNT: usize = 12 + USER_PARENTS.len();
 
 pub fn user_targets(cfg: &UserConfig) -> Vec<Target<'_>> {
     let mut items = Vec::with_capacity(USER_TARGET_COUNT);
@@ -585,6 +602,9 @@ mod tests {
     fn label_borrows_instead_of_allocating_for_every_target() {
         let cfg = sample_user_config();
         for target in targets(Some(&cfg), default_policy()) {
+            if matches!(target, Target::RepositoryOwner { .. }) {
+                continue;
+            }
             assert!(
                 matches!(target.label(), Cow::Borrowed(_)),
                 "label() allocated for {target:?}"
@@ -807,9 +827,9 @@ mod tests {
     }
 
     #[test]
-    fn user_targets_returns_exactly_the_fourteen_per_user_entries() {
+    fn user_targets_returns_exactly_the_fifteen_per_user_entries() {
         let cfg = sample_user_config();
-        assert_eq!(user_targets(&cfg).len(), 14);
+        assert_eq!(user_targets(&cfg).len(), 15);
     }
 
     #[test]

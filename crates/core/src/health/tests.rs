@@ -158,6 +158,7 @@ fn repair(world: &mut World, config: &UserConfig) -> Run {
 type Drift = fn(&mut World);
 
 const ALICE_REPOSITORY: &str = "/home/alice/.local/state/mix/.git";
+const ALICE_OWNERSHIP: &str = "/home/alice/.local/state/mix/.git ownership";
 const ALICE_GENERATIONS: &str = "/home/alice/.local/state/nix/profiles/home-manager";
 
 fn remove_tree(world: &mut World, top: &Path) {
@@ -487,7 +488,7 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
                 world.files.get_mut(&head).unwrap().owner = (0, 0);
             },
             vec![(
-                ALICE_REPOSITORY,
+                ALICE_OWNERSHIP,
                 Finding::Owner {
                     actual: (0, 0),
                     expected: (1000, 1000),

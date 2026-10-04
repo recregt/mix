@@ -207,6 +207,13 @@ pub fn queries(target: &Target<'_>) -> Vec<Query> {
             queries
         }
         Target::PathExists { path, .. } => vec![Query::Path((*path).into())],
+        Target::RepositoryOwner { path, user } => vec![
+            Query::Path(path.to_path_buf()),
+            Query::Strangers {
+                path: path.to_path_buf(),
+                owner: (user.uid, user.gid),
+            },
+        ],
         Target::Repository { path, user } => vec![
             Query::Path(path.join(INDEX_LOCK)),
             Query::Path(path.to_path_buf()),
@@ -359,6 +366,7 @@ pub fn drift(target: &Target<'_>, facts: &[Fact]) -> Option<Drift> {
         | Target::GroupMember { .. }
         | Target::User { .. }
         | Target::PathExists { .. }
+        | Target::RepositoryOwner { .. }
         | Target::Repository { .. }
         | Target::Program { .. }
         | Target::Journals { .. }
@@ -472,6 +480,9 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
         } => {
             let installed = contents(facts, 0);
             let Some(installed) = installed else {
+                if unit_source(src, facts).is_none() {
+                    return Some(Finding::RuntimeMissing);
+                }
                 return match path_facts(facts, 1).kind {
                     Kind::Missing => Some(Finding::UnitMissing),
                     Kind::Unreadable(kind) => Some(Finding::Unreadable { kind }),
@@ -490,19 +501,25 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
         Target::PathExists { .. } => {
             (path_facts(facts, 0).kind == Kind::Missing).then_some(Finding::RuntimeMissing)
         }
-        Target::Repository { user, .. } => {
+        Target::RepositoryOwner { user, .. } => {
+            if path_facts(facts, 0).kind != Kind::Directory {
+                return None;
+            }
+            match &facts[1] {
+                Fact::Stranger(Some((_, actual))) => Some(Finding::Owner {
+                    actual: *actual,
+                    expected: (user.uid, user.gid),
+                }),
+                _ => None,
+            }
+        }
+        Target::Repository { .. } => {
             let repository = path_facts(facts, 1);
             if let Some(finding) = absent(repository.kind) {
                 return Some(finding);
             }
             if repository.kind != Kind::Directory {
                 return Some(Finding::RepositoryBroken);
-            }
-            if let Fact::Stranger(Some((_, actual))) = &facts[3] {
-                return Some(Finding::Owner {
-                    actual: *actual,
-                    expected: (user.uid, user.gid),
-                });
             }
             if !matches!(facts[2], Fact::Repository { intact: true, .. }) {
                 return Some(Finding::RepositoryBroken);
@@ -544,7 +561,7 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
             _ => None,
         },
         Target::Leftovers { .. } => {
-            let paths: Vec<String> = leftovers(facts)
+            let paths: Vec<String> = leftovers(facts, None)
                 .map(|(path, _)| path.display().to_string())
                 .collect();
             (!paths.is_empty()).then_some(Finding::Leftovers { paths })
@@ -571,7 +588,14 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
     }
 }
 
-fn leftovers(facts: &[Fact]) -> impl Iterator<Item = &(std::path::PathBuf, crate::action::FileId)> {
+fn named_by(name: &str, request: &str) -> bool {
+    name.contains(&format!("-{request}-")) || name.ends_with(&format!("-{request}"))
+}
+
+fn leftovers<'f>(
+    facts: &'f [Fact],
+    running: Option<&'f str>,
+) -> impl Iterator<Item = &'f (std::path::PathBuf, crate::action::FileId)> {
     let abandoned: &[crate::action::Abandoned] = match &facts[0] {
         Fact::Journals(abandoned) => abandoned,
         _ => &[],
@@ -587,10 +611,10 @@ fn leftovers(facts: &[Fact]) -> impl Iterator<Item = &(std::path::PathBuf, crate
                 .file_name()
                 .map(|name| name.to_string_lossy())
                 .unwrap_or_default();
-            !abandoned.iter().any(|request| {
-                name.contains(&format!("-{}-", request.request))
-                    || name.ends_with(&format!("-{}", request.request))
-            })
+            !abandoned
+                .iter()
+                .any(|request| named_by(&name, &request.request))
+                && !running.is_some_and(|request| named_by(&name, request))
         })
 }
 
@@ -780,6 +804,22 @@ pub fn fix(
             actions
         }
         Target::PathExists { .. } => return Err(Unfixable::MissingRuntime),
+        Target::RepositoryOwner { path, .. } => {
+            let Finding::Owner { expected, .. } = finding else {
+                return Ok(Vec::new());
+            };
+            let found = path_facts(facts, 0);
+            found
+                .id
+                .map(|expect| Action::ReclaimTree {
+                    path: path.to_path_buf(),
+                    expect,
+                    owner: expected,
+                    mode: found.mode,
+                })
+                .into_iter()
+                .collect()
+        }
         Target::Repository { path, user } => {
             let aside =
                 |path, found: &PathFacts| found.id.map(|expect| Action::SetAside { path, expect });
@@ -839,7 +879,7 @@ pub fn fix(
         }
         Target::Journals { .. } => return Err(Unfixable::Unrecovered),
         Target::HomeFiles { .. } => return Err(Unfixable::InTheWay),
-        Target::Leftovers { .. } => leftovers(facts)
+        Target::Leftovers { .. } => leftovers(facts, Some(request))
             .map(|(path, expect)| Action::RemoveCreatedTree {
                 path: path.clone(),
                 expect: *expect,
