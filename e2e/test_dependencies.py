@@ -77,7 +77,7 @@ def test_a_profile_lock_someone_else_holds_is_waited_for_in_the_open(
 
 
 @pytest.mark.bootstrapped
-def test_an_interrupted_request_recovery_cannot_put_back_is_reported(container):
+def test_an_interrupted_request_repair_cannot_put_back_is_given_up(container):
     records = [
         {"began": {"request": "r9"}},
         {
@@ -106,10 +106,9 @@ def test_an_interrupted_request_recovery_cannot_put_back_is_reported(container):
         JOURNALS: {"interrupted": {"requests": ["r9"], "pending": ["/etc/mix/policy.json"]}}
     }
     repaired = container.mix("repair", user=USER)
-    assert repaired.exit_code == 3, repaired
-    assert container.path_exists(f"{JOURNALS}/r9.ndjson")
-
-    container.exec("rm", f"{JOURNALS}/r9.ndjson", check=True)
+    assert repaired.succeeded(), repaired
+    assert repaired.warnings == ["CODE_CLEANUP_INCOMPLETE"], repaired
+    assert not container.path_exists(f"{JOURNALS}/r9.ndjson")
     _healthy(container)
 
 
