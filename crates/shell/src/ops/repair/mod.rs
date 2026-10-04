@@ -416,6 +416,23 @@ mod tests {
         }]
     }
 
+    fn repository_report<'r>(
+        reports: &'r [RepairReport],
+        user: &mix_core::identity::InvokingUser,
+    ) -> &'r RepairReport {
+        let name = mix_core::paths::repository_dir(&user.home);
+        reports
+            .iter()
+            .find(|report| report.name == name.to_string_lossy())
+            .unwrap_or_else(|| {
+                let names: Vec<String> = reports
+                    .iter()
+                    .map(|report| format!("{}: {:?}", report.name, report.error))
+                    .collect();
+                panic!("no report for the repository among {names:?}")
+            })
+    }
+
     fn fixed(reports: &[RepairReport]) -> Vec<&str> {
         reports
             .iter()
@@ -462,8 +479,7 @@ mod tests {
 
         let (reports, _) = repair_in(repository_target(&user), &mix_exec::Scope::root()).await;
 
-        assert_eq!(reports.len(), 1);
-        assert!(reports[0].fixed);
+        assert!(repository_report(&reports, &user).fixed);
         assert!(intact(&user).await);
     }
 
@@ -479,11 +495,7 @@ mod tests {
 
         let (reports, _) = repair_in(repository_target(&user), &mix_exec::Scope::root()).await;
 
-        assert!(
-            reports.iter().all(|report| report.fixed),
-            "{}",
-            reports.len()
-        );
+        assert!(repository_report(&reports, &user).fixed);
         assert!(!repository.join(mix_core::paths::INDEX_LOCK).exists());
         assert_eq!(
             std::fs::read_to_string(repository.join("HEAD")).unwrap(),
@@ -509,7 +521,7 @@ mod tests {
 
         let (reports, _) = repair_in(repository_target(&user), &mix_exec::Scope::root()).await;
 
-        assert!(reports.iter().any(|report| !report.fixed));
+        assert!(!repository_report(&reports, &user).fixed);
         assert_eq!(
             std::fs::read_to_string(repository.join("HEAD")).unwrap(),
             "garbage\n"
