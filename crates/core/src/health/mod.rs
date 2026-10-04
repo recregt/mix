@@ -2,7 +2,9 @@ use std::borrow::Cow;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::action::{Action, Expect, Fact, Failure, Kind, Owner, PathFacts, Query, UserSpec};
+use crate::action::{
+    Action, Expect, Fact, Failure, Kind, Owner, PathFacts, ProgramFacts, Query, UserSpec,
+};
 use crate::bootstrap::stale_restart;
 use crate::identity;
 use crate::paths::{INDEX_LOCK, NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT};
@@ -216,8 +218,10 @@ pub fn queries(target: &Target<'_>) -> Vec<Query> {
         ],
         Target::Program { path, source, .. } => vec![
             Query::Path((*path).into()),
-            Query::Contents((*path).into()),
-            Query::Contents((*source).into()),
+            Query::Program {
+                path: (*path).into(),
+                source: (*source).into(),
+            },
         ],
         Target::Journals { path } => vec![Query::Journals((*path).into())],
         Target::Leftovers { user, journals } => {
@@ -487,9 +491,7 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
             if let Some(finding) = absent(found.kind) {
                 return Some(finding);
             }
-            if let Some(running) = contents(facts, 2)
-                && contents(facts, 1) != Some(running)
-            {
+            if matches!(&facts[1], Fact::Program(program) if !program.same) {
                 return Some(Finding::ContentDrift);
             }
             if found.mode != *mode {
@@ -784,7 +786,13 @@ pub fn fix(
                 }],
                 _ => vec![Action::PutFile {
                     path: (*path).into(),
-                    contents: Arc::from(contents(facts, 2).ok_or(Unfixable::MissingRuntime)?),
+                    contents: match &facts[1] {
+                        Fact::Program(ProgramFacts {
+                            source: Some(source),
+                            ..
+                        }) => Arc::clone(source),
+                        _ => return Err(Unfixable::MissingRuntime),
+                    },
                     mode: *mode,
                     owner: None,
                     expect: found.id.map_or(Expect::Absent, Expect::Present),

@@ -1,8 +1,8 @@
 use mix_events::Timestamp;
 use mix_events::v1::{
     Began, ContentsFact, FileIdentity, GroupFact, Journaled, Observation, Observed, PathFact,
-    PathKind, PathsFact, ProfileFact, RepositoryFact, Sequenced, StrangerFact, TreeOwnerFact,
-    UnitFact, UserFact, journaled, observation,
+    PathKind, PathsFact, ProfileFact, ProgramFact, RepositoryFact, Sequenced, StrangerFact,
+    TreeOwnerFact, UnitFact, UserFact, journaled, observation,
 };
 
 use crate::action::{Action, Fact, FileId, Kind, PathFacts, Query};
@@ -78,6 +78,7 @@ fn query_of(query: &Query) -> observation::Query {
         Query::Leftovers(at) => Wire::Leftovers(path(at)),
         Query::Strangers { path: at, .. } => Wire::Strangers(path(at)),
         Query::Clobbered(user) => Wire::Clobbered(user.name.clone()),
+        Query::Program { path: at, .. } => Wire::Program(path(at)),
     }
 }
 
@@ -175,6 +176,7 @@ fn fact_of(fact: &Fact) -> observation::Fact {
             },
             None => StrangerFact::default(),
         }),
+        Fact::Program(program) => Wire::ProgramFact(ProgramFact { same: program.same }),
         Fact::Clobbered(found) => Wire::ClobberedFact(PathsFact {
             paths: found.iter().map(|at| at.display().to_string()).collect(),
         }),

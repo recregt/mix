@@ -20,6 +20,7 @@ fn query(query: &observation::Query) -> (&'static str, &str) {
         Query::Leftovers(path) => ("leftovers in", path),
         Query::Strangers(path) => ("other owners in", path),
         Query::Clobbered(name) => ("files in the way for", name),
+        Query::Program(path) => ("running program against", path),
     }
 }
 
@@ -95,6 +96,8 @@ fn fact(out: &mut String, fact: &observation::Fact) {
         Fact::JournalsFact(found) | Fact::LeftoversFact(found) | Fact::ClobberedFact(found) => {
             write!(out, "{}", found.paths.join(", "))
         }
+        Fact::ProgramFact(program) if program.same => write!(out, "the same"),
+        Fact::ProgramFact(_) => write!(out, "different"),
         Fact::StrangerFact(stranger) => match &stranger.path {
             Some(path) => write!(out, "{path} owned by {}:{}", stranger.uid, stranger.gid),
             None => write!(out, "none"),

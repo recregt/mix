@@ -321,6 +321,7 @@ pub enum Query {
     Leftovers(PathBuf),
     Strangers { path: PathBuf, owner: Owner },
     Clobbered(InvokingUser),
+    Program { path: PathBuf, source: PathBuf },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -402,6 +403,15 @@ pub enum Fact {
     Leftovers(Vec<(PathBuf, FileId)>),
     Stranger(Option<(PathBuf, Owner)>),
     Clobbered(Vec<PathBuf>),
+    Program(ProgramFacts),
+}
+
+/// Whether an installed program is the one at its source, and the source's contents when it
+/// is not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramFacts {
+    pub same: bool,
+    pub source: Option<Arc<[u8]>>,
 }
 
 pub fn rollback_order(journal: &[Vec<Action>]) -> Vec<Action> {

@@ -1258,6 +1258,15 @@ impl World {
                     })
                     .find(|(_, found)| found != owner),
             ),
+            Query::Program { path, source } => {
+                let installed = self.contents(path);
+                let running = self.contents(source);
+                let same = installed.is_some() && installed == running;
+                Fact::Program(crate::action::ProgramFacts {
+                    same,
+                    source: if same { None } else { running.map(Arc::from) },
+                })
+            }
             Query::Clobbered(user) => {
                 Fact::Clobbered(self.clobbered.get(&user.uid).cloned().unwrap_or_default())
             }

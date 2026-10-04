@@ -9,7 +9,7 @@ use mix_core::action::{Action, Fact, Failure, Kind, Outcome, PathFacts, Performe
 use mix_core::identity::InvokingUser;
 use mix_core::journal::Record;
 use mix_core::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
-use mix_core::paths::{RUNNING_PROGRAM, mix_state_dir, repository_dir};
+use mix_core::paths::{mix_state_dir, repository_dir};
 use mix_core::plan::{Input, Next, Report, Runner, make_guard};
 use mix_core::{ActivityReporter, BuildProgress, DownloadProgress};
 use mix_events::v1::node_progress::Progress;
@@ -481,8 +481,8 @@ impl Performer {
             let fact = match query {
                 Query::Unit(unit) => Fact::Unit(self.units().await?.observe(unit).await?),
                 Query::Journals(dir) => Fact::Journals(crate::effect::journal::abandoned(dir)),
-                Query::Contents(path) if path.as_os_str() == RUNNING_PROGRAM => {
-                    Fact::Contents(std::fs::read(RUNNING_PROGRAM).ok().map(Into::into))
+                Query::Program { path, source } => {
+                    Fact::Program(crate::effect::program::observe(path, source))
                 }
                 Query::Repository(user) => Fact::Repository {
                     intact: Git::resolve(user)
@@ -1236,16 +1236,27 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::disallowed_methods)]
-    async fn the_running_program_is_read_through_its_proc_link() {
+    async fn the_running_program_is_compared_through_its_proc_link() {
         let mut performer = Performer::new(Files::open(Path::new("/"), "r1").unwrap());
+        let running = std::env::current_exe().unwrap();
 
         let facts = performer
-            .observe(&[Query::Contents(RUNNING_PROGRAM.into())], &Scope::root())
+            .observe(
+                &[Query::Program {
+                    path: running,
+                    source: mix_core::paths::RUNNING_PROGRAM.into(),
+                }],
+                &Scope::root(),
+            )
             .await
             .unwrap();
 
-        let running = std::fs::read(std::env::current_exe().unwrap()).unwrap();
-        assert_eq!(facts, [Fact::Contents(Some(running.into()))]);
+        assert_eq!(
+            facts,
+            [Fact::Program(mix_core::action::ProgramFacts {
+                same: true,
+                source: None
+            })]
+        );
     }
 }

@@ -40,9 +40,12 @@ const ISOLATED_ENV: &[(&str, &str)] = &[
     ("GIT_TERMINAL_PROMPT", "0"),
 ];
 
+/// Checks a repository passes: `HEAD` resolves to a commit, every object of its tree reads, and
+/// the index reads.
 const VERIFY: &[&[&str]] = &[
     &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
-    &["fsck", "--no-progress", "--no-dangling"],
+    &["archive", "--format=tar", "HEAD"],
+    &["ls-files", "--stage"],
 ];
 
 const MANAGED_FILES: &[&str] = &[GITIGNORE, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, STATE_FILE];
@@ -73,10 +76,11 @@ impl Git {
         self.sync(user, state_dir, scope).await.map(|_| ())
     }
 
-    /// Whether `HEAD` resolves to a commit and `git fsck` finds every object it reaches intact.
+    /// Whether `HEAD` resolves to a commit whose tree reads in full, and the index reads.
     ///
-    /// Note: The repository is named with `--git-dir`, so a missing one is never answered by a
-    /// repository further up.
+    /// Note: Only what a build reads is checked, so the cost follows the current tree, not the
+    /// history. The repository is named with `--git-dir`, so a missing one is never answered by
+    /// a repository further up.
     pub async fn verify(
         &self,
         user: &InvokingUser,
@@ -577,6 +581,15 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let state_dir = committed(home.path()).await;
         std::fs::write(state_dir.join(GIT_DIR).join("config"), "[[[ not a config\n").unwrap();
+
+        assert!(!verified(home.path(), &state_dir).await);
+    }
+
+    #[tokio::test]
+    async fn a_repository_with_an_unreadable_index_does_not_verify() {
+        let home = tempfile::tempdir().unwrap();
+        let state_dir = committed(home.path()).await;
+        std::fs::write(state_dir.join(GIT_DIR).join("index"), "garbage").unwrap();
 
         assert!(!verified(home.path(), &state_dir).await);
     }

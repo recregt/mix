@@ -226,6 +226,7 @@ message Observation {
     string leftovers = 23;
     string strangers = 24;
     string clobbered = 25;
+    string program = 26;
   }
   oneof fact {
     PathFact path_fact = 10;
@@ -240,6 +241,7 @@ message Observation {
     PathsFact leftovers_fact = 19;
     StrangerFact stranger_fact = 20;
     PathsFact clobbered_fact = 21;
+    ProgramFact program_fact = 30;
   }
 }
 
@@ -310,6 +312,10 @@ message TreeOwnerFact {
 
 message RepositoryFact {
   bool intact = 1;
+}
+
+message ProgramFact {
+  bool same = 1;
 }
 
 message PathsFact {
