@@ -33,7 +33,20 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - run: cargo test --workspace --locked
+      - uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
+        with:
+          tool: cargo-insta@1.49.0
+
+      - run: cargo metadata --locked --format-version 1 > /dev/null
+
+      - run: cargo insta test --workspace --check --unreferenced=reject
+
+      - name: Every snapshot is named after its test or given a name
+        run: |
+          if find crates -path '*/snapshots/*' -name '*-[0-9]*.snap' | grep .; then
+            echo "these snapshots were numbered by insta; name each one" >&2
+            exit 1
+          fi
 
   contract:
     name: Nix Contract
