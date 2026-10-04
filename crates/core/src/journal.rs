@@ -62,6 +62,25 @@ pub fn pending(records: &[Record]) -> Vec<PathBuf> {
         .collect()
 }
 
+pub fn abandoned(request: &str, records: &[Record]) -> crate::action::Abandoned {
+    let pending = match recover(records) {
+        Recovery::RollBack { uncertain, certain } => certain
+            .iter()
+            .chain(&uncertain)
+            .map(|action| crate::plan::describe(action).1)
+            .collect(),
+        Recovery::FinishCommit { pending } => pending
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect(),
+        Recovery::Nothing => Vec::new(),
+    };
+    crate::action::Abandoned {
+        request: request.to_string(),
+        pending,
+    }
+}
+
 pub fn recover(records: &[Record]) -> Recovery {
     if records.contains(&Record::Ended) {
         return Recovery::Nothing;

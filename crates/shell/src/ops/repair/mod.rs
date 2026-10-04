@@ -19,7 +19,7 @@ use crate::Context;
 use crate::drive::{Journal, Observer, Performer, drive};
 use crate::effect::generations::ProfileContext;
 use crate::effect::home::core_error;
-use crate::effect::journal::{FileJournal, recover_all};
+
 use crate::request::sink::Relay;
 use crate::request::{Concluded, Root};
 use crate::target::Error;
@@ -135,7 +135,9 @@ async fn repaired(
         };
     }
     let journals = ctx.journals.as_path();
-    let recovered = recover_all(journals, &mut performer, &scope.shielded()).await;
+    let recovered = ctx
+        .recover(journals, &mut performer, &scope.shielded())
+        .await;
     for (_, failure) in &recovered.failures {
         let _ = tree.warn(
             ROOT,
@@ -146,7 +148,7 @@ async fn repaired(
             ),
         );
     }
-    let mut journal = match FileJournal::create(journals, request) {
+    let mut journal = match ctx.journal(journals) {
         Ok(journal) => journal,
         Err(failure) => {
             return Repair {

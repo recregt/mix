@@ -700,10 +700,15 @@ impl Performer {
         report: &mut (dyn FnMut(Signal) + Send),
         prepared: &mut Prepared<'_>,
     ) -> Outcome {
-        if let Some(mut world) = self.modelled_world() {
-            let undo = world.clone().apply(action)?.undo;
+        if self.model.is_some() {
+            let undo = self
+                .modelled_world()
+                .expect("checked above")
+                .clone()
+                .apply(action)?
+                .undo;
             prepared(&undo)?;
-            return world.apply(action);
+            return self.modelled_world().expect("checked above").apply(action);
         }
         if self.prediction.is_some() {
             return Box::pin(self.predict(action, scope, prepared)).await;

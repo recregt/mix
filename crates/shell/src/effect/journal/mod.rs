@@ -4,9 +4,11 @@ use nix::fcntl::{Flock, FlockArg};
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use mix_core::action::{Abandoned, Action, Failure};
 use mix_core::journal::{Record, Recovery, recover};
+use mix_core::world::World;
 use mix_exec::Scope;
 
 use crate::drive::{Journal, Performer};
@@ -90,19 +92,8 @@ pub fn abandoned(dir: &Path) -> Vec<Abandoned> {
         .filter(|path| unheld(path).is_some())
         .filter_map(|path| {
             let request = path.file_stem()?.to_string_lossy().into_owned();
-            let pending = match read(&path).map(|records| recover(&records)) {
-                Ok(Recovery::RollBack { uncertain, certain }) => certain
-                    .iter()
-                    .chain(&uncertain)
-                    .map(|action| mix_core::plan::describe(action).1)
-                    .collect(),
-                Ok(Recovery::FinishCommit { pending }) => pending
-                    .iter()
-                    .map(|path| path.display().to_string())
-                    .collect(),
-                Ok(Recovery::Nothing) | Err(_) => Vec::new(),
-            };
-            Some(Abandoned { request, pending })
+            let records = read(&path).unwrap_or_default();
+            Some(mix_core::journal::abandoned(&request, &records))
         })
         .collect()
 }
@@ -143,46 +134,146 @@ pub async fn recover_all(dir: &Path, performer: &mut Performer, scope: &Scope) -
                 continue;
             }
         };
-        let failed_before = recovered.failures.len();
         recovered.requests += 1;
-        let mut ignore = |_: &[Action]| Ok(());
-        let mut quiet = |_| {};
-        match recover(&records) {
-            Recovery::Nothing => {}
-            Recovery::RollBack { uncertain, certain } => {
-                for action in uncertain {
-                    let _ = performer
-                        .perform(&action, scope, &mut quiet, &mut ignore)
-                        .await;
-                }
-                for action in certain {
-                    if let Err(failure) = performer
-                        .perform(&action, scope, &mut quiet, &mut ignore)
-                        .await
-                    {
-                        recovered.failures.push((action, failure));
-                    }
-                }
-            }
-            Recovery::FinishCommit { pending } => {
-                let committed = match performer.adopt(pending, scope).await {
-                    Ok(()) => {
-                        performer
-                            .perform(&Action::Commit, scope, &mut quiet, &mut ignore)
-                            .await
-                    }
-                    Err(failure) => Err(failure),
-                };
-                if let Err(failure) = committed {
-                    recovered.failures.push((Action::Commit, failure));
-                }
-            }
-        }
-        if recovered.failures.len() > failed_before {
+        if !recover_records(&records, performer, scope, &mut recovered).await {
             continue;
         }
         if let Err(failure) = std::fs::remove_file(&path).map_err(|error| io(&path, error)) {
             recovered.failures.push((Action::Commit, failure));
+        }
+    }
+    recovered
+}
+
+pub async fn recover_records(
+    records: &[Record],
+    performer: &mut Performer,
+    scope: &Scope,
+    recovered: &mut Recovered,
+) -> bool {
+    let failed_before = recovered.failures.len();
+    let mut ignore = |_: &[Action]| Ok(());
+    let mut quiet = |_| {};
+    match recover(records) {
+        Recovery::Nothing => {}
+        Recovery::RollBack { uncertain, certain } => {
+            for action in uncertain {
+                let _ = performer
+                    .perform(&action, scope, &mut quiet, &mut ignore)
+                    .await;
+            }
+            for action in certain {
+                if let Err(failure) = performer
+                    .perform(&action, scope, &mut quiet, &mut ignore)
+                    .await
+                {
+                    recovered.failures.push((action, failure));
+                }
+            }
+        }
+        Recovery::FinishCommit { pending } => {
+            let committed = match performer.adopt(pending, scope).await {
+                Ok(()) => {
+                    performer
+                        .perform(&Action::Commit, scope, &mut quiet, &mut ignore)
+                        .await
+                }
+                Err(failure) => Err(failure),
+            };
+            if let Err(failure) = committed {
+                recovered.failures.push((Action::Commit, failure));
+            }
+        }
+    }
+    recovered.failures.len() == failed_before
+}
+
+pub struct ModelJournal {
+    world: Arc<Mutex<World>>,
+    request: String,
+}
+
+impl ModelJournal {
+    pub fn open(world: Arc<Mutex<World>>, request: &str) -> Self {
+        {
+            let mut locked = lock(&world);
+            locked.held.insert(request.to_string());
+            locked.logs.insert(
+                request.to_string(),
+                vec![Record::Began {
+                    request: request.to_string(),
+                }],
+            );
+        }
+        Self {
+            world,
+            request: request.to_string(),
+        }
+    }
+}
+
+impl Drop for ModelJournal {
+    fn drop(&mut self) {
+        lock(&self.world).held.remove(&self.request);
+    }
+}
+
+pub enum RequestJournal {
+    File(FileJournal),
+    Model(ModelJournal),
+}
+
+impl RequestJournal {
+    pub fn finish(self) -> Result<(), Failure> {
+        match self {
+            RequestJournal::File(journal) => journal.finish(),
+            RequestJournal::Model(journal) => {
+                lock(&journal.world).logs.remove(&journal.request);
+                Ok(())
+            }
+        }
+    }
+}
+
+impl Journal for RequestJournal {
+    fn append(&mut self, record: &Record) -> Result<(), Failure> {
+        match self {
+            RequestJournal::File(journal) => journal.append(record),
+            RequestJournal::Model(journal) => {
+                lock(&journal.world)
+                    .logs
+                    .entry(journal.request.clone())
+                    .or_default()
+                    .push(record.clone());
+                Ok(())
+            }
+        }
+    }
+}
+
+fn lock(world: &Mutex<World>) -> std::sync::MutexGuard<'_, World> {
+    world.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+pub async fn recover_model(
+    world: &Arc<Mutex<World>>,
+    performer: &mut Performer,
+    scope: &Scope,
+) -> Recovered {
+    let mut recovered = Recovered::default();
+    let open: Vec<(String, Vec<Record>)> = {
+        let locked = lock(world);
+        locked
+            .logs
+            .iter()
+            .filter(|(request, _)| !locked.held.contains(*request))
+            .map(|(request, records)| (request.clone(), records.clone()))
+            .collect()
+    };
+    for (request, records) in open {
+        recovered.requests += 1;
+        if recover_records(&records, performer, scope, &mut recovered).await {
+            lock(world).logs.remove(&request);
         }
     }
     recovered

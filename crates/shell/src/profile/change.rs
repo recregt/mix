@@ -10,7 +10,7 @@ use mix_events::v1::Code;
 use crate::drive::drive;
 use crate::effect::generations::ProfileContext;
 use crate::effect::home::core_error;
-use crate::effect::journal::FileJournal;
+
 use crate::profile::state::{self, Invalid, Settled, Source};
 use crate::request::{Concluded, Root};
 
@@ -141,7 +141,7 @@ pub async fn perform(
             .clone();
             return conclude(root, verdict, result);
         }
-        let mut journal = match FileJournal::create(&ctx.journals, &ctx.request.id) {
+        let mut journal = match ctx.journal(&ctx.journals) {
             Ok(journal) => journal,
             Err(failure) => return root.refuse(Error::Core(core_error(failure, &ctx.journals))),
         };

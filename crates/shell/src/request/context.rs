@@ -94,6 +94,46 @@ pub struct Context {
 }
 
 impl Context {
+    pub(crate) fn journal(
+        &self,
+        dir: &Path,
+    ) -> Result<crate::effect::journal::RequestJournal, mix_core::action::Failure> {
+        use crate::effect::journal::{FileJournal, ModelJournal, RequestJournal};
+        Ok(match &self.host {
+            Host::Machine => RequestJournal::File(FileJournal::create(dir, &self.request.id)?),
+            Host::Model(world) => {
+                RequestJournal::Model(ModelJournal::open(Arc::clone(world), &self.request.id))
+            }
+        })
+    }
+
+    pub(crate) fn interrupted(&self, dir: &Path) -> bool {
+        match &self.host {
+            Host::Machine => !crate::effect::journal::unfinished(dir).is_empty(),
+            Host::Model(world) => {
+                let world = world.lock().unwrap_or_else(PoisonError::into_inner);
+                world
+                    .logs
+                    .keys()
+                    .any(|request| !world.held.contains(request))
+            }
+        }
+    }
+
+    pub(crate) async fn recover(
+        &self,
+        dir: &Path,
+        performer: &mut Performer,
+        scope: &mix_exec::Scope,
+    ) -> crate::effect::journal::Recovered {
+        match &self.host {
+            Host::Machine => crate::effect::journal::recover_all(dir, performer, scope).await,
+            Host::Model(world) => {
+                crate::effect::journal::recover_model(world, performer, scope).await
+            }
+        }
+    }
+
     pub(crate) fn performer(&self) -> std::io::Result<Performer> {
         match &self.host {
             Host::Machine => {

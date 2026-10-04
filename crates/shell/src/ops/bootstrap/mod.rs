@@ -17,7 +17,7 @@ use mix_events::{Ending, ROOT, Start};
 use crate::Context;
 use crate::drive::{Performer, drive};
 use crate::effect::generations::ProfileContext;
-use crate::effect::journal::{FileJournal, recover_all, unfinished};
+
 use crate::effect::mirror::{filter_mirror, mirror_url};
 use crate::request::{Concluded, Root};
 
@@ -170,7 +170,7 @@ pub(crate) async fn bootstrap(
         let ending = ending_of(&report.verdict);
         return root.conclude(ending);
     }
-    if !unfinished(journals).is_empty() {
+    if ctx.interrupted(journals) {
         let node = tree
             .start(
                 ROOT,
@@ -184,7 +184,9 @@ pub(crate) async fn bootstrap(
                 .shielded(),
             )
             .expect("the root is open");
-        let recovered = recover_all(journals, &mut performer, &scope.shielded()).await;
+        let recovered = ctx
+            .recover(journals, &mut performer, &scope.shielded())
+            .await;
         for (_, failure) in &recovered.failures {
             let _ = tree.warn(
                 node,
@@ -197,7 +199,7 @@ pub(crate) async fn bootstrap(
         }
         let _ = tree.finish(node, Ending::succeeded());
     }
-    let mut journal = match FileJournal::create(journals, &ctx.request.id) {
+    let mut journal = match ctx.journal(journals) {
         Ok(journal) => journal,
         Err(failure) => return root.refuse(error_from(failure)),
     };

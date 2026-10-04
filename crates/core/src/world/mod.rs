@@ -100,6 +100,8 @@ pub struct World {
     pub units: BTreeMap<String, Unit>,
     pub profiles: BTreeMap<u32, Profile>,
     pub journals: Vec<crate::action::Abandoned>,
+    pub logs: BTreeMap<String, Vec<crate::journal::Record>>,
+    pub held: std::collections::BTreeSet<String>,
     pub clobbered: BTreeMap<u32, Vec<PathBuf>>,
     pending: Vec<PathBuf>,
     next_ino: u64,
@@ -113,6 +115,7 @@ impl PartialEq for World {
             && self.meaningful_units().eq(other.meaningful_units())
             && self.profiles == other.profiles
             && self.journals == other.journals
+            && self.logs == other.logs
             && self.clobbered == other.clobbered
             && self.pending == other.pending
     }
@@ -137,6 +140,8 @@ impl Default for World {
             units: BTreeMap::new(),
             profiles: BTreeMap::new(),
             journals: Vec::new(),
+            logs: BTreeMap::new(),
+            held: std::collections::BTreeSet::new(),
             clobbered: BTreeMap::new(),
             pending: Vec::new(),
             next_ino: 1,
@@ -1269,7 +1274,18 @@ impl World {
                     })
                     .unwrap_or_default(),
             ),
-            Query::Journals(_) => Fact::Journals(self.journals.clone()),
+            Query::Journals(_) => Fact::Journals(
+                self.journals
+                    .iter()
+                    .cloned()
+                    .chain(
+                        self.logs
+                            .iter()
+                            .filter(|(request, _)| !self.held.contains(*request))
+                            .map(|(request, records)| crate::journal::abandoned(request, records)),
+                    )
+                    .collect(),
+            ),
             Query::Leftovers(dir) => Fact::Leftovers(
                 self.files
                     .iter()
