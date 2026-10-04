@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mix_events::v1::command::Request;
@@ -8,7 +8,7 @@ use mix_events::v1::{Cancellation, Command, Envelope};
 use mix_events::{Ending, Outbox, ROOT, Start, Tree};
 use serde_json::{Value, json};
 
-use crate::action::{Action, Failure, Query};
+use crate::action::{Action, Failure, Owner, Query};
 use crate::journal::{Record, Recovery};
 use crate::plan::{Input, Next, Report, Runner, Verdict, describe, diagnostic, make_guard};
 use crate::world::{Content, Entry, Unit, World};
@@ -569,4 +569,108 @@ fn unit(unit: &Unit) -> Value {
         "enabled": unit.enabled,
         "running": unit.running.as_deref().map(text),
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Damage {
+    Removed,
+    Swapped,
+    Emptied,
+    Altered,
+    Unreadable,
+    Stranger,
+    Locked,
+}
+
+impl Damage {
+    pub const ALL: [Damage; 7] = [
+        Damage::Removed,
+        Damage::Swapped,
+        Damage::Emptied,
+        Damage::Altered,
+        Damage::Unreadable,
+        Damage::Stranger,
+        Damage::Locked,
+    ];
+}
+
+const STRANGER: Owner = (4242, 4242);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Breakage {
+    pub path: PathBuf,
+    pub damage: Damage,
+}
+
+impl Breakage {
+    pub fn apply(&self, world: &mut World) -> bool {
+        let Some(entry) = world.files.get(&self.path).cloned() else {
+            return false;
+        };
+        let path = &self.path;
+        match (self.damage, &entry.content) {
+            (Damage::Removed, _) => {
+                world.files.retain(|found, _| !found.starts_with(path));
+            }
+            (Damage::Swapped, Content::Directory) => {
+                world.files.retain(|found, _| !found.starts_with(path));
+                world.with_file(path, b"swapped", entry.mode & 0o666, entry.owner);
+            }
+            (Damage::Swapped, Content::File(_)) => {
+                world.files.remove(path);
+                world.with_dir(path, entry.mode | 0o111, entry.owner);
+            }
+            (Damage::Emptied, Content::File(bytes)) if !bytes.is_empty() => {
+                world.files.get_mut(path).expect("found above").content =
+                    Content::File(Arc::from(&b""[..]));
+            }
+            (Damage::Altered, Content::File(bytes)) => {
+                let mut altered = bytes.to_vec();
+                match altered.last_mut() {
+                    Some(last) => *last ^= 0x20,
+                    None => altered.push(b'x'),
+                }
+                world.files.get_mut(path).expect("found above").content =
+                    Content::File(Arc::from(altered));
+            }
+            (Damage::Unreadable, _) if entry.mode & 0o777 != 0 => {
+                world.files.get_mut(path).expect("found above").mode = entry.mode & !0o777;
+            }
+            (Damage::Stranger, _) if entry.owner != STRANGER => {
+                world.files.get_mut(path).expect("found above").owner = STRANGER;
+            }
+            (Damage::Locked, Content::File(_)) => {
+                let mut name = path.file_name().unwrap_or_default().to_os_string();
+                name.push(".lock");
+                let lock = path.with_file_name(name);
+                if world.files.contains_key(&lock) {
+                    return false;
+                }
+                world.with_file(lock, b"", 0o644, entry.owner);
+            }
+            _ => return false,
+        }
+        true
+    }
+}
+
+pub fn owned(before: &World, after: &World) -> Vec<PathBuf> {
+    after
+        .files
+        .keys()
+        .filter(|path| !before.files.contains_key(*path))
+        .cloned()
+        .collect()
+}
+
+pub fn breakages(paths: &[PathBuf]) -> Vec<Breakage> {
+    paths
+        .iter()
+        .flat_map(|path| {
+            Damage::ALL.iter().map(|damage| Breakage {
+                path: path.clone(),
+                damage: *damage,
+            })
+        })
+        .collect()
 }
