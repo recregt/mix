@@ -1,0 +1,22 @@
+[package]
+name = "mix-conformance"
+version.workspace = true
+edition = "2024"
+authors = ["Ömer Tekin"]
+license = "MPL-2.0"
+publish = false
+
+[dependencies]
+mix-core = { path = "../core", features = ["testkit"] }
+mix-events = { path = "../events" }
+mix-exec = { path = "../exec" }
+mix-render = { path = "../render" }
+mix-shell = { path = "../shell" }
+proptest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

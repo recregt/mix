@@ -1426,6 +1426,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mix-conformance"
+version = "0.1.0"
+dependencies = [
+ "mix-core",
+ "mix-events",
+ "mix-exec",
+ "mix-render",
+ "mix-shell",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "mix-core"
 version = "0.1.0"
 dependencies = [
@@ -1570,11 +1586,9 @@ dependencies = [
  "mix-exec",
  "mix-nixgen",
  "mix-pins",
- "mix-render",
  "mix-testchild",
  "mockito",
  "nix",
- "proptest",
  "reqwest",
  "rustix",
  "serde",

@@ -14,6 +14,7 @@ members = [
     "crates/explain",
     "crates/render",
     "crates/testchild",
+    "crates/conformance",
 ]
 
 [workspace.package]
