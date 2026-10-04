@@ -128,10 +128,27 @@ async fn prepare(ctx: &Context, force: bool) -> Result<(Settings, Performer)> {
         path: "/".into(),
         source,
     })?;
-    let performer = Performer::new(files).with_profile(ProfileContext {
+    let performer = if ctx.dry_run {
+        Performer::predicting(files)
+    } else {
+        Performer::new(files)
+    };
+    let performer = performer.with_profile(ProfileContext {
         mirror: ctx.mirror().map(str::to_string),
     });
     Ok((settings, performer))
+}
+
+fn ending_of(verdict: &Verdict) -> Ending {
+    match verdict {
+        Verdict::Succeeded => {
+            Ending::succeeded().with_result(node_finished::Result::Bootstrap(BootstrapResult {
+                profile_snippet: mix_core::paths::PROFILE_SNIPPET_DEST.to_string(),
+            }))
+        }
+        Verdict::Failed { failure, .. } => Ending::failed(diagnostic(failure)),
+        Verdict::Cancelled(cause) => Ending::cancelled(*cause),
+    }
 }
 
 pub(crate) async fn bootstrap(
@@ -146,6 +163,21 @@ pub(crate) async fn bootstrap(
     let scope = &ctx.scope;
     let tree = &mut root.tree;
     let journals = ctx.journals.as_path();
+    if ctx.dry_run {
+        let mut runner = Runner::new(ROOT, steps(&settings));
+        let report = drive(
+            &mut runner,
+            &mut root.tree,
+            &mut performer,
+            scope,
+            &root.stopped,
+            &mut Vec::new(),
+            &mut ctx.relay(),
+        )
+        .await;
+        let ending = ending_of(&report.verdict);
+        return root.conclude(ending);
+    }
     if !unfinished(journals).is_empty() {
         let node = tree
             .start(
@@ -188,15 +220,7 @@ pub(crate) async fn bootstrap(
         &mut ctx.relay(),
     )
     .await;
-    let ending = match &report.verdict {
-        Verdict::Succeeded => {
-            Ending::succeeded().with_result(node_finished::Result::Bootstrap(BootstrapResult {
-                profile_snippet: mix_core::paths::PROFILE_SNIPPET_DEST.to_string(),
-            }))
-        }
-        Verdict::Failed { failure, .. } => Ending::failed(diagnostic(failure)),
-        Verdict::Cancelled(cause) => Ending::cancelled(*cause),
-    };
+    let ending = ending_of(&report.verdict);
     if let Err(failure) = journal.finish() {
         let _ = root.tree.warn(
             ROOT,

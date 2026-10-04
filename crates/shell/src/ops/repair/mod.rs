@@ -116,9 +116,32 @@ async fn repaired(
             };
         }
     };
-    let mut performer = Performer::new(files).with_profile(ProfileContext {
+    let performer = if ctx.dry_run {
+        Performer::predicting(files)
+    } else {
+        Performer::new(files)
+    };
+    let mut performer = performer.with_profile(ProfileContext {
         mirror: ctx.mirror().map(str::to_string),
     });
+    if ctx.dry_run {
+        let (reports, interrupted) = put_back(
+            health::repair_steps(items, request),
+            &mut performer,
+            &mut Vec::new(),
+            scope,
+            Events {
+                tree,
+                stopped,
+                observer,
+            },
+        )
+        .await;
+        return Repair {
+            reports,
+            interrupted,
+        };
+    }
     let journals = ctx.journals.as_path();
     let recovered = recover_all(journals, &mut performer, &scope.shielded()).await;
     for (_, failure) in &recovered.failures {
@@ -253,6 +276,9 @@ async fn commit_the_tracked_state(
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+
     use mix_core::journal::Record;
     use mix_core::targets::Target;
 
@@ -295,15 +321,25 @@ mod tests {
     }
 
     async fn repair_in(targets: Vec<Target<'_>>, scope: &Scope) -> (Vec<RepairReport>, bool) {
-        let mut performer = Performer::new(Files::open(Path::new("/"), "r1").unwrap());
+        let files = Files::open(Path::new("/"), "r1").unwrap();
+        repairing(Performer::new(files), targets, scope).await.0
+    }
+
+    /// Runs the repair of `targets` with `performer`, and the actions it performed in order.
+    async fn repairing(
+        mut performer: Performer,
+        targets: Vec<Target<'_>>,
+        scope: &Scope,
+    ) -> ((Vec<RepairReport>, bool), Vec<mix_events::v1::Action>) {
         let mut journal: Vec<Record> = Vec::new();
         let stopped = stopped_by(scope);
+        let outbox = Arc::new(mix_events::Outbox::new("r1", || {}));
         let mut tree = Tree::new(
-            Arc::new(mix_events::Outbox::new("r1", || {})),
+            Arc::clone(&outbox),
             Arc::clone(&stopped),
             Start::command("repair", Command::default()),
         );
-        put_back(
+        let repaired = put_back(
             health::target_steps(targets, "r1"),
             &mut performer,
             &mut journal,
@@ -314,7 +350,77 @@ mod tests {
                 observer: &mut (),
             },
         )
-        .await
+        .await;
+        drop(tree);
+        let actions = outbox
+            .drain()
+            .into_iter()
+            .filter_map(|envelope| match envelope.event {
+                Some(mix_events::v1::envelope::Event::NodeStarted(started)) => match started.kind {
+                    Some(mix_events::v1::node_started::Kind::Action(action)) => Some(action),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        (repaired, actions)
+    }
+
+    #[tokio::test]
+    async fn a_dry_run_plans_exactly_what_the_repair_then_does_and_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocked = dir.path().join("blocked");
+        std::fs::create_dir(&blocked).unwrap();
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut targets = vec![Target::Directory {
+            path: blocked.clone().into(),
+            mode: 0o755,
+            owner: None,
+        }];
+        targets.extend(drifted_files(dir.path()));
+        let before: Vec<(PathBuf, String)> = ["one", "two"]
+            .iter()
+            .map(|name| {
+                let path = dir.path().join(name);
+                let contents = std::fs::read_to_string(&path).unwrap();
+                (path, contents)
+            })
+            .collect();
+        let scope = mix_exec::Scope::root();
+
+        let (planned, planned_actions) = repairing(
+            Performer::predicting(Files::open(Path::new("/"), "r1").unwrap()),
+            targets.clone(),
+            &scope,
+        )
+        .await;
+        for (path, contents) in &before {
+            assert_eq!(&std::fs::read_to_string(path).unwrap(), contents);
+        }
+        assert_eq!(
+            std::fs::metadata(&blocked).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let (done, done_actions) = repairing(
+            Performer::new(Files::open(Path::new("/"), "r1").unwrap()),
+            targets,
+            &scope,
+        )
+        .await;
+
+        assert!(!planned_actions.is_empty());
+        assert_eq!(planned_actions, done_actions);
+        let names = |reports: &[RepairReport]| -> Vec<(String, bool)> {
+            reports
+                .iter()
+                .map(|report| (report.name.clone(), report.fixed))
+                .collect()
+        };
+        assert_eq!(names(&planned.0), names(&done.0));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("one")).unwrap(),
+            "expected"
+        );
     }
 
     #[tokio::test]

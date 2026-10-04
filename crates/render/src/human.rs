@@ -74,6 +74,7 @@ pub struct Human {
     started: Instant,
     stop_noticed: bool,
     request: Option<Request>,
+    dry_run: bool,
     lines: HashMap<NodeId, Arc<dyn StepLine>>,
     subjects: HashMap<NodeId, String>,
     undone: HashMap<NodeId, String>,
@@ -91,6 +92,7 @@ impl Human {
             started: Instant::now(),
             stop_noticed: false,
             request: None,
+            dry_run: false,
             lines: HashMap::new(),
             subjects: HashMap::new(),
             undone: HashMap::new(),
@@ -146,6 +148,16 @@ impl Human {
             Event::NodeStarted(node) => match node.kind {
                 Some(node_started::Kind::Command(command)) => {
                     self.request = command.request;
+                    self.dry_run = command.dry_run;
+                    if self.dry_run && self.shows(Detail::Step) {
+                        mix_ui::note_to(
+                            self.out.as_ref(),
+                            &mix_ui::note!(
+                                "a dry run: this shows what would change, and changes nothing"
+                            ),
+                            None,
+                        );
+                    }
                     if self.shows(Detail::Trace) {
                         mix_ui::note_to(
                             self.out.as_ref(),
@@ -203,13 +215,27 @@ impl Human {
             },
             Event::NodeFinished(node) if node.id == ROOT => {
                 let elapsed = self.recorded.unwrap_or_else(|| self.started.elapsed());
-                super::results::finished(
-                    self.out.as_ref(),
-                    &node,
-                    self.request.as_ref(),
-                    self.level,
-                    elapsed,
-                );
+                if self.dry_run {
+                    if self.shows(Detail::Step)
+                        && node.status() == mix_events::v1::Status::Succeeded
+                    {
+                        mix_ui::note_to(
+                            self.out.as_ref(),
+                            &mix_ui::note!("nothing was changed"),
+                            Some(&mix_ui::help!(
+                                "run it again without `--dry-run` to make these changes"
+                            )),
+                        );
+                    }
+                } else {
+                    super::results::finished(
+                        self.out.as_ref(),
+                        &node,
+                        self.request.as_ref(),
+                        self.level,
+                        elapsed,
+                    );
+                }
                 self.outcome(&node, elapsed);
             }
             Event::NodeFinished(node) if self.actions.remove(&node.id) => {

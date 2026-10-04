@@ -17,7 +17,6 @@ pub mod system;
 pub mod targets;
 pub mod trace;
 pub mod vocabulary;
-#[cfg(any(test, feature = "world"))]
 pub mod world;
 
 pub use error::{Error, Result};

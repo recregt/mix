@@ -117,6 +117,11 @@ impl Builder {
                         return;
                     };
                     self.changes.insert(id, self.document.changes.len());
+                    let unknown = if self.document.dry_run {
+                        known_after(action.operation())
+                    } else {
+                        Vec::new()
+                    };
                     self.document.changes.push(Change {
                         step: key.clone(),
                         action: kind as i32,
@@ -124,7 +129,7 @@ impl Builder {
                         subject: action.subject.clone(),
                         status: Status::Unspecified as i32,
                         undone: false,
-                        unknown: Vec::new(),
+                        unknown,
                     });
                     return;
                 }
@@ -169,6 +174,50 @@ fn result_of(found: node_finished::Result) -> Option<result::Result> {
         node_finished::Result::Explain(found) => result::Result::Explain(found),
         node_finished::Result::Inspection(_) | node_finished::Result::Process(_) => return None,
     })
+}
+
+/// What a dry run cannot tell about an operation's result until it is carried out.
+fn known_after(operation: Operation) -> Vec<String> {
+    let unknown: &[&str] = match operation {
+        Operation::ActivateProfile => &["generation", "build"],
+        Operation::InstallRuntime => &["contents"],
+        Operation::CollectGarbage => &["freed"],
+        Operation::CreateRepository | Operation::RecordState => &["commit"],
+        Operation::CreateDir
+        | Operation::CreateDirs
+        | Operation::PutFile
+        | Operation::SetMode
+        | Operation::SetOwner
+        | Operation::SetAside
+        | Operation::RemoveCreated
+        | Operation::RemoveCreatedTree
+        | Operation::Restore
+        | Operation::ReclaimTree
+        | Operation::CopyTree
+        | Operation::AddGroup
+        | Operation::SetGroupGid
+        | Operation::DeleteGroup
+        | Operation::AddUser
+        | Operation::SetUserIds
+        | Operation::DeleteUser
+        | Operation::AddMember
+        | Operation::RemoveMember
+        | Operation::InstallUnit
+        | Operation::EnableUnit
+        | Operation::DisableUnit
+        | Operation::StartUnit
+        | Operation::StopUnit
+        | Operation::RestartUnit
+        | Operation::DrainService
+        | Operation::DaemonReload
+        | Operation::RemoveRuntime
+        | Operation::SwitchGeneration
+        | Operation::DeleteGeneration
+        | Operation::ApplyGeneration
+        | Operation::Commit
+        | Operation::Unspecified => &[],
+    };
+    unknown.iter().map(|field| (*field).to_string()).collect()
 }
 
 /// What an operation does to its subject, or `None` for bookkeeping that changes nothing a

@@ -17,7 +17,7 @@ pub use crate::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
 const ROOT: Owner = (0, 0);
 
 /// File whose absence makes the model's repository fail to verify, as it makes a real one.
-pub const REPOSITORY_HEAD: &str = "HEAD";
+pub use crate::paths::REPOSITORY_HEAD;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Content {
@@ -1168,6 +1168,86 @@ impl World {
             path: repository,
             expect: id,
         }])
+    }
+
+    /// Takes in what `path` was found to be on the machine, with its real id, so actions that
+    /// expect that id apply to the model as they would to the machine.
+    pub fn seed_path(&mut self, path: &Path, facts: &PathFacts, contents: Option<Arc<[u8]>>) {
+        let content = match facts.kind {
+            Kind::Missing => {
+                self.files.remove(path);
+                return;
+            }
+            Kind::Directory => Content::Directory,
+            Kind::File | Kind::Symlink | Kind::Other | Kind::Unreadable(_) => {
+                Content::File(contents.unwrap_or_else(|| Arc::from(&[][..])))
+            }
+        };
+        let id = facts.id.unwrap_or_else(|| self.fresh());
+        self.files.insert(
+            path.to_path_buf(),
+            Entry {
+                content,
+                mode: facts.mode,
+                owner: facts.owner,
+                id,
+                changed: facts
+                    .changed
+                    .map_or(id.ino, |(seconds, _)| u64::try_from(seconds).unwrap_or(0)),
+            },
+        );
+    }
+
+    pub fn seed_group(&mut self, name: &str, found: Option<GroupFacts>) {
+        match found {
+            Some(group) => {
+                self.groups.insert(name.to_string(), group);
+            }
+            None => {
+                self.groups.remove(name);
+            }
+        }
+    }
+
+    pub fn seed_user(&mut self, name: &str, found: Option<UserFacts>) {
+        match found {
+            Some(user) => {
+                self.users.insert(name.to_string(), user);
+            }
+            None => {
+                self.users.remove(name);
+            }
+        }
+    }
+
+    /// Takes in a unit as systemd reported it, `file` being its installed unit file.
+    pub fn seed_unit(&mut self, name: &str, found: &UnitFacts, file: Option<Arc<[u8]>>) {
+        let loaded = (found.load_state == "loaded").then_some(file).flatten();
+        let running = matches!(found.active_state.as_str(), "active" | "reloading")
+            .then(|| loaded.clone())
+            .flatten();
+        let since = running.is_some().then(|| self.fresh().ino);
+        self.units.insert(
+            name.to_string(),
+            Unit {
+                loaded,
+                enabled: found.enabled(),
+                running,
+                since,
+            },
+        );
+    }
+
+    pub fn seed_profile(&mut self, uid: u32, found: &ProfileFacts) {
+        self.profiles.insert(
+            uid,
+            Profile {
+                generations: found.generations.clone(),
+                active: found.active,
+                built: BTreeMap::new(),
+                dangling: found.dangling.clone(),
+            },
+        );
     }
 
     pub fn observe(&self, query: &Query) -> Fact {

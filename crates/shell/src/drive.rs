@@ -5,7 +5,9 @@ use std::sync::Mutex;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use mix_core::action::{Action, Fact, Failure, Kind, Outcome, PathFacts, Performed, Query};
+use mix_core::action::{
+    Action, Fact, Failure, Kind, Outcome, PathFacts, Performed, Query, Subject,
+};
 use mix_core::identity::InvokingUser;
 use mix_core::journal::Record;
 use mix_core::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
@@ -187,8 +189,46 @@ impl DownloadProgress for Relay<'_> {
     }
 }
 
+/// A dry run's view of the machine: the real machine as observed, with every predicted action
+/// applied to a model of it instead.
+#[derive(Default)]
+struct Prediction {
+    world: mix_core::world::World,
+    seeded: std::collections::HashSet<Subject>,
+    touched: Vec<Subject>,
+}
+
+impl Prediction {
+    /// Whether a predicted action changed what `query` asks about, so the model answers it.
+    fn answers(&self, query: &Query) -> bool {
+        let near = |path: &Path| {
+            self.touched.iter().any(|subject| {
+                matches!(subject, Subject::Path(touched)
+                    if touched.starts_with(path) || path.starts_with(touched))
+            })
+        };
+        match query {
+            Query::Path(path)
+            | Query::Contents(path)
+            | Query::TreeOwner(path)
+            | Query::Leftovers(path)
+            | Query::Strangers { path, .. }
+            | Query::Program { path, .. } => near(path),
+            Query::Repository(user) => near(&repository_dir(&user.home)),
+            Query::Group(name) => self.touched.contains(&Subject::Group(name.clone())),
+            Query::User(name) => self.touched.contains(&Subject::User(name.clone())),
+            Query::Unit(name) => self.touched.contains(&Subject::Unit(name.clone())),
+            Query::Profile(user) | Query::Clobbered(user) => {
+                self.touched.contains(&Subject::Profile(user.clone()))
+            }
+            Query::Journals(_) => false,
+        }
+    }
+}
+
 pub struct Performer {
     files: Files,
+    prediction: Option<Prediction>,
     agents: BTreeMap<u32, Agent>,
     units: Option<Units>,
     profile: Option<ProfileContext>,
@@ -201,6 +241,7 @@ impl Performer {
     pub fn new(files: Files) -> Self {
         Self {
             files,
+            prediction: None,
             agents: BTreeMap::new(),
             units: None,
             profile: None,
@@ -471,6 +512,15 @@ impl Performer {
         Ok(Performed { undo })
     }
 
+    /// A performer that changes nothing: it observes the machine and applies every action to a
+    /// model of it, to show what a request would do.
+    pub fn predicting(files: Files) -> Self {
+        Self {
+            prediction: Some(Prediction::default()),
+            ..Self::new(files)
+        }
+    }
+
     pub async fn observe(
         &mut self,
         queries: &[Query],
@@ -478,7 +528,127 @@ impl Performer {
     ) -> Result<Vec<Fact>, Failure> {
         let mut facts = Vec::with_capacity(queries.len());
         for query in queries {
-            let fact = match query {
+            let fact = match &self.prediction {
+                Some(prediction) if prediction.answers(query) => prediction.world.observe(query),
+                _ => self.observe_one(query, scope).await?,
+            };
+            facts.push(fact);
+        }
+        Ok(facts)
+    }
+
+    async fn seed(&mut self, subject: &Subject, scope: &Scope) -> Result<(), Failure> {
+        if self
+            .prediction
+            .as_ref()
+            .is_none_or(|prediction| prediction.seeded.contains(subject))
+        {
+            return Ok(());
+        }
+        match subject {
+            Subject::Path(path) => {
+                let mut chain: Vec<&Path> = path
+                    .ancestors()
+                    .filter(|at| at.parent().is_some())
+                    .collect();
+                chain.reverse();
+                for at in chain {
+                    let at_subject = Subject::Path(at.to_path_buf());
+                    if self
+                        .prediction
+                        .as_ref()
+                        .is_some_and(|prediction| prediction.seeded.contains(&at_subject))
+                    {
+                        continue;
+                    }
+                    let Fact::Path(found) =
+                        self.observe_one(&Query::Path(at.into()), scope).await?
+                    else {
+                        continue;
+                    };
+                    let contents = match found.kind {
+                        Kind::File => {
+                            match self.observe_one(&Query::Contents(at.into()), scope).await? {
+                                Fact::Contents(contents) => contents,
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    };
+                    if let Some(prediction) = &mut self.prediction {
+                        prediction.world.seed_path(at, &found, contents);
+                        prediction.seeded.insert(at_subject);
+                    }
+                }
+                return Ok(());
+            }
+            Subject::Group(name) => {
+                if let Fact::Group(found) =
+                    self.observe_one(&Query::Group(name.clone()), scope).await?
+                    && let Some(prediction) = &mut self.prediction
+                {
+                    prediction.world.seed_group(name, found);
+                }
+            }
+            Subject::User(name) => {
+                if let Fact::User(found) =
+                    self.observe_one(&Query::User(name.clone()), scope).await?
+                    && let Some(prediction) = &mut self.prediction
+                {
+                    prediction.world.seed_user(name, found);
+                }
+            }
+            Subject::Unit(name) => {
+                let file = Path::new(UNIT_DIR).join(name);
+                Box::pin(self.seed(&Subject::Path(file.clone()), scope)).await?;
+                let found = self.units().await?.observe(name).await?;
+                let contents = match self.observe_one(&Query::Contents(file), scope).await? {
+                    Fact::Contents(contents) => contents,
+                    _ => None,
+                };
+                if let Some(prediction) = &mut self.prediction {
+                    prediction.world.seed_unit(name, &found, contents);
+                }
+            }
+            Subject::Profile(user) => {
+                if let Fact::Profile(found) = self
+                    .observe_one(&Query::Profile(user.clone()), scope)
+                    .await?
+                    && let Some(prediction) = &mut self.prediction
+                {
+                    prediction.world.seed_profile(user.uid, &found);
+                }
+            }
+        }
+        if let Some(prediction) = &mut self.prediction {
+            prediction.seeded.insert(subject.clone());
+        }
+        Ok(())
+    }
+
+    async fn predict(
+        &mut self,
+        action: &Action,
+        scope: &Scope,
+        prepared: &mut Prepared<'_>,
+    ) -> Outcome {
+        let subjects = action.subjects();
+        for subject in &subjects {
+            self.seed(subject, scope).await?;
+        }
+        let prediction = self
+            .prediction
+            .as_mut()
+            .expect("only a predicting performer predicts");
+        let performed = prediction.world.apply(action)?;
+        prepared(&performed.undo)?;
+        prediction.touched.extend(subjects);
+        Ok(performed)
+    }
+
+    async fn observe_one(&mut self, query: &Query, scope: &Scope) -> Result<Fact, Failure> {
+        Ok({
+            match query {
                 Query::Unit(unit) => Fact::Unit(self.units().await?.observe(unit).await?),
                 Query::Journals(dir) => Fact::Journals(crate::effect::journal::abandoned(dir)),
                 Query::Program { path, source } => {
@@ -497,10 +667,8 @@ impl Performer {
                     .or_else(|| identity::observe(query))
                     .or_else(|| generations::observe(query))
                     .expect("every query has an observer"),
-            };
-            facts.push(fact);
-        }
-        Ok(facts)
+            }
+        })
     }
 
     pub async fn perform(
@@ -510,6 +678,9 @@ impl Performer {
         report: &mut (dyn FnMut(Signal) + Send),
         prepared: &mut Prepared<'_>,
     ) -> Outcome {
+        if self.prediction.is_some() {
+            return Box::pin(self.predict(action, scope, prepared)).await;
+        }
         match action {
             Action::InstallRuntime { url, sha256, size } => {
                 let relay = Relay {
@@ -1257,6 +1428,111 @@ mod tests {
                 same: true,
                 source: None
             })]
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn a_prediction_answers_from_what_it_predicted_and_the_machine_is_left_alone() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("etc")).unwrap();
+        std::fs::write(root.path().join("etc/nix.conf"), "legacy\n").unwrap();
+        let before = listing(root.path());
+        let me = nix::unistd::Uid::current().as_raw();
+        let mut performer =
+            Performer::predicting(Files::open_trusting(root.path(), "r1", me).unwrap());
+        let scope = Scope::root();
+        let Fact::Path(found) = performer
+            .observe(&[Query::Path("/etc/nix.conf".into())], &scope)
+            .await
+            .unwrap()
+            .remove(0)
+        else {
+            panic!("a path is observed as a path");
+        };
+        let mut undone = Vec::new();
+
+        for action in [
+            Action::PutFile {
+                path: "/etc/nix.conf".into(),
+                contents: Arc::from(&b"trusted-users = root\n"[..]),
+                mode: 0o644,
+                owner: None,
+                expect: Expect::Present(found.id.unwrap()),
+            },
+            Action::CreateDirs {
+                path: "/nix/var".into(),
+                mode: 0o755,
+                owner: None,
+            },
+        ] {
+            let performed = performer
+                .perform(&action, &scope, &mut |_| {}, &mut |undo: &[Action]| {
+                    undone.extend_from_slice(undo);
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            assert!(!performed.undo.is_empty(), "{action:?}");
+        }
+        let facts = performer
+            .observe(
+                &[
+                    Query::Contents("/etc/nix.conf".into()),
+                    Query::Path("/nix/var".into()),
+                ],
+                &scope,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            facts[0],
+            Fact::Contents(Some(Arc::from(&b"trusted-users = root\n"[..])))
+        );
+        assert!(matches!(
+            &facts[1],
+            Fact::Path(PathFacts {
+                kind: Kind::Directory,
+                ..
+            })
+        ));
+        assert_eq!(listing(root.path()), before);
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("etc/nix.conf")).unwrap(),
+            "legacy\n"
+        );
+        assert!(!undone.is_empty());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn a_prediction_refuses_what_the_machine_would_refuse() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("etc")).unwrap();
+        std::fs::write(root.path().join("etc/nix.conf"), "legacy\n").unwrap();
+        let me = nix::unistd::Uid::current().as_raw();
+        let mut performer =
+            Performer::predicting(Files::open_trusting(root.path(), "r1", me).unwrap());
+
+        let refused = performer
+            .perform(
+                &Action::PutFile {
+                    path: "/etc/nix.conf".into(),
+                    contents: Arc::from(&b"x"[..]),
+                    mode: 0o644,
+                    owner: None,
+                    expect: Expect::Absent,
+                },
+                &Scope::root(),
+                &mut |_| {},
+                &mut |_: &[Action]| Ok(()),
+            )
+            .await;
+
+        assert!(
+            matches!(refused, Err(Failure::Conflict { .. })),
+            "{refused:?}"
         );
     }
 }

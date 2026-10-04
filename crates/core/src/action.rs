@@ -206,7 +206,103 @@ pub enum Action {
     Commit,
 }
 
+/// Something on the machine an action reads or changes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Subject {
+    Path(PathBuf),
+    Group(String),
+    User(String),
+    Unit(String),
+    Profile(InvokingUser),
+}
+
 impl Action {
+    /// What the action reads or changes: what a prediction must know of the machine before it
+    /// applies the action to the model.
+    pub fn subjects(&self) -> Vec<Subject> {
+        use crate::paths::{
+            DEFAULT_PROFILE_NIX_ENV, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, NIX_DAEMON_SERVICE_SRC,
+            NIX_DAEMON_SOCKET_SRC, NIX_STORE, STATE_FILE, SYSTEMD_UNIT_DIR, mix_state_dir,
+            repository_dir,
+        };
+        let path = |path: &std::path::Path| Subject::Path(path.to_path_buf());
+        let unit = |unit: &str| {
+            vec![
+                Subject::Unit(unit.to_string()),
+                Subject::Path(std::path::Path::new(SYSTEMD_UNIT_DIR).join(unit)),
+            ]
+        };
+        match self {
+            Action::CreateDir { path: at, .. }
+            | Action::CreateDirs { path: at, .. }
+            | Action::PutFile { path: at, .. }
+            | Action::SetMode { path: at, .. }
+            | Action::SetOwner { path: at, .. }
+            | Action::SetAside { path: at, .. }
+            | Action::RemoveCreated { path: at, .. }
+            | Action::RemoveCreatedTree { path: at, .. }
+            | Action::ReclaimTree { path: at, .. } => vec![path(at)],
+            Action::Restore { path: at, from, .. } => vec![path(at), path(from)],
+            Action::CopyTree { from, to, .. } => vec![path(from), path(to)],
+            Action::AddGroup { name, .. }
+            | Action::SetGroupGid { name, .. }
+            | Action::DeleteGroup { name, .. } => vec![Subject::Group(name.clone())],
+            Action::AddUser(spec) => std::iter::once(Subject::User(spec.name.clone()))
+                .chain(spec.groups.iter().cloned().map(Subject::Group))
+                .collect(),
+            Action::SetUserIds { name, .. } | Action::DeleteUser { name, .. } => {
+                vec![Subject::User(name.clone())]
+            }
+            Action::AddMember { group, user } | Action::RemoveMember { group, user } => {
+                vec![Subject::Group(group.clone()), Subject::User(user.clone())]
+            }
+            Action::InstallUnit { unit: name, .. }
+            | Action::EnableUnit { unit: name }
+            | Action::DisableUnit { unit: name }
+            | Action::StartUnit { unit: name }
+            | Action::StopUnit { unit: name }
+            | Action::RestartUnit { unit: name }
+            | Action::DrainService { unit: name } => unit(name),
+            Action::DaemonReload | Action::Commit => Vec::new(),
+            Action::InstallRuntime { .. } => [
+                NIX_STORE,
+                DEFAULT_PROFILE_NIX_ENV,
+                NIX_DAEMON_SERVICE_SRC,
+                NIX_DAEMON_SOCKET_SRC,
+            ]
+            .iter()
+            .map(|at| path(std::path::Path::new(at)))
+            .collect(),
+            Action::RemoveRuntime { created, kept } => {
+                created.iter().chain(kept).map(|at| path(at)).collect()
+            }
+            Action::ActivateProfile { user, .. } => {
+                let state = mix_state_dir(&user.home);
+                let mut subjects = vec![
+                    Subject::Profile(user.clone()),
+                    path(std::path::Path::new(DEFAULT_PROFILE_NIX_ENV)),
+                ];
+                subjects.extend(
+                    [FLAKE_NIX, HOME_NIX, FLAKE_LOCK, STATE_FILE]
+                        .iter()
+                        .map(|file| path(&state.join(file))),
+                );
+                subjects
+            }
+            Action::SwitchGeneration { user, .. }
+            | Action::DeleteGeneration { user, .. }
+            | Action::ApplyGeneration { user }
+            | Action::CollectGarbage { user } => vec![Subject::Profile(user.clone())],
+            Action::RecordState { user } | Action::CreateRepository { user } => {
+                let repository = repository_dir(&user.home);
+                vec![
+                    path(&repository.join(crate::paths::REPOSITORY_HEAD)),
+                    path(&repository),
+                ]
+            }
+        }
+    }
+
     pub fn is_sync(&self) -> bool {
         matches!(
             self,

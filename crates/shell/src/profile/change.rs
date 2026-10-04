@@ -121,14 +121,34 @@ pub async fn perform(
                 }));
             }
         };
-        let mut performer = Performer::new(files).with_profile(ProfileContext {
+        let performer = if ctx.dry_run {
+            Performer::predicting(files)
+        } else {
+            Performer::new(files)
+        };
+        let mut performer = performer.with_profile(ProfileContext {
             mirror: ctx.mirror().map(str::to_string),
         });
+        let mut runner = Runner::new(ROOT, steps);
+        if ctx.dry_run {
+            let verdict = drive(
+                &mut runner,
+                &mut root.tree,
+                &mut performer,
+                &ctx.scope,
+                &root.stopped,
+                &mut Vec::new(),
+                &mut ctx.relay(),
+            )
+            .await
+            .verdict
+            .clone();
+            return conclude(root, verdict, result);
+        }
         let mut journal = match FileJournal::create(&ctx.journals, &ctx.request.id) {
             Ok(journal) => journal,
             Err(failure) => return root.refuse(Error::Core(core_error(failure, &ctx.journals))),
         };
-        let mut runner = Runner::new(ROOT, steps);
         let verdict = drive(
             &mut runner,
             &mut root.tree,
@@ -153,6 +173,14 @@ pub async fn perform(
         }
         verdict
     };
+    conclude(root, verdict, result)
+}
+
+fn conclude(
+    root: &mut Root,
+    verdict: Verdict,
+    result: impl FnOnce() -> node_finished::Result,
+) -> Concluded {
     root.conclude(match verdict {
         Verdict::Succeeded => Ending::succeeded().with_result(result()),
         Verdict::Failed { failure, .. } => Ending::failed(diagnostic(&failure)),

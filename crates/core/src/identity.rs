@@ -43,7 +43,7 @@ mod tests {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct InvokingUser {
     pub uid: u32,
     pub gid: u32,

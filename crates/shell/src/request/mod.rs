@@ -169,11 +169,11 @@ impl Root {
     }
 }
 
-fn command_of(request: command::Request) -> Command {
+fn command_of(request: command::Request, dry_run: bool) -> Command {
     Command {
         mix_version: env!("CARGO_PKG_VERSION").to_string(),
         schema_minor: mix_events::SCHEMA_MINOR,
-        dry_run: false,
+        dry_run,
         request: Some(request),
     }
 }
@@ -188,18 +188,19 @@ fn ending_of(blocked: &Blocked) -> Ending {
 async fn host(
     session: &Session,
     request: &command::Request,
+    dry_run: bool,
     policy: Option<Policy>,
     op: impl AsyncFnOnce(&Context, &mut Root) -> Concluded,
 ) {
     let key = mix_events::key_of(Some(request));
     let (opened, delivery) = open(&session.render);
     let stopped = stopped_by(&session.scope);
-    let need = locks_for(request);
+    let need = locks_for(request, dry_run);
     let enrolling = matches!(request, command::Request::Bootstrap(_));
     let mut tree = Tree::new(
         Arc::clone(&opened.outbox),
         Arc::clone(&stopped),
-        Start::command(key, command_of(request.clone())),
+        Start::command(key, command_of(request.clone(), dry_run)),
     );
     let held = match (&session.locks, need) {
         (None, _) | (_, Need::Nothing) => None,
@@ -232,6 +233,7 @@ async fn host(
         render: Arc::clone(&session.render),
         locked,
         journals: session.journals.clone(),
+        dry_run,
     };
     let mut root = Root { tree, stopped };
     let concluded = op(&ctx, &mut root).await;
@@ -301,6 +303,7 @@ pub async fn recover(
 }
 
 pub async fn run(session: &Session, command: Command) {
+    let dry_run = command.dry_run;
     let Some(request) = command.request else {
         let mut render = session
             .render
@@ -318,13 +321,19 @@ pub async fn run(session: &Session, command: Command) {
         command::Request::Bootstrap(bootstrap) => {
             match Policy::new(bootstrap.mirror.as_deref(), bootstrap.mirror_key.as_deref()) {
                 Ok(policy) => {
-                    host(session, &request, Some(policy), async |ctx, root| {
-                        crate::ops::bootstrap::bootstrap(ctx, root, bootstrap).await
-                    })
+                    host(
+                        session,
+                        &request,
+                        dry_run,
+                        Some(policy),
+                        async |ctx, root| {
+                            crate::ops::bootstrap::bootstrap(ctx, root, bootstrap).await
+                        },
+                    )
                     .await
                 }
                 Err(invalid) => {
-                    host(session, &request, None, async |_, root| {
+                    host(session, &request, dry_run, None, async |_, root| {
                         root.refuse(crate::ops::bootstrap::Error::InvalidMirror(
                             invalid.to_string(),
                         ))
@@ -334,37 +343,37 @@ pub async fn run(session: &Session, command: Command) {
             }
         }
         command::Request::Install(install) => {
-            host(session, &request, None, async |ctx, root| {
+            host(session, &request, dry_run, None, async |ctx, root| {
                 crate::ops::install::install(ctx, root, install).await
             })
             .await
         }
         command::Request::Remove(remove) => {
-            host(session, &request, None, async |ctx, root| {
+            host(session, &request, dry_run, None, async |ctx, root| {
                 crate::ops::remove::remove(ctx, root, remove).await
             })
             .await
         }
         command::Request::Clean(clean) => {
-            host(session, &request, None, async |ctx, root| {
+            host(session, &request, dry_run, None, async |ctx, root| {
                 crate::ops::clean::clean(ctx, root, clean).await
             })
             .await
         }
         command::Request::Repair(repair) => {
-            host(session, &request, None, async |ctx, root| {
+            host(session, &request, dry_run, None, async |ctx, root| {
                 crate::ops::repair::repair(ctx, root, repair).await
             })
             .await
         }
         command::Request::Doctor(doctor) => {
-            host(session, &request, None, async |ctx, root| {
+            host(session, &request, dry_run, None, async |ctx, root| {
                 crate::ops::doctor::audit(ctx, root, doctor).await
             })
             .await
         }
         command::Request::Explain(explain) => {
-            host(session, &request, None, async |ctx, root| {
+            host(session, &request, dry_run, None, async |ctx, root| {
                 crate::ops::explain::explain(ctx, root, explain).await
             })
             .await

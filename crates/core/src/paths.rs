@@ -62,6 +62,7 @@ pub const FLAKE_LOCK: &str = "flake.lock";
 pub const STATE_FILE: &str = "state";
 pub const GIT_DIR: &str = ".git";
 pub const INDEX_LOCK: &str = "index.lock";
+pub const REPOSITORY_HEAD: &str = "HEAD";
 
 pub const GENERATION_STATE_FILE: &str = "mix-state";
 
