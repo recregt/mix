@@ -1448,6 +1448,7 @@ name = "mix-daemon"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "insta",
  "mix-core",
  "mix-events",
  "mix-exec",

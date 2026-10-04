@@ -295,6 +295,7 @@ impl Run {
     }
 
     /// The document `--json` prints for this run.
+    #[cfg(test)]
     pub fn document(&self) -> Value {
         let document =
             mix_render::document::of(&self.stream).expect("a driven run always ends its root");
@@ -314,6 +315,7 @@ impl Run {
 
     /// The run for a snapshot: its document, every action it performed in order, and what it
     /// changed on the machine it started from.
+    #[cfg(test)]
     pub fn case(&self, before: &World, after: &World) -> Value {
         json!({
             "document": self.document(),

@@ -13,10 +13,9 @@ serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 generativity = "1.2.1"
-mix-render = { path = "../render", optional = true }
 
 [features]
-testkit = ["dep:mix-render"]
+testkit = []
 
 [dev-dependencies]
 insta = { workspace = true }

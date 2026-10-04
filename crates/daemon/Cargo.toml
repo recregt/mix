@@ -24,6 +24,8 @@ tokio = { workspace = true, features = ["signal"] }
 
 [dev-dependencies]
 futures-util = { workspace = true }
+insta = { workspace = true }
+mix-core = { path = "../core", features = ["testkit"] }
 tempfile = { workspace = true }
 
 [lints]

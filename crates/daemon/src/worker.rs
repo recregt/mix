@@ -14,10 +14,13 @@ use crate::controls;
 
 type Ending = Arc<Mutex<Option<(String, NodeFinished)>>>;
 
-struct Forward(Events, Ending);
+struct Forward(Events, Ending, crate::journal::Steps);
 
 impl Render for Forward {
     fn envelope(&mut self, envelope: Envelope) {
+        for entry in self.2.entries(&envelope) {
+            crate::journal::record(&entry);
+        }
         if let Some(envelope::Event::NodeFinished(finished)) = &envelope.event
             && finished.id == ROOT
         {
@@ -65,9 +68,10 @@ impl Host {
         account: Option<mix_core::identity::InvokingUser>,
         events: &Events,
         ending: &Ending,
+        steps: crate::journal::Steps,
     ) -> mix_shell::Session {
         mix_shell::Session::new(mix_exec::Scope::root())
-            .with_render(Forward(events.clone(), Arc::clone(ending)))
+            .with_render(Forward(events.clone(), Arc::clone(ending), steps))
             .with_locks(Arc::clone(&self.locks))
             .with_caller(mix_shell::Caller::Account {
                 peer_is_root: caller.uid == 0,
@@ -105,7 +109,8 @@ impl mix_rpc::Worker for Host {
         );
         let key = mix_events::key_of(command.request.as_ref());
         let ending = Ending::default();
-        let session = self.session(caller, account, &events, &ending);
+        let steps = crate::journal::Steps::new(&who, key);
+        let session = self.session(caller, account, &events, &ending, steps);
         let _steer = controls::steer(&session.scope, controls, &events);
         mix_shell::request::run(&session, command).await;
         let ended = ending
@@ -123,14 +128,7 @@ fn audit(
 ) -> Vec<(&'static str, String)> {
     let outcome = ended.map_or_else(
         || "ended without an outcome".to_string(),
-        |(_, finished)| {
-            finished
-                .status()
-                .as_str_name()
-                .trim_start_matches("STATUS_")
-                .to_ascii_lowercase()
-                .replace('_', " ")
-        },
+        |(_, finished)| crate::journal::status_words(finished.status()),
     );
     let failed =
         !ended.is_some_and(|(_, finished)| finished.exit_code == mix_events::exit::SUCCEEDED);
