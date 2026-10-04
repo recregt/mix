@@ -1,0 +1,19 @@
+---
+source: crates/explain/src/codes/tests.rs
+expression: shown(code)
+---
+$ mix install ripgrep
+error: the running `mix` daemon is older than this `mix`
+
+note: nothing was changed
+help: run `mix bootstrap` to install the daemon that matches this `mix`
+
+$ mix explain daemon-outdated
+DAEMON_OUTDATED
+
+The running `mix` daemon is older than the `mix` that sent the request.
+
+The daemon does the work for every command after `mix bootstrap`, and it was installed by an earlier `mix`. A request can carry settings an older daemon does not know, such as `--dry-run`, and an older daemon would carry the request out without them. So `mix` refused to send it, and nothing was changed.
+
+To fix it:
+  - run `mix bootstrap` to install the daemon that matches this `mix`

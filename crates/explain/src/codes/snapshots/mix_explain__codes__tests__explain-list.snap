@@ -42,5 +42,6 @@ Failure codes:
     worker-ended           The privileged helper stopped before it answered
     version-mismatch       The privileged helper is a different version of `mix` than the command that started it
     usage                  The command line was not one `mix` understands
+    daemon-outdated        The running `mix` daemon is older than the `mix` that sent the request
 
 Run `mix explain <code>` to read about one of them.

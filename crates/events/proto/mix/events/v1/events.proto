@@ -628,6 +628,7 @@ enum Code {
   CODE_WORKER_ENDED = 71;
   CODE_VERSION_MISMATCH = 72;
   CODE_USAGE = 73;
+  CODE_DAEMON_OUTDATED = 74;
 }
 
 enum Host {

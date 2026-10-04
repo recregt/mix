@@ -270,6 +270,11 @@ pub fn explanation(code: Code) -> Explanation {
             "A subcommand, flag or value was misspelled, missing, or given where it does not belong.",
             ["run `mix help` to see the commands and their flags"]
         ),
+        Code::DaemonOutdated => explained!(
+            "The running `mix` daemon is older than the `mix` that sent the request.",
+            "The daemon does the work for every command after `mix bootstrap`, and it was installed by an earlier `mix`. A request can carry settings an older daemon does not know, such as `--dry-run`, and an older daemon would carry the request out without them. So `mix` refused to send it, and nothing was changed.",
+            ["run `mix bootstrap` to install the daemon that matches this `mix`"]
+        ),
         Code::VersionMismatch => explained!(
             "The privileged helper is a different version of `mix` than the command that started it.",
             "`mix` starts its helper with administrator rights from its own program file. That file was replaced, usually by an update, between the command starting and the helper starting. The two must be the same version, so the helper refused the request before changing anything.",

@@ -212,6 +212,13 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
             .help(help!(
                 "run the same command again to pick up where it stopped"
             )),
+        Code::DaemonOutdated => {
+            Diagnostic::new(phrase!("the running `mix` daemon is older than this `mix`"))
+                .note(note!("nothing was changed"))
+                .help(help!(
+                    "run `mix bootstrap` to install the daemon that matches this `mix`"
+                ))
+        }
         Code::VersionMismatch => Diagnostic::new(phrase!(
             "the `mix` program was replaced while this command was starting"
         ))

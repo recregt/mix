@@ -418,3 +418,37 @@ async fn a_connection_checks_its_caller_once() {
 
     assert_eq!(admissions.load(Ordering::SeqCst), 1);
 }
+
+struct OlderDaemon(Arc<AtomicBool>);
+
+impl Worker for OlderDaemon {
+    const VERSION: &'static str = VERSION;
+    const SCHEMA: u32 = 0;
+
+    fn admits(&self, _caller: Caller) -> bool {
+        true
+    }
+
+    async fn run(&self, _caller: Caller, _command: Command, _controls: Controls, _events: Events) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+#[tokio::test]
+async fn a_request_a_daemon_of_an_older_schema_cannot_read_is_never_sent() {
+    let ran = Arc::new(AtomicBool::new(false));
+    let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
+    let _server = tokio::spawn(serve_connection(OlderDaemon(Arc::clone(&ran)), theirs));
+    let mut client = Client::connect(ours, VERSION).await.unwrap();
+
+    let refused = client.run(&bootstrap(false)).await.err();
+
+    let Some(mix_rpc::Error::Outdated { ours, theirs }) = refused else {
+        panic!("a request newer than the daemon must be refused, got {refused:?}");
+    };
+    assert_eq!((ours, theirs), (mix_events::SCHEMA_MINOR, 0));
+    assert!(
+        !ran.load(Ordering::SeqCst),
+        "the older daemon ran the request"
+    );
+}

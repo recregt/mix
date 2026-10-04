@@ -46,6 +46,7 @@ fn transported(error: &mix_rpc::Error) -> Code {
         }
         Error::Ended => Code::WorkerEnded,
         Error::VersionMismatch { .. } => Code::VersionMismatch,
+        Error::Outdated { .. } => Code::DaemonOutdated,
         Error::Denied(_) => Code::NotBootstrapped,
         Error::Malformed(_) | Error::NotAConnection(_) => Code::Internal,
     }
@@ -209,6 +210,10 @@ mod tests {
                     theirs: "1.1.0".into(),
                 }),
                 Code::VersionMismatch,
+            ),
+            (
+                Failure::Transport(Error::Outdated { ours: 7, theirs: 0 }),
+                Code::DaemonOutdated,
             ),
             (
                 Failure::Transport(Error::Malformed(mix_rpc::Malformed("x".into()))),
