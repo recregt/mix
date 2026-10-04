@@ -240,6 +240,7 @@ impl Tree {
             return Err(Misuse::NotOpen(id));
         }
         diagnostic.node = id;
+        diagnostic.severity = crate::v1::Severity::Warning as i32;
         self.outbox.push(Event::Diagnostic(diagnostic));
         Ok(())
     }
@@ -646,6 +647,22 @@ mod tests {
             panic!("expected a warning, got {:?}", events[3]);
         };
         assert_eq!((progress.id, warning.node), (2, 2));
+    }
+
+    #[test]
+    fn whatever_is_warned_is_a_warning_whatever_severity_it_was_made_with() {
+        let sink = Arc::new(Recorded::default());
+        let root = root(&sink, never(), &[]);
+        root.warn(Diagnostic {
+            severity: crate::v1::Severity::Error as i32,
+            ..Diagnostic::default()
+        });
+
+        let events = sink.take();
+        let Event::Diagnostic(warning) = &events[1] else {
+            panic!("expected a warning, got {:?}", events[1]);
+        };
+        assert_eq!(warning.severity(), crate::v1::Severity::Warning);
     }
 
     #[test]
