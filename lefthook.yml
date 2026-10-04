@@ -11,7 +11,7 @@ pre-commit:
       run: cargo fmt --all -- --check
     dependencies:
       glob: "{Cargo.toml,Cargo.lock,**/Cargo.toml}"
-      run: scripts/check_dependencies.py
+      run: for layer in core cli explain render ui; do cargo deny --log-level error --manifest-path "crates/$layer/Cargo.toml" --config "deny/$layer.toml" check bans || exit 1; done
     ruff:
       glob: "*.py"
       run: >-

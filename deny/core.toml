@@ -1,0 +1,18 @@
+[graph]
+targets = ["x86_64-unknown-linux-gnu"]
+exclude-dev = true
+
+[bans]
+multiple-versions = "allow"
+deny = [
+    { crate = "async-trait", reason = "mix-core decides and never does io or runs async code; the shell does" },
+    { crate = "futures-util", reason = "mix-core decides and never does io or runs async code; the shell does" },
+    { crate = "libc", reason = "mix-core decides and never does io or runs async code; the shell does" },
+    { crate = "mio", reason = "mix-core decides and never does io or runs async code; the shell does" },
+    { crate = "mix-exec", reason = "mix-core decides and never does io or runs async code; the shell does" },
+    { crate = "mix-shell", reason = "mix-core decides and never does io or runs async code; the shell does" },
+    { crate = "nix", reason = "mix-core decides and never does io or runs async code; the shell does" },
+    { crate = "reqwest", reason = "mix-core decides and never does io or runs async code; the shell does" },
+    { crate = "tokio", reason = "mix-core decides and never does io or runs async code; the shell does" },
+    { crate = "tokio-util", reason = "mix-core decides and never does io or runs async code; the shell does" },
+]
