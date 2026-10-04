@@ -2,7 +2,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use mix_core::identity::InvokingUser;
-use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
+use mix_core::paths::{
+    HOME_NIX, NIX_OWNERSHIP_MARKER, NIX_STORE, NIXOS_MARKER, STATE_FILE, mix_state_dir,
+};
 use mix_core::policy::{Mirror, Policy};
 use mix_core::targets::UserConfig;
 use mix_core::world::World;
@@ -67,6 +69,26 @@ impl Host {
         match self {
             Host::Machine => crate::effect::accounts::is_root(),
             Host::Model(_) => true,
+        }
+    }
+
+    pub async fn preflight(&self, force: bool, scope: &Scope) -> crate::ops::bootstrap::Result<()> {
+        use crate::ops::bootstrap::Error;
+        match self {
+            Host::Machine => crate::ops::bootstrap::preflight::check(force, scope).await,
+            Host::Model(world) => {
+                let world = Self::world(world);
+                if world.files.contains_key(Path::new(NIXOS_MARKER)) {
+                    return Err(Error::UnsupportedHost);
+                }
+                if !force
+                    && world.contents(NIX_OWNERSHIP_MARKER).is_none()
+                    && world.files.contains_key(Path::new(NIX_STORE))
+                {
+                    return Err(Error::AlreadyManaged);
+                }
+                Ok(())
+            }
         }
     }
 

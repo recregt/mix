@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use mix_core::paths::NIX_OWNERSHIP_MARKER;
+use mix_core::paths::{NIX_OWNERSHIP_MARKER, NIXOS_MARKER};
 use mix_exec::Scope;
 
 use crate::effect::fs::exists;
@@ -8,8 +8,18 @@ use crate::effect::fs::{is_dir, is_file};
 use crate::ops::bootstrap::detect::{self, Wsl};
 use crate::ops::bootstrap::error::{Error, Host, Result};
 
+pub async fn check(force: bool, scope: &Scope) -> Result<()> {
+    check_not_nixos().await?;
+    check_not_wsl1().await?;
+    check_systemd_ready().await?;
+    if !force {
+        check_nix_not_installed(scope).await?;
+    }
+    Ok(())
+}
+
 pub async fn check_not_nixos() -> Result<()> {
-    check_not_nixos_at(Path::new("/etc/NIXOS")).await
+    check_not_nixos_at(Path::new(NIXOS_MARKER)).await
 }
 
 async fn check_not_nixos_at(marker: &Path) -> Result<()> {

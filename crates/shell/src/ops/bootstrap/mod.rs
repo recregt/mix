@@ -104,12 +104,7 @@ async fn prepare(ctx: &Context, force: bool) -> Result<(Settings, Performer)> {
     if !ctx.host.is_root() {
         return Err(Error::NotRoot("bootstrap the managed environment"));
     }
-    preflight::check_not_nixos().await?;
-    preflight::check_not_wsl1().await?;
-    preflight::check_systemd_ready().await?;
-    if !force {
-        preflight::check_nix_not_installed(&ctx.scope).await?;
-    }
+    ctx.host.preflight(force, &ctx.scope).await?;
     let request = ctx.request.id.clone();
     let settings = Settings {
         policy: ctx.policy.clone(),
