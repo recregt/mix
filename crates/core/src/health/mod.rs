@@ -162,6 +162,7 @@ impl Finding {
 
 pub fn queries(target: &Target<'_>) -> Vec<Query> {
     match target {
+        Target::Parent { path, .. } => vec![Query::Path(path.to_path_buf())],
         Target::Directory { path, owner, .. } => {
             let mut queries = vec![Query::Path(path.to_path_buf())];
             if owner.is_some_and(|(uid, _)| uid != 0) {
@@ -350,7 +351,8 @@ pub fn drift(target: &Target<'_>, facts: &[Fact]) -> Option<Drift> {
                 hunks: hunks(&text(source), &text(installed)),
             })
         }
-        Target::Directory { .. }
+        Target::Parent { .. }
+        | Target::Directory { .. }
         | Target::File { expected: None, .. }
         | Target::SeededFile { .. }
         | Target::Group { .. }
@@ -368,6 +370,27 @@ pub fn drift(target: &Target<'_>, facts: &[Fact]) -> Option<Drift> {
 
 pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
     match target {
+        Target::Parent { bits, owner, .. } => {
+            let found = path_facts(facts, 0);
+            if let Some(finding) = absent(found.kind) {
+                return Some(finding);
+            }
+            if found.kind != Kind::Directory {
+                return Some(Finding::NotADirectory);
+            }
+            if let Some(expected) = *owner
+                && found.owner != expected
+            {
+                return Some(Finding::Owner {
+                    actual: found.owner,
+                    expected,
+                });
+            }
+            (found.mode & bits != *bits).then_some(Finding::Mode {
+                actual: found.mode,
+                expected: found.mode | bits,
+            })
+        }
         Target::Directory { mode, owner, .. } => {
             let found = path_facts(facts, 0);
             if let Some(finding) = absent(found.kind) {
@@ -615,6 +638,23 @@ pub fn fix(
         return Err(reason);
     }
     Ok(match target {
+        Target::Parent { path, bits, owner } => match finding {
+            Finding::Owner { actual, expected } => vec![Action::SetOwner {
+                path: path.to_path_buf(),
+                owner: expected,
+                expect: actual,
+            }],
+            Finding::Mode { actual, expected } => vec![Action::SetMode {
+                path: path.to_path_buf(),
+                mode: expected,
+                expect: actual,
+            }],
+            _ => vec![Action::CreateDirs {
+                path: path.to_path_buf(),
+                mode: *bits,
+                owner: *owner,
+            }],
+        },
         Target::Directory { path, mode, owner } => {
             let found = path_facts(facts, 0);
             match found.kind {
@@ -911,10 +951,13 @@ impl StepSpec for RecordRepaired {
 
     fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
         Ok(match facts[0] {
-            Fact::Repository { recorded: true, .. } => Vec::new(),
-            _ => vec![Action::RecordState {
+            Fact::Repository {
+                intact: true,
+                recorded: false,
+            } => vec![Action::RecordState {
                 user: self.0.clone(),
             }],
+            _ => Vec::new(),
         })
     }
 }

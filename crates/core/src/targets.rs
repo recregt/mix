@@ -8,12 +8,12 @@ use crate::identity::{
 };
 use crate::paths::{
     DEFAULT_PROFILE_NIX_ENV, FLAKE_LOCK, FLAKE_NIX, GITIGNORE, GITIGNORE_CONTENTS, HOME_NIX,
-    MIX_DAEMON_SERVICE_DEST, MIX_DAEMON_SERVICE_UNIT, MIX_DAEMON_SOCKET_DEST,
-    MIX_DAEMON_SOCKET_UNIT, MIX_STATE_DIR_MODE, NIX_CONF_DEST, NIX_DAEMON_SERVICE_DEST,
-    NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SERVICE_UNIT, NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC,
-    NIX_DAEMON_SOCKET_UNIT, NIX_OWNERSHIP_MARKER, NIX_PROFILES_DIR_MODE, NIX_STORE, NIX_TREE_MODE,
-    NIX_TREE_PATHS, POLICY_FILE, PROFILE_SNIPPET_DEST, STATE_FILE, mix_state_dir, nix_profiles_dir,
-    repository_dir,
+    MIX_BIN_DIR, MIX_DAEMON_SERVICE_DEST, MIX_DAEMON_SERVICE_UNIT, MIX_DAEMON_SOCKET_DEST,
+    MIX_DAEMON_SOCKET_UNIT, MIX_STATE_DIR_MODE, MIX_VAR_DIR, NIX_CONF_DEST,
+    NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SERVICE_UNIT,
+    NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC, NIX_DAEMON_SOCKET_UNIT, NIX_OWNERSHIP_MARKER,
+    NIX_PROFILES_DIR_MODE, NIX_STORE, NIX_TREE_MODE, NIX_TREE_PATHS, POLICY_FILE,
+    PROFILE_SNIPPET_DEST, STATE_FILE, mix_state_dir, nix_profiles_dir, repository_dir,
 };
 use crate::paths::{
     HOME_MANAGER_PROFILE_NAME, INDEX_LOCK, JOURNAL_DIR, MIX_DAEMON_BIN, MIX_DAEMON_BIN_MODE,
@@ -112,6 +112,11 @@ pub enum UnitSource {
 
 #[derive(Debug, Clone)]
 pub enum Target<'a> {
+    Parent {
+        path: Cow<'a, Path>,
+        bits: u32,
+        owner: Owner,
+    },
     Directory {
         path: Cow<'a, Path>,
         mode: u32,
@@ -183,6 +188,11 @@ impl Target<'_> {
     pub fn into_owned(self) -> Target<'static> {
         let own_path = |path: Cow<'_, Path>| Cow::Owned(path.into_owned());
         match self {
+            Target::Parent { path, bits, owner } => Target::Parent {
+                path: own_path(path),
+                bits,
+                owner,
+            },
             Target::Directory { path, mode, owner } => Target::Directory {
                 path: own_path(path),
                 mode,
@@ -240,7 +250,7 @@ impl Target<'_> {
 
     pub fn label(&self) -> Cow<'_, str> {
         match self {
-            Target::Directory { path, .. } => path.to_string_lossy(),
+            Target::Parent { path, .. } | Target::Directory { path, .. } => path.to_string_lossy(),
             Target::File { path, .. } => path.to_string_lossy(),
             Target::SeededFile { path, .. } => path.to_string_lossy(),
             Target::Group { name, .. } => Cow::Borrowed(name),
@@ -258,7 +268,7 @@ impl Target<'_> {
 
     pub fn category(&self) -> Category {
         match self {
-            Target::Directory { .. } => Category::Filesystem,
+            Target::Parent { .. } | Target::Directory { .. } => Category::Filesystem,
             Target::File { path, .. } if is_configuration(path) => Category::Configuration,
             Target::File { .. } => Category::Filesystem,
             Target::SeededFile { .. } => Category::Filesystem,
@@ -287,6 +297,11 @@ fn is_configuration(path: &Path) -> bool {
 fn push_user_targets<'a>(items: &mut Vec<Target<'a>>, cfg: &'a UserConfig) {
     let state_dir = mix_state_dir(&cfg.user.home);
     let owner = Some((cfg.user.uid, cfg.user.gid));
+    items.extend(USER_PARENTS.iter().map(|parent| Target::Parent {
+        path: Cow::Owned(cfg.user.home.join(parent)),
+        bits: USER_PARENT_BITS,
+        owner,
+    }));
     items.push(Target::Directory {
         path: Cow::Owned(state_dir.clone()),
         mode: MIX_STATE_DIR_MODE,
@@ -367,7 +382,8 @@ pub fn written_dirs(user: Option<&InvokingUser>) -> Vec<PathBuf> {
     };
     for item in &items {
         match item {
-            Target::Directory { path, .. }
+            Target::Parent { path, .. }
+            | Target::Directory { path, .. }
             | Target::File { path, .. }
             | Target::SeededFile { path, .. } => add(path),
             Target::SystemdUnit { dest, .. } => add(Path::new(dest)),
@@ -391,8 +407,19 @@ pub fn written_dirs(user: Option<&InvokingUser>) -> Vec<PathBuf> {
     dirs
 }
 
-const SYSTEM_TARGET_COUNT: usize = 16 + NIX_TREE_PATHS.len() + NIXBLD_USER_COUNT as usize;
-const USER_TARGET_COUNT: usize = 11;
+const SYSTEM_PARENTS: [(&str, u32); 5] = [
+    ("/etc/mix", 0o755),
+    ("/etc/nix", 0o755),
+    ("/etc/profile.d", 0o755),
+    (MIX_VAR_DIR, 0o700),
+    (MIX_BIN_DIR, 0o700),
+];
+const USER_PARENTS: [&str; 3] = [".local", ".local/state", ".local/state/nix"];
+const USER_PARENT_BITS: u32 = 0o700;
+
+const SYSTEM_TARGET_COUNT: usize =
+    16 + SYSTEM_PARENTS.len() + NIX_TREE_PATHS.len() + NIXBLD_USER_COUNT as usize;
+const USER_TARGET_COUNT: usize = 11 + USER_PARENTS.len();
 
 pub fn user_targets(cfg: &UserConfig) -> Vec<Target<'_>> {
     let mut items = Vec::with_capacity(USER_TARGET_COUNT);
@@ -409,6 +436,11 @@ pub fn targets<'a>(user_config: Option<&'a UserConfig>, policy: &'a Policy) -> V
                 0
             },
     );
+    items.extend(SYSTEM_PARENTS.iter().map(|(path, bits)| Target::Parent {
+        path: Cow::Borrowed(Path::new(*path)),
+        bits: *bits,
+        owner: Some((0, 0)),
+    }));
     items.push(Target::Directory {
         path: Cow::Borrowed(Path::new("/nix")),
         mode: 0o755,
@@ -775,9 +807,9 @@ mod tests {
     }
 
     #[test]
-    fn user_targets_returns_exactly_the_eleven_per_user_entries() {
+    fn user_targets_returns_exactly_the_fourteen_per_user_entries() {
         let cfg = sample_user_config();
-        assert_eq!(user_targets(&cfg).len(), 11);
+        assert_eq!(user_targets(&cfg).len(), 14);
     }
 
     #[test]

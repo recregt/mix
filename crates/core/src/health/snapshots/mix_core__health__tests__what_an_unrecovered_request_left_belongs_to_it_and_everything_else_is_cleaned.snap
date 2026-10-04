@@ -41,6 +41,41 @@ expression: "run.case(&before, &world)"
     "status": "STATUS_FAILED",
     "steps": [
       {
+        "key": "/etc/mix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc/mix",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/etc/nix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc/nix",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/etc/profile.d",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc/profile.d",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/var/lib/mix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/var/lib/mix",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/var/lib/mix/bin",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/var/lib/mix/bin",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
         "key": "/nix",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/nix",
@@ -457,6 +492,27 @@ expression: "run.case(&before, &world)"
         "key": "/var/lib/mix/journal",
         "status": "STATUS_FAILED",
         "subject": "/var/lib/mix/journal",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/home/alice/.local",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/home/alice/.local/state",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/home/alice/.local/state/nix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/nix",
         "undone": false,
         "verb": "VERB_REPAIRING"
       },
