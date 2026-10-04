@@ -489,7 +489,7 @@ pub enum Fact {
     Unit(UnitFacts),
     Profile(ProfileFacts),
     TreeOwner(Option<u32>),
-    Repository { intact: bool },
+    Repository { intact: bool, recorded: bool },
     Journals(Vec<Abandoned>),
     Leftovers(Vec<(PathBuf, FileId)>),
     Stranger(Option<(PathBuf, Owner)>),

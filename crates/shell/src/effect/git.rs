@@ -90,6 +90,26 @@ impl Git {
         Ok(true)
     }
 
+    pub async fn recorded(
+        &self,
+        user: &InvokingUser,
+        state_dir: &Path,
+        scope: &Scope,
+    ) -> Result<bool> {
+        let state_dir = state_dir.to_string_lossy();
+        let mut args = vec![
+            "--no-optional-locks",
+            "-C",
+            &state_dir,
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--",
+        ];
+        args.extend(MANAGED_FILES);
+        Ok(self.run_as(user, &args, scope).await?.is_empty())
+    }
+
     pub async fn sync(&self, user: &InvokingUser, state_dir: &Path, scope: &Scope) -> Result<bool> {
         let git_dir = state_dir.join(GIT_DIR);
         if !exists(&git_dir).await {

@@ -1,5 +1,6 @@
 ---
 source: crates/core/src/health/tests.rs
+assertion_line: 668
 expression: "run.case(&before, &world)"
 ---
 {
@@ -7,11 +8,29 @@ expression: "run.case(&before, &world)"
     "cancellation": "CANCELLATION_UNSPECIFIED",
     "changes": [
       {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_PUT_FILE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "/etc/nix/nix.conf",
+        "subject": "/etc/nix/nix.conf",
+        "undone": false,
+        "unknown": []
+      },
+      {
         "action": "CHANGE_ACTION_DELETE",
         "operation": "OPERATION_REMOVE_CREATED_TREE",
         "status": "STATUS_SUCCEEDED",
         "step": "leftovers of interrupted writes",
-        "subject": "/home/alice/.local/state/mix/.home.nix.mix-new-r7-2",
+        "subject": "/etc/nix/.nix.conf.mix-backup-78",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_RESTART_UNIT",
+        "status": "STATUS_SUCCEEDED",
+        "step": "restart-nix-daemon",
+        "subject": "nix-daemon.service",
         "undone": false,
         "unknown": []
       }
@@ -20,25 +39,9 @@ expression: "run.case(&before, &world)"
     "dryRun": false,
     "exit": 0,
     "formatVersion": "1.0",
-    "problems": [
-      {
-        "causes": [],
-        "code": "CODE_UNREPAIRABLE",
-        "detail": "/var/lib/mix/journal: an interrupted request couldn't be put back",
-        "help": [
-          "use the help under the message"
-        ],
-        "subject": "/var/lib/mix/journal",
-        "title": "`mix repair` found something it will not change on its own",
-        "type": "urn:mix:problem:unrepairable",
-        "unrepairable": {
-          "artifact": "/var/lib/mix/journal",
-          "reason": "UNFIXABLE_UNRECOVERED"
-        }
-      }
-    ],
+    "problems": [],
     "request": "request",
-    "status": "STATUS_FAILED",
+    "status": "STATUS_SUCCEEDED",
     "steps": [
       {
         "key": "/nix",
@@ -161,7 +164,7 @@ expression: "run.case(&before, &world)"
       },
       {
         "key": "/etc/nix/nix.conf",
-        "status": "STATUS_ALREADY_SATISFIED",
+        "status": "STATUS_SUCCEEDED",
         "subject": "/etc/nix/nix.conf",
         "undone": false,
         "verb": "VERB_REPAIRING"
@@ -455,7 +458,7 @@ expression: "run.case(&before, &world)"
       },
       {
         "key": "/var/lib/mix/journal",
-        "status": "STATUS_FAILED",
+        "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/var/lib/mix/journal",
         "undone": false,
         "verb": "VERB_REPAIRING"
@@ -546,7 +549,7 @@ expression: "run.case(&before, &world)"
       },
       {
         "key": "restart-nix-daemon",
-        "status": "STATUS_ALREADY_SATISFIED",
+        "status": "STATUS_SUCCEEDED",
         "subject": "Nix daemon",
         "undone": false,
         "verb": "VERB_RESTARTING"
@@ -564,19 +567,22 @@ expression: "run.case(&before, &world)"
   },
   "machine": {
     "files": {
-      "/home/alice/.local/state/mix/.home.nix.mix-new-r7-2": {
-        "removed": {
-          "contents": [
-            "{}"
-          ],
-          "mode": "0644",
-          "owner": "1000:1000"
-        }
+      "/etc/nix/nix.conf": {
+        "contents": [
+          "-trusted-users = *",
+          "+build-users-group = nixbld",
+          "+experimental-features = nix-command flakes",
+          "+trusted-users = root",
+          "+substituters = https://mirror.internal/cache",
+          "+trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= mirror:AAAA"
+        ]
       }
     }
   },
   "performed": [
-    "RemoveCreatedTree /home/alice/.local/state/mix/.home.nix.mix-new-r7-2",
+    "PutFile /etc/nix/nix.conf",
+    "RemoveCreatedTree /etc/nix/.nix.conf.mix-backup-78",
+    "RestartUnit nix-daemon.service",
     "Commit changes"
   ]
 }

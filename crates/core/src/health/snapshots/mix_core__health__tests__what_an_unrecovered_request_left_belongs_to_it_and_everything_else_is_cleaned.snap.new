@@ -1,5 +1,6 @@
 ---
 source: crates/core/src/health/tests.rs
+assertion_line: 633
 expression: "run.case(&before, &world)"
 ---
 {

@@ -155,7 +155,10 @@ fn fact_of(fact: &Fact) -> observation::Fact {
             dangling: profile.dangling.clone(),
         }),
         Fact::TreeOwner(uid) => Wire::TreeOwnerFact(TreeOwnerFact { uid: *uid }),
-        Fact::Repository { intact } => Wire::RepositoryFact(RepositoryFact { intact: *intact }),
+        Fact::Repository { intact, recorded } => Wire::RepositoryFact(RepositoryFact {
+            intact: *intact,
+            recorded: *recorded,
+        }),
         Fact::Journals(abandoned) => Wire::JournalsFact(PathsFact {
             paths: abandoned
                 .iter()

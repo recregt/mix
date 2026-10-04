@@ -1,5 +1,6 @@
 ---
 source: crates/core/src/health/tests.rs
+assertion_line: 693
 expression: "run.case(&before, &world)"
 ---
 {
@@ -7,11 +8,20 @@ expression: "run.case(&before, &world)"
     "cancellation": "CANCELLATION_UNSPECIFIED",
     "changes": [
       {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_PUT_FILE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "/home/alice/.local/state/mix/home.nix",
+        "subject": "/home/alice/.local/state/mix/home.nix",
+        "undone": false,
+        "unknown": []
+      },
+      {
         "action": "CHANGE_ACTION_DELETE",
         "operation": "OPERATION_REMOVE_CREATED_TREE",
         "status": "STATUS_SUCCEEDED",
         "step": "leftovers of interrupted writes",
-        "subject": "/home/alice/.local/state/mix/.home.nix.mix-new-r7-2",
+        "subject": "/home/alice/.local/state/mix/.home.nix.mix-backup-102",
         "undone": false,
         "unknown": []
       }
@@ -20,25 +30,9 @@ expression: "run.case(&before, &world)"
     "dryRun": false,
     "exit": 0,
     "formatVersion": "1.0",
-    "problems": [
-      {
-        "causes": [],
-        "code": "CODE_UNREPAIRABLE",
-        "detail": "/var/lib/mix/journal: an interrupted request couldn't be put back",
-        "help": [
-          "use the help under the message"
-        ],
-        "subject": "/var/lib/mix/journal",
-        "title": "`mix repair` found something it will not change on its own",
-        "type": "urn:mix:problem:unrepairable",
-        "unrepairable": {
-          "artifact": "/var/lib/mix/journal",
-          "reason": "UNFIXABLE_UNRECOVERED"
-        }
-      }
-    ],
+    "problems": [],
     "request": "request",
-    "status": "STATUS_FAILED",
+    "status": "STATUS_SUCCEEDED",
     "steps": [
       {
         "key": "/nix",
@@ -455,7 +449,7 @@ expression: "run.case(&before, &world)"
       },
       {
         "key": "/var/lib/mix/journal",
-        "status": "STATUS_FAILED",
+        "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/var/lib/mix/journal",
         "undone": false,
         "verb": "VERB_REPAIRING"
@@ -476,7 +470,7 @@ expression: "run.case(&before, &world)"
       },
       {
         "key": "/home/alice/.local/state/mix/home.nix",
-        "status": "STATUS_ALREADY_SATISFIED",
+        "status": "STATUS_SUCCEEDED",
         "subject": "/home/alice/.local/state/mix/home.nix",
         "undone": false,
         "verb": "VERB_REPAIRING"
@@ -564,19 +558,41 @@ expression: "run.case(&before, &world)"
   },
   "machine": {
     "files": {
-      "/home/alice/.local/state/mix/.home.nix.mix-new-r7-2": {
-        "removed": {
-          "contents": [
-            "{}"
-          ],
-          "mode": "0644",
-          "owner": "1000:1000"
+      "/home/alice/.local/state/mix/home.nix": {
+        "contents": [
+          "-changed",
+          "+home of alice"
+        ]
+      }
+    },
+    "repositories": {
+      "/home/alice/.local/state/mix/.git": {
+        "after": {
+          "records": {
+            ".gitignore": "as on disk",
+            "flake.lock": "as on disk",
+            "flake.nix": "as on disk",
+            "home.nix": "as on disk",
+            "state": "as on disk"
+          },
+          "verifies": true
+        },
+        "before": {
+          "records": {
+            ".gitignore": "as on disk",
+            "flake.lock": "as on disk",
+            "flake.nix": "as on disk",
+            "home.nix": "older",
+            "state": "as on disk"
+          },
+          "verifies": true
         }
       }
     }
   },
   "performed": [
-    "RemoveCreatedTree /home/alice/.local/state/mix/.home.nix.mix-new-r7-2",
+    "PutFile /home/alice/.local/state/mix/home.nix",
+    "RemoveCreatedTree /home/alice/.local/state/mix/.home.nix.mix-backup-102",
     "Commit changes"
   ]
 }

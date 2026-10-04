@@ -40,4 +40,4 @@ pub use root::{Render, command, fail, key_of};
 pub use tree::{Ending, Misuse, Node, NodeId, ROOT, Start, Stopped, Tree, exit, output};
 pub use validate::{Entry, Outcome, Validated, Validator, Violation, validate};
 
-pub const SCHEMA_MINOR: u32 = 6;
+pub const SCHEMA_MINOR: u32 = 7;

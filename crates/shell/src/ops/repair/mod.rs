@@ -9,9 +9,8 @@ use std::path::Path;
 
 use mix_core::action::Failure;
 use mix_core::health;
-use mix_core::paths::mix_state_dir;
 use mix_core::plan::{Runner, StepOutcome, Verdict};
-use mix_core::targets::{UserConfig, targets};
+use mix_core::targets::targets;
 use mix_events::v1::{Cancellation, Code, RepairRequest, RepairResult, node_finished};
 use mix_events::{Diagnose, Ending, Fault, ROOT, Stopped, Tree};
 use mix_exec::Scope;
@@ -20,7 +19,6 @@ use crate::Context;
 use crate::drive::{Journal, Observer, Performer, drive};
 use crate::effect::files::Files;
 use crate::effect::generations::ProfileContext;
-use crate::effect::git;
 use crate::effect::home::core_error;
 use crate::effect::journal::{FileJournal, recover_all};
 use crate::request::sink::Relay;
@@ -166,7 +164,7 @@ async fn repaired(
             };
         }
     };
-    let (mut reports, interrupted) = put_back(
+    let (reports, interrupted) = put_back(
         health::repair_steps(items, request),
         &mut performer,
         &mut journal,
@@ -187,10 +185,6 @@ async fn repaired(
                 &failure,
             ),
         );
-    }
-
-    if let Some(cfg) = user_config {
-        commit_the_tracked_state(cfg, &scope.shielded(), &mut reports).await;
     }
 
     Repair {
@@ -256,23 +250,6 @@ async fn put_back(
     (reports, matches!(report.verdict, Verdict::Cancelled(_)))
 }
 
-/// Configuration mix rewrote is drift the user should be able to see in git.
-async fn commit_the_tracked_state(
-    cfg: &UserConfig,
-    scope: &Scope,
-    reports: &mut Vec<RepairReport>,
-) {
-    const NAME: &str = "git-tracked state";
-
-    let state_dir = mix_state_dir(&cfg.user.home);
-    let git = git::Git::resolve(&cfg.user).await;
-    match git.sync(&cfg.user, &state_dir, scope).await {
-        Ok(true) => reports.push(RepairReport::repaired(NAME)),
-        Ok(false) => {}
-        Err(e) => reports.push(RepairReport::failed(NAME, e)),
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod tests {
@@ -287,8 +264,11 @@ mod tests {
     use mix_events::v1::Command;
     use mix_events::{Start, Tree};
 
+    use mix_core::paths::mix_state_dir;
+
     use super::*;
     use crate::drive::stopped_by;
+    use crate::effect::git;
 
     #[test]
     fn a_report_carries_either_a_repair_or_the_reason_there_was_none() {
@@ -567,10 +547,7 @@ mod tests {
 
         assert_eq!(fixed(&reports), [repository.to_string_lossy()]);
         assert!(intact(&user).await);
-        assert_eq!(
-            entries(&state_dir),
-            [".git", ".gitignore", "flake.nix", "home.nix"]
-        );
+        assert_eq!(entries(&state_dir), [".git", "flake.nix", "home.nix"]);
     }
 
     #[tokio::test]
@@ -633,6 +610,6 @@ mod tests {
             std::fs::read_to_string(repository.join("HEAD")).unwrap(),
             "garbage\n"
         );
-        assert_eq!(entries(&state_dir), [".git", ".gitignore", "flake.nix"]);
+        assert_eq!(entries(&state_dir), [".git", "flake.nix"]);
     }
 }

@@ -649,13 +649,19 @@ impl Performer {
                 Query::Program { path, source } => {
                     Fact::Program(crate::effect::program::observe(path, source))
                 }
-                Query::Repository(user) => Fact::Repository {
-                    intact: Git::resolve(user)
-                        .await
+                Query::Repository(user) => {
+                    let git = Git::resolve(user).await;
+                    let intact = git
                         .verify(user, &repository_dir(&user.home), scope)
                         .await
-                        .map_err(core_failure)?,
-                },
+                        .map_err(core_failure)?;
+                    let recorded = intact
+                        && git
+                            .recorded(user, &mix_state_dir(&user.home), scope)
+                            .await
+                            .unwrap_or(false);
+                    Fact::Repository { intact, recorded }
+                }
                 query => self
                     .files
                     .observe(query)

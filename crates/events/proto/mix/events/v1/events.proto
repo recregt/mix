@@ -313,6 +313,7 @@ message TreeOwnerFact {
 
 message RepositoryFact {
   bool intact = 1;
+  bool recorded = 2;
 }
 
 message ProgramFact {

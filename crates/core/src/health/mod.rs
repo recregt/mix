@@ -481,7 +481,7 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
                     expected: (user.uid, user.gid),
                 });
             }
-            if !matches!(facts[2], Fact::Repository { intact: true }) {
+            if !matches!(facts[2], Fact::Repository { intact: true, .. }) {
                 return Some(Finding::RepositoryBroken);
             }
             (path_facts(facts, 0).kind != Kind::Missing).then_some(Finding::RepositoryLocked)
@@ -864,6 +864,7 @@ impl StepSpec for TargetStep {
 }
 
 pub const RESTART_NIX_DAEMON: &str = "restart-nix-daemon";
+pub const RECORD_REPAIRED: &str = "record-repaired-config";
 
 struct RestartIfStale;
 
@@ -893,9 +894,41 @@ impl StepSpec for RestartIfStale {
     }
 }
 
+struct RecordRepaired(identity::InvokingUser);
+
+impl StepSpec for RecordRepaired {
+    fn key(&self) -> Cow<'static, str> {
+        RECORD_REPAIRED.into()
+    }
+
+    fn title(&self) -> Title {
+        Title::new(Verb::Recording, "repaired configuration")
+    }
+
+    fn queries(&self) -> Vec<Query> {
+        vec![Query::Repository(self.0.clone())]
+    }
+
+    fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
+        Ok(match facts[0] {
+            Fact::Repository { recorded: true, .. } => Vec::new(),
+            _ => vec![Action::RecordState {
+                user: self.0.clone(),
+            }],
+        })
+    }
+}
+
 pub fn repair_steps(targets: Vec<Target<'_>>, request: &str) -> Vec<Box<dyn StepSpec>> {
+    let user = targets.iter().find_map(|target| match target {
+        Target::Repository { user, .. } => Some(user.clone().into_owned()),
+        _ => None,
+    });
     let mut steps = target_steps(targets, request);
     steps.push(Box::new(RestartIfStale));
+    if let Some(user) = user {
+        steps.push(Box::new(RecordRepaired(user)));
+    }
     steps
 }
 

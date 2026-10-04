@@ -86,7 +86,12 @@ fn fact(out: &mut String, fact: &observation::Fact) {
             Some(uid) => write!(out, "uid {uid}"),
             None => write!(out, "none"),
         },
-        Fact::RepositoryFact(repository) if repository.intact => write!(out, "intact"),
+        Fact::RepositoryFact(repository) if repository.intact && repository.recorded => {
+            write!(out, "intact, records the config")
+        }
+        Fact::RepositoryFact(repository) if repository.intact => {
+            write!(out, "intact, behind the config")
+        }
         Fact::RepositoryFact(_) => write!(out, "damaged"),
         Fact::JournalsFact(found) | Fact::LeftoversFact(found) | Fact::ClobberedFact(found)
             if found.paths.is_empty() =>

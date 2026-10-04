@@ -552,6 +552,13 @@ expression: "run.case(&before, &world)"
         "subject": "Nix daemon",
         "undone": false,
         "verb": "VERB_RESTARTING"
+      },
+      {
+        "key": "record-repaired-config",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "repaired configuration",
+        "undone": false,
+        "verb": "VERB_RECORDING"
       }
     ],
     "waits": [],

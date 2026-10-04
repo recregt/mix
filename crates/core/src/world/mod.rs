@@ -1249,6 +1249,9 @@ impl World {
             ),
             Query::Repository(user) => Fact::Repository {
                 intact: self.verifies(user),
+                recorded: self
+                    .committed(user)
+                    .is_some_and(|recorded| recorded == self.staged(user)),
             },
             Query::Profile(user) => Fact::Profile(
                 self.profiles
