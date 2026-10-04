@@ -241,6 +241,12 @@ async fn violations(healthy: World, breakage: Breakage) -> Vec<String> {
             changes(&repaired)
         ));
     }
+    if repaired["exit"] != 0 && repaired["problems"].as_array().is_none_or(Vec::is_empty) {
+        found.push(format!(
+            "{at}: repair exited {} without naming a problem",
+            repaired["exit"]
+        ));
+    }
     let doctor = machine
         .run(Request::Doctor(DoctorRequest {}), false, false)
         .await;
