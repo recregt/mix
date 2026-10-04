@@ -41,6 +41,7 @@ mix-testchild = { path = "../testchild" }
 divan = { workspace = true }
 mix-core = { path = "../core" }
 mockito = "=1.7.2"
+mix-render = { path = "../render" }
 tokio = { workspace = true, features = ["test-util"] }
 
 [[bench]]

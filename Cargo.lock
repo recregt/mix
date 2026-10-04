@@ -1570,6 +1570,7 @@ dependencies = [
  "mix-exec",
  "mix-nixgen",
  "mix-pins",
+ "mix-render",
  "mix-testchild",
  "mockito",
  "nix",
