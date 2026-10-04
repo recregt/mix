@@ -65,12 +65,8 @@ DIRECT = {
 
 
 def host() -> str:
-    version = subprocess.run(
-        ["rustc", "-vV"], capture_output=True, text=True, check=True
-    ).stdout
-    return next(
-        line.split()[1] for line in version.splitlines() if line.startswith("host:")
-    )
+    version = subprocess.run(["rustc", "-vV"], capture_output=True, text=True, check=True).stdout
+    return next(line.split()[1] for line in version.splitlines() if line.startswith("host:"))
 
 
 def metadata() -> dict:

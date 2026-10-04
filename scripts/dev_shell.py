@@ -39,19 +39,32 @@ def require(tool: str) -> None:
 
 def build_mix() -> None:
     step("building mix (release)")
-    subprocess.run(["cargo", "build", "--release", "-p", "mix-cli", "-p", "mix-daemon"], cwd=REPO_ROOT, check=True)
+    subprocess.run(
+        ["cargo", "build", "--release", "-p", "mix-cli", "-p", "mix-daemon"],
+        cwd=REPO_ROOT,
+        check=True,
+    )
 
 
 def resolve_image(requested: str | None) -> str:
     image = requested or os.environ.get("MIX_TEST_IMAGE")
     if image:
         step(f"pulling {image}")
-        if subprocess.run(["podman", "pull", "-q", image]).returncode == 0:
+        if subprocess.run(["podman", "pull", "-q", image], check=False).returncode == 0:
             return image
         print(f"could not pull {image}, building it locally instead", file=sys.stderr)
     step(f"building {LOCAL_IMAGE} from {CONTAINERFILE.relative_to(REPO_ROOT)}")
     subprocess.run(
-        ["podman", "build", "-q", "-t", LOCAL_IMAGE, "-f", str(CONTAINERFILE), str(CONTAINERFILE.parent)],
+        [
+            "podman",
+            "build",
+            "-q",
+            "-t",
+            LOCAL_IMAGE,
+            "-f",
+            str(CONTAINERFILE),
+            str(CONTAINERFILE.parent),
+        ],
         check=True,
     )
     return LOCAL_IMAGE
@@ -71,6 +84,7 @@ def start_container(image: str) -> str:
             ["podman", "exec", name, "systemctl", "is-system-running"],
             capture_output=True,
             text=True,
+            check=False,
         )
         if probe.stdout.strip() in ("running", "degraded"):
             return name
@@ -80,7 +94,7 @@ def start_container(image: str) -> str:
 
 
 def remove_container(name: str) -> None:
-    subprocess.run(["podman", "rm", "-f", name], capture_output=True)
+    subprocess.run(["podman", "rm", "-f", name], capture_output=True, check=False)
 
 
 def container_exec(name: str, *args: str) -> None:
@@ -112,7 +126,8 @@ def create_user(name: str, user: str) -> None:
         name,
         "bash",
         "-c",
-        f"echo '{user} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/{user} && chmod 440 /etc/sudoers.d/{user}",
+        f"echo '{user} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/{user}"
+        f" && chmod 440 /etc/sudoers.d/{user}",
     )
 
 
@@ -144,7 +159,7 @@ def banner(user: str, offline: bool) -> None:
     print(
         f"""
 You are {user}, with sudo and no password. mix is at /usr/local/bin/mix.
-Mode: {'offline, from the local E2E cache' if offline else 'online'} ({packages} can be installed).
+Mode: {"offline, from the local E2E cache" if offline else "online"} ({packages} can be installed).
 
   mix bootstrap          set everything up (asks for sudo by itself)
   mix install hello      then: hello
@@ -160,24 +175,37 @@ def shell(name: str, user: str, command: str | None) -> int:
     env_flags = ["-e", f"TERM={os.environ['TERM']}"] if os.environ.get("TERM") else []
     login = ["bash", "-l"] if command is None else ["bash", "-lc", command]
     return subprocess.run(
-        ["podman", "exec", *flags, *env_flags, "-u", user, "-w", f"/home/{user}", name, *login]
+        ["podman", "exec", *flags, *env_flags, "-u", user, "-w", f"/home/{user}", name, *login],
+        check=False,
     ).returncode
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build mix, start the E2E test container with it inside, and open a shell there."
+        description=(
+            "Build mix, start the E2E test container with it inside, and open a shell there."
+        )
     )
     parser.add_argument(
         "--offline",
         action="store_true",
         help="serve the E2E suite's local cache instead of using the internet (git and hello only)",
     )
-    parser.add_argument("--user", help="user to create and log in as (default: dev, or ciuser offline)")
-    parser.add_argument("--image", help="container image to use (default: $MIX_TEST_IMAGE, else built locally)")
-    parser.add_argument("--no-build", action="store_true", help="use the existing target/release/mix")
-    parser.add_argument("--keep", action="store_true", help="leave the container running after you exit")
-    parser.add_argument("--run", metavar="COMMAND", help="run COMMAND in a login shell instead of opening one")
+    parser.add_argument(
+        "--user", help="user to create and log in as (default: dev, or ciuser offline)"
+    )
+    parser.add_argument(
+        "--image", help="container image to use (default: $MIX_TEST_IMAGE, else built locally)"
+    )
+    parser.add_argument(
+        "--no-build", action="store_true", help="use the existing target/release/mix"
+    )
+    parser.add_argument(
+        "--keep", action="store_true", help="leave the container running after you exit"
+    )
+    parser.add_argument(
+        "--run", metavar="COMMAND", help="run COMMAND in a login shell instead of opening one"
+    )
     return parser.parse_args()
 
 

@@ -16,3 +16,8 @@ verbosity_assertions = 2
 markers = [
     "bootstrapped: start from a container where ciuser already ran `mix bootstrap`",
 ]
+
+[dependency-groups]
+dev = [
+    "ruff==0.16.10",
+]

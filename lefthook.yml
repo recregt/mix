@@ -12,6 +12,11 @@ pre-commit:
     dependencies:
       glob: "{Cargo.toml,Cargo.lock,**/Cargo.toml}"
       run: scripts/check_dependencies.py
+    ruff:
+      glob: "*.py"
+      run: >-
+        uv run --project e2e --locked --only-group dev ruff check {staged_files} &&
+        uv run --project e2e --locked --only-group dev ruff format --check {staged_files}
 
 pre-push:
   commands:
