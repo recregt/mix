@@ -1,0 +1,2 @@
+[env]
+INSTA_WORKSPACE_ROOT = { value = "", relative = true }
