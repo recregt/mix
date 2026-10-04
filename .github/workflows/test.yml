@@ -33,4 +33,21 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - run: cargo test --workspace --locked -- --include-ignored
+      - run: cargo test --workspace --locked
+
+  contract:
+    name: Nix Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: ghcr.io/recregt/mix-nix-test@sha256:e9f551ac9ed040e69ca69f0a61a1207adf8ba1a8103e1d3b6d6b28f31eb8b43e # latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - run: cargo test --workspace --locked -- --ignored
