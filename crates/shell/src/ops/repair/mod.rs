@@ -17,7 +17,6 @@ use mix_exec::Scope;
 
 use crate::Context;
 use crate::drive::{Journal, Observer, Performer, drive};
-use crate::effect::files::Files;
 use crate::effect::generations::ProfileContext;
 use crate::effect::home::core_error;
 use crate::effect::journal::{FileJournal, recover_all};
@@ -99,8 +98,8 @@ async fn repaired(
     let user_config = ctx.user.as_ref();
     let scope = &ctx.scope;
     let items = targets(user_config, &ctx.policy);
-    let files = match Files::open(Path::new("/"), request) {
-        Ok(files) => files,
+    let performer = match ctx.performer() {
+        Ok(performer) => performer,
         Err(source) => {
             return Repair {
                 reports: vec![RepairReport::failed(
@@ -113,11 +112,6 @@ async fn repaired(
                 interrupted: false,
             };
         }
-    };
-    let performer = if ctx.dry_run {
-        Performer::predicting(files)
-    } else {
-        Performer::new(files)
     };
     let mut performer = performer.with_profile(ProfileContext {
         mirror: ctx.mirror().map(str::to_string),
@@ -268,6 +262,7 @@ mod tests {
 
     use super::*;
     use crate::drive::stopped_by;
+    use crate::effect::files::Files;
     use crate::effect::git;
 
     #[test]

@@ -1,7 +1,6 @@
 use mix_core::change::render_home;
 use mix_core::identity::InvokingUser;
 use mix_core::identity::MIX_USERS_GROUP;
-use mix_core::paths::{HOME_NIX, mix_state_dir};
 use mix_core::state::StateManifest;
 use mix_core::system::{Arch, Os};
 use mix_core::targets::UserConfig;
@@ -44,24 +43,26 @@ fn nix_system(arch: Arch, os: Os) -> System {
     }
 }
 
-pub fn user_config_for(user: InvokingUser, locked: &crate::request::Locked) -> Option<UserConfig> {
+pub fn user_config_for(
+    user: InvokingUser,
+    host: &crate::request::context::Host,
+    locked: &crate::request::Locked,
+) -> Option<UserConfig> {
     let system = nix_system(Arch::current()?, Os::current()?);
     let flake = FlakeConfig::new(system, &user.name, NIXPKGS, HOME_MANAGER)
         .expect("a real username cannot contain a null byte")
         .render();
-    let (home, restored_state) = match settle(&user.home, locked) {
+    let (home, restored_state) = match settle(&user, host, locked) {
         Settled::Current { manifest, source } => (
             render_home(&user, &manifest.packages)
                 .expect("a settled package list only holds valid names"),
             (source != Source::File).then(|| manifest.render()),
         ),
         Settled::Newer(_) => (
-            std::fs::read_to_string(mix_state_dir(&user.home).join(HOME_NIX)).unwrap_or_else(
-                |_| {
-                    render_home(&user, StateManifest::seed().packages)
-                        .expect("the seed package list is always valid")
-                },
-            ),
+            host.home_nix(&user).unwrap_or_else(|| {
+                render_home(&user, StateManifest::seed().packages)
+                    .expect("the seed package list is always valid")
+            }),
             None,
         ),
     };
@@ -76,12 +77,12 @@ pub fn user_config_for(user: InvokingUser, locked: &crate::request::Locked) -> O
 
 pub fn existing_user_config_for(
     user: InvokingUser,
+    host: &crate::request::context::Host,
     locked: &crate::request::Locked,
 ) -> Option<UserConfig> {
-    managed(
-        user_config_for(user, locked)?,
-        crate::effect::accounts::group_has_member,
-    )
+    managed(user_config_for(user, host, locked)?, |group, user| {
+        host.is_member(group, user)
+    })
 }
 
 fn managed(cfg: UserConfig, member: impl Fn(&str, &str) -> bool) -> Option<UserConfig> {
@@ -97,6 +98,7 @@ mod tests {
     use mix_core::paths::STATE_FILE;
 
     use super::*;
+    use mix_core::paths::HOME_NIX;
 
     fn sample_user(home: &Path) -> InvokingUser {
         InvokingUser {

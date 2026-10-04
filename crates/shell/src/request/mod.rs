@@ -45,6 +45,7 @@ pub struct Session {
     pub caller: Caller,
     pub policy: Option<Policy>,
     pub journals: PathBuf,
+    pub host: context::Host,
 }
 
 impl Session {
@@ -56,7 +57,13 @@ impl Session {
             caller: Caller::Fixed(None),
             policy: None,
             journals: PathBuf::from(crate::effect::journal::JOURNAL_DIR),
+            host: context::Host::Machine,
         }
+    }
+
+    pub fn with_host(mut self, host: context::Host) -> Self {
+        self.host = host;
+        self
     }
 
     pub fn with_journals(mut self, journals: impl Into<PathBuf>) -> Self {
@@ -119,9 +126,9 @@ impl Session {
             } => {
                 let config = account.clone().and_then(|account| {
                     if enrolling {
-                        crate::profile::user_config_for(account, locked)
+                        crate::profile::user_config_for(account, &self.host, locked)
                     } else {
-                        crate::profile::existing_user_config_for(account, locked)
+                        crate::profile::existing_user_config_for(account, &self.host, locked)
                     }
                 });
                 (config, *peer_is_root)
@@ -234,6 +241,7 @@ async fn host(
         locked,
         journals: session.journals.clone(),
         dry_run,
+        host: session.host.clone(),
     };
     let mut root = Root { tree, stopped };
     let concluded = op(&ctx, &mut root).await;

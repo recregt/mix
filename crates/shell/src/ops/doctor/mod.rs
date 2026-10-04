@@ -2,8 +2,6 @@
 //! it should be, and reports what it finds. `mix repair` uses the same checks to fix those
 //! targets. Because both rely on the same logic, detection and repair never go out of sync.
 
-use std::path::Path;
-
 use mix_core::action::Failure;
 use mix_core::health::{self, wire};
 use mix_events::v1::{
@@ -12,8 +10,6 @@ use mix_events::v1::{
 use mix_events::{Ending, ROOT, Start};
 
 use crate::Context;
-use crate::drive::Performer;
-use crate::effect::files::Files;
 use crate::request::{Concluded, Root};
 use crate::target::Finding;
 
@@ -29,7 +25,7 @@ pub(crate) async fn audit(ctx: &Context, root: &mut Root, _request: &DoctorReque
                 .planned(items.iter().map(|target| target.label().into_owned())),
         )
         .expect("the root is open");
-    let mut performer = Files::open(Path::new("/"), "audit").map(Performer::new);
+    let mut performer = ctx.performer();
     let mut reports = Vec::with_capacity(items.len());
     for target in &items {
         let (finding, drift) = match &mut performer {

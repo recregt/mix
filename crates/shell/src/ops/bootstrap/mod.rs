@@ -8,8 +8,6 @@ pub mod tarball;
 
 pub use error::{Error, Host, Result};
 
-use std::path::Path;
-
 use mix_core::action::{Digest, Failure};
 use mix_core::bootstrap::{Runtime, Settings, steps};
 use mix_core::plan::{Runner, Verdict, diagnostic};
@@ -18,7 +16,6 @@ use mix_events::{Ending, ROOT, Start};
 
 use crate::Context;
 use crate::drive::{Performer, drive};
-use crate::effect::files::Files;
 use crate::effect::generations::ProfileContext;
 use crate::effect::journal::{FileJournal, recover_all, unfinished};
 use crate::effect::mirror::{filter_mirror, mirror_url};
@@ -103,7 +100,7 @@ pub fn error_from(failure: Failure) -> Error {
 }
 
 async fn prepare(ctx: &Context, force: bool) -> Result<(Settings, Performer)> {
-    if !crate::effect::accounts::is_root() {
+    if !ctx.host.is_root() {
         return Err(Error::NotRoot("bootstrap the managed environment"));
     }
     preflight::check_not_nixos().await?;
@@ -124,15 +121,10 @@ async fn prepare(ctx: &Context, force: bool) -> Result<(Settings, Performer)> {
             source,
         })?,
     };
-    let files = Files::open(Path::new("/"), &request).map_err(|source| mix_core::Error::Io {
+    let performer = ctx.performer().map_err(|source| mix_core::Error::Io {
         path: "/".into(),
         source,
     })?;
-    let performer = if ctx.dry_run {
-        Performer::predicting(files)
-    } else {
-        Performer::new(files)
-    };
     let performer = performer.with_profile(ProfileContext {
         mirror: ctx.mirror().map(str::to_string),
     });

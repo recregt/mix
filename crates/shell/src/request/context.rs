@@ -1,11 +1,75 @@
-use std::sync::Arc;
+use std::path::Path;
+use std::sync::{Arc, Mutex, PoisonError};
 
+use mix_core::identity::InvokingUser;
+use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
 use mix_core::policy::{Mirror, Policy};
 use mix_core::targets::UserConfig;
+use mix_core::world::World;
 use mix_events::Outbox;
 use mix_exec::Scope;
 
+use crate::drive::Performer;
+use crate::effect::files::Files;
 use crate::request::Locked;
+
+#[derive(Clone, Default)]
+pub enum Host {
+    #[default]
+    Machine,
+    Model(Arc<Mutex<World>>),
+}
+
+impl Host {
+    fn world(world: &Mutex<World>) -> std::sync::MutexGuard<'_, World> {
+        world.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn read(&self, path: &Path) -> Option<String> {
+        match self {
+            Host::Machine => crate::profile::state::read(path),
+            Host::Model(world) => Self::world(world)
+                .contents(path)
+                .map(|bytes| String::from_utf8_lossy(bytes).into_owned()),
+        }
+    }
+
+    pub fn state_file(&self, user: &InvokingUser) -> Option<String> {
+        self.read(&mix_state_dir(&user.home).join(STATE_FILE))
+    }
+
+    pub fn home_nix(&self, user: &InvokingUser) -> Option<String> {
+        self.read(&mix_state_dir(&user.home).join(HOME_NIX))
+    }
+
+    pub fn active_list(&self, user: &InvokingUser) -> Option<String> {
+        match self {
+            Host::Machine => crate::profile::state::read(
+                &crate::profile::state::active_generation_state(&user.home),
+            ),
+            Host::Model(world) => Self::world(world)
+                .active_list(user)
+                .map(|bytes| String::from_utf8_lossy(bytes).into_owned()),
+        }
+    }
+
+    pub fn is_root(&self) -> bool {
+        match self {
+            Host::Machine => crate::effect::accounts::is_root(),
+            Host::Model(_) => true,
+        }
+    }
+
+    pub fn is_member(&self, group: &str, user: &str) -> bool {
+        match self {
+            Host::Machine => crate::effect::accounts::group_has_member(group, user),
+            Host::Model(world) => Self::world(world)
+                .groups
+                .get(group)
+                .is_some_and(|found| found.members.iter().any(|member| member == user)),
+        }
+    }
+}
 
 pub fn request_id() -> String {
     uuid::Uuid::now_v7().to_string()
@@ -26,9 +90,28 @@ pub struct Context {
     pub locked: Locked,
     pub journals: std::path::PathBuf,
     pub dry_run: bool,
+    pub host: Host,
 }
 
 impl Context {
+    pub(crate) fn performer(&self) -> std::io::Result<Performer> {
+        match &self.host {
+            Host::Machine => {
+                let files = Files::open(Path::new("/"), &self.request.id)?;
+                Ok(if self.dry_run {
+                    Performer::predicting(files)
+                } else {
+                    Performer::new(files)
+                })
+            }
+            Host::Model(world) if self.dry_run => {
+                let copy = world.lock().unwrap_or_else(PoisonError::into_inner).clone();
+                Performer::modelled(Arc::new(Mutex::new(copy)))
+            }
+            Host::Model(world) => Performer::modelled(Arc::clone(world)),
+        }
+    }
+
     pub(crate) fn relay(&self) -> crate::request::sink::Relay {
         crate::request::sink::Relay::new(Arc::clone(&self.render))
     }

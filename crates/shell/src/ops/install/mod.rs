@@ -11,11 +11,13 @@ pub(crate) async fn install(ctx: &Context, root: &mut Root, request: &InstallReq
     let Some(cfg) = ctx.user.as_ref() else {
         return root.refuse(change::Error::NotBootstrapped);
     };
-    let decided =
-        match mix_core::change::install(&request.packages, change::settled(cfg, &ctx.locked)) {
-            Ok(decided) => decided,
-            Err(refused) => return root.refuse(change::Error::from(refused)),
-        };
+    let decided = match mix_core::change::install(
+        &request.packages,
+        change::settled(cfg, &ctx.host, &ctx.locked),
+    ) {
+        Ok(decided) => decided,
+        Err(refused) => return root.refuse(change::Error::from(refused)),
+    };
     change::run(ctx, root, cfg, change::Verb::Install, &decided).await
 }
 

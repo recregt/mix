@@ -13,6 +13,7 @@ use mix_core::journal::Record;
 use mix_core::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
 use mix_core::paths::{mix_state_dir, repository_dir};
 use mix_core::plan::{Input, Next, Report, Runner, make_guard};
+use mix_core::world::World;
 use mix_core::{ActivityReporter, BuildProgress, DownloadProgress};
 use mix_events::v1::node_progress::Progress;
 use mix_events::v1::{
@@ -225,6 +226,7 @@ impl Prediction {
 
 pub struct Performer {
     files: Files,
+    model: Option<std::sync::Arc<Mutex<World>>>,
     prediction: Option<Prediction>,
     agents: BTreeMap<u32, Agent>,
     units: Option<Units>,
@@ -238,6 +240,7 @@ impl Performer {
     pub fn new(files: Files) -> Self {
         Self {
             files,
+            model: None,
             prediction: None,
             agents: BTreeMap::new(),
             units: None,
@@ -509,6 +512,21 @@ impl Performer {
         Ok(Performed { undo })
     }
 
+    pub fn modelled(world: std::sync::Arc<Mutex<World>>) -> std::io::Result<Self> {
+        Ok(Self {
+            model: Some(world),
+            ..Self::new(Files::open(Path::new("/"), "model")?)
+        })
+    }
+
+    fn modelled_world(&self) -> Option<std::sync::MutexGuard<'_, World>> {
+        self.model.as_ref().map(|world| {
+            world
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        })
+    }
+
     pub fn predicting(files: Files) -> Self {
         Self {
             prediction: Some(Prediction::default()),
@@ -521,6 +539,9 @@ impl Performer {
         queries: &[Query],
         scope: &Scope,
     ) -> Result<Vec<Fact>, Failure> {
+        if let Some(world) = self.modelled_world() {
+            return Ok(queries.iter().map(|query| world.observe(query)).collect());
+        }
         let mut facts = Vec::with_capacity(queries.len());
         for query in queries {
             let fact = match &self.prediction {
@@ -679,6 +700,11 @@ impl Performer {
         report: &mut (dyn FnMut(Signal) + Send),
         prepared: &mut Prepared<'_>,
     ) -> Outcome {
+        if let Some(mut world) = self.modelled_world() {
+            let undo = world.clone().apply(action)?.undo;
+            prepared(&undo)?;
+            return world.apply(action);
+        }
         if self.prediction.is_some() {
             return Box::pin(self.predict(action, scope, prepared)).await;
         }

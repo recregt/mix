@@ -1,16 +1,22 @@
 use std::path::Path;
 
+use mix_core::identity::InvokingUser;
+
 use mix_core::paths::{
-    GENERATION_INPUTS, GENERATION_STATE_FILE, HOME_MANAGER_PROFILE_NAME, STATE_FILE, mix_state_dir,
+    GENERATION_INPUTS, GENERATION_STATE_FILE, HOME_MANAGER_PROFILE_NAME, mix_state_dir,
     nix_profiles_dir,
 };
 
 pub use mix_core::change::{Invalid, STATE_VERSION, Settled, Source, validate};
 
-pub fn settle(home: &Path, _locked: &crate::request::Locked) -> Settled {
+pub fn settle(
+    user: &InvokingUser,
+    host: &crate::request::context::Host,
+    _locked: &crate::request::Locked,
+) -> Settled {
     mix_core::change::settle(
-        read(&mix_state_dir(home).join(STATE_FILE)).as_deref(),
-        read(&active_generation_state(home)).as_deref(),
+        host.state_file(user).as_deref(),
+        host.active_list(user).as_deref(),
     )
 }
 
@@ -38,7 +44,7 @@ pub fn built_generation(home: &Path, generations: &[u64]) -> Option<u64> {
     })
 }
 
-fn read(path: &Path) -> Option<String> {
+pub fn read(path: &Path) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
@@ -48,6 +54,16 @@ mod tests {
     use mix_core::state::StateManifest;
 
     use super::*;
+    use mix_core::paths::STATE_FILE;
+
+    fn owner(home: &Path) -> InvokingUser {
+        InvokingUser {
+            uid: 1000,
+            gid: 1000,
+            name: "mix-user".into(),
+            home: home.to_path_buf(),
+        }
+    }
 
     fn manifest(packages: &[&str]) -> StateManifest {
         StateManifest {
@@ -78,7 +94,11 @@ mod tests {
         write_generation(home.path(), &manifest(&["git"]).render());
 
         assert_eq!(
-            settle(home.path(), &crate::request::Locked::for_tests()),
+            settle(
+                &owner(home.path()),
+                &crate::request::context::Host::Machine,
+                &crate::request::Locked::for_tests(),
+            ),
             Settled::Current {
                 manifest: manifest(&["git"]),
                 source: Source::Generation,
@@ -142,7 +162,11 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
 
         assert_eq!(
-            settle(home.path(), &crate::request::Locked::for_tests()),
+            settle(
+                &owner(home.path()),
+                &crate::request::context::Host::Machine,
+                &crate::request::Locked::for_tests(),
+            ),
             Settled::Current {
                 manifest: StateManifest::seed(),
                 source: Source::Fresh,

@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use mix_core::change::{Change, NewerList, Unrenderable};
 use mix_core::plan::{Runner, StepSpec, Verdict, diagnostic};
 use mix_core::targets::UserConfig;
@@ -9,8 +7,7 @@ use mix_events::{Ending, ROOT};
 use crate::Context;
 use mix_events::v1::Code;
 
-use crate::drive::{Performer, drive};
-use crate::effect::files::Files;
+use crate::drive::drive;
 use crate::effect::generations::ProfileContext;
 use crate::effect::home::core_error;
 use crate::effect::journal::FileJournal;
@@ -55,8 +52,12 @@ impl From<NewerList> for Error {
     }
 }
 
-pub fn settled(cfg: &UserConfig, locked: &crate::request::Locked) -> Settled {
-    state::settle(&cfg.user.home, locked)
+pub fn settled(
+    cfg: &UserConfig,
+    host: &crate::request::context::Host,
+    locked: &crate::request::Locked,
+) -> Settled {
+    state::settle(&cfg.user, host, locked)
 }
 
 pub enum Verb {
@@ -112,19 +113,14 @@ pub async fn perform(
     let verdict = if steps.is_empty() {
         Verdict::Succeeded
     } else {
-        let files = match Files::open(Path::new("/"), &ctx.request.id) {
-            Ok(files) => files,
+        let performer = match ctx.performer() {
+            Ok(performer) => performer,
             Err(source) => {
                 return root.refuse(Error::Core(mix_core::Error::Io {
                     path: "/".into(),
                     source,
                 }));
             }
-        };
-        let performer = if ctx.dry_run {
-            Performer::predicting(files)
-        } else {
-            Performer::new(files)
         };
         let mut performer = performer.with_profile(ProfileContext {
             mirror: ctx.mirror().map(str::to_string),
