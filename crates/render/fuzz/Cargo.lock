@@ -457,7 +457,6 @@ dependencies = [
  "mix-events",
  "mix-explain",
  "mix-ui",
- "pbjson-types",
  "serde_json",
 ]
 

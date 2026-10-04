@@ -9,7 +9,6 @@ license = "MPL-2.0"
 mix-events = { path = "../events" }
 mix-explain = { path = "../explain" }
 mix-ui = { path = "../ui" }
-pbjson-types = "0.9.0"
 serde_json = { workspace = true }
 
 [dev-dependencies]
