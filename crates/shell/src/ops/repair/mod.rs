@@ -555,6 +555,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires git"]
     async fn a_damaged_repository_is_replaced_by_a_new_history_of_the_current_config() {
         let home = tempfile::tempdir().unwrap();
         let user = user_with_git(home.path());
@@ -574,6 +575,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires git"]
     async fn a_missing_repository_is_created_from_the_current_config() {
         let home = tempfile::tempdir().unwrap();
         let user = user_with_git(home.path());
@@ -588,6 +590,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires git"]
     async fn a_stale_index_lock_is_removed_and_the_history_kept() {
         let home = tempfile::tempdir().unwrap();
         let user = user_with_git(home.path());
@@ -614,6 +617,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires git"]
     async fn a_new_history_that_cannot_be_committed_puts_the_old_repository_back() {
         let home = tempfile::tempdir().unwrap();
         let user = user_with_git(home.path());

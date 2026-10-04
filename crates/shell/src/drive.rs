@@ -1381,6 +1381,7 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::disallowed_methods)]
+    #[ignore = "requires git"]
     async fn a_change_git_cannot_record_still_takes_effect_and_says_so() {
         let home = tempfile::tempdir().unwrap();
         let user = crate::effect::git::testing::user(home.path(), Some("commit"));

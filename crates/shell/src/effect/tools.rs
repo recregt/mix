@@ -141,6 +141,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "reads the tools of the host it runs on"]
     fn a_system_tool_resolves_to_an_absolute_root_owned_path() {
         let sh = trusted("sh").expect("every supported host has a root-owned sh");
 

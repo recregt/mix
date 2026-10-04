@@ -324,6 +324,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires git"]
     async fn sync_is_a_noop_for_a_state_dir_that_is_not_a_repository() {
         let home = tempfile::tempdir().unwrap();
         let state_dir = mix_core::paths::mix_state_dir(home.path());
@@ -338,6 +339,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires git"]
     async fn init_bounds_the_repository_with_a_gitignore() {
         let home = tempfile::tempdir().unwrap();
         let state_dir = repository(home.path()).await;
@@ -353,6 +355,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires git"]
     async fn sync_commits_the_generated_config() {
         let home = tempfile::tempdir().unwrap();
         let state_dir = repository(home.path()).await;
@@ -376,6 +379,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires git"]
     async fn sync_leaves_anything_that_is_not_generated_config_uncommitted() {
         let home = tempfile::tempdir().unwrap();
         let state_dir = repository(home.path()).await;
@@ -397,6 +401,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires git"]
     async fn sync_commits_nothing_twice() {
         let home = tempfile::tempdir().unwrap();
         let state_dir = repository(home.path()).await;
@@ -416,6 +421,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires git"]
     async fn sync_commits_drift_in_the_generated_config() {
         let home = tempfile::tempdir().unwrap();
         let state_dir = repository(home.path()).await;
@@ -446,6 +452,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires git"]
     async fn sync_runs_no_hook_of_the_repository_or_the_user() {
         let home = tempfile::tempdir().unwrap();
         let state_dir = repository(home.path()).await;
@@ -469,6 +476,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires git"]
     async fn sync_commits_unsigned_whatever_the_user_configured() {
         let home = tempfile::tempdir().unwrap();
         let state_dir = repository(home.path()).await;
@@ -531,6 +539,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires git"]
     async fn a_committed_repository_verifies() {
         let home = tempfile::tempdir().unwrap();
         let state_dir = committed(home.path()).await;
@@ -539,6 +548,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires git"]
     async fn a_repository_whose_commit_lost_its_tree_does_not_verify() {
         let home = tempfile::tempdir().unwrap();
         let state_dir = committed(home.path()).await;
@@ -568,6 +578,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires git"]
     async fn a_repository_whose_head_does_not_resolve_does_not_verify() {
         let home = tempfile::tempdir().unwrap();
         let state_dir = committed(home.path()).await;
@@ -577,6 +588,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires git"]
     async fn a_repository_with_an_unreadable_config_does_not_verify() {
         let home = tempfile::tempdir().unwrap();
         let state_dir = committed(home.path()).await;
@@ -586,6 +598,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires git"]
     async fn a_repository_with_an_unreadable_index_does_not_verify() {
         let home = tempfile::tempdir().unwrap();
         let state_dir = committed(home.path()).await;
@@ -595,6 +608,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires git"]
     async fn a_repository_with_nothing_committed_does_not_verify() {
         let home = tempfile::tempdir().unwrap();
         let state_dir = repository(home.path()).await;
@@ -603,6 +617,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires git"]
     async fn a_missing_repository_is_not_answered_by_one_further_up() {
         let home = tempfile::tempdir().unwrap();
         let outer = committed(home.path()).await;
@@ -614,6 +629,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires git"]
     async fn create_commits_the_files_already_there() {
         let home = tempfile::tempdir().unwrap();
         let state_dir = mix_core::paths::mix_state_dir(home.path());
@@ -638,6 +654,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires git"]
     async fn sync_fails_while_a_stale_index_lock_is_left_behind() {
         let home = tempfile::tempdir().unwrap();
         let state_dir = committed(home.path()).await;
