@@ -496,12 +496,14 @@ mod tests {
         assert!(matches!(err, Error::Network(_)));
     }
 
-    #[tokio::test]
-    async fn fetch_and_verify_lets_a_slow_server_finish() {
+    #[tokio::test(start_paused = true)]
+    async fn fetch_and_verify_waits_out_a_server_silent_for_an_hour() {
         let body = b"slow but steady".to_vec();
         let expected = sha256_hex(&body);
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
+        let (fell_silent, silent) = tokio::sync::oneshot::channel();
+        let (resume, resumed) = std::sync::mpsc::channel::<()>();
         std::thread::spawn(move || {
             use std::io::{BufRead as _, Write as _};
             if let Ok((mut conn, _)) = listener.accept() {
@@ -511,24 +513,29 @@ mod tests {
                     line.clear();
                 }
                 let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
+                let (first, rest) = body.split_at(5);
                 let _ = conn.write_all(head.as_bytes());
-                for chunk in body.chunks(5) {
-                    std::thread::sleep(std::time::Duration::from_millis(400));
-                    let _ = conn.write_all(chunk);
+                let _ = conn.write_all(first);
+                let _ = fell_silent.send(());
+                if resumed.recv().is_ok() {
+                    let _ = conn.write_all(rest);
                 }
             }
         });
+        let an_hour_later = async {
+            silent.await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_secs(60 * 60)).await;
+            resume.send(()).unwrap();
+        };
 
-        let bytes = fetch_and_verify(
-            &format!("http://{addr}/"),
-            &expected,
-            15,
-            &mix_core::NoopProgress,
-            &Scope::root(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(bytes, b"slow but steady");
+        let url = format!("http://{addr}/");
+        let scope = Scope::root();
+        let (bytes, ()) = tokio::join!(
+            fetch_and_verify(&url, &expected, 15, &mix_core::NoopProgress, &scope),
+            an_hour_later
+        );
+
+        assert_eq!(bytes.unwrap(), b"slow but steady");
     }
 
     #[tokio::test]

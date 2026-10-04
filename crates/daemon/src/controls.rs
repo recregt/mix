@@ -70,17 +70,9 @@ pub fn ignore_the_terminal() -> impl Future<Output = ()> + Send + 'static {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use super::*;
 
     static ONE_WATCH_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-    async fn cancelled_within_a_few_seconds(scope: &Scope) {
-        tokio::time::timeout(Duration::from_secs(5), scope.stopped())
-            .await
-            .expect("the scope should be stopped");
-    }
 
     fn steering() -> (
         Scope,
@@ -122,7 +114,7 @@ mod tests {
 
         drop(replies);
 
-        cancelled_within_a_few_seconds(&scope).await;
+        scope.stopped().await;
         assert_eq!(scope.reason(), Some(Reason::ClientGone));
     }
 
