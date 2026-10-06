@@ -105,13 +105,14 @@ fn inspect_the_declared_targets(bencher: divan::Bencher, n: usize) {
     let targets = declared_tree(root.path(), n);
     let rt = runtime();
     let mut performer = performer();
+    let scope = mix_exec::Scope::root();
 
     bencher.bench_local(|| {
         rt.block_on(async {
             let mut drifted = 0usize;
             for item in divan::black_box(&targets) {
                 let facts = performer
-                    .observe(&health::queries(item), &mix_exec::Scope::root())
+                    .observe(&health::queries(item), &scope)
                     .await
                     .unwrap();
                 drifted += usize::from(health::classify(item, &facts).is_some());
