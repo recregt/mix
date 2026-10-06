@@ -28,15 +28,30 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: printer
-            hours: 2
-            max-total-time: 7200
-            cache-key: nixgen-printer-fuzz-corpus-
-            verifier: verify_printer_corpus
-          - target: installable
+          - target: parse
             hours: 1
             max-total-time: 3600
-            cache-key: nixgen-installable-fuzz-corpus-
+            cache-key: nixgen-parse-fuzz-corpus-
+            verifier: verify-corpus
+          - target: ident
+            hours: 1
+            max-total-time: 3600
+            cache-key: nixgen-ident-fuzz-corpus-
+            verifier: ""
+          - target: attr-path
+            hours: 1
+            max-total-time: 3600
+            cache-key: nixgen-attr-path-fuzz-corpus-
+            verifier: ""
+          - target: flake
+            hours: 1
+            max-total-time: 3600
+            cache-key: nixgen-flake-fuzz-corpus-
+            verifier: ""
+          - target: home
+            hours: 1
+            max-total-time: 3600
+            cache-key: nixgen-home-fuzz-corpus-
             verifier: ""
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
