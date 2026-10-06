@@ -1437,7 +1437,6 @@ dependencies = [
  "nix",
  "proptest",
  "proptest-state-machine",
- "serde",
  "serde_json",
  "tempfile",
  "tokio",
