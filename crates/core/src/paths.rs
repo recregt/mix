@@ -100,12 +100,20 @@ pub fn is_leftover(name: &str) -> bool {
     })
 }
 
+/// `base.join(rel)` in a single allocation.
+pub fn join(base: &std::path::Path, rel: &str) -> std::path::PathBuf {
+    let mut path = std::path::PathBuf::with_capacity(base.as_os_str().len() + 1 + rel.len());
+    path.push(base);
+    path.push(rel);
+    path
+}
+
 pub fn mix_state_dir(home: &std::path::Path) -> std::path::PathBuf {
-    home.join(MIX_STATE_DIR)
+    join(home, MIX_STATE_DIR)
 }
 
 pub fn repository_dir(home: &std::path::Path) -> std::path::PathBuf {
-    mix_state_dir(home).join(GIT_DIR)
+    join(&mix_state_dir(home), GIT_DIR)
 }
 
 pub fn active_list_path(home: &std::path::Path) -> std::path::PathBuf {
@@ -115,7 +123,7 @@ pub fn active_list_path(home: &std::path::Path) -> std::path::PathBuf {
 }
 
 pub fn nix_profiles_dir(home: &std::path::Path) -> std::path::PathBuf {
-    home.join(NIX_PROFILES_DIR)
+    join(home, NIX_PROFILES_DIR)
 }
 
 #[cfg(test)]

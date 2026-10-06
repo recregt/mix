@@ -13,11 +13,11 @@ use crate::paths::{
     NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SERVICE_UNIT,
     NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC, NIX_DAEMON_SOCKET_UNIT, NIX_OWNERSHIP_MARKER,
     NIX_PROFILES_DIR_MODE, NIX_STORE, NIX_TREE_MODE, NIX_TREE_PATHS, POLICY_FILE,
-    PROFILE_SNIPPET_DEST, STATE_FILE, mix_state_dir, nix_profiles_dir, repository_dir,
+    PROFILE_SNIPPET_DEST, STATE_FILE, join, mix_state_dir, nix_profiles_dir,
 };
 use crate::paths::{
-    HOME_MANAGER_PROFILE_NAME, INDEX_LOCK, JOURNAL_DIR, MIX_DAEMON_BIN, MIX_DAEMON_BIN_MODE,
-    RUNNING_PROGRAM,
+    GIT_DIR, HOME_MANAGER_PROFILE_NAME, INDEX_LOCK, JOURNAL_DIR, MIX_DAEMON_BIN,
+    MIX_DAEMON_BIN_MODE, RUNNING_PROGRAM,
 };
 use crate::policy::Policy;
 
@@ -187,6 +187,7 @@ pub enum Target<'a> {
 
 /// Name of the target that collects what interrupted writes left behind.
 pub const LEFTOVERS: &str = "leftovers of interrupted writes";
+const OWNERSHIP: &str = " ownership";
 
 impl Target<'_> {
     pub fn into_owned(self) -> Target<'static> {
@@ -267,7 +268,11 @@ impl Target<'_> {
             Target::SystemdUnit { name, .. } => Cow::Borrowed(name),
             Target::PathExists { name, .. } => Cow::Borrowed(name),
             Target::RepositoryOwner { path, .. } => {
-                Cow::Owned(format!("{} ownership", path.display()))
+                let path = path.to_string_lossy();
+                let mut label = String::with_capacity(path.len() + OWNERSHIP.len());
+                label.push_str(&path);
+                label.push_str(OWNERSHIP);
+                Cow::Owned(label)
             }
             Target::Repository { path, .. }
             | Target::Generations { path, .. }
@@ -307,61 +312,54 @@ fn is_configuration(path: &Path) -> bool {
 }
 
 fn push_user_targets<'a>(items: &mut Vec<Target<'a>>, cfg: &'a UserConfig) {
-    let state_dir = mix_state_dir(&cfg.user.home);
+    let home = &cfg.user.home;
+    let state_dir = mix_state_dir(home);
+    let profiles_dir = nix_profiles_dir(home);
+    let generations = join(&profiles_dir, HOME_MANAGER_PROFILE_NAME);
+    let repository = join(&state_dir, GIT_DIR);
     let owner = Some((cfg.user.uid, cfg.user.gid));
     items.extend(USER_PARENTS.iter().map(|parent| Target::Parent {
-        path: Cow::Owned(cfg.user.home.join(parent)),
+        path: Cow::Owned(join(home, parent)),
         bits: USER_PARENT_BITS,
         owner,
     }));
+    let file = |name: &str, expected: &'a str| Target::File {
+        path: Cow::Owned(join(&state_dir, name)),
+        expected: Some(Cow::Borrowed(expected)),
+        owner,
+    };
+    let files = [
+        file(HOME_NIX, &cfg.home),
+        file(FLAKE_NIX, &cfg.flake),
+        file(FLAKE_LOCK, &cfg.lock),
+        file(GITIGNORE, GITIGNORE_CONTENTS),
+    ];
+    let state = match &cfg.restored_state {
+        Some(restored) => file(STATE_FILE, restored),
+        None => Target::SeededFile {
+            path: Cow::Owned(join(&state_dir, STATE_FILE)),
+            seed: Cow::Borrowed(crate::state::StateManifest::seed_rendered()),
+            owner,
+        },
+    };
     items.push(Target::Directory {
-        path: Cow::Owned(state_dir.clone()),
+        path: Cow::Owned(state_dir),
         mode: MIX_STATE_DIR_MODE,
         owner,
     });
     items.push(Target::Directory {
-        path: Cow::Owned(nix_profiles_dir(&cfg.user.home)),
+        path: Cow::Owned(profiles_dir),
         mode: NIX_PROFILES_DIR_MODE,
         owner,
     });
-    items.push(Target::File {
-        path: Cow::Owned(state_dir.join(HOME_NIX)),
-        expected: Some(Cow::Borrowed(&cfg.home)),
-        owner,
-    });
-    items.push(Target::File {
-        path: Cow::Owned(state_dir.join(FLAKE_NIX)),
-        expected: Some(Cow::Borrowed(&cfg.flake)),
-        owner,
-    });
-    items.push(Target::File {
-        path: Cow::Owned(state_dir.join(FLAKE_LOCK)),
-        expected: Some(Cow::Borrowed(&cfg.lock)),
-        owner,
-    });
-    items.push(Target::File {
-        path: Cow::Owned(state_dir.join(GITIGNORE)),
-        expected: Some(Cow::Borrowed(GITIGNORE_CONTENTS)),
-        owner,
-    });
-    match &cfg.restored_state {
-        Some(restored) => items.push(Target::File {
-            path: Cow::Owned(state_dir.join(STATE_FILE)),
-            expected: Some(Cow::Borrowed(restored)),
-            owner,
-        }),
-        None => items.push(Target::SeededFile {
-            path: Cow::Owned(state_dir.join(STATE_FILE)),
-            seed: Cow::Borrowed(crate::state::StateManifest::seed_rendered()),
-            owner,
-        }),
-    }
+    items.extend(files);
+    items.push(state);
     items.push(Target::RepositoryOwner {
-        path: Cow::Owned(repository_dir(&cfg.user.home)),
+        path: Cow::Owned(repository.clone()),
         user: Cow::Borrowed(&cfg.user),
     });
     items.push(Target::Repository {
-        path: Cow::Owned(repository_dir(&cfg.user.home)),
+        path: Cow::Owned(repository),
         user: Cow::Borrowed(&cfg.user),
     });
     items.push(Target::GroupMember {
@@ -369,11 +367,11 @@ fn push_user_targets<'a>(items: &mut Vec<Target<'a>>, cfg: &'a UserConfig) {
         user: cfg.user.name.clone(),
     });
     items.push(Target::Generations {
-        path: Cow::Owned(nix_profiles_dir(&cfg.user.home).join(HOME_MANAGER_PROFILE_NAME)),
+        path: Cow::Owned(generations),
         user: Cow::Borrowed(&cfg.user),
     });
     items.push(Target::HomeFiles {
-        path: Cow::Borrowed(&cfg.user.home),
+        path: Cow::Borrowed(home),
         user: Cow::Borrowed(&cfg.user),
     });
 }
