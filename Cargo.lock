@@ -1434,6 +1434,7 @@ dependencies = [
  "mix-exec",
  "mix-render",
  "mix-shell",
+ "nix",
  "proptest",
  "proptest-state-machine",
  "serde",

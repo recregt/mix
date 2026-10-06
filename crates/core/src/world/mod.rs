@@ -501,6 +501,14 @@ impl World {
                 owner,
                 mode,
             } => {
+                let running = self.running_for(path);
+                if running != *owner {
+                    return Err(conflict(
+                        path,
+                        format!("a copy made as {owner:?}"),
+                        format!("a process running as {running:?}"),
+                    ));
+                }
                 self.matches(path, Expect::Present(*expect))?;
                 let aside = self.sibling(path, "aside");
                 let mut copy = Vec::new();
@@ -551,11 +559,19 @@ impl World {
                 owner,
                 mode,
             } => {
-                if !self.files.contains_key(from) {
-                    return Err(not_found(from));
+                let running = self.running_for(to);
+                if running != *owner {
+                    return Err(conflict(
+                        to,
+                        format!("a copy made as {owner:?}"),
+                        format!("a process running as {running:?}"),
+                    ));
                 }
                 self.matches(to, Expect::Absent)?;
                 self.parent_is_dir(to)?;
+                if !self.files.contains_key(from) {
+                    return Err(not_found(from));
+                }
                 let copy: Vec<(PathBuf, Entry)> = self
                     .subtree(from)
                     .into_iter()
@@ -633,6 +649,13 @@ impl World {
                         format!("gid {}", found.gid),
                     ));
                 }
+                if let Some((holder, _)) = self.groups.iter().find(|(_, group)| group.gid == *gid) {
+                    return Err(account_conflict(
+                        name,
+                        format!("gid {gid} free"),
+                        format!("gid {gid} held by {holder}"),
+                    ));
+                }
                 self.groups.insert(
                     name.clone(),
                     GroupFacts {
@@ -681,6 +704,22 @@ impl World {
                         &spec.name,
                         format!("uid {} free", spec.uid),
                         format!("uid {} held by {holder}", spec.uid),
+                    ));
+                }
+                let primary = spec.gid.to_string();
+                let missing = std::iter::once(&primary)
+                    .filter(|_| !self.groups.values().any(|group| group.gid == spec.gid))
+                    .chain(
+                        spec.groups
+                            .iter()
+                            .filter(|group| !self.groups.contains_key(*group)),
+                    )
+                    .next();
+                if let Some(missing) = missing {
+                    return Err(account_conflict(
+                        &spec.name,
+                        format!("group {missing}"),
+                        "no group",
                     ));
                 }
                 self.users.insert(
@@ -839,10 +878,11 @@ impl World {
             Action::RestartUnit { unit } => {
                 let since = self.fresh().ino;
                 let facts = self.units.entry(unit.clone()).or_default();
-                if facts.running.is_some() {
-                    facts.running = facts.loaded.clone();
-                    facts.since = Some(since);
+                if facts.running.is_none() {
+                    return done(Vec::new());
                 }
+                facts.running = facts.loaded.clone();
+                facts.since = Some(since);
                 done(vec![Action::RestartUnit { unit: unit.clone() }])
             }
             Action::DrainService { unit } => {
@@ -1031,6 +1071,21 @@ impl World {
                 .is_some_and(|unit| unit.running.is_some()),
             _ => false,
         }
+    }
+
+    fn tree_owner(&self, path: &Path) -> Option<Owner> {
+        path.ancestors()
+            .skip(1)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .filter_map(|ancestor| self.files.get(ancestor))
+            .map(|entry| entry.owner)
+            .find(|owner| owner.0 != 0)
+    }
+
+    fn running_for(&self, path: &Path) -> Owner {
+        self.tree_owner(path).unwrap_or(ROOT)
     }
 
     fn group(&mut self, name: &str, expect: u32) -> Result<&mut GroupFacts, Failure> {
@@ -1265,16 +1320,7 @@ impl World {
             Query::Contents(path) => Fact::Contents(self.contents(path).map(Arc::from)),
             Query::Group(name) => Fact::Group(self.groups.get(name).cloned()),
             Query::User(name) => Fact::User(self.users.get(name).cloned()),
-            Query::TreeOwner(path) => Fact::TreeOwner(
-                path.ancestors()
-                    .skip(1)
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .filter_map(|ancestor| self.files.get(ancestor))
-                    .map(|entry| entry.owner.0)
-                    .find(|uid| *uid != 0),
-            ),
+            Query::TreeOwner(path) => Fact::TreeOwner(self.tree_owner(path).map(|owner| owner.0)),
             Query::Repository(user) => Fact::Repository {
                 intact: self.verifies(user),
                 recorded: self
@@ -1695,6 +1741,12 @@ mod tests {
     #[test]
     fn an_undo_leaves_a_same_named_account_someone_else_made() {
         let mut world = World::default();
+        world
+            .apply(&Action::AddGroup {
+                name: "nixbld".into(),
+                gid: 30_000,
+            })
+            .unwrap();
         let spec = UserSpec {
             name: "nixbld1".into(),
             uid: 30_001,

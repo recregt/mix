@@ -12,6 +12,7 @@ mix-events = { path = "../events" }
 mix-exec = { path = "../exec" }
 mix-render = { path = "../render" }
 mix-shell = { path = "../shell" }
+nix = { workspace = true }
 proptest = { workspace = true }
 proptest-state-machine = "0.8.0"
 serde = { workspace = true }

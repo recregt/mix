@@ -156,6 +156,22 @@ impl Files {
         self.place_with(path, ResolveFlags::NO_SYMLINKS | ResolveFlags::BENEATH)
     }
 
+    fn place_of(&self, path: &Path) -> Result<Option<Place>, Failure> {
+        match self.place(path) {
+            Ok(place) => Ok(Some(place)),
+            Err(Failure::Io {
+                kind: std::io::ErrorKind::NotFound,
+                ..
+            }) => Ok(None),
+            Err(failure) => Err(failure),
+        }
+    }
+
+    fn place_holding(&self, path: &Path, expect: FileId) -> Result<Place, Failure> {
+        self.place_of(path)?
+            .ok_or_else(|| conflict(path, format!("{expect:?}"), "nothing"))
+    }
+
     fn forget(&self) {
         if let Ok(mut seen) = self.seen.lock() {
             seen.dir = None;
@@ -786,7 +802,7 @@ impl Files {
     }
 
     fn set_aside(&mut self, path: &Path, expect: FileId, prepared: &mut Prepared<'_>) -> Outcome {
-        let place = self.place(path)?;
+        let place = self.place_holding(path, expect)?;
         let pinned = Self::pinned(&place, &place.name, expect)?;
         let aside = self.sibling(&place, "aside");
         let undo = vec![Action::Restore {
@@ -811,7 +827,9 @@ impl Files {
     }
 
     fn remove_created(&mut self, path: &Path, expect: FileId) -> Outcome {
-        let place = self.place(path)?;
+        let Some(place) = self.place_of(path)? else {
+            return done(Vec::new());
+        };
         let Some(pinned) = Self::pin(&place, &place.name, expect)? else {
             return done(Vec::new());
         };
@@ -857,7 +875,9 @@ impl Files {
     }
 
     fn remove_created_tree(&mut self, path: &Path, expect: FileId) -> Outcome {
-        let place = self.place(path)?;
+        let Some(place) = self.place_of(path)? else {
+            return done(Vec::new());
+        };
         let Some(pinned) = Self::pin(&place, &place.name, expect)? else {
             return done(Vec::new());
         };
@@ -983,6 +1003,7 @@ impl Files {
                 Self::rename(&place, &from_name, &place.name, RenameFlags::NOREPLACE).map_err(
                     |errno| match errno {
                         Errno::EXIST => conflict(path, "nothing", "something already there"),
+                        Errno::NOENT => io(from, errno),
                         errno => io(path, errno),
                     },
                 )?;
@@ -991,6 +1012,11 @@ impl Files {
                 let pinned = Self::pinned(&place, &place.name, current)?;
                 Self::rename(&place, &from_name, &place.name, RenameFlags::EXCHANGE).map_err(
                     |errno| match errno {
+                        Errno::NOENT
+                            if Self::stat(&place, &place.name).ok().flatten().is_some() =>
+                        {
+                            io(from, errno)
+                        }
                         Errno::NOENT => conflict(path, format!("{current:?}"), "nothing"),
                         errno => io(path, errno),
                     },
@@ -1026,7 +1052,7 @@ impl Files {
                 format!("a process running as {running:?}"),
             ));
         }
-        let place = self.place(path)?;
+        let place = self.place_holding(path, expect)?;
         let pinned = Self::pinned(&place, &place.name, expect)?;
         let staged = self.sibling(&place, "reclaim");
         let discard = |files: &Self| {

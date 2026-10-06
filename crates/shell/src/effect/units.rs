@@ -349,12 +349,20 @@ impl Units {
         }
         prepared(&[])?;
         let operation = UnitOperation::Restart;
-        self.manager(operation)
+        match self
+            .manager(operation)
             .await?
             .call::<_, _, ()>("KillUnit", &(unit, "main", DRAIN as i32))
             .await
-            .map_err(|error| bus_failure(operation, unit, error))?;
-        done(Vec::new())
+        {
+            Ok(()) => done(Vec::new()),
+            Err(zbus::Error::MethodError(name, _, _))
+                if name.as_str() == "org.freedesktop.systemd1.NoSuchProcess" =>
+            {
+                done(Vec::new())
+            }
+            Err(error) => Err(bus_failure(operation, unit, error)),
+        }
     }
 
     async fn start(&self, unit: &str, scope: &Scope, prepared: &mut Prepared<'_>) -> Outcome {
