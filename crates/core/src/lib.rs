@@ -7,7 +7,6 @@ pub mod health;
 pub mod identity;
 pub mod journal;
 pub mod locks;
-pub mod nix_log;
 pub mod paths;
 pub mod plan;
 pub mod policy;
@@ -22,6 +21,5 @@ pub mod vocabulary;
 pub mod world;
 
 pub use error::{Error, Result};
-pub use nix_log::{BuildProgress, NixLog};
 pub use progress::{ActivityReporter, DownloadProgress, NoopActivity, NoopProgress};
 pub use targets::{Category, Target};

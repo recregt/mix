@@ -1451,6 +1451,7 @@ dependencies = [
  "insta",
  "mix-events",
  "mix-nixgen",
+ "mix-nixlog",
  "mix-render",
  "proptest",
  "serde",
@@ -1534,6 +1535,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mix-nixlog"
+version = "0.1.0"
+dependencies = [
+ "codspeed-divan-compat",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "mix-pins"
 version = "0.1.0"
 dependencies = [
@@ -1586,6 +1596,7 @@ dependencies = [
  "mix-events",
  "mix-exec",
  "mix-nixgen",
+ "mix-nixlog",
  "mix-pins",
  "mix-testchild",
  "mockito",

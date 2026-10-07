@@ -229,7 +229,7 @@ mod tests {
     #[derive(Default)]
     struct Recorder {
         lines: std::sync::Mutex<Vec<String>>,
-        progress: std::sync::Mutex<Vec<mix_core::BuildProgress>>,
+        progress: std::sync::Mutex<Vec<mix_nixlog::BuildProgress>>,
         cleared: std::sync::atomic::AtomicBool,
     }
 
@@ -238,7 +238,7 @@ mod tests {
             self.lines.lock().unwrap().clone()
         }
 
-        fn last_progress(&self) -> Option<mix_core::BuildProgress> {
+        fn last_progress(&self) -> Option<mix_nixlog::BuildProgress> {
             self.progress.lock().unwrap().last().copied()
         }
 
@@ -252,7 +252,7 @@ mod tests {
             self.lines.lock().unwrap().push(line.to_string());
         }
 
-        fn progress(&self, progress: &mix_core::BuildProgress) {
+        fn progress(&self, progress: &mix_nixlog::BuildProgress) {
             self.progress.lock().unwrap().push(*progress);
         }
 

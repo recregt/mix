@@ -1,4 +1,4 @@
-use crate::nix_log::BuildProgress;
+use mix_nixlog::BuildProgress;
 
 pub trait DownloadProgress: Send + Sync {
     fn fetching(&self, url: &str);

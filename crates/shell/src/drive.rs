@@ -14,7 +14,7 @@ use mix_core::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
 use mix_core::paths::{mix_state_dir, repository_dir};
 use mix_core::plan::{Input, Next, Report, Runner, make_guard};
 use mix_core::world::World;
-use mix_core::{ActivityReporter, BuildProgress, DownloadProgress};
+use mix_core::{ActivityReporter, DownloadProgress};
 use mix_events::v1::node_progress::Progress;
 use mix_events::v1::{
     BuildStarted, Builds, Bytes, Cancellation, Code, CommandFinished, CommandStarted, Diagnostic,
@@ -22,6 +22,7 @@ use mix_events::v1::{
 };
 use mix_events::{NodeId, ROOT, Stopped, Tree, output};
 use mix_exec::Scope;
+use mix_nixlog::{BuildProgress, package_name};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::effect::files::{Files, Prepared};
@@ -131,14 +132,14 @@ impl ActivityReporter for Activity {
     fn build_started(&self, derivation: &str) {
         self.send(Progress::Build(BuildStarted {
             derivation: derivation.to_string(),
-            name: mix_core::nix_log::package_name(derivation).to_string(),
+            name: package_name(derivation).to_string(),
         }));
     }
 
     fn fetch_started(&self, path: &str) {
         self.send(Progress::Substitution(SubstitutionStarted {
             path: path.to_string(),
-            name: mix_core::nix_log::package_name(path).to_string(),
+            name: package_name(path).to_string(),
         }));
     }
 

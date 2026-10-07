@@ -1,4 +1,4 @@
-use mix_core::nix_log::{Event, NixLog};
+use mix_nixlog::{Event, NixLog};
 
 fn main() {
     divan::main();

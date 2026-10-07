@@ -15,6 +15,7 @@ members = [
     "crates/render",
     "crates/testchild",
     "crates/conformance",
+    "crates/nixlog",
 ]
 
 [workspace.package]

@@ -4,6 +4,7 @@ use mix_events::v1::{
     UnrepairableDetail,
 };
 use mix_events::{Diagnose, Fault};
+use mix_nixlog::{NixFailure, nix_error};
 
 use crate::Error;
 use crate::action::Failure;
@@ -11,9 +12,9 @@ use crate::health::Unfixable;
 use crate::plan::diagnostic;
 
 fn command_code(tail: &str) -> Code {
-    match crate::nix_log::nix_error(tail).and_then(|error| error.failure) {
-        Some(crate::nix_log::NixFailure::Build { .. }) => Code::BuildFailed,
-        Some(crate::nix_log::NixFailure::UnknownPackage { .. }) => Code::UnknownPackage,
+    match nix_error(tail).and_then(|error| error.failure) {
+        Some(NixFailure::Build { .. }) => Code::BuildFailed,
+        Some(NixFailure::UnknownPackage { .. }) => Code::UnknownPackage,
         None => Code::CommandFailed,
     }
 }
@@ -29,7 +30,7 @@ pub fn command_failure(
         exit_status,
         output_tail,
     };
-    let Some(error) = crate::nix_log::nix_error(tail) else {
+    let Some(error) = nix_error(tail) else {
         return Diagnostic {
             code: Code::CommandFailed as i32,
             severity: Severity::Error as i32,
@@ -39,8 +40,8 @@ pub fn command_failure(
         };
     };
     let (code, package) = match error.failure {
-        Some(crate::nix_log::NixFailure::Build { package }) => (Code::BuildFailed, package),
-        Some(crate::nix_log::NixFailure::UnknownPackage { name }) => (Code::UnknownPackage, name),
+        Some(NixFailure::Build { package }) => (Code::BuildFailed, package),
+        Some(NixFailure::UnknownPackage { name }) => (Code::UnknownPackage, name),
         None => {
             return Diagnostic {
                 code: Code::CommandFailed as i32,

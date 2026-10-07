@@ -17,6 +17,7 @@ mix-core = { path = "../core" }
 mix-events = { path = "../events" }
 mix-exec = { path = "../exec" }
 mix-nixgen = { path = "../nixgen" }
+mix-nixlog = { path = "../nixlog" }
 mix-pins = { path = "../pins" }
 futures-util = { workspace = true }
 liblzma = { version = "0.4.8", default-features = false, features = ["static"] }

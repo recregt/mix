@@ -149,7 +149,7 @@ mod tests {
 
     impl ActivityReporter for Recorded {
         fn line(&self, _line: &str) {}
-        fn progress(&self, _progress: &mix_core::BuildProgress) {}
+        fn progress(&self, _progress: &mix_nixlog::BuildProgress) {}
         fn clear(&self) {}
         fn waiting(&self, lock: &str, _holder: Option<&str>, _command: Option<&str>) {
             self.0.lock().unwrap().push(lock.to_string());
