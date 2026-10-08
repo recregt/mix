@@ -138,11 +138,17 @@ impl World {
         bytes: &[u8],
         owner: (u32, u32),
     ) -> Result<(), Failure> {
-        match self.files.get(path) {
+        match self.files.get_mut(path) {
             Some(Entry {
                 content: Content::File(found),
+                mode,
+                owner: current_owner,
                 ..
-            }) if found.as_ref() == bytes => Ok(()),
+            }) if found.as_ref() == bytes => {
+                *mode = 0o444;
+                *current_owner = owner;
+                Ok(())
+            }
             Some(Entry {
                 content: Content::Directory,
                 ..
