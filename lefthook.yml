@@ -5,6 +5,7 @@ remotes:
       - lefthook-remote.yml
 
 pre-commit:
+  parallel: true
   commands:
     fmt:
       glob: "*.rs"
@@ -19,6 +20,7 @@ pre-commit:
         uv run --project e2e --locked --only-group dev ruff format --check {staged_files}
 
 pre-push:
+  parallel: true
   commands:
     doc:
       run: cargo doc --workspace --no-deps --document-private-items --locked
