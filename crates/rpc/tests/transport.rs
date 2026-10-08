@@ -73,6 +73,7 @@ fn bootstrap(force: bool) -> Command {
 
 fn repair() -> Command {
     Command {
+        schema_minor: mix_events::SCHEMA_MINOR,
         request: Some(command::Request::Repair(RepairRequest {})),
         ..Command::default()
     }
@@ -441,7 +442,7 @@ async fn a_request_a_daemon_of_an_older_schema_cannot_read_is_never_sent() {
     let _server = tokio::spawn(serve_connection(OlderDaemon(Arc::clone(&ran)), theirs));
     let mut client = Client::connect(ours, VERSION).await.unwrap();
 
-    let refused = client.run(&bootstrap(false)).await.err();
+    let refused = client.run(&repair()).await.err();
 
     let Some(mix_rpc::Error::Outdated { ours, theirs }) = refused else {
         panic!("a request newer than the daemon must be refused, got {refused:?}");
@@ -450,5 +451,24 @@ async fn a_request_a_daemon_of_an_older_schema_cannot_read_is_never_sent() {
     assert!(
         !ran.load(Ordering::SeqCst),
         "the older daemon ran the request"
+    );
+}
+
+#[tokio::test]
+async fn a_bootstrap_request_can_be_sent_to_a_daemon_of_an_older_schema() {
+    let ran = Arc::new(AtomicBool::new(false));
+    let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
+    let _server = tokio::spawn(serve_connection(OlderDaemon(Arc::clone(&ran)), theirs));
+    let mut client = Client::connect(ours, VERSION).await.unwrap();
+
+    let outcome = client.run(&bootstrap(false)).await;
+    assert!(outcome.is_ok());
+    let (_controller, mut replies) = outcome.unwrap();
+    while let Some(reply) = replies.next().await {
+        let _ = reply.unwrap();
+    }
+    assert!(
+        ran.load(Ordering::SeqCst),
+        "the older daemon should run the bootstrap request"
     );
 }

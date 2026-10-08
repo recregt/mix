@@ -143,6 +143,13 @@ async fn command(calls: &mut Streaming<proto::RunRequest>) -> Result<Command, St
     }
 }
 
+fn allows_older_schema(command: &Command) -> bool {
+    matches!(
+        command.request,
+        Some(mix_events::v1::command::Request::Bootstrap(_))
+    )
+}
+
 fn control_from_wire(control: i32) -> Option<Control> {
     match proto::Control::try_from(control).ok()? {
         proto::Control::Interrupt => Some(Control::Interrupt),
@@ -228,7 +235,7 @@ impl<W: Worker> proto::worker_service_server::WorkerService for Service<W> {
         let caller = self.admit(&request)?;
         let mut calls = request.into_inner();
         let command = command(&mut calls).await?;
-        if command.schema_minor > W::SCHEMA {
+        if command.schema_minor > W::SCHEMA && !allows_older_schema(&command) {
             return Err(Status::failed_precondition(format!(
                 "this daemon reads requests of schema {}, but the request is schema {}",
                 W::SCHEMA,
@@ -425,7 +432,7 @@ impl Client {
     }
 
     pub async fn run(&mut self, command: &Command) -> Result<(Controller, Replies), Error> {
-        if command.schema_minor > self.schema {
+        if command.schema_minor > self.schema && !allows_older_schema(command) {
             return Err(Error::Outdated {
                 ours: command.schema_minor,
                 theirs: self.schema,
