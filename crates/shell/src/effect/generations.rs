@@ -244,6 +244,9 @@ pub async fn perform(
             }
         }
         Action::DeleteGeneration { user, generation } => {
+            if current(user) == Some(*generation) {
+                return Some(Ok(Performed { undo: Vec::new() }));
+            }
             let link = profile_link(user);
             let generation = generation.to_string();
             match prepared(&[]) {
@@ -500,5 +503,28 @@ mod tests {
                 Action::ApplyGeneration { user }
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn deleting_the_active_generation_is_a_noop() {
+        let home = tempfile::tempdir().unwrap();
+        let user = user_in(home.path());
+        let profiles = nix_profiles_dir(&user.home);
+        std::fs::create_dir_all(&profiles).unwrap();
+        let gen6 = profiles.join("home-manager-6-link");
+        std::fs::create_dir_all(&gen6).unwrap();
+        std::os::unix::fs::symlink(&gen6, profile_link(&user)).unwrap();
+
+        let action = Action::DeleteGeneration {
+            user: user.clone(),
+            generation: 6,
+        };
+        let reporter: Arc<dyn ActivityReporter> = Arc::new(mix_core::NoopActivity);
+        let context = ProfileContext { mirror: None };
+        let scope = Scope::root();
+        let mut prepared = |_undo: &[Action]| Ok(());
+
+        let outcome = perform(&action, None, &context, &reporter, &scope, &mut prepared).await;
+        assert!(matches!(outcome, Some(Ok(Performed { undo })) if undo.is_empty()));
     }
 }
