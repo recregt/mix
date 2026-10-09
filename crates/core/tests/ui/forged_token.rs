@@ -1,6 +1,6 @@
 #![allow(unreachable_code)]
 
-use mix_core::plan::{Closed, Runner, make_guard};
+use mix_core::run::{Closed, Runner, make_guard};
 use mix_events::ROOT;
 
 fn main() {

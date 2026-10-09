@@ -5,10 +5,10 @@ use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 
-use mix_core::action::{
+use mix_core::declared::paths::is_leftover;
+use mix_core::effect::{
     Action, Expect, Fact, Failure, FileId, Kind, Outcome, Owner, PathFacts, Performed, Query,
 };
-use mix_core::paths::is_leftover;
 use rustix::fs::{
     self as sys, AtFlags, FileType, Gid, Mode, OFlags, RenameFlags, ResolveFlags, Statx,
     StatxFlags, Uid,

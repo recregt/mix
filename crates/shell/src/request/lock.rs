@@ -16,7 +16,7 @@ use tokio::sync::OwnedMutexGuard;
 const LOCK_MODE: u32 = 0o644;
 const LOCK_DIR_MODE: u32 = 0o755;
 
-pub use mix_core::locks::Need;
+pub use mix_core::run::locks::Need;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Holder {

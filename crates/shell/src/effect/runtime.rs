@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use mix_core::action::{Digest, Failure, Outcome, Performed};
+use mix_core::effect::{Digest, Failure, Outcome, Performed};
 use mix_events::v1::Code;
 use mix_exec::Scope;
 
@@ -105,19 +105,22 @@ pub(crate) async fn install(
                 .map_err(|error| failure(url, error))?,
         ),
     };
-    let profile = std::path::Path::new(mix_core::paths::DEFAULT_PROFILE_BIN)
+    let profile = std::path::Path::new(mix_core::declared::paths::DEFAULT_PROFILE_BIN)
         .parent()
         .expect("the profile's bin has a parent");
-    let predicted: Vec<PathBuf> = [profile, std::path::Path::new(mix_core::paths::NIX_STORE)]
-        .into_iter()
-        .filter(|path| !path.exists())
-        .map(std::path::Path::to_path_buf)
-        .collect();
+    let predicted: Vec<PathBuf> = [
+        profile,
+        std::path::Path::new(mix_core::declared::paths::NIX_STORE),
+    ]
+    .into_iter()
+    .filter(|path| !path.exists())
+    .map(std::path::Path::to_path_buf)
+    .collect();
     let nix = Path::new("/nix");
-    let store = Path::new(mix_core::paths::NIX_STORE);
+    let store = Path::new(mix_core::declared::paths::NIX_STORE);
     let before = listing(nix, store);
     let kept: Vec<PathBuf> = before.iter().cloned().collect();
-    prepared(&[mix_core::action::Action::RemoveRuntime {
+    prepared(&[mix_core::effect::Action::RemoveRuntime {
         created: predicted,
         kept: kept.clone(),
     }])?;
@@ -131,7 +134,7 @@ pub(crate) async fn install(
     let failed = match provisioned {
         Ok(()) if !scope.is_stopped() => {
             return Ok(Performed {
-                undo: vec![mix_core::action::Action::RemoveRuntime { created, kept }],
+                undo: vec![mix_core::effect::Action::RemoveRuntime { created, kept }],
             });
         }
         Ok(()) => Failure::Cancelled,
@@ -139,7 +142,7 @@ pub(crate) async fn install(
     };
     let cleanup = created.clone();
     if let Err(error) = blocking(move || remove_runtime(&cleanup)).await? {
-        progress.warning(mix_core::diagnose::warning(
+        progress.warning(mix_core::report::diagnose::warning(
             Code::CleanupIncomplete,
             "could not remove a partly installed runtime",
             &error,
@@ -152,7 +155,10 @@ pub async fn remove(created: &[PathBuf], kept: &[PathBuf]) -> Outcome {
     let mut created = created.to_vec();
     if !kept.is_empty() {
         let kept: BTreeSet<PathBuf> = kept.iter().cloned().collect();
-        let now = listing(Path::new("/nix"), Path::new(mix_core::paths::NIX_STORE));
+        let now = listing(
+            Path::new("/nix"),
+            Path::new(mix_core::declared::paths::NIX_STORE),
+        );
         for path in added(&kept, &now) {
             if !created.iter().any(|known| path.starts_with(known)) {
                 created.push(path);

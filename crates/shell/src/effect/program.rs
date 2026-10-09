@@ -1,7 +1,7 @@
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use mix_core::action::ProgramFacts;
+use mix_core::effect::ProgramFacts;
 
 pub fn observe(path: &Path, source: &Path) -> ProgramFacts {
     let installed = std::fs::symlink_metadata(path).ok();

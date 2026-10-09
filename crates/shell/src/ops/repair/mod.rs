@@ -7,12 +7,12 @@
 
 use std::path::Path;
 
-use mix_core::action::Failure;
-use mix_core::health;
+use mix_core::effect::Failure;
+use mix_core::ops::health;
 
 use crate::profile::config::observed_user_config;
-use mix_core::plan::{Runner, StepOutcome, Verdict};
-use mix_core::targets::targets;
+use mix_core::declared::targets::targets;
+use mix_core::run::{Runner, StepOutcome, Verdict};
 use mix_events::v1::{Cancellation, Code, RepairRequest, RepairResult, node_finished};
 use mix_events::{Diagnose, Ending, Fault, ROOT, Stopped, Tree};
 use mix_exec::Scope;
@@ -170,7 +170,7 @@ async fn repaired(
     if !unfinished && let Err(failure) = journal.finish() {
         let _ = tree.warn(
             ROOT,
-            mix_core::diagnose::warning(
+            mix_core::report::diagnose::warning(
                 Code::CleanupIncomplete,
                 "could not remove the finished journal",
                 &failure,
@@ -198,7 +198,7 @@ struct Events<'a> {
 }
 
 async fn put_back(
-    steps: Vec<Box<dyn mix_core::plan::StepSpec>>,
+    steps: Vec<Box<dyn mix_core::run::StepSpec>>,
     performer: &mut Performer,
     journal: &mut dyn Journal,
     scope: &Scope,
@@ -252,8 +252,8 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
-    use mix_core::journal::Record;
-    use mix_core::targets::Target;
+    use mix_core::declared::targets::Target;
+    use mix_core::run::journal::Record;
 
     use std::sync::Arc;
 

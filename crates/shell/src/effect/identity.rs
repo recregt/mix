@@ -1,4 +1,4 @@
-use mix_core::action::{
+use mix_core::effect::{
     Action, Fact, Failure, GroupFacts, Outcome, Owner, Performed, Query, UserFacts, UserSpec,
 };
 use mix_exec::Scope;

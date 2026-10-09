@@ -1,4 +1,4 @@
-use mix_core::action::{Fact, Query};
+use mix_core::effect::{Fact, Query};
 use mix_events::v1::{CleanRequest, CleanResult, node_finished};
 
 use crate::Context;
@@ -21,7 +21,7 @@ pub(crate) async fn clean(ctx: &Context, root: &mut Root, request: &CleanRequest
         .await
         .as_deref()
     {
-        Ok([Fact::Profile(profile)]) => mix_core::change::old_generations(profile),
+        Ok([Fact::Profile(profile)]) => mix_core::ops::change::old_generations(profile),
         _ => Vec::new(),
     };
     let before = request.all.then(|| ctx.host.available()).flatten();
@@ -29,7 +29,7 @@ pub(crate) async fn clean(ctx: &Context, root: &mut Root, request: &CleanRequest
         ctx,
         root,
         performer,
-        mix_core::change::clean_steps(&cfg.user, request.all),
+        mix_core::ops::change::clean_steps(&cfg.user, request.all),
         || {
             node_finished::Result::Clean(CleanResult {
                 generations: old,
@@ -45,7 +45,7 @@ pub(crate) async fn clean(ctx: &Context, root: &mut Root, request: &CleanRequest
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod tests {
-    use mix_core::identity::InvokingUser;
+    use mix_core::declared::identity::InvokingUser;
     use mix_events::v1::command::Request;
 
     use super::*;
@@ -54,7 +54,7 @@ mod tests {
     fn context(home: &std::path::Path) -> crate::Session {
         crate::Session::new(mix_exec::Scope::root())
             .with_journals(home.join("journal"))
-            .with_user(Some(mix_core::targets::UserConfig {
+            .with_user(Some(mix_core::declared::targets::UserConfig {
                 user: InvokingUser {
                     uid: 1000,
                     gid: 1000,

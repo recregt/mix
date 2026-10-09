@@ -400,7 +400,7 @@ mod tests {
                 .chain(command.get_arguments().filter_map(|arg| arg.get_help()))
                 .map(ToString::to_string);
             for text in texts {
-                if !mix_core::vocabulary::nix_mechanics_in(&text).is_empty() {
+                if !mix_core::report::vocabulary::nix_mechanics_in(&text).is_empty() {
                     found.push(format!("{}: {text}", command.get_name()));
                 }
             }

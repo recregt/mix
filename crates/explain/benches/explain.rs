@@ -1,5 +1,5 @@
 use mix_core::Category;
-use mix_core::health::{HealthReport, wire};
+use mix_core::ops::health::{HealthReport, wire};
 use mix_events::Diagnose;
 use mix_events::v1::InspectionReport;
 use mix_explain as explain;

@@ -1,4 +1,4 @@
-use mix_core::change::Refusal;
+use mix_core::ops::change::Refusal;
 use mix_events::v1::RemoveRequest;
 
 use crate::Context;
@@ -41,7 +41,7 @@ pub(crate) async fn remove(ctx: &Context, root: &mut Root, request: &RemoveReque
         Err(concluded) => return *concluded,
     };
     let settled = change::settled(&mut performer, cfg, &ctx.scope).await;
-    let decided = match mix_core::change::remove(&request.packages, settled) {
+    let decided = match mix_core::ops::change::remove(&request.packages, settled) {
         Ok(decided) => decided,
         Err(refused) => return root.refuse(Error::from(refused)),
     };
@@ -51,9 +51,9 @@ pub(crate) async fn remove(ctx: &Context, root: &mut Root, request: &RemoveReque
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod tests {
-    use mix_core::identity::InvokingUser;
-    use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
-    use mix_core::state::StateManifest;
+    use mix_core::declared::identity::InvokingUser;
+    use mix_core::declared::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
+    use mix_core::declared::state::StateManifest;
     use mix_events::v1::command::Request;
     use mix_events::v1::diagnostic::Detail;
     use mix_events::v1::{Code, RemoveResult, node_finished};
@@ -82,8 +82,8 @@ mod tests {
             .with_journals(home.join("journal"))
     }
 
-    fn user_config(home: &std::path::Path) -> mix_core::targets::UserConfig {
-        mix_core::targets::UserConfig {
+    fn user_config(home: &std::path::Path) -> mix_core::declared::targets::UserConfig {
+        mix_core::declared::targets::UserConfig {
             user: InvokingUser {
                 uid: 1000,
                 gid: 1000,

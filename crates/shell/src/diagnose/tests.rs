@@ -1,4 +1,4 @@
-use mix_core::health::Unfixable;
+use mix_core::ops::health::Unfixable;
 use mix_events::v1::diagnostic::Detail;
 use mix_events::v1::{Cancellation, Code};
 use mix_events::{Diagnose, Fault};

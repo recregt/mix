@@ -6,11 +6,11 @@ pub mod sink;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use mix_core::identity::InvokingUser;
-use mix_core::locks::Need;
-use mix_core::locks::locks_for;
-use mix_core::policy::Policy;
-use mix_core::targets::UserConfig;
+use mix_core::declared::identity::InvokingUser;
+use mix_core::declared::policy::Policy;
+use mix_core::declared::targets::UserConfig;
+use mix_core::run::locks::Need;
+use mix_core::run::locks::locks_for;
 use mix_events::v1::{Cancellation, Code, Command, command};
 use mix_events::{Diagnose, Ending, Fault, Outbox, ROOT, Start, Stopped, Tree};
 use mix_exec::Scope;
@@ -264,7 +264,7 @@ async fn host(
 
 #[allow(clippy::disallowed_methods)]
 fn stored_policy() -> Policy {
-    let stored = std::fs::read_to_string(mix_core::paths::POLICY_FILE).ok();
+    let stored = std::fs::read_to_string(mix_core::declared::paths::POLICY_FILE).ok();
     Policy::load(stored.as_deref())
 }
 
@@ -283,7 +283,7 @@ pub async fn recover(
                 user: "root".to_string(),
                 command: "recover".to_string(),
             },
-            mix_core::locks::Need::Exclusive,
+            mix_core::run::locks::Need::Exclusive,
             None,
             &mut tree,
             scope,

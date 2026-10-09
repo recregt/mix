@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use std::sync::Mutex;
 
-use mix_core::paths::LOCK_FILE;
+use mix_core::declared::paths::LOCK_FILE;
 use mix_events::ROOT;
 use mix_events::v1::{Command, Envelope, NodeFinished, envelope};
 use mix_rpc::{Caller, Controls, Events, Reply};
@@ -65,7 +65,7 @@ impl Host {
     fn session(
         &self,
         caller: Caller,
-        account: Option<mix_core::identity::InvokingUser>,
+        account: Option<mix_core::declared::identity::InvokingUser>,
         events: &Events,
         ending: &Ending,
         steps: crate::journal::Steps,
@@ -83,7 +83,10 @@ impl Host {
 fn enrolled(uid: u32) -> bool {
     uid == 0
         || mix_shell::effect::accounts::user_by_uid(uid).is_some_and(|user| {
-            mix_shell::effect::accounts::user_in_group(mix_core::identity::MIX_USERS_GROUP, &user)
+            mix_shell::effect::accounts::user_in_group(
+                mix_core::declared::identity::MIX_USERS_GROUP,
+                &user,
+            )
         })
 }
 

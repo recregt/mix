@@ -1,6 +1,6 @@
-use mix_core::change::{Change, NewerList, Unrenderable};
-use mix_core::plan::{Runner, StepSpec, Verdict, diagnostic};
-use mix_core::targets::UserConfig;
+use mix_core::declared::targets::UserConfig;
+use mix_core::ops::change::{Change, NewerList, Unrenderable};
+use mix_core::run::{Runner, StepSpec, Verdict, diagnostic};
 use mix_events::v1::{InstallResult, RemoveResult, node_finished};
 use mix_events::{Ending, ROOT};
 
@@ -82,24 +82,25 @@ pub async fn settled(
     cfg: &UserConfig,
     scope: &mix_exec::Scope,
 ) -> Settled {
-    let state = mix_core::paths::mix_state_dir(&cfg.user.home).join(mix_core::paths::STATE_FILE);
+    let state = mix_core::declared::paths::mix_state_dir(&cfg.user.home)
+        .join(mix_core::declared::paths::STATE_FILE);
     let facts = performer
         .observe(
             &[
-                mix_core::action::Query::Contents(state),
-                mix_core::action::Query::ActiveList(cfg.user.clone()),
+                mix_core::effect::Query::Contents(state),
+                mix_core::effect::Query::ActiveList(cfg.user.clone()),
             ],
             scope,
         )
         .await
         .unwrap_or_default();
     let text = |index: usize| match facts.get(index) {
-        Some(mix_core::action::Fact::Contents(Some(bytes))) => {
+        Some(mix_core::effect::Fact::Contents(Some(bytes))) => {
             Some(String::from_utf8_lossy(bytes).into_owned())
         }
         _ => None,
     };
-    mix_core::change::settle(text(0).as_deref(), text(1).as_deref())
+    mix_core::ops::change::settle(text(0).as_deref(), text(1).as_deref())
 }
 
 pub enum Verb {
@@ -140,7 +141,7 @@ pub async fn run(
     verb: Verb,
     change: &Change,
 ) -> Concluded {
-    let steps = match mix_core::change::steps(&cfg.user, change, verb.doing()) {
+    let steps = match mix_core::ops::change::steps(&cfg.user, change, verb.doing()) {
         Ok(steps) => steps,
         Err(error) => return root.refuse(Error::from(error)),
     };
@@ -193,7 +194,7 @@ pub async fn perform(
         {
             let _ = root.tree.warn(
                 ROOT,
-                mix_core::diagnose::warning(
+                mix_core::report::diagnose::warning(
                     Code::CleanupIncomplete,
                     "could not remove the finished journal",
                     &failure,
@@ -219,7 +220,7 @@ fn conclude(
 
 #[cfg(test)]
 mod tests {
-    use mix_core::state::StateManifest;
+    use mix_core::declared::state::StateManifest;
 
     use super::*;
 

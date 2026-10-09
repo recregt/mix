@@ -9,11 +9,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mix_core::ActivityReporter;
-use mix_core::action::Failure;
-use mix_core::identity::InvokingUser;
-use mix_core::paths::{
+use mix_core::declared::identity::InvokingUser;
+use mix_core::declared::paths::{
     HOME_MANAGER_PROFILE_NAME, PROFILE_LOCK_SUFFIX, USER_PROFILE_NAME, nix_profiles_dir,
 };
+use mix_core::effect::Failure;
 use mix_exec::Scope;
 use nix::errno::Errno;
 use nix::fcntl::{Flock, FlockArg, OFlag};

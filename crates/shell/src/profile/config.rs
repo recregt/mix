@@ -1,9 +1,9 @@
-use mix_core::change::render_home;
-use mix_core::identity::InvokingUser;
-use mix_core::identity::MIX_USERS_GROUP;
-use mix_core::state::StateManifest;
-use mix_core::system::{Arch, Os};
-use mix_core::targets::UserConfig;
+use mix_core::declared::identity::InvokingUser;
+use mix_core::declared::identity::MIX_USERS_GROUP;
+use mix_core::declared::state::StateManifest;
+use mix_core::declared::targets::UserConfig;
+use mix_core::ops::bootstrap::system::{Arch, Os};
+use mix_core::ops::change::render_home;
 use mix_nixgen::lock::{self, LockedInput, NarHash};
 use mix_nixgen::{FlakeConfig, Rev, System};
 use mix_pins::{
@@ -53,7 +53,7 @@ fn configured(
     let flake = FlakeConfig::new(system, &user.name, NIXPKGS, HOME_MANAGER)
         .expect("a real username cannot contain a null byte")
         .render();
-    let (home, restored_state) = match mix_core::change::settle(state, active) {
+    let (home, restored_state) = match mix_core::ops::change::settle(state, active) {
         Settled::Current { manifest, source } => (
             render_home(&user, &manifest.packages)
                 .expect("a settled package list only holds valid names"),
@@ -92,8 +92,8 @@ pub async fn observed_user_config(
     performer: &mut crate::drive::Performer,
     scope: &mix_exec::Scope,
 ) -> Option<UserConfig> {
-    use mix_core::action::{Fact, Query};
-    use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
+    use mix_core::declared::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
+    use mix_core::effect::{Fact, Query};
     let state_dir = mix_state_dir(&user.home);
     let facts = performer
         .observe(
@@ -137,11 +137,11 @@ fn managed(cfg: UserConfig, member: impl Fn(&str, &str) -> bool) -> Option<UserC
 mod tests {
     use std::path::Path;
 
-    use mix_core::change::HOME_MANAGER_STATE_VERSION;
-    use mix_core::paths::STATE_FILE;
+    use mix_core::declared::paths::STATE_FILE;
+    use mix_core::ops::change::HOME_MANAGER_STATE_VERSION;
 
     use super::*;
-    use mix_core::paths::HOME_NIX;
+    use mix_core::declared::paths::HOME_NIX;
 
     fn sample_user(home: &Path) -> InvokingUser {
         InvokingUser {

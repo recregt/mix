@@ -3,10 +3,11 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use mix_core::action::{Action, Expect, Fact, FileId, Owner, PathFacts, Query, rollback_order};
-use mix_core::paths::is_leftover;
-use mix_core::testkit::{Breakage, Damage};
-use mix_core::world::World;
+use mix_core::declared::paths::is_leftover;
+use mix_core::effect::{Action, Expect, Fact, FileId, Owner, PathFacts, Query};
+use mix_core::model::World;
+use mix_core::model::testkit::{Breakage, Damage};
+use mix_core::run::journal::rollback_order;
 use mix_shell::drive::Performer;
 use mix_shell::effect::files::Files;
 use proptest::prelude::*;

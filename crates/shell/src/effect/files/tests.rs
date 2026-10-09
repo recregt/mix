@@ -3,8 +3,8 @@
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
-use mix_core::action::rollback_order;
-use mix_core::world::World;
+use mix_core::model::World;
+use mix_core::run::journal::rollback_order;
 
 use super::*;
 

@@ -1,9 +1,8 @@
 use std::path::Path;
 
-use mix_core::action::{
-    Action, Fact, GroupFacts, Owner, Query, UserFacts, UserSpec, rollback_order,
-};
-use mix_core::world::World;
+use mix_core::effect::{Action, Fact, GroupFacts, Owner, Query, UserFacts, UserSpec};
+use mix_core::model::World;
+use mix_core::run::journal::rollback_order;
 use mix_shell::drive::Performer;
 use mix_shell::effect::files::Files;
 use proptest::prelude::*;

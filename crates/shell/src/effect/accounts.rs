@@ -1,4 +1,4 @@
-use mix_core::identity::InvokingUser;
+use mix_core::declared::identity::InvokingUser;
 
 pub fn is_root() -> bool {
     nix::unistd::Uid::effective().is_root()

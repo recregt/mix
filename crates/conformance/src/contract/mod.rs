@@ -3,7 +3,7 @@ pub mod files;
 pub mod git;
 pub mod units;
 
-use mix_core::action::{Action, Fact, Failure, Outcome, PathFacts, Query};
+use mix_core::effect::{Action, Fact, Failure, Outcome, PathFacts, Query};
 use mix_exec::Scope;
 use mix_shell::drive::Performer;
 

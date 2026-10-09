@@ -8,9 +8,9 @@ pub mod tarball;
 
 pub use error::{Error, Host, Result};
 
-use mix_core::action::{Digest, Failure};
-use mix_core::bootstrap::{Runtime, Settings, steps};
-use mix_core::plan::{Runner, Verdict, diagnostic};
+use mix_core::effect::{Digest, Failure};
+use mix_core::ops::bootstrap::{Runtime, Settings, steps};
+use mix_core::run::{Runner, Verdict, diagnostic};
 use mix_events::v1::{BootstrapRequest, BootstrapResult, Code, node_finished};
 use mix_events::{Ending, ROOT};
 
@@ -131,7 +131,7 @@ fn ending_of(verdict: &Verdict) -> Ending {
     match verdict {
         Verdict::Succeeded => {
             Ending::succeeded().with_result(node_finished::Result::Bootstrap(BootstrapResult {
-                profile_snippet: mix_core::paths::PROFILE_SNIPPET_DEST.to_string(),
+                profile_snippet: mix_core::declared::paths::PROFILE_SNIPPET_DEST.to_string(),
             }))
         }
         Verdict::Failed { failure, .. } => Ending::failed(diagnostic(failure)),
@@ -193,7 +193,7 @@ pub(crate) async fn bootstrap(
     {
         let _ = root.tree.warn(
             ROOT,
-            mix_core::diagnose::warning(
+            mix_core::report::diagnose::warning(
                 Code::CleanupIncomplete,
                 "could not remove the finished journal",
                 &failure,

@@ -2,7 +2,7 @@ use mix_conformance::model::Model;
 use mix_conformance::suite::{
     FaultKind, Mix, bootstrap, doctor, findings, install, repair, succeeded, violations,
 };
-use mix_core::testkit::{Breakage, Damage, breakages, owned};
+use mix_core::model::testkit::{Breakage, Damage, breakages, owned};
 use proptest_state_machine::prop_state_machine;
 
 #[tokio::test]
@@ -77,9 +77,9 @@ async fn a_new_history_that_cannot_be_created_puts_the_old_repository_back() {
     let model = Model::new();
     model.run(bootstrap(), false, true).await;
     model.run(install(&["hello"]), false, false).await;
-    let repository = mix_core::paths::repository_dir(&model.user().home);
+    let repository = mix_core::declared::paths::repository_dir(&model.user().home);
     Breakage {
-        path: repository.join(mix_core::paths::REPOSITORY_HEAD),
+        path: repository.join(mix_core::declared::paths::REPOSITORY_HEAD),
         damage: Damage::Altered,
     }
     .apply(&mut model.world.lock().unwrap_or_else(|e| e.into_inner()));

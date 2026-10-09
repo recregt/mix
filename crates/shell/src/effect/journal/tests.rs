@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use mix_core::action::{Expect, Fact, Query};
+use mix_core::effect::{Expect, Fact, Query};
 
 use super::*;
 use crate::effect::files::Files;
@@ -32,7 +32,7 @@ fn machine() -> tempfile::TempDir {
     root
 }
 
-fn id_of(files: &Files, path: &str) -> mix_core::action::FileId {
+fn id_of(files: &Files, path: &str) -> mix_core::effect::FileId {
     match files.observe(&Query::Path(path.into())) {
         Some(Fact::Path(facts)) => facts.id.unwrap(),
         other => panic!("{other:?}"),
@@ -72,7 +72,7 @@ async fn perform(
     performer: &mut Performer,
     action: &Action,
     prepared: &mut crate::effect::files::Prepared<'_>,
-) -> mix_core::action::Outcome {
+) -> mix_core::effect::Outcome {
     let mut quiet = |_| {};
     performer
         .perform(action, &Scope::root(), &mut quiet, prepared)

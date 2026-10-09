@@ -114,7 +114,7 @@ pub async fn serve() -> ExitCode {
     while connections.join_next().await.is_some() {}
     match ended {
         Ended::Stopped => ExitCode::SUCCESS,
-        Ended::Drained => ExitCode::from(mix_core::targets::MIX_DAEMON_DRAINED),
+        Ended::Drained => ExitCode::from(mix_core::declared::targets::MIX_DAEMON_DRAINED),
         Ended::Failed(reason) => stopped(reason),
     }
 }
@@ -139,7 +139,7 @@ mod tests {
     #[test]
     fn the_installed_socket_listens_where_the_client_dials() {
         assert!(
-            mix_core::targets::MIX_DAEMON_SOCKET
+            mix_core::declared::targets::MIX_DAEMON_SOCKET
                 .contains(&format!("ListenStream={}\n", mix_rpc::SOCKET_PATH))
         );
     }

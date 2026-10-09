@@ -5,12 +5,12 @@
 //! *when* a profile is activated and what a failure should read like, and neither has to reach
 //! into the other to do it.
 
-use mix_core::action::FlakeSource;
+use mix_core::effect::FlakeSource;
 use std::sync::Arc;
 
 use mix_core::ActivityReporter;
-use mix_core::identity::InvokingUser;
-use mix_core::paths::{
+use mix_core::declared::identity::InvokingUser;
+use mix_core::declared::paths::{
     DEFAULT_PROFILE_NIX, GIT_DIR, HOME_MANAGER_PROFILE_NAME, mix_state_dir, nix_profiles_dir,
 };
 use mix_exec::Scope;

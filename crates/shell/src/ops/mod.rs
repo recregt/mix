@@ -37,7 +37,7 @@ pub(crate) async fn recover_interrupted(
     for (_, failure) in &recovered.failures {
         let _ = tree.warn(
             node,
-            mix_core::diagnose::warning(
+            mix_core::report::diagnose::warning(
                 Code::CleanupIncomplete,
                 "could not finish an interrupted request",
                 failure,
@@ -47,7 +47,7 @@ pub(crate) async fn recover_interrupted(
     for (_, failure) in &recovered.lost {
         let _ = tree.warn(
             node,
-            mix_core::diagnose::warning(
+            mix_core::report::diagnose::warning(
                 Code::CleanupIncomplete,
                 "what an interrupted request changed could not be put back, so mix writes what it declares instead",
                 failure,

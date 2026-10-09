@@ -136,7 +136,7 @@ fn nothing_mix_says_by_default_names_nix_mechanics() {
         let words = crate::render::render(&mix_events::Fault::Failed(wire), &context).message();
         for text in [words.as_str(), explanation_text(code).as_str()] {
             assert_eq!(
-                mix_core::vocabulary::nix_mechanics_in(text),
+                mix_core::report::vocabulary::nix_mechanics_in(text),
                 Vec::<&str>::new(),
                 "{code:?}: {text}"
             );

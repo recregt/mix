@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use mix_core::testkit::{Breakage, Damage, owned};
-use mix_core::world::World;
+use mix_core::model::World;
+use mix_core::model::testkit::{Breakage, Damage, owned};
 use mix_events::v1::command::Request;
 use mix_events::v1::{CleanRequest, DoctorRequest, InstallRequest, RemoveRequest, RepairRequest};
 use mix_shell::drive::Fault;
@@ -40,7 +40,7 @@ pub enum Transition {
 impl FaultKind {
     pub fn fault(self) -> Fault {
         match self {
-            FaultKind::Fail => Fault::Fail(mix_core::action::Failure::Io {
+            FaultKind::Fail => Fault::Fail(mix_core::effect::Failure::Io {
                 path: "/injected".into(),
                 kind: std::io::ErrorKind::StorageFull,
             }),
@@ -271,7 +271,8 @@ async fn ran(model: &Model, command: Command) -> Vec<String> {
     if command.atomic()
         && succeeded(&done)
         && world.contents(
-            mix_core::paths::mix_state_dir(&model.user().home).join(mix_core::paths::STATE_FILE),
+            mix_core::declared::paths::mix_state_dir(&model.user().home)
+                .join(mix_core::declared::paths::STATE_FILE),
         ) != world.active_list(model.user())
     {
         found.push("the list differs from the active generation".to_string());

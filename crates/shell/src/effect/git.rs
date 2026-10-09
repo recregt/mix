@@ -6,8 +6,8 @@
 use std::path::{Path, PathBuf};
 
 use mix_core::Result;
-use mix_core::identity::InvokingUser;
-use mix_core::paths::{GIT_DIR, MANAGED_FILES};
+use mix_core::declared::identity::InvokingUser;
+use mix_core::declared::paths::{GIT_DIR, MANAGED_FILES};
 use mix_exec::Scope;
 
 use mix_exec::Command;

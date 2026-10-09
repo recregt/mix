@@ -1,0 +1,86 @@
+---
+source: crates/core/src/ops/bootstrap/tests.rs
+expression: "again.case(&before, &world)"
+---
+{
+  "document": {
+    "cancellation": "CANCELLATION_UNSPECIFIED",
+    "changes": [],
+    "command": "bootstrap",
+    "dryRun": false,
+    "exit": 0,
+    "formatVersion": "1.0",
+    "problems": [],
+    "request": "request",
+    "status": "STATUS_SUCCEEDED",
+    "steps": [
+      {
+        "key": "create-nix-dir",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "Nix directory",
+        "undone": false,
+        "verb": "VERB_CREATING"
+      },
+      {
+        "key": "create-nix-tree",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "runtime directories",
+        "undone": false,
+        "verb": "VERB_CREATING"
+      },
+      {
+        "key": "create-users-and-groups",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "build users and groups",
+        "undone": false,
+        "verb": "VERB_CREATING"
+      },
+      {
+        "key": "fetch-runtime",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "Nix runtime",
+        "undone": false,
+        "verb": "VERB_INSTALLING"
+      },
+      {
+        "key": "write-nix-conf",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "runtime configuration",
+        "undone": false,
+        "verb": "VERB_WRITING"
+      },
+      {
+        "key": "configure-daemon",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "Nix daemon service",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "install-mix-daemon",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "mix daemon service",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "write-home-config",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "profile configuration",
+        "undone": false,
+        "verb": "VERB_WRITING"
+      },
+      {
+        "key": "activate-home",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "profile",
+        "undone": false,
+        "verb": "VERB_ACTIVATING"
+      }
+    ],
+    "waits": [],
+    "warnings": []
+  },
+  "machine": {},
+  "performed": []
+}

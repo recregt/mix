@@ -32,8 +32,8 @@ fn pin_filename(pin: &TarballPin) -> &'static str {
 
 fn host_target_key() -> String {
     match (
-        mix_core::system::Arch::current(),
-        mix_core::system::Os::current(),
+        mix_core::ops::bootstrap::system::Arch::current(),
+        mix_core::ops::bootstrap::system::Os::current(),
     ) {
         (Some(arch), Some(os)) => format!("{arch}-{os}"),
         _ => format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),

@@ -2,11 +2,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mix_core::ActivityReporter;
-use mix_core::action::{Action, Fact, Failure, Outcome, Performed, ProfileFacts, Query};
-use mix_core::identity::InvokingUser;
-use mix_core::paths::{
+use mix_core::declared::identity::InvokingUser;
+use mix_core::declared::paths::{
     DEFAULT_PROFILE_NIX_ENV, DEFAULT_PROFILE_NIX_STORE, HOME_MANAGER_PROFILE_NAME, nix_profiles_dir,
 };
+use mix_core::effect::{Action, Fact, Failure, Outcome, Performed, ProfileFacts, Query};
 use mix_exec::Scope;
 
 use crate::effect::exec::{run_as, run_as_reporting};
@@ -335,7 +335,7 @@ async fn reuse(
 
 async fn activate(
     user: &InvokingUser,
-    source: mix_core::action::FlakeSource,
+    source: mix_core::effect::FlakeSource,
     built: Option<u64>,
     context: &ProfileContext,
     activity: &Arc<dyn ActivityReporter>,

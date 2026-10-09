@@ -1,4 +1,4 @@
-pub use mix_core::health::{Finding, Unfixable};
+pub use mix_core::ops::health::{Finding, Unfixable};
 
 /// What reconciling a target could not do.
 ///

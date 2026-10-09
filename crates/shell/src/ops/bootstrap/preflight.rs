@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use mix_core::paths::{NIX_OWNERSHIP_MARKER, NIXOS_MARKER};
+use mix_core::declared::paths::{NIX_OWNERSHIP_MARKER, NIXOS_MARKER};
 use mix_exec::Scope;
 
 use crate::effect::fs::exists;

@@ -1,0 +1,166 @@
+---
+source: crates/core/src/ops/bootstrap/tests.rs
+expression: "again.case(&before, &world)"
+---
+{
+  "document": {
+    "cancellation": "CANCELLATION_UNSPECIFIED",
+    "changes": [
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_INSTALL_RUNTIME",
+        "status": "STATUS_SUCCEEDED",
+        "step": "fetch-runtime",
+        "subject": "https://mirror.internal/nix-2.35.2-x86_64-linux.tar.xz",
+        "undone": false,
+        "unknown": []
+      }
+    ],
+    "command": "bootstrap",
+    "dryRun": false,
+    "exit": 0,
+    "formatVersion": "1.0",
+    "problems": [],
+    "request": "request",
+    "status": "STATUS_SUCCEEDED",
+    "steps": [
+      {
+        "key": "create-nix-dir",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "Nix directory",
+        "undone": false,
+        "verb": "VERB_CREATING"
+      },
+      {
+        "key": "create-nix-tree",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "runtime directories",
+        "undone": false,
+        "verb": "VERB_CREATING"
+      },
+      {
+        "key": "create-users-and-groups",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "build users and groups",
+        "undone": false,
+        "verb": "VERB_CREATING"
+      },
+      {
+        "key": "fetch-runtime",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "Nix runtime",
+        "undone": false,
+        "verb": "VERB_INSTALLING"
+      },
+      {
+        "key": "write-nix-conf",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "runtime configuration",
+        "undone": false,
+        "verb": "VERB_WRITING"
+      },
+      {
+        "key": "configure-daemon",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "Nix daemon service",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "install-mix-daemon",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "mix daemon service",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "write-home-config",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "profile configuration",
+        "undone": false,
+        "verb": "VERB_WRITING"
+      },
+      {
+        "key": "activate-home",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "profile",
+        "undone": false,
+        "verb": "VERB_ACTIVATING"
+      }
+    ],
+    "waits": [],
+    "warnings": []
+  },
+  "machine": {
+    "files": {
+      "/nix/var/nix/profiles/default": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/profiles/default/bin": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/profiles/default/bin/nix-env": {
+        "added": {
+          "contents": [
+            "nix-env"
+          ],
+          "mode": "0444",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/profiles/default/lib": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/profiles/default/lib/systemd": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/profiles/default/lib/systemd/system": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/profiles/default/lib/systemd/system/nix-daemon.service": {
+        "added": {
+          "contents": [
+            "[Service]",
+            "ExecStart=nix-daemon"
+          ],
+          "mode": "0444",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/profiles/default/lib/systemd/system/nix-daemon.socket": {
+        "added": {
+          "contents": [
+            "[Socket]",
+            "ListenStream=/nix/var/nix/daemon-socket/socket"
+          ],
+          "mode": "0444",
+          "owner": "0:0"
+        }
+      }
+    }
+  },
+  "performed": [
+    "InstallRuntime https://mirror.internal/nix-2.35.2-x86_64-linux.tar.xz",
+    "Commit changes"
+  ]
+}

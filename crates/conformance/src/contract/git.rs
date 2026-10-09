@@ -2,12 +2,12 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use mix_core::action::{Action, Fact, Query};
-use mix_core::identity::InvokingUser;
-use mix_core::paths::{
+use mix_core::declared::identity::InvokingUser;
+use mix_core::declared::paths::{
     FLAKE_NIX, GIT_DIR, HOME_NIX, INDEX_LOCK, REPOSITORY_CONFIG, mix_state_dir, repository_dir,
 };
-use mix_core::world::{Content, World};
+use mix_core::effect::{Action, Fact, Query};
+use mix_core::model::{Content, World};
 use mix_shell::drive::Performer;
 use mix_shell::effect::files::Files;
 use proptest::prelude::*;

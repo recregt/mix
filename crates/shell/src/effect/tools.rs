@@ -1,7 +1,7 @@
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use mix_core::action::Failure;
+use mix_core::effect::Failure;
 
 pub const TRUSTED_DIRS: [&str; 4] = ["/usr/sbin", "/usr/bin", "/sbin", "/bin"];
 

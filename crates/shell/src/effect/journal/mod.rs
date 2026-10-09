@@ -6,14 +6,14 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use mix_core::action::{Abandoned, Action, Failure};
-use mix_core::journal::{Record, Recovery, recover};
-use mix_core::world::World;
+use mix_core::effect::{Abandoned, Action, Failure};
+use mix_core::model::World;
+use mix_core::run::journal::{Record, Recovery, recover};
 use mix_exec::Scope;
 
 use crate::drive::{Journal, Performer};
 
-pub use mix_core::paths::JOURNAL_DIR;
+pub use mix_core::declared::paths::JOURNAL_DIR;
 
 fn io(path: &Path, error: std::io::Error) -> Failure {
     Failure::Io {
@@ -93,7 +93,7 @@ pub fn abandoned(dir: &Path) -> Vec<Abandoned> {
         .filter_map(|path| {
             let request = path.file_stem()?.to_string_lossy().into_owned();
             let records = read(&path).unwrap_or_default();
-            Some(mix_core::journal::abandoned(&request, &records))
+            Some(mix_core::run::journal::abandoned(&request, &records))
         })
         .collect()
 }

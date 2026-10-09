@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use mix_core::action::{Action, Expect, Fact, Query, rollback_order};
-use mix_core::paths::SYSTEMD_UNIT_DIR;
-use mix_core::world::World;
+use mix_core::declared::paths::SYSTEMD_UNIT_DIR;
+use mix_core::effect::{Action, Expect, Fact, Query};
+use mix_core::model::World;
+use mix_core::run::journal::rollback_order;
 use mix_shell::drive::Performer;
 use mix_shell::effect::files::Files;
 use proptest::prelude::*;
@@ -57,7 +58,7 @@ fn concrete(op: &Op, ask: &mut dyn FnMut(&Query) -> Fact) -> Action {
                     (Guess::Current, Some(id)) => Expect::Present(id),
                     (Guess::Current, None) | (Guess::Absent, _) => Expect::Absent,
                     (Guess::Wrong, Some(_)) => Expect::Absent,
-                    (Guess::Wrong, None) => Expect::Present(mix_core::action::FileId {
+                    (Guess::Wrong, None) => Expect::Present(mix_core::effect::FileId {
                         dev: 0,
                         ino: u64::MAX,
                         born: None,

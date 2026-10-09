@@ -243,7 +243,7 @@ pub fn unhealthy(reports: &[InspectionReport]) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use mix_core::Category;
-    use mix_core::health::{Finding, HealthReport, wire};
+    use mix_core::ops::health::{Finding, HealthReport, wire};
 
     use super::*;
 

@@ -5,17 +5,17 @@ use std::sync::Mutex;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use mix_core::action::{
-    Action, Expect, Fact, Failure, Kind, Outcome, PathFacts, Performed, Query, Subject,
-};
-use mix_core::identity::InvokingUser;
-use mix_core::journal::Record;
-use mix_core::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
-use mix_core::paths::{
+use mix_core::declared::identity::InvokingUser;
+use mix_core::declared::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
+use mix_core::declared::paths::{
     REPOSITORY_CONFIG, REPOSITORY_CONFIG_CONTENTS, REPOSITORY_INDEX, mix_state_dir, repository_dir,
 };
-use mix_core::plan::{Input, Next, Report, Runner, make_guard};
-use mix_core::world::World;
+use mix_core::effect::{
+    Action, Expect, Fact, Failure, Kind, Outcome, PathFacts, Performed, Query, Subject,
+};
+use mix_core::model::World;
+use mix_core::run::journal::Record;
+use mix_core::run::{Input, Next, Report, Runner, make_guard};
 use mix_core::{ActivityReporter, DownloadProgress};
 use mix_events::v1::node_progress::Progress;
 use mix_events::v1::{
@@ -195,7 +195,7 @@ impl DownloadProgress for Relay<'_> {
 
 #[derive(Default)]
 struct Prediction {
-    world: mix_core::world::World,
+    world: mix_core::model::World,
     seeded: std::collections::HashSet<Subject>,
     touched: Vec<Subject>,
 }
@@ -331,7 +331,7 @@ impl Performer {
 
     async fn find_built(
         &mut self,
-        user: &mix_core::identity::InvokingUser,
+        user: &mix_core::declared::identity::InvokingUser,
         scope: &Scope,
     ) -> Result<Option<u64>, Failure> {
         let generations = generations::existing(user);
@@ -377,8 +377,8 @@ impl Performer {
     async fn reclaim_by_copy(
         &mut self,
         path: &Path,
-        expect: mix_core::action::FileId,
-        owner: mix_core::action::Owner,
+        expect: mix_core::effect::FileId,
+        owner: mix_core::effect::Owner,
         mode: u32,
         scope: &Scope,
         prepared: &mut Prepared<'_>,
@@ -398,7 +398,7 @@ impl Performer {
         let restore = Action::Restore {
             path: path.to_path_buf(),
             from: staging,
-            expect: mix_core::action::Expect::Absent,
+            expect: mix_core::effect::Expect::Absent,
         };
         prepared(std::slice::from_ref(&restore))?;
         let mut announced = |_: &[Action]| Ok(());
@@ -418,7 +418,7 @@ impl Performer {
     async fn set_aside_by_copy(
         &mut self,
         path: &Path,
-        expect: mix_core::action::FileId,
+        expect: mix_core::effect::FileId,
         scope: &Scope,
         prepared: &mut Prepared<'_>,
     ) -> Outcome {
@@ -444,7 +444,7 @@ impl Performer {
         let restore = Action::Restore {
             path: path.to_path_buf(),
             from: aside.clone(),
-            expect: mix_core::action::Expect::Absent,
+            expect: mix_core::effect::Expect::Absent,
         };
         prepared(std::slice::from_ref(&restore))?;
         let mut announced = |_: &[Action]| Ok(());
@@ -515,11 +515,13 @@ impl Performer {
             other => other,
         };
         if let Err(failure) = recorded {
-            report(Signal::Warning(Box::new(mix_core::diagnose::warning(
-                Code::GitRecordFailed,
-                "could not record the change in git",
-                &failure,
-            ))));
+            report(Signal::Warning(Box::new(
+                mix_core::report::diagnose::warning(
+                    Code::GitRecordFailed,
+                    "could not record the change in git",
+                    &failure,
+                ),
+            )));
         }
         if let Some(Fact::Path(PathFacts { id: Some(id), .. })) =
             self.files.observe(&Query::Path(git.clone()))
@@ -861,7 +863,7 @@ impl Performer {
             Query::Unit(_) | Query::Repository(_) => None,
             Query::Journals(dir) => Some(Fact::Journals(crate::effect::journal::abandoned(dir))),
             Query::ActiveList(user) => Some(Fact::Contents(
-                std::fs::read(mix_core::paths::active_list_path(&user.home))
+                std::fs::read(mix_core::declared::paths::active_list_path(&user.home))
                     .ok()
                     .map(Into::into),
             )),
@@ -1077,7 +1079,7 @@ impl Journal for Vec<Record> {
 }
 
 fn journaled(record: &Record) -> Progress {
-    Progress::Journaled(mix_core::trace::journaled(record))
+    Progress::Journaled(mix_core::report::trace::journaled(record))
 }
 
 fn keep(journal: &mut dyn Journal, record: &Record, tree: &mut Tree, node: NodeId, traced: bool) {
@@ -1089,7 +1091,7 @@ fn keep(journal: &mut dyn Journal, record: &Record, tree: &mut Tree, node: NodeI
         Err(failure) => {
             let _ = tree.warn(
                 node,
-                mix_core::diagnose::warning(
+                mix_core::report::diagnose::warning(
                     Code::JournalUnwritable,
                     "could not record progress in the journal",
                     &failure,
@@ -1147,7 +1149,7 @@ pub async fn drive<'r>(
                 if traced && let Ok(found) = &facts {
                     let _ = tree.progress(
                         runner.current_node().unwrap_or(ROOT),
-                        Progress::Observed(mix_core::trace::observed(&queries, found)),
+                        Progress::Observed(mix_core::report::trace::observed(&queries, found)),
                     );
                 }
                 input = Some(Input::Facts(facts));
@@ -1259,8 +1261,8 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use mix_core::action::{Expect, Kind};
-    use mix_core::plan::{StepSpec, Verdict};
+    use mix_core::effect::{Expect, Kind};
+    use mix_core::run::{StepSpec, Verdict};
     use mix_events::v1::{Cancellation, Command};
     use mix_events::{Outbox, ROOT, Start, validate};
 
@@ -1304,11 +1306,13 @@ mod tests {
         activity.connect(Some(sender));
         mix_exec::Watch::started(&activity, "nix build .#hello");
         activity.build_started("/nix/store/x-hello.drv");
-        activity.signal(Signal::Warning(Box::new(mix_core::diagnose::warning(
-            Code::GitRecordFailed,
-            "could not record the change in git",
-            &Failure::Cancelled,
-        ))));
+        activity.signal(Signal::Warning(Box::new(
+            mix_core::report::diagnose::warning(
+                Code::GitRecordFailed,
+                "could not record the change in git",
+                &Failure::Cancelled,
+            ),
+        )));
 
         let outbox = Arc::new(Outbox::new("request", || {}));
         let mut tree = Tree::new(
@@ -1350,8 +1354,8 @@ mod tests {
             self.key.into()
         }
 
-        fn title(&self) -> mix_core::plan::Title {
-            mix_core::plan::Title::new(mix_events::v1::Verb::Creating, "ensure")
+        fn title(&self) -> mix_core::run::Title {
+            mix_core::run::Title::new(mix_events::v1::Verb::Creating, "ensure")
         }
 
         fn queries(&self) -> Vec<Query> {
@@ -1626,7 +1630,11 @@ mod tests {
         std::fs::write(&profile_git, "not a program").unwrap();
         let state_dir = mix_state_dir(&user.home);
         std::fs::create_dir_all(&state_dir).unwrap();
-        std::fs::write(state_dir.join(mix_core::paths::FLAKE_NIX), "flake-content").unwrap();
+        std::fs::write(
+            state_dir.join(mix_core::declared::paths::FLAKE_NIX),
+            "flake-content",
+        )
+        .unwrap();
         let mut performer = Performer::new(Files::open(Path::new("/"), "r1").unwrap());
         let mut signals = Vec::new();
 
@@ -1655,7 +1663,7 @@ mod tests {
             .observe(
                 &[Query::Program {
                     path: running,
-                    source: mix_core::paths::RUNNING_PROGRAM.into(),
+                    source: mix_core::declared::paths::RUNNING_PROGRAM.into(),
                 }],
                 &Scope::root(),
             )
@@ -1664,7 +1672,7 @@ mod tests {
 
         assert_eq!(
             facts,
-            [Fact::Program(mix_core::action::ProgramFacts {
+            [Fact::Program(mix_core::effect::ProgramFacts {
                 same: true,
                 source: None
             })]

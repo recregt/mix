@@ -1,20 +1,20 @@
 use std::path::Path;
 
-use mix_core::identity::InvokingUser;
+use mix_core::declared::identity::InvokingUser;
 
-use mix_core::paths::{
+use mix_core::declared::paths::{
     GENERATION_INPUTS, GENERATION_STATE_FILE, HOME_MANAGER_PROFILE_NAME, mix_state_dir,
     nix_profiles_dir,
 };
 
-pub use mix_core::change::{Invalid, STATE_VERSION, Settled, Source, validate};
+pub use mix_core::ops::change::{Invalid, STATE_VERSION, Settled, Source, validate};
 
 pub fn settle(
     user: &InvokingUser,
     host: &crate::request::context::Host,
     _locked: &crate::request::Locked,
 ) -> Settled {
-    mix_core::change::settle(
+    mix_core::ops::change::settle(
         host.state_file(user).as_deref(),
         host.active_list(user).as_deref(),
     )
@@ -51,10 +51,10 @@ pub fn read(path: &Path) -> Option<String> {
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod tests {
-    use mix_core::state::StateManifest;
+    use mix_core::declared::state::StateManifest;
 
     use super::*;
-    use mix_core::paths::STATE_FILE;
+    use mix_core::declared::paths::STATE_FILE;
 
     fn owner(home: &Path) -> InvokingUser {
         InvokingUser {

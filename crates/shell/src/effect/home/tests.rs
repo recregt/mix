@@ -3,7 +3,7 @@
 use std::io::Cursor;
 use std::sync::Arc;
 
-use mix_core::action::{Expect, Performed};
+use mix_core::effect::{Expect, Performed};
 
 use super::*;
 

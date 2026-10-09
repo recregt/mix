@@ -1,10 +1,10 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
-use mix_core::action::UserFacts;
-use mix_core::identity::InvokingUser;
-use mix_core::paths::RUNNING_PROGRAM;
-use mix_core::policy::Policy;
-use mix_core::world::World;
+use mix_core::declared::identity::InvokingUser;
+use mix_core::declared::paths::RUNNING_PROGRAM;
+use mix_core::declared::policy::Policy;
+use mix_core::effect::UserFacts;
+use mix_core::model::World;
 use mix_events::Render;
 use mix_events::v1::command::Request;
 use mix_events::v1::{Command, Envelope};

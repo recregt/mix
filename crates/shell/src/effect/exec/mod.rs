@@ -8,8 +8,8 @@ pub mod output;
 
 use std::sync::Arc;
 
-use mix_core::identity::InvokingUser;
-use mix_core::paths::{DEFAULT_PROFILE_BIN, HOME_MANAGER_PROFILE_NAME, nix_profiles_dir};
+use mix_core::declared::identity::InvokingUser;
+use mix_core::declared::paths::{DEFAULT_PROFILE_BIN, HOME_MANAGER_PROFILE_NAME, nix_profiles_dir};
 use mix_core::{ActivityReporter, Result};
 use mix_exec::Scope;
 use mix_exec::{Command, Drain};

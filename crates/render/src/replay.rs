@@ -244,10 +244,10 @@ fn installed() -> Vec<Envelope> {
     tree.finish(profile, Ending::succeeded()).unwrap();
     tree.warn(
         activate,
-        mix_core::diagnose::warning(
+        mix_core::report::diagnose::warning(
             mix_events::v1::Code::GitRecordFailed,
             "could not record the change in git",
-            &mix_core::action::Failure::CommandFailed {
+            &mix_core::effect::Failure::CommandFailed {
                 program: "git commit".into(),
                 status: Some(128),
                 output_tail: "fatal: not a git repository".into(),
@@ -407,7 +407,7 @@ fn failed() -> Vec<Envelope> {
             start(action(Operation::ActivateProfile, "ciuser's profile"), "a2"),
         )
         .unwrap();
-    let failure = mix_core::diagnose::command_failure(
+    let failure = mix_core::report::diagnose::command_failure(
         "/nix/var/nix/profiles/default/bin/nix build",
         Some(1),
         "error: attribute 'hello' missing\n       at /nix/store/x5piy362vlnbxc71zd6alpswvgsdsv55-source/home.nix:10:7:\n            9|       pkgs.git\n           10|       pkgs.hello\n             |       ^\n           11|     ];\n       Did you mean hello2?\n",
@@ -454,8 +454,8 @@ fn failed() -> Vec<Envelope> {
     outbox.drain()
 }
 
-fn drift(target: &str) -> Option<mix_core::health::Drift> {
-    let hunk = |found_line, found: &[&str], expected: &[&str]| mix_core::health::Hunk {
+fn drift(target: &str) -> Option<mix_core::ops::health::Drift> {
+    let hunk = |found_line, found: &[&str], expected: &[&str]| mix_core::ops::health::Hunk {
         found_line,
         found: found.iter().map(|line| line.to_string()).collect(),
         expected: expected.iter().map(|line| line.to_string()).collect(),
@@ -479,13 +479,13 @@ fn drift(target: &str) -> Option<mix_core::health::Drift> {
         ),
         _ => return None,
     };
-    Some(mix_core::health::Drift {
+    Some(mix_core::ops::health::Drift {
         path: path.into(),
         hunks,
     })
 }
 
-fn doctored(findings: &[(&str, Option<mix_core::health::Finding>)]) -> Vec<Envelope> {
+fn doctored(findings: &[(&str, Option<mix_core::ops::health::Finding>)]) -> Vec<Envelope> {
     let outbox = Arc::new(Outbox::new("01920000-0000-7000-8000-000000000005", || {}));
     let mut tree = Tree::new(
         Arc::clone(&outbox),
@@ -504,7 +504,7 @@ fn doctored(findings: &[(&str, Option<mix_core::health::Finding>)]) -> Vec<Envel
         reports: findings
             .iter()
             .map(|(target, finding)| {
-                mix_core::health::wire::report(&mix_core::health::HealthReport {
+                mix_core::ops::health::wire::report(&mix_core::ops::health::HealthReport {
                     name: (*target).into(),
                     category: mix_core::Category::Filesystem,
                     finding: finding.clone(),
@@ -527,7 +527,7 @@ fn doctored(findings: &[(&str, Option<mix_core::health::Finding>)]) -> Vec<Envel
 
 #[test]
 fn doctor_reads_at_every_level_as_recorded() {
-    use mix_core::health::Finding;
+    use mix_core::ops::health::Finding;
 
     let healthy = doctored(&[("/nix", None), ("nix-daemon.service", None)]);
     let problems = doctored(&[

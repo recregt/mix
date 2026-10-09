@@ -1,13 +1,13 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use mix_core::identity::InvokingUser;
-use mix_core::paths::{
+use mix_core::declared::identity::InvokingUser;
+use mix_core::declared::paths::{
     HOME_NIX, NIX_OWNERSHIP_MARKER, NIX_STORE, NIXOS_MARKER, STATE_FILE, mix_state_dir,
 };
-use mix_core::policy::{Mirror, Policy};
-use mix_core::targets::UserConfig;
-use mix_core::world::World;
+use mix_core::declared::policy::{Mirror, Policy};
+use mix_core::declared::targets::UserConfig;
+use mix_core::model::World;
 use mix_events::Outbox;
 use mix_exec::Scope;
 
@@ -58,7 +58,7 @@ impl Host {
     pub fn available(&self) -> Option<u64> {
         match self {
             Host::Machine => {
-                let stat = rustix::fs::statvfs(mix_core::paths::NIX_STORE).ok()?;
+                let stat = rustix::fs::statvfs(mix_core::declared::paths::NIX_STORE).ok()?;
                 Some(stat.f_bavail.saturating_mul(stat.f_frsize))
             }
             Host::Model(_) => None,
@@ -130,7 +130,7 @@ impl Context {
     pub(crate) fn journal(
         &self,
         dir: &Path,
-    ) -> Result<crate::effect::journal::RequestJournal, mix_core::action::Failure> {
+    ) -> Result<crate::effect::journal::RequestJournal, mix_core::effect::Failure> {
         use crate::effect::journal::{FileJournal, ModelJournal, RequestJournal};
         Ok(match &self.host {
             Host::Machine => RequestJournal::File(FileJournal::create(dir, &self.request.id)?),

@@ -1,4 +1,4 @@
-use mix_core::state::StateManifest;
+use mix_core::declared::state::StateManifest;
 
 fn main() {
     divan::main();

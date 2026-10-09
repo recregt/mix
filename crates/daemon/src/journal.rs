@@ -161,12 +161,12 @@ pub fn status_words(status: Status) -> String {
 #[cfg(test)]
 mod tests {
     use insta::assert_json_snapshot;
-    use mix_core::action::Digest;
-    use mix_core::bootstrap::{Runtime, Settings, steps};
-    use mix_core::plan::Runner;
-    use mix_core::policy::Policy;
-    use mix_core::testkit::{Script, drive, requested};
-    use mix_core::world::World;
+    use mix_core::declared::policy::Policy;
+    use mix_core::effect::Digest;
+    use mix_core::model::World;
+    use mix_core::model::testkit::{Script, drive, requested};
+    use mix_core::ops::bootstrap::{Runtime, Settings, steps};
+    use mix_core::run::Runner;
     use mix_events::v1::Command;
     use mix_events::v1::command::Request;
     use mix_events::{ROOT, Start};

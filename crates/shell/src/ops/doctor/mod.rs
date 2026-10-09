@@ -2,8 +2,8 @@
 //! it should be, and reports what it finds. `mix repair` uses the same checks to fix those
 //! targets. Because both rely on the same logic, detection and repair never go out of sync.
 
-use mix_core::action::Failure;
-use mix_core::health::{self, wire};
+use mix_core::effect::Failure;
+use mix_core::ops::health::{self, wire};
 use mix_events::v1::{
     DoctorRequest, DoctorResult, Inspection, InspectionResult, Plan, node_finished, node_started,
 };
@@ -13,10 +13,10 @@ use crate::Context;
 use crate::request::{Concluded, Root};
 use crate::target::Finding;
 
-use mix_core::health::HealthReport;
+use mix_core::ops::health::HealthReport;
 
 pub(crate) async fn audit(ctx: &Context, root: &mut Root, _request: &DoctorRequest) -> Concluded {
-    let items = mix_core::targets::targets(ctx.user.as_ref(), &ctx.policy);
+    let items = mix_core::declared::targets::targets(ctx.user.as_ref(), &ctx.policy);
     let tree = &mut root.tree;
     let plan = tree
         .start(
@@ -96,15 +96,15 @@ fn kind_of(failure: &Failure) -> std::io::ErrorKind {
 mod tests {
     use std::path::PathBuf;
 
-    use mix_core::identity::InvokingUser;
+    use mix_core::declared::identity::InvokingUser;
     use mix_events::v1::InspectionReport;
     use mix_events::v1::command::Request;
 
     use super::*;
     use crate::request::ran::{Ran, ran};
 
-    fn user_config() -> mix_core::targets::UserConfig {
-        mix_core::targets::UserConfig {
+    fn user_config() -> mix_core::declared::targets::UserConfig {
+        mix_core::declared::targets::UserConfig {
             user: InvokingUser {
                 uid: 1000,
                 gid: 1000,
@@ -120,7 +120,7 @@ mod tests {
 
     fn session() -> crate::Session {
         crate::Session::new(mix_exec::Scope::root())
-            .with_policy(mix_core::policy::Policy::default())
+            .with_policy(mix_core::declared::policy::Policy::default())
     }
 
     async fn audited(session: crate::Session) -> (Ran, Vec<InspectionReport>) {
@@ -137,7 +137,11 @@ mod tests {
         let (_, reports) = audited(session()).await;
         assert_eq!(
             reports.len(),
-            mix_core::targets::targets(None, &mix_core::policy::Policy::default()).len()
+            mix_core::declared::targets::targets(
+                None,
+                &mix_core::declared::policy::Policy::default()
+            )
+            .len()
         );
     }
 
@@ -149,7 +153,11 @@ mod tests {
 
         assert_eq!(
             reports.len(),
-            mix_core::targets::targets(Some(&cfg), &mix_core::policy::Policy::default()).len(),
+            mix_core::declared::targets::targets(
+                Some(&cfg),
+                &mix_core::declared::policy::Policy::default()
+            )
+            .len(),
             "every target of the injected config must be reported"
         );
         assert!(reports.len() > audited(session()).await.1.len());
