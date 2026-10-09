@@ -20,7 +20,7 @@ expression: "run.case(&before, &world)"
         "operation": "OPERATION_REMOVE_CREATED_TREE",
         "status": "STATUS_SUCCEEDED",
         "step": "leftovers of interrupted writes",
-        "subject": "/etc/nix/.nix.conf.mix-backup-model-78",
+        "subject": "/etc/nix/.nix.conf.mix-backup-model-79",
         "undone": false,
         "unknown": []
       },
@@ -568,6 +568,13 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_REPAIRING"
       },
       {
+        "key": "/home/alice/.local/state/mix/.git/config",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/mix/.git/config",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
         "key": "/home/alice/.local/state/mix/.git ownership",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/home/alice/.local/state/mix/.git ownership",
@@ -643,7 +650,7 @@ expression: "run.case(&before, &world)"
   },
   "performed": [
     "PutFile /etc/nix/nix.conf",
-    "RemoveCreatedTree /etc/nix/.nix.conf.mix-backup-model-78",
+    "RemoveCreatedTree /etc/nix/.nix.conf.mix-backup-model-79",
     "RestartUnit nix-daemon.service",
     "Commit changes"
   ]

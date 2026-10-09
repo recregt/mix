@@ -1322,10 +1322,14 @@ impl World {
             Query::User(name) => Fact::User(self.users.get(name).cloned()),
             Query::TreeOwner(path) => Fact::TreeOwner(self.tree_owner(path).map(|owner| owner.0)),
             Query::Repository(user) => Fact::Repository {
-                intact: self.verifies(user),
-                recorded: self
-                    .committed(user)
-                    .is_some_and(|recorded| recorded == self.staged(user)),
+                intact: self.usable(user) && self.verifies(user) && self.reusable(user),
+                recorded: self.usable(user)
+                    && self.verifies(user)
+                    && self.reusable(user)
+                    && self.indexed(user)
+                    && self
+                        .committed(user)
+                        .is_some_and(|recorded| recorded == self.staged(user)),
             },
             Query::Profile(user) => Fact::Profile(
                 self.profiles

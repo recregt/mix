@@ -17,7 +17,7 @@ use crate::paths::{
 };
 use crate::paths::{
     GIT_DIR, HOME_MANAGER_PROFILE_NAME, INDEX_LOCK, JOURNAL_DIR, MIX_DAEMON_BIN,
-    MIX_DAEMON_BIN_MODE, RUNNING_PROGRAM,
+    MIX_DAEMON_BIN_MODE, REPOSITORY_CONFIG, REPOSITORY_CONFIG_CONTENTS, RUNNING_PROGRAM,
 };
 use crate::policy::Policy;
 
@@ -361,6 +361,11 @@ fn push_user_targets<'a>(items: &mut Vec<Target<'a>>, cfg: &'a UserConfig) {
     });
     items.extend(files);
     items.push(state);
+    items.push(Target::File {
+        path: Cow::Owned(join(&repository, REPOSITORY_CONFIG)),
+        expected: Some(Cow::Borrowed(REPOSITORY_CONFIG_CONTENTS)),
+        owner,
+    });
     items.push(Target::RepositoryOwner {
         path: Cow::Owned(repository.clone()),
         user: UserRef::Borrowed(&cfg.user),
@@ -441,7 +446,7 @@ const USER_PARENT_BITS: u32 = 0o700;
 
 const SYSTEM_TARGET_COUNT: usize =
     16 + SYSTEM_PARENTS.len() + NIX_TREE_PATHS.len() + NIXBLD_USER_COUNT as usize;
-const USER_TARGET_COUNT: usize = 12 + USER_PARENTS.len();
+const USER_TARGET_COUNT: usize = 13 + USER_PARENTS.len();
 
 pub fn user_targets(cfg: &UserConfig) -> Vec<Target<'_>> {
     let mut items = Vec::with_capacity(USER_TARGET_COUNT);
@@ -843,9 +848,9 @@ mod tests {
     }
 
     #[test]
-    fn user_targets_returns_exactly_the_fifteen_per_user_entries() {
+    fn user_targets_returns_exactly_the_sixteen_per_user_entries() {
         let cfg = sample_user_config();
-        assert_eq!(user_targets(&cfg).len(), 15);
+        assert_eq!(user_targets(&cfg).len(), 16);
     }
 
     #[test]

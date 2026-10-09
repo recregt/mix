@@ -377,11 +377,6 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
             },
             vec![
                 ("/home/alice/.local/state/mix", Finding::Missing),
-                ("/home/alice/.local/state/mix/home.nix", Finding::Missing),
-                ("/home/alice/.local/state/mix/flake.nix", Finding::Missing),
-                ("/home/alice/.local/state/mix/flake.lock", Finding::Missing),
-                ("/home/alice/.local/state/mix/.gitignore", Finding::Missing),
-                ("/home/alice/.local/state/mix/state", Finding::Missing),
                 (ALICE_REPOSITORY, Finding::Missing),
             ],
         ),

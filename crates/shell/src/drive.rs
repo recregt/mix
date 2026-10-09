@@ -6,12 +6,14 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use mix_core::action::{
-    Action, Fact, Failure, Kind, Outcome, PathFacts, Performed, Query, Subject,
+    Action, Expect, Fact, Failure, Kind, Outcome, PathFacts, Performed, Query, Subject,
 };
 use mix_core::identity::InvokingUser;
 use mix_core::journal::Record;
 use mix_core::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
-use mix_core::paths::{mix_state_dir, repository_dir};
+use mix_core::paths::{
+    REPOSITORY_CONFIG, REPOSITORY_CONFIG_CONTENTS, REPOSITORY_INDEX, mix_state_dir, repository_dir,
+};
 use mix_core::plan::{Input, Next, Report, Runner, make_guard};
 use mix_core::world::World;
 use mix_core::{ActivityReporter, DownloadProgress};
@@ -496,23 +498,72 @@ impl Performer {
             }))
         );
         prepared(&[])?;
-        if let Err(error) = profile::record(user, scope).await {
+        let mut undo = Vec::new();
+        let owned = match existed {
+            true => self.own_config(user, scope, prepared).await,
+            false => Ok(Vec::new()),
+        };
+        let recorded = match owned {
+            Ok(restore) => {
+                undo.extend(restore);
+                profile::record(user, scope).await.map_err(core_failure)
+            }
+            Err(failure) => Err(failure),
+        };
+        let recorded = match recorded {
+            Ok(()) if !existed => self.own_config(user, scope, prepared).await.map(|_| ()),
+            other => other,
+        };
+        if let Err(failure) = recorded {
             report(Signal::Warning(Box::new(mix_core::diagnose::warning(
                 Code::GitRecordFailed,
                 "could not record the change in git",
-                &error,
+                &failure,
             ))));
         }
-        let undo = match self.files.observe(&Query::Path(git.clone())) {
-            Some(Fact::Path(PathFacts { id: Some(id), .. })) if !existed => {
-                vec![Action::RemoveCreatedTree {
-                    path: git,
-                    expect: id,
-                }]
-            }
-            _ => Vec::new(),
-        };
+        if let Some(Fact::Path(PathFacts { id: Some(id), .. })) =
+            self.files.observe(&Query::Path(git.clone()))
+            && !existed
+        {
+            undo.push(Action::RemoveCreatedTree {
+                path: git,
+                expect: id,
+            });
+        }
         Ok(Performed { undo })
+    }
+
+    async fn own_config(
+        &mut self,
+        user: &InvokingUser,
+        scope: &Scope,
+        prepared: &mut Prepared<'_>,
+    ) -> Result<Vec<Action>, Failure> {
+        let config = repository_dir(&user.home).join(REPOSITORY_CONFIG);
+        let Some(Fact::Path(found)) = self.files.observe(&Query::Path(config.clone())) else {
+            return Ok(Vec::new());
+        };
+        let ours = matches!(
+            self.files.observe(&Query::Contents(config.clone())),
+            Some(Fact::Contents(Some(bytes))) if *bytes == *REPOSITORY_CONFIG_CONTENTS.as_bytes()
+        );
+        if found.kind == Kind::File && ours {
+            return Ok(Vec::new());
+        }
+        let put = Action::PutFile {
+            path: config.clone(),
+            contents: std::sync::Arc::from(REPOSITORY_CONFIG_CONTENTS.as_bytes()),
+            mode: 0o644,
+            owner: Some((user.uid, user.gid)),
+            expect: match found.id {
+                Some(id) => Expect::Present(id),
+                None => Expect::Absent,
+            },
+        };
+        Ok(self
+            .perform_file(&put, &config, scope, prepared)
+            .await?
+            .undo)
     }
 
     async fn units(&mut self) -> Result<&Units, Failure> {
@@ -544,10 +595,10 @@ impl Performer {
             });
         }
         prepared(&[])?;
-        let created = Git::resolve(user)
-            .await
-            .create(user, &mix_state_dir(&user.home), scope)
-            .await;
+        let created = match Git::resolve(user, scope).await {
+            Ok(git) => git.create(user, &mix_state_dir(&user.home), scope).await,
+            Err(error) => Err(error),
+        };
         let undo = match self.files.observe(&Query::Path(repository.clone())) {
             Some(Fact::Path(PathFacts { id: Some(id), .. })) => vec![Action::RemoveCreatedTree {
                 path: repository.clone(),
@@ -555,13 +606,17 @@ impl Performer {
             }],
             _ => Vec::new(),
         };
-        if let Err(error) = created {
+        let created = match created {
+            Ok(()) => self.own_config(user, scope, prepared).await.map(|_| ()),
+            Err(error) => Err(core_failure(error)),
+        };
+        if let Err(failure) = created {
             let mut announced = |_: &[Action]| Ok(());
             for removal in &undo {
                 self.perform_file(removal, &repository, &scope.shielded(), &mut announced)
                     .await?;
             }
-            return Err(core_failure(error));
+            return Err(failure);
         }
         Ok(Performed { undo })
     }
@@ -751,17 +806,51 @@ impl Performer {
         Ok(match query {
             Query::Unit(unit) => Fact::Unit(self.units().await?.observe(unit).await?),
             Query::Repository(user) => {
-                let git = Git::resolve(user).await;
-                let intact = git
+                let repository = repository_dir(&user.home);
+                let config = self
+                    .files
+                    .observe(&Query::Contents(repository.join(REPOSITORY_CONFIG)));
+                let index = self
+                    .files
+                    .observe(&Query::Path(repository.join(REPOSITORY_INDEX)));
+                let usable = matches!(
+                    config,
+                    Some(Fact::Contents(Some(bytes))) if *bytes == *REPOSITORY_CONFIG_CONTENTS.as_bytes()
+                ) && matches!(
+                    index,
+                    Some(Fact::Path(PathFacts {
+                        kind: Kind::Missing | Kind::File,
+                        ..
+                    }))
+                );
+                if !usable {
+                    return Ok(Fact::Repository {
+                        intact: false,
+                        recorded: false,
+                    });
+                }
+                let git = Git::resolve(user, scope).await.map_err(core_failure)?;
+                let state_dir = mix_state_dir(&user.home);
+                let verified = git
                     .verify(user, &repository_dir(&user.home), scope)
                     .await
                     .map_err(core_failure)?;
-                let recorded = intact
-                    && git
-                        .recorded(user, &mix_state_dir(&user.home), scope)
+                let unrecorded = match verified {
+                    true => git.unrecorded(user, &state_dir, scope).await.ok(),
+                    false => None,
+                };
+                let reusable = match &unrecorded {
+                    Some(files) if !files.is_empty() => git
+                        .reusable(user, &state_dir, files, scope)
                         .await
-                        .unwrap_or(false);
-                Fact::Repository { intact, recorded }
+                        .map_err(core_failure)?,
+                    _ => true,
+                };
+                let intact = verified && reusable;
+                Fact::Repository {
+                    intact,
+                    recorded: intact && unrecorded.is_some_and(|files| files.is_empty()),
+                }
             }
             query => self.observed(query).expect("every query has an observer"),
         })
@@ -1524,10 +1613,17 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::disallowed_methods)]
-    #[ignore = "requires git"]
     async fn a_change_git_cannot_record_still_takes_effect_and_says_so() {
         let home = tempfile::tempdir().unwrap();
-        let user = crate::effect::git::testing::user(home.path(), Some("commit"));
+        let user = InvokingUser {
+            uid: nix::unistd::Uid::current().as_raw(),
+            gid: nix::unistd::Gid::current().as_raw(),
+            name: "mix-user".to_string(),
+            home: home.path().to_path_buf(),
+        };
+        let profile_git = home.path().join(".nix-profile/bin/git");
+        std::fs::create_dir_all(profile_git.parent().unwrap()).unwrap();
+        std::fs::write(&profile_git, "not a program").unwrap();
         let state_dir = mix_state_dir(&user.home);
         std::fs::create_dir_all(&state_dir).unwrap();
         std::fs::write(state_dir.join(mix_core::paths::FLAKE_NIX), "flake-content").unwrap();

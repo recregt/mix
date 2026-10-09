@@ -64,6 +64,10 @@ pub const STATE_FILE: &str = "state";
 pub const GIT_DIR: &str = ".git";
 pub const INDEX_LOCK: &str = "index.lock";
 pub const REPOSITORY_HEAD: &str = "HEAD";
+pub const REPOSITORY_CONFIG: &str = "config";
+pub const REPOSITORY_INDEX: &str = "index";
+pub const REPOSITORY_CONFIG_CONTENTS: &str =
+    "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n";
 pub const GITIGNORE: &str = ".gitignore";
 pub const GITIGNORE_CONTENTS: &str = "# Managed by mix -- do not edit, changes are overwritten.\n/*\n!/.gitignore\n!/flake.lock\n!/flake.nix\n!/home.nix\n!/state\n";
 

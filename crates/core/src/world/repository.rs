@@ -3,14 +3,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::{Content, Entry, World, conflict, describe};
-use crate::action::{Action, Failure};
+use crate::action::{Action, Expect, Failure};
 use crate::identity::InvokingUser;
-use crate::paths::{INDEX_LOCK, MANAGED_FILES, REPOSITORY_HEAD, mix_state_dir, repository_dir};
+use crate::paths::{
+    INDEX_LOCK, MANAGED_FILES, REPOSITORY_CONFIG, REPOSITORY_CONFIG_CONTENTS, REPOSITORY_HEAD,
+    REPOSITORY_INDEX, mix_state_dir, repository_dir,
+};
 
 const HEAD_CONTENTS: &[u8] = b"ref: refs/heads/main\n";
 const BRANCH: &str = "refs/heads/main";
 const OBJECTS: &str = "objects";
-const INDEX: &str = "index";
 
 pub type Snapshot = BTreeMap<String, Arc<[u8]>>;
 
@@ -19,6 +21,13 @@ fn digest(bytes: &[u8]) -> String {
         (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
     });
     format!("{hash:016x}")
+}
+
+fn listing(staged: &Snapshot) -> String {
+    staged
+        .iter()
+        .map(|(name, bytes)| format!("{name} {}\n", digest(bytes)))
+        .collect()
 }
 
 impl World {
@@ -63,8 +72,57 @@ impl World {
         }
         let named = self.readable(&repository.join(BRANCH), uid)?;
         let commit = std::str::from_utf8(named).ok()?.trim().to_string();
-        self.readable(&repository.join(OBJECTS).join(&commit), uid)?;
-        Some(commit)
+        self.intact_object(repository, &commit, uid)
+            .then_some(commit)
+    }
+
+    fn intact_object(&self, repository: &Path, object: &str, uid: u32) -> bool {
+        self.readable(&repository.join(OBJECTS).join(object), uid)
+            .is_some_and(|bytes| digest(bytes) == object)
+    }
+
+    fn reusable_at(&self, repository: &Path, user: &InvokingUser) -> bool {
+        let committed = self.snapshot_at(repository, user.uid);
+        self.staged(user)
+            .iter()
+            .filter(|(name, bytes)| {
+                committed.as_ref().and_then(|found| found.get(*name)) != Some(*bytes)
+            })
+            .all(|(_, bytes)| {
+                let object = digest(bytes);
+                !self
+                    .files
+                    .contains_key(&repository.join(OBJECTS).join(&object))
+                    || self.intact_object(repository, &object, user.uid)
+            })
+    }
+
+    pub fn indexed(&self, user: &InvokingUser) -> bool {
+        let repository = repository_dir(&user.home);
+        self.readable(&repository.join(REPOSITORY_INDEX), user.uid)
+            .is_some_and(|index| index.as_ref() == listing(&self.staged(user)).as_bytes())
+    }
+
+    pub fn usable(&self, user: &InvokingUser) -> bool {
+        let repository = repository_dir(&user.home);
+        let index = repository.join(REPOSITORY_INDEX);
+        self.readable(&repository.join(REPOSITORY_CONFIG), user.uid)
+            .is_some_and(|config| config.as_ref() == REPOSITORY_CONFIG_CONTENTS.as_bytes())
+            && (!self.files.contains_key(&index) || self.is_file(&index))
+    }
+
+    fn is_file(&self, path: &Path) -> bool {
+        matches!(
+            self.files.get(path),
+            Some(Entry {
+                content: Content::File(_),
+                ..
+            })
+        )
+    }
+
+    pub fn reusable(&self, user: &InvokingUser) -> bool {
+        self.reusable_at(&repository_dir(&user.home), user)
     }
 
     fn listed(&self, repository: &Path, commit: &str, uid: u32) -> Option<Vec<(String, String)>> {
@@ -83,7 +141,11 @@ impl World {
 
     fn snapshot_at(&self, repository: &Path, uid: u32) -> Option<Snapshot> {
         let commit = self.head_commit(repository, uid)?;
-        self.listed(repository, &commit, uid)?
+        self.snapshot_of(repository, &commit, uid)
+    }
+
+    fn snapshot_of(&self, repository: &Path, commit: &str, uid: u32) -> Option<Snapshot> {
+        self.listed(repository, commit, uid)?
             .into_iter()
             .map(|(name, object)| {
                 let bytes = self.readable(&repository.join(OBJECTS).join(&object), uid)?;
@@ -97,9 +159,22 @@ impl World {
     }
 
     fn verifies_at(&self, repository: &Path, uid: u32) -> bool {
-        self.is_dir(repository)
-            && self.snapshot_at(repository, uid).is_some()
-            && self.readable(&repository.join(INDEX), uid).is_some()
+        self.is_dir(repository) && self.snapshot_at(repository, uid).is_some()
+    }
+
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn blob_object(user: &InvokingUser, bytes: &[u8]) -> PathBuf {
+        repository_dir(&user.home).join(OBJECTS).join(digest(bytes))
+    }
+
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn branch_object(&self, user: &InvokingUser) -> Option<PathBuf> {
+        let repository = repository_dir(&user.home);
+        let Content::File(named) = &self.files.get(&repository.join(BRANCH))?.content else {
+            return None;
+        };
+        let commit = std::str::from_utf8(named).ok()?.trim();
+        Some(repository.join(OBJECTS).join(commit))
     }
 
     pub fn repository_at(&self, repository: &Path) -> (bool, Option<Snapshot>) {
@@ -149,11 +224,8 @@ impl World {
                 *current_owner = owner;
                 Ok(())
             }
-            Some(Entry {
-                content: Content::Directory,
-                ..
-            }) => Err(conflict(path, "a file", "a directory")),
-            _ => {
+            Some(_) => Ok(()),
+            None => {
                 self.parent_is_dir(path)?;
                 let id = self.fresh();
                 self.files.insert(
@@ -217,6 +289,11 @@ impl World {
         let owner = (user.uid, user.gid);
         self.make_dir(&repository, owner)?;
         self.write_ref(&repository.join(REPOSITORY_HEAD), HEAD_CONTENTS, owner)?;
+        self.write_ref(
+            &repository.join(REPOSITORY_CONFIG),
+            REPOSITORY_CONFIG_CONTENTS.as_bytes(),
+            owner,
+        )?;
         for dir in [OBJECTS, "refs", "refs/heads"] {
             self.make_dir(&repository.join(dir), owner)?;
         }
@@ -235,28 +312,50 @@ impl World {
         {
             return Err(conflict(&repository, "a git repository", "something else"));
         }
+        let index = repository.join(REPOSITORY_INDEX);
+        if self.files.contains_key(&index) && !self.is_file(&index) {
+            return Err(conflict(
+                &index,
+                "an index",
+                describe(self.files.get(&index)),
+            ));
+        }
         let lock = repository.join(INDEX_LOCK);
         if self.files.contains_key(&lock) {
             return Err(conflict(&lock, "nothing", "a lock another git left"));
         }
         let staged = self.staged(user);
-        if staged.is_empty() {
-            return Ok(false);
-        }
-        if self.snapshot_at(&repository, user.uid).as_ref() == Some(&staged) {
-            return Ok(false);
-        }
         let owner = (user.uid, user.gid);
         let objects = repository.join(OBJECTS);
-        let mut listing = String::new();
-        for (name, bytes) in &staged {
-            let object = digest(bytes);
-            self.write_object(&objects.join(&object), bytes, owner)?;
-            listing.push_str(&format!("{name} {object}\n"));
+        for bytes in staged.values() {
+            self.write_object(&objects.join(digest(bytes)), bytes, owner)?;
+        }
+        self.write_ref(&index, listing(&staged).as_bytes(), owner)?;
+        let listing = listing(&staged);
+        let head = self.head_commit(&repository, user.uid);
+        match &head {
+            Some(head) => {
+                let current: Vec<(String, String)> = staged
+                    .iter()
+                    .map(|(name, bytes)| (name.clone(), digest(bytes)))
+                    .collect();
+                if self.listed(&repository, head, user.uid).as_ref() == Some(&current) {
+                    return Ok(false);
+                }
+            }
+            None if staged.is_empty() => return Ok(false),
+            None => {}
         }
         let commit = digest(listing.as_bytes());
         self.write_object(&objects.join(&commit), listing.as_bytes(), owner)?;
-        self.write_ref(&repository.join(INDEX), listing.as_bytes(), owner)?;
+        if !self.intact_object(&repository, &commit, user.uid)
+            || self.snapshot_of(&repository, &commit, user.uid).as_ref() != Some(&staged)
+        {
+            return Err(conflict(&objects, "intact objects", "a damaged object"));
+        }
+        if head.is_none() && self.files.contains_key(&repository.join(BRANCH)) {
+            return Err(conflict(&repository.join(BRANCH), "no branch", "a branch"));
+        }
         self.write_ref(
             &repository.join(BRANCH),
             format!("{commit}\n").as_bytes(),
@@ -268,19 +367,48 @@ impl World {
     pub(super) fn record_state(&mut self, user: &InvokingUser) -> Vec<Action> {
         let repository = repository_dir(&user.home);
         let existed = self.files.contains_key(&repository);
+        let mut undo = Vec::new();
         let recorded = if existed {
-            Ok(())
+            self.own_config(user).map(|restore| undo.extend(restore))
         } else {
             self.init_repository(user)
         };
         let _ = recorded.and_then(|()| self.sync_repository(user));
-        match self.files.get(&repository) {
-            Some(entry) if !existed => vec![Action::RemoveCreatedTree {
+        if let Some(entry) = self.files.get(&repository)
+            && !existed
+        {
+            undo.push(Action::RemoveCreatedTree {
                 path: repository,
                 expect: entry.id,
-            }],
-            _ => Vec::new(),
+            });
         }
+        undo
+    }
+
+    fn own_config(&mut self, user: &InvokingUser) -> Result<Vec<Action>, Failure> {
+        let repository = repository_dir(&user.home);
+        if !self.is_dir(&repository) {
+            return Ok(Vec::new());
+        }
+        let config = repository.join(REPOSITORY_CONFIG);
+        let found = self.files.get(&config);
+        if let Some(Entry {
+            content: Content::File(bytes),
+            ..
+        }) = found
+            && bytes.as_ref() == REPOSITORY_CONFIG_CONTENTS.as_bytes()
+        {
+            return Ok(Vec::new());
+        }
+        let expect = found.map_or(Expect::Absent, |entry| Expect::Present(entry.id));
+        self.apply(&Action::PutFile {
+            path: config,
+            contents: Arc::from(REPOSITORY_CONFIG_CONTENTS.as_bytes()),
+            mode: 0o644,
+            owner: Some((user.uid, user.gid)),
+            expect,
+        })
+        .map(|performed| performed.undo)
     }
 
     pub(super) fn create_repository(

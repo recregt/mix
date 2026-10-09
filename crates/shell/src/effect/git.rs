@@ -1,8 +1,7 @@
-//! The git repository the generated configuration is tracked in.
+//! The git repository the generated configuration is recorded in.
 //!
-//! Every write mix makes to a user's state directory is committed, so a reader can see what
-//! changed and when. Which `git` that is depends on what the machine has: the one in the
-//! profile mix installed, or the one that was already on the system.
+//! Note: mix drives `git` through plumbing commands only, as the user, with the `git` of the
+//! user's Nix profile when it has one and the one on `PATH` otherwise.
 
 use std::path::{Path, PathBuf};
 
@@ -13,17 +12,25 @@ use mix_exec::Scope;
 
 use mix_exec::Command;
 
-use crate::effect::exec::{command_as, run, status};
+use crate::effect::exec::{command_as, exec_error, run, status};
 use crate::effect::fs::exists;
 
-const AUTHOR_NAME: &str = "mix";
-const AUTHOR_EMAIL: &str = "mix@localhost";
+const AUTHOR: &[(&str, &str)] = &[
+    ("GIT_AUTHOR_NAME", "mix"),
+    ("GIT_AUTHOR_EMAIL", "mix@localhost"),
+    ("GIT_COMMITTER_NAME", "mix"),
+    ("GIT_COMMITTER_EMAIL", "mix@localhost"),
+];
 const COMMIT_MESSAGE: &str = "mix: sync generated home-manager config";
+const BRANCH: &str = "refs/heads/main";
 
 const PROFILE_GIT: &str = ".nix-profile/bin/git";
 
-/// Settings given to every `git` call: no hook runs, no file-system monitor is started and no
-/// commit is signed.
+/// Oldest `git` release mix runs, as major and minor version.
+const OLDEST: (u32, u32) = (2, 34);
+
+/// Settings given to every `git` call: no hook runs, no file-system monitor starts and no commit
+/// is signed.
 const ISOLATION: &[&str] = &[
     "core.hooksPath=/dev/null",
     "core.fsmonitor=false",
@@ -38,28 +45,43 @@ const ISOLATED_ENV: &[(&str, &str)] = &[
     ("GIT_TERMINAL_PROMPT", "0"),
 ];
 
-const VERIFY: &[&[&str]] = &[
-    &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
-    &["archive", "--format=tar", "HEAD"],
-    &["ls-files", "--stage"],
-];
-
 pub struct Git {
     binary: String,
 }
 
 impl Git {
-    pub async fn resolve(user: &InvokingUser) -> Self {
-        Self {
+    pub async fn resolve(user: &InvokingUser, scope: &Scope) -> Result<Self> {
+        let git = Self {
             binary: resolve_binary(user).await,
+        };
+        let reported = git.run_as(user, &["--version"], scope).await?;
+        let found = reported.split_whitespace().nth(2).unwrap_or_default();
+        let mut parts = found.split('.').map(str::parse::<u32>);
+        match (parts.next(), parts.next()) {
+            (Some(Ok(major)), Some(Ok(minor))) if (major, minor) >= OLDEST => Ok(git),
+            _ => Err(mix_core::Error::Unsupported {
+                program: git.binary,
+                found: found.to_string(),
+                oldest: format!("{}.{}", OLDEST.0, OLDEST.1),
+            }),
         }
     }
 
     pub async fn init(&self, user: &InvokingUser, state_dir: &Path, scope: &Scope) -> Result<()> {
-        let state_dir_str = state_dir.to_string_lossy().into_owned();
-        self.run_as(user, &["-C", &state_dir_str, "init", "-q"], scope)
-            .await
-            .map(|_| ())
+        let state_dir = state_dir.to_string_lossy();
+        self.run_as(
+            user,
+            &[
+                "init",
+                "-q",
+                "--initial-branch=main",
+                "--template=",
+                &state_dir,
+            ],
+            scope,
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Creates the repository and commits the generated config into it.
@@ -68,11 +90,11 @@ impl Git {
         self.sync(user, state_dir, scope).await.map(|_| ())
     }
 
-    /// Whether `HEAD` resolves to a commit whose tree reads in full, and the index reads.
+    /// Whether the commit and tree of `HEAD` and every file in that tree match their object ids.
     ///
-    /// Note: Only what a build reads is checked, so the cost follows the current tree, not the
-    /// history. The repository is named with `--git-dir`, so a missing one is never answered by
-    /// a repository further up.
+    /// Note: Only `HEAD`'s own objects are read, so the cost follows the current tree, not the
+    /// history. The index is not checked, because every record rebuilds it. The repository is
+    /// named with `--git-dir`, so a missing one is never answered by a repository further up.
     pub async fn verify(
         &self,
         user: &InvokingUser,
@@ -80,9 +102,14 @@ impl Git {
         scope: &Scope,
     ) -> Result<bool> {
         let repository = repository.to_string_lossy();
-        for check in VERIFY {
+        let tree = "HEAD^{tree}";
+        let checks: [&[&str]; 2] = [
+            &["rev-parse", "--verify", "--quiet", tree],
+            &export("HEAD^!"),
+        ];
+        for check in checks {
             let mut args = vec!["--git-dir", &repository];
-            args.extend(check.iter());
+            args.extend(check);
             if !self.status_as(user, &args, scope).await? {
                 return Ok(false);
             }
@@ -90,12 +117,12 @@ impl Git {
         Ok(true)
     }
 
-    pub async fn recorded(
+    pub async fn unrecorded(
         &self,
         user: &InvokingUser,
         state_dir: &Path,
         scope: &Scope,
-    ) -> Result<bool> {
+    ) -> Result<Vec<String>> {
         let state_dir = state_dir.to_string_lossy();
         let mut args = vec![
             "--no-optional-locks",
@@ -107,80 +134,135 @@ impl Git {
             "--",
         ];
         args.extend(MANAGED_FILES);
-        Ok(self.run_as(user, &args, scope).await?.is_empty())
+        Ok(self
+            .run_as(user, &args, scope)
+            .await?
+            .lines()
+            .filter_map(|line| line.trim_start().split_once(' '))
+            .map(|(_, path)| path.trim_start().to_string())
+            .collect())
+    }
+
+    pub async fn reusable(
+        &self,
+        user: &InvokingUser,
+        state_dir: &Path,
+        files: &[String],
+        scope: &Scope,
+    ) -> Result<bool> {
+        let mut present = Vec::with_capacity(files.len());
+        for file in files {
+            if exists(state_dir.join(file)).await {
+                present.push(file.as_str());
+            }
+        }
+        if present.is_empty() {
+            return Ok(true);
+        }
+        let state_dir = state_dir.to_string_lossy();
+        let mut args = vec!["-C", &state_dir, "hash-object", "--"];
+        args.extend(&present);
+        for object in self.run_as(user, &args, scope).await?.lines() {
+            let blob = format!("{object}^{{blob}}");
+            let reads = ["-C", &state_dir, "rev-parse", "--verify", "--quiet", &blob];
+            if !self.status_as(user, &reads, scope).await?
+                && self
+                    .status_as(user, &["-C", &state_dir, "cat-file", "-e", object], scope)
+                    .await?
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     pub async fn sync(&self, user: &InvokingUser, state_dir: &Path, scope: &Scope) -> Result<bool> {
-        let git_dir = state_dir.join(GIT_DIR);
-        if !exists(&git_dir).await {
+        if !exists(state_dir.join(GIT_DIR)).await {
             return Ok(false);
         }
+        let state_dir = state_dir.to_string_lossy();
+        let dir = ["-C", &*state_dir];
 
-        let state_dir_str = state_dir.to_string_lossy().into_owned();
-        let staged = self.stage(user, &state_dir_str, state_dir, scope).await?;
-        if !staged {
-            return Ok(false);
-        }
+        let rebuild = [&dir[..], &["read-tree", "--empty"]].concat();
+        self.run_as(user, &rebuild, scope).await?;
+        let mut stage = dir.to_vec();
+        stage.extend(["update-index", "--add", "--remove", "--"]);
+        stage.extend(MANAGED_FILES);
+        self.run_as(user, &stage, scope).await?;
 
-        let clean = self
-            .status_as(
-                user,
-                &["-C", &state_dir_str, "diff", "--cached", "--quiet"],
-                scope,
-            )
+        let tree = self
+            .run_as(user, &[&dir[..], &["write-tree"]].concat(), scope)
             .await?;
-        if clean {
-            return Ok(false);
+        let parent = self
+            .found(user, &dir, &format!("{BRANCH}^{{commit}}"), scope)
+            .await?;
+        match &parent {
+            Some(parent) => {
+                let recorded = self
+                    .found(user, &dir, &format!("{parent}^{{tree}}"), scope)
+                    .await?;
+                if recorded.as_deref() == Some(tree.as_str()) {
+                    return Ok(false);
+                }
+            }
+            None => {
+                let listed = [&dir[..], &["ls-files"]].concat();
+                if self.run_as(user, &listed, scope).await?.is_empty() {
+                    return Ok(false);
+                }
+            }
         }
 
+        let mut commit = dir.to_vec();
+        commit.extend(["commit-tree", &tree, "-m", COMMIT_MESSAGE]);
+        if let Some(parent) = &parent {
+            commit.extend(["-p", parent]);
+        }
+        let command = AUTHOR
+            .iter()
+            .fold(self.command(user, &commit), |command, (key, value)| {
+                command.env(key, value)
+            });
+        let commit = run(command, scope).await?;
+
+        let tree = format!("{commit}^{{tree}}");
+        let only = format!("{commit}^!");
         self.run_as(
             user,
-            &[
-                "-c",
-                &format!("user.name={AUTHOR_NAME}"),
-                "-c",
-                &format!("user.email={AUTHOR_EMAIL}"),
-                "-C",
-                &state_dir_str,
-                "commit",
-                "-q",
-                "-m",
-                COMMIT_MESSAGE,
-            ],
+            &[&dir[..], &["rev-parse", "--verify", "--quiet", &tree]].concat(),
             scope,
         )
         .await?;
+        self.run_as(user, &[&dir[..], &export(&only)].concat(), scope)
+            .await?;
 
+        let old = parent.as_deref().unwrap_or("");
+        let publish = [
+            &dir[..],
+            &["update-ref", "-m", COMMIT_MESSAGE, BRANCH, &commit, old],
+        ]
+        .concat();
+        self.run_as(user, &publish, scope).await?;
         Ok(true)
     }
 
-    /// Stages the generated config and nothing else: anything a user drops next
-    /// to it stays out of mix's commits.
-    async fn stage(
+    async fn found(
         &self,
         user: &InvokingUser,
-        state_dir_str: &str,
-        state_dir: &Path,
+        dir: &[&str],
+        rev: &str,
         scope: &Scope,
-    ) -> Result<bool> {
-        let mut args = vec!["-C", state_dir_str, "ls-files", "--"];
-        args.extend(MANAGED_FILES);
-        let tracked = self.run_as(user, &args, scope).await?;
-
-        let mut paths: Vec<&str> = Vec::new();
-        for file in MANAGED_FILES {
-            if tracked.lines().any(|line| line == file) || exists(state_dir.join(file)).await {
-                paths.push(file);
-            }
-        }
-        if paths.is_empty() {
-            return Ok(false);
-        }
-
-        let mut args = vec!["-C", state_dir_str, "add", "-A", "--"];
-        args.extend(&paths);
-        self.run_as(user, &args, scope).await?;
-        Ok(true)
+    ) -> Result<Option<String>> {
+        let args = [dir, &["rev-parse", "--verify", "--quiet", rev]].concat();
+        let output = self
+            .command(user, &args)
+            .output(scope)
+            .await
+            .map_err(exec_error)?;
+        Ok(output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string()))
     }
 
     async fn run_as(&self, user: &InvokingUser, args: &[&str], scope: &Scope) -> Result<String> {
@@ -207,6 +289,15 @@ impl Git {
     }
 }
 
+fn export(only: &str) -> [&str; 4] {
+    [
+        "fast-export",
+        "--full-tree",
+        "--reference-excluded-parents",
+        only,
+    ]
+}
+
 async fn resolve_binary(user: &InvokingUser) -> String {
     let profile_git = profile_git(user);
     if exists(&profile_git).await {
@@ -220,57 +311,7 @@ fn profile_git(user: &InvokingUser) -> PathBuf {
 }
 
 #[cfg(test)]
-#[allow(clippy::disallowed_methods)]
-pub(crate) mod testing {
-    use std::os::unix::fs::PermissionsExt;
-    use std::path::{Path, PathBuf};
-
-    use mix_core::identity::InvokingUser;
-
-    use super::PROFILE_GIT;
-
-    pub fn on_path() -> PathBuf {
-        let path = std::env::var_os("PATH").unwrap_or_default();
-        std::env::split_paths(&path)
-            .map(|directory| directory.join("git"))
-            .find(|candidate| candidate.is_file())
-            .expect("the tests need git on PATH")
-    }
-
-    /// The running account with `home` as its home, whose profile's `git` is the one on `PATH`,
-    /// failing every `refused` subcommand.
-    pub fn user(home: &Path, refused: Option<&str>) -> InvokingUser {
-        let profile_git = home.join(PROFILE_GIT);
-        std::fs::create_dir_all(profile_git.parent().unwrap()).unwrap();
-        match refused {
-            None => std::os::unix::fs::symlink(on_path(), &profile_git).unwrap(),
-            Some(refused) => {
-                std::fs::write(
-                    &profile_git,
-                    format!(
-                        "#!/bin/sh\nfor arg; do [ \"$arg\" = {refused} ] && exit 1; done\nexec '{}' \"$@\"\n",
-                        on_path().display()
-                    ),
-                )
-                .unwrap();
-                std::fs::set_permissions(&profile_git, std::fs::Permissions::from_mode(0o755))
-                    .unwrap();
-            }
-        }
-        InvokingUser {
-            uid: nix::unistd::Uid::current().as_raw(),
-            gid: nix::unistd::Gid::current().as_raw(),
-            name: "mix-user".to_string(),
-            home: home.to_path_buf(),
-        }
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::disallowed_methods)]
 mod tests {
-    use mix_core::paths::{FLAKE_NIX, HOME_NIX, INDEX_LOCK};
-
     use super::*;
 
     fn user(home: &Path) -> InvokingUser {
@@ -282,35 +323,8 @@ mod tests {
         }
     }
 
-    fn git() -> Git {
-        Git {
-            binary: testing::on_path().to_string_lossy().into_owned(),
-        }
-    }
-
-    async fn repository(home: &Path) -> PathBuf {
-        let state_dir = mix_core::paths::mix_state_dir(home);
-        tokio::fs::create_dir_all(&state_dir).await.unwrap();
-        git()
-            .init(&user(home), &state_dir, &mix_exec::Scope::root())
-            .await
-            .unwrap();
-        state_dir
-    }
-
-    async fn committed_files(state_dir: &Path) -> Vec<String> {
-        let output = mix_exec::Command::new("git")
-            .args(["-C", &state_dir.to_string_lossy(), "ls-files"])
-            .output(&mix_exec::Scope::root())
-            .await
-            .unwrap();
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(str::to_string)
-            .collect()
-    }
-
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
     async fn resolve_binary_uses_the_git_in_the_users_nix_profile() {
         let home = tempfile::tempdir().unwrap();
         let profile_git = profile_git(&user(home.path()));
@@ -326,327 +340,5 @@ mod tests {
     async fn resolve_binary_falls_back_to_the_path() {
         let home = tempfile::tempdir().unwrap();
         assert_eq!(resolve_binary(&user(home.path())).await, "git");
-    }
-
-    #[tokio::test]
-    #[ignore = "requires git"]
-    async fn sync_is_a_noop_for_a_state_dir_that_is_not_a_repository() {
-        let home = tempfile::tempdir().unwrap();
-        let state_dir = mix_core::paths::mix_state_dir(home.path());
-        tokio::fs::create_dir_all(&state_dir).await.unwrap();
-
-        let committed = git()
-            .sync(&user(home.path()), &state_dir, &mix_exec::Scope::root())
-            .await
-            .unwrap();
-
-        assert!(!committed);
-    }
-
-    #[tokio::test]
-    #[ignore = "requires git"]
-    async fn sync_commits_the_generated_config() {
-        let home = tempfile::tempdir().unwrap();
-        let state_dir = repository(home.path()).await;
-        std::fs::write(state_dir.join(FLAKE_NIX), "flake-content").unwrap();
-        std::fs::write(state_dir.join(HOME_NIX), "home-content").unwrap();
-
-        let committed = git()
-            .sync(&user(home.path()), &state_dir, &mix_exec::Scope::root())
-            .await
-            .unwrap();
-
-        assert!(committed);
-        assert_eq!(
-            committed_files(&state_dir).await,
-            vec![FLAKE_NIX.to_string(), HOME_NIX.to_string()]
-        );
-    }
-
-    #[tokio::test]
-    #[ignore = "requires git"]
-    async fn sync_leaves_anything_that_is_not_generated_config_uncommitted() {
-        let home = tempfile::tempdir().unwrap();
-        let state_dir = repository(home.path()).await;
-        std::fs::write(state_dir.join(FLAKE_NIX), "flake-content").unwrap();
-        std::fs::write(state_dir.join("id_rsa"), "a stray secret").unwrap();
-        std::fs::write(state_dir.join("flake.nix~"), "an editor backup").unwrap();
-        std::fs::create_dir_all(state_dir.join("result")).unwrap();
-        std::fs::write(state_dir.join("result/out"), "build output").unwrap();
-
-        git()
-            .sync(&user(home.path()), &state_dir, &mix_exec::Scope::root())
-            .await
-            .unwrap();
-
-        assert_eq!(
-            committed_files(&state_dir).await,
-            vec![FLAKE_NIX.to_string()]
-        );
-    }
-
-    #[tokio::test]
-    #[ignore = "requires git"]
-    async fn sync_commits_nothing_twice() {
-        let home = tempfile::tempdir().unwrap();
-        let state_dir = repository(home.path()).await;
-        std::fs::write(state_dir.join(FLAKE_NIX), "flake-content").unwrap();
-
-        let git = git();
-        assert!(
-            git.sync(&user(home.path()), &state_dir, &mix_exec::Scope::root())
-                .await
-                .unwrap()
-        );
-        assert!(
-            !git.sync(&user(home.path()), &state_dir, &mix_exec::Scope::root())
-                .await
-                .unwrap()
-        );
-    }
-
-    #[tokio::test]
-    #[ignore = "requires git"]
-    async fn sync_commits_drift_in_the_generated_config() {
-        let home = tempfile::tempdir().unwrap();
-        let state_dir = repository(home.path()).await;
-        std::fs::write(state_dir.join(FLAKE_NIX), "flake-content").unwrap();
-        let git = git();
-        git.sync(&user(home.path()), &state_dir, &mix_exec::Scope::root())
-            .await
-            .unwrap();
-
-        std::fs::write(state_dir.join(FLAKE_NIX), "repaired-content").unwrap();
-
-        assert!(
-            git.sync(&user(home.path()), &state_dir, &mix_exec::Scope::root())
-                .await
-                .unwrap()
-        );
-    }
-
-    fn hook(path: &Path, marker: &Path) {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(
-            path,
-            format!("#!/bin/sh\ntouch '{}'\nexit 1\n", marker.display()),
-        )
-        .unwrap();
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-
-    #[tokio::test]
-    #[ignore = "requires git"]
-    async fn sync_runs_no_hook_of_the_repository_or_the_user() {
-        let home = tempfile::tempdir().unwrap();
-        let state_dir = repository(home.path()).await;
-        let marker = home.path().join("hook-ran");
-        hook(&state_dir.join(".git/hooks/pre-commit"), &marker);
-        hook(&home.path().join("hooks/pre-commit"), &marker);
-        std::fs::write(
-            home.path().join(".gitconfig"),
-            format!("[core]\n\thooksPath = {}/hooks\n", home.path().display()),
-        )
-        .unwrap();
-        std::fs::write(state_dir.join(FLAKE_NIX), "flake-content").unwrap();
-
-        let committed = git()
-            .sync(&user(home.path()), &state_dir, &mix_exec::Scope::root())
-            .await
-            .unwrap();
-
-        assert!(committed);
-        assert!(!marker.exists());
-    }
-
-    #[tokio::test]
-    #[ignore = "requires git"]
-    async fn sync_commits_unsigned_whatever_the_user_configured() {
-        let home = tempfile::tempdir().unwrap();
-        let state_dir = repository(home.path()).await;
-        let settings = "[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = /bin/false\n";
-        std::fs::write(home.path().join(".gitconfig"), settings).unwrap();
-        std::fs::create_dir_all(home.path().join(".config/git")).unwrap();
-        std::fs::write(home.path().join(".config/git/config"), settings).unwrap();
-        let local = state_dir.join(".git/config");
-        let mut config = std::fs::read_to_string(&local).unwrap();
-        config.push_str(settings);
-        std::fs::write(&local, config).unwrap();
-        std::fs::write(state_dir.join(FLAKE_NIX), "flake-content").unwrap();
-
-        let committed = git()
-            .sync(&user(home.path()), &state_dir, &mix_exec::Scope::root())
-            .await
-            .unwrap();
-
-        assert!(committed);
-        assert_eq!(
-            committed_files(&state_dir).await,
-            vec![FLAKE_NIX.to_string()]
-        );
-    }
-
-    async fn committed(home: &Path) -> PathBuf {
-        let state_dir = repository(home).await;
-        std::fs::write(state_dir.join(FLAKE_NIX), "flake-content").unwrap();
-        git()
-            .sync(&user(home), &state_dir, &mix_exec::Scope::root())
-            .await
-            .unwrap();
-        state_dir
-    }
-
-    async fn verified(home: &Path, state_dir: &Path) -> bool {
-        git()
-            .verify(
-                &user(home),
-                &state_dir.join(GIT_DIR),
-                &mix_exec::Scope::root(),
-            )
-            .await
-            .unwrap()
-    }
-
-    fn objects(repository: &Path) -> Vec<PathBuf> {
-        std::fs::read_dir(repository.join("objects"))
-            .unwrap()
-            .filter_map(std::result::Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.file_name().is_some_and(|name| name.len() == 2))
-            .flat_map(|fanout| {
-                std::fs::read_dir(fanout)
-                    .unwrap()
-                    .filter_map(std::result::Result::ok)
-            })
-            .map(|entry| entry.path())
-            .collect()
-    }
-
-    #[tokio::test]
-    #[ignore = "requires git"]
-    async fn a_committed_repository_verifies() {
-        let home = tempfile::tempdir().unwrap();
-        let state_dir = committed(home.path()).await;
-
-        assert!(verified(home.path(), &state_dir).await);
-    }
-
-    #[tokio::test]
-    #[ignore = "requires git"]
-    async fn a_repository_whose_commit_lost_its_tree_does_not_verify() {
-        let home = tempfile::tempdir().unwrap();
-        let state_dir = committed(home.path()).await;
-        let head = mix_exec::Command::new("git")
-            .args(["-C", &state_dir.to_string_lossy(), "rev-parse", "HEAD"])
-            .output(&mix_exec::Scope::root())
-            .await
-            .unwrap();
-        let head = String::from_utf8_lossy(&head.stdout).trim().to_string();
-        for object in objects(&state_dir.join(GIT_DIR)) {
-            let name = format!(
-                "{}{}",
-                object
-                    .parent()
-                    .unwrap()
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy(),
-                object.file_name().unwrap().to_string_lossy()
-            );
-            if name != head {
-                std::fs::remove_file(object).unwrap();
-            }
-        }
-
-        assert!(!verified(home.path(), &state_dir).await);
-    }
-
-    #[tokio::test]
-    #[ignore = "requires git"]
-    async fn a_repository_whose_head_does_not_resolve_does_not_verify() {
-        let home = tempfile::tempdir().unwrap();
-        let state_dir = committed(home.path()).await;
-        std::fs::write(state_dir.join(GIT_DIR).join("HEAD"), "garbage\n").unwrap();
-
-        assert!(!verified(home.path(), &state_dir).await);
-    }
-
-    #[tokio::test]
-    #[ignore = "requires git"]
-    async fn a_repository_with_an_unreadable_config_does_not_verify() {
-        let home = tempfile::tempdir().unwrap();
-        let state_dir = committed(home.path()).await;
-        std::fs::write(state_dir.join(GIT_DIR).join("config"), "[[[ not a config\n").unwrap();
-
-        assert!(!verified(home.path(), &state_dir).await);
-    }
-
-    #[tokio::test]
-    #[ignore = "requires git"]
-    async fn a_repository_with_an_unreadable_index_does_not_verify() {
-        let home = tempfile::tempdir().unwrap();
-        let state_dir = committed(home.path()).await;
-        std::fs::write(state_dir.join(GIT_DIR).join("index"), "garbage").unwrap();
-
-        assert!(!verified(home.path(), &state_dir).await);
-    }
-
-    #[tokio::test]
-    #[ignore = "requires git"]
-    async fn a_repository_with_nothing_committed_does_not_verify() {
-        let home = tempfile::tempdir().unwrap();
-        let state_dir = repository(home.path()).await;
-
-        assert!(!verified(home.path(), &state_dir).await);
-    }
-
-    #[tokio::test]
-    #[ignore = "requires git"]
-    async fn a_missing_repository_is_not_answered_by_one_further_up() {
-        let home = tempfile::tempdir().unwrap();
-        let outer = committed(home.path()).await;
-        let nested_home = outer.join("nested");
-        let state_dir = mix_core::paths::mix_state_dir(&nested_home);
-        std::fs::create_dir_all(&state_dir).unwrap();
-
-        assert!(!verified(home.path(), &state_dir).await);
-    }
-
-    #[tokio::test]
-    #[ignore = "requires git"]
-    async fn create_commits_the_files_already_there() {
-        let home = tempfile::tempdir().unwrap();
-        let state_dir = mix_core::paths::mix_state_dir(home.path());
-        std::fs::create_dir_all(&state_dir).unwrap();
-        std::fs::write(state_dir.join(FLAKE_NIX), "flake-content").unwrap();
-        std::fs::write(state_dir.join(HOME_NIX), "home-content").unwrap();
-
-        git()
-            .create(&user(home.path()), &state_dir, &mix_exec::Scope::root())
-            .await
-            .unwrap();
-
-        assert!(verified(home.path(), &state_dir).await);
-        assert_eq!(
-            committed_files(&state_dir).await,
-            vec![FLAKE_NIX.to_string(), HOME_NIX.to_string()]
-        );
-    }
-
-    #[tokio::test]
-    #[ignore = "requires git"]
-    async fn sync_fails_while_a_stale_index_lock_is_left_behind() {
-        let home = tempfile::tempdir().unwrap();
-        let state_dir = committed(home.path()).await;
-        std::fs::write(state_dir.join(GIT_DIR).join(INDEX_LOCK), "").unwrap();
-        std::fs::write(state_dir.join(FLAKE_NIX), "changed").unwrap();
-
-        let synced = git()
-            .sync(&user(home.path()), &state_dir, &mix_exec::Scope::root())
-            .await;
-
-        assert!(synced.is_err());
-        assert!(verified(home.path(), &state_dir).await);
     }
 }

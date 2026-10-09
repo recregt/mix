@@ -7,7 +7,10 @@ use crate::action::{
 };
 use crate::bootstrap::stale_restart;
 use crate::identity::{self, InvokingUser};
-use crate::paths::{INDEX_LOCK, NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT};
+use crate::paths::{
+    INDEX_LOCK, NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT, REPOSITORY_CONFIG,
+    REPOSITORY_CONFIG_CONTENTS,
+};
 use crate::plan::{StepSpec, Title};
 use crate::targets::{Target, UnitSource};
 use mix_events::v1::Verb;
@@ -178,12 +181,18 @@ pub fn queries(target: &Target<'_>) -> Vec<Query> {
             if owner.is_some_and(|(uid, _)| uid != 0) {
                 queries.push(Query::TreeOwner(path.to_path_buf()));
             }
+            if let Some(parent) = path.parent() {
+                queries.push(Query::Path(parent.to_path_buf()));
+            }
             queries
         }
         Target::SeededFile { path, owner, .. } => {
             let mut queries = vec![Query::Path(path.to_path_buf())];
             if owner.is_some_and(|(uid, _)| uid != 0) {
                 queries.push(Query::TreeOwner(path.to_path_buf()));
+            }
+            if let Some(parent) = path.parent() {
+                queries.push(Query::Path(parent.to_path_buf()));
             }
             queries
         }
@@ -223,6 +232,7 @@ pub fn queries(target: &Target<'_>) -> Vec<Query> {
                 owner: (user.uid, user.gid),
             },
             Query::TreeOwner(path.to_path_buf()),
+            Query::Contents(path.join(REPOSITORY_CONFIG)),
         ],
         Target::Program { path, source, .. } => vec![
             Query::Path((*path).into()),
@@ -265,6 +275,11 @@ fn unit_source<'f>(src: &UnitSource, facts: &'f [Fact]) -> Option<&'f [u8]> {
         UnitSource::File(_) => contents(facts, 3),
         UnitSource::Text(text) => Some(text.as_bytes()),
     }
+}
+
+fn orphaned(facts: &[Fact]) -> bool {
+    facts.len() > 1
+        && matches!(facts.last(), Some(Fact::Path(parent)) if parent.kind != Kind::Directory)
 }
 
 fn absent(kind: Kind) -> Option<Finding> {
@@ -419,6 +434,9 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
             expected, owner, ..
         } => {
             let found = path_facts(facts, 0);
+            if orphaned(facts) {
+                return None;
+            }
             match expected {
                 Some(expected) => {
                     if let Some(finding) = absent(found.kind) {
@@ -444,6 +462,9 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
         }
         Target::SeededFile { owner, .. } => {
             let found = path_facts(facts, 0);
+            if orphaned(facts) {
+                return None;
+            }
             absent(found.kind).or_else(|| owner_drift(found.owner, *owner))
         }
         Target::Group { gid, .. } => match &facts[0] {
@@ -520,6 +541,9 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
             }
             if repository.kind != Kind::Directory {
                 return Some(Finding::RepositoryBroken);
+            }
+            if contents(facts, 5) != Some(REPOSITORY_CONFIG_CONTENTS.as_bytes()) {
+                return None;
             }
             if !matches!(facts[2], Fact::Repository { intact: true, .. }) {
                 return Some(Finding::RepositoryBroken);
