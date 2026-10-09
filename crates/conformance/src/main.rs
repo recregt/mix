@@ -3,13 +3,14 @@ use std::process::ExitCode;
 
 use mix_conformance::contract::accounts::Accounts;
 use mix_conformance::contract::files::FileTree;
+use mix_conformance::contract::git::{GIT, Git};
 use mix_conformance::contract::units::Units;
 use proptest::test_runner::{
     Config, FailurePersistence, FileFailurePersistence, TestError, TestRunner,
 };
 use proptest_state_machine::{ReferenceStateMachine, StateMachineTest};
 
-const SUITES: [&str; 3] = ["files", "accounts", "units"];
+const SUITES: [&str; 4] = ["files", "accounts", "units", "git"];
 
 fn config(seeds: Option<&str>, suite: &str) -> Config {
     let path: Option<&'static str> =
@@ -58,10 +59,15 @@ fn main() -> ExitCode {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--seeds" => seeds = args.next(),
+            "--git" => {
+                if let Some(git) = args.next() {
+                    let _ = GIT.set(git.into());
+                }
+            }
             name if SUITES.contains(&name) => chosen.push(arg),
             other => {
                 report(&format!(
-                    "unknown argument {other:?}; expected {SUITES:?} or --seeds DIR"
+                    "unknown argument {other:?}; expected {SUITES:?}, --seeds DIR or --git PATH"
                 ));
                 return ExitCode::from(2);
             }
@@ -69,6 +75,10 @@ fn main() -> ExitCode {
     }
     if chosen.is_empty() {
         chosen = SUITES.iter().map(|name| name.to_string()).collect();
+    }
+    if chosen.iter().any(|name| name == "git") && GIT.get().is_none() {
+        report("the git suite checks the pinned git, so it needs --git PATH");
+        return ExitCode::from(2);
     }
     if !nix::unistd::Uid::effective().is_root() {
         report("the contract changes accounts, units and owners, so it runs as root");
@@ -80,6 +90,7 @@ fn main() -> ExitCode {
             "files" => suite::<FileTree>(seeds.as_deref(), name),
             "accounts" => suite::<Accounts>(seeds.as_deref(), name),
             "units" => suite::<Units>(seeds.as_deref(), name),
+            "git" => suite::<Git>(seeds.as_deref(), name),
             _ => unreachable!("only known suites are chosen"),
         };
         match result {

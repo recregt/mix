@@ -1,8 +1,8 @@
 use mix_conformance::model::Model;
 use mix_conformance::suite::{
-    Mix, bootstrap, doctor, findings, install, repair, succeeded, violations,
+    FaultKind, Mix, bootstrap, doctor, findings, install, repair, succeeded, violations,
 };
-use mix_core::testkit::{breakages, owned};
+use mix_core::testkit::{Breakage, Damage, breakages, owned};
 use proptest_state_machine::prop_state_machine;
 
 #[tokio::test]
@@ -70,6 +70,53 @@ async fn any_single_damage_to_what_mix_owns_is_repaired_as_planned() {
         found.len(),
         found.join("\n")
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_history_that_cannot_be_created_puts_the_old_repository_back() {
+    let model = Model::new();
+    model.run(bootstrap(), false, true).await;
+    model.run(install(&["hello"]), false, false).await;
+    let repository = mix_core::paths::repository_dir(&model.user().home);
+    Breakage {
+        path: repository.join(mix_core::paths::REPOSITORY_HEAD),
+        damage: Damage::Altered,
+    }
+    .apply(&mut model.world.lock().unwrap_or_else(|e| e.into_inner()));
+    let history = |model: &Model| -> Vec<_> {
+        let world = model.snapshot();
+        world
+            .files
+            .into_iter()
+            .filter(|(path, _)| path.starts_with(&repository))
+            .map(|(path, entry)| (path, entry.content))
+            .collect()
+    };
+    let damaged = history(&model);
+
+    for at in 0.. {
+        let fork = model.fork();
+        let Some(done) = fork.faulted(repair(), true, at, FaultKind::Fail).await else {
+            continue;
+        };
+        let failed: Vec<&serde_json::Value> = done["changes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|change| change["status"] == "STATUS_FAILED")
+            .collect();
+        assert!(
+            !failed.is_empty(),
+            "no step created the repository: {done:#}"
+        );
+        if failed
+            .iter()
+            .any(|change| change["operation"] == "OPERATION_CREATE_REPOSITORY")
+        {
+            assert_eq!(history(&fork), damaged, "{done:#}");
+            return;
+        }
+    }
 }
 
 prop_state_machine! {
