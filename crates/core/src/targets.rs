@@ -259,16 +259,16 @@ impl Target<'_> {
 
     pub fn label(&self) -> Cow<'_, str> {
         match self {
-            Target::Parent { path, .. } | Target::Directory { path, .. } => path.to_string_lossy(),
-            Target::File { path, .. } => path.to_string_lossy(),
-            Target::SeededFile { path, .. } => path.to_string_lossy(),
+            Target::Parent { path, .. } | Target::Directory { path, .. } => text(path),
+            Target::File { path, .. } => text(path),
+            Target::SeededFile { path, .. } => text(path),
             Target::Group { name, .. } => Cow::Borrowed(name),
             Target::GroupMember { user, .. } => Cow::Borrowed(user),
             Target::User { n, .. } => identity::user_name(*n),
             Target::SystemdUnit { name, .. } => Cow::Borrowed(name),
             Target::PathExists { name, .. } => Cow::Borrowed(name),
             Target::RepositoryOwner { path, .. } => {
-                let path = path.to_string_lossy();
+                let path = text(path);
                 let mut label = String::with_capacity(path.len() + OWNERSHIP.len());
                 label.push_str(&path);
                 label.push_str(OWNERSHIP);
@@ -276,7 +276,7 @@ impl Target<'_> {
             }
             Target::Repository { path, .. }
             | Target::Generations { path, .. }
-            | Target::HomeFiles { path, .. } => path.to_string_lossy(),
+            | Target::HomeFiles { path, .. } => text(path),
             Target::Program { path, .. } | Target::Journals { path } => Cow::Borrowed(path),
             Target::Leftovers { .. } => Cow::Borrowed(LEFTOVERS),
         }
@@ -301,6 +301,13 @@ impl Target<'_> {
             Target::Program { .. } => Category::Services,
             Target::Generations { .. } => Category::Configuration,
         }
+    }
+}
+
+fn text(path: &Path) -> Cow<'_, str> {
+    match path.to_str() {
+        Some(text) => Cow::Borrowed(text),
+        None => path.to_string_lossy(),
     }
 }
 
@@ -584,6 +591,17 @@ mod tests {
             owner: None,
         };
         assert_eq!(target.label(), "/nix");
+    }
+
+    #[test]
+    fn label_replaces_bytes_that_are_not_utf8() {
+        use std::os::unix::ffi::OsStrExt;
+        let target = Target::Directory {
+            path: Path::new(std::ffi::OsStr::from_bytes(b"/home/a\xffb")).into(),
+            mode: 0o755,
+            owner: None,
+        };
+        assert_eq!(target.label(), "/home/a\u{fffd}b");
     }
 
     #[test]
