@@ -22,6 +22,7 @@ jobs:
     timeout-minutes: 200
     env:
       ASAN_OPTIONS: malloc_context_size=0
+      RUSTUP_TOOLCHAIN: nightly
     container:
       image: ghcr.io/recregt/mix-nix-fuzz@sha256:c81e71c1e17055e7394d8e96bb972d952a96d9dc1b7a92abc0c1ba2df9914191 # latest
     strategy:
@@ -111,6 +112,7 @@ jobs:
     timeout-minutes: 100
     env:
       ASAN_OPTIONS: malloc_context_size=0
+      RUSTUP_TOOLCHAIN: nightly
     container:
       image: ghcr.io/recregt/mix-nix-fuzz@sha256:c81e71c1e17055e7394d8e96bb972d952a96d9dc1b7a92abc0c1ba2df9914191 # latest
     steps:

@@ -4,15 +4,29 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     crane.url = "github:ipetkov/crane";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
-    { nixpkgs, crane, ... }:
+    {
+      nixpkgs,
+      crane,
+      rust-overlay,
+      ...
+    }:
     let
       system = "x86_64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
+      pkgs = import nixpkgs {
+        inherit system;
+        overlays = [ (import rust-overlay) ];
+      };
       inherit (pkgs) lib;
-      craneLib = crane.mkLib pkgs;
+      craneLib = (crane.mkLib pkgs).overrideToolchain (
+        p: p.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml
+      );
       src = lib.fileset.toSource {
         root = ./.;
         fileset = lib.fileset.unions [
