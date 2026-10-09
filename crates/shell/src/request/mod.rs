@@ -251,6 +251,7 @@ async fn host(
         host: session.host.clone(),
         faults: session.faults.clone(),
     };
+    let _released = Released(&ctx);
     let mut root = Root { tree, stopped };
     let concluded = op(&ctx, &mut root).await;
     let _ = root
@@ -316,6 +317,14 @@ pub async fn recover(
         &scope.shielded(),
     )
     .await)
+}
+
+struct Released<'c>(&'c Context);
+
+impl Drop for Released<'_> {
+    fn drop(&mut self) {
+        self.0.release();
+    }
 }
 
 pub async fn run(session: &Session, command: Command) {

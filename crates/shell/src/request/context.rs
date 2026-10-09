@@ -140,6 +140,15 @@ impl Context {
         })
     }
 
+    pub(crate) fn release(&self) {
+        if let Host::Model(world) = &self.host {
+            world
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .forget(&self.request.id);
+        }
+    }
+
     pub(crate) fn interrupted(&self, dir: &Path) -> bool {
         match &self.host {
             Host::Machine => !crate::effect::journal::unfinished(dir).is_empty(),
