@@ -1,11 +1,11 @@
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
-use crate::identity::InvokingUser;
 use crate::identity::{
     self, MIX_USERS_GID, MIX_USERS_GROUP, NIXBLD_GID, NIXBLD_GROUP, NIXBLD_UID_BASE,
     NIXBLD_USER_COUNT,
 };
+use crate::identity::{InvokingUser, UserRef};
 use crate::paths::{
     DEFAULT_PROFILE_NIX_ENV, FLAKE_LOCK, FLAKE_NIX, GITIGNORE, GITIGNORE_CONTENTS, HOME_NIX,
     MIX_BIN_DIR, MIX_DAEMON_SERVICE_DEST, MIX_DAEMON_SERVICE_UNIT, MIX_DAEMON_SOCKET_DEST,
@@ -157,11 +157,11 @@ pub enum Target<'a> {
     },
     RepositoryOwner {
         path: Cow<'a, Path>,
-        user: Cow<'a, InvokingUser>,
+        user: UserRef<'a>,
     },
     Repository {
         path: Cow<'a, Path>,
-        user: Cow<'a, InvokingUser>,
+        user: UserRef<'a>,
     },
     Program {
         path: &'static str,
@@ -172,16 +172,16 @@ pub enum Target<'a> {
         path: &'static str,
     },
     Leftovers {
-        user: Option<Cow<'a, InvokingUser>>,
+        user: Option<UserRef<'a>>,
         journals: &'static str,
     },
     Generations {
         path: Cow<'a, Path>,
-        user: Cow<'a, InvokingUser>,
+        user: UserRef<'a>,
     },
     HomeFiles {
         path: Cow<'a, Path>,
-        user: Cow<'a, InvokingUser>,
+        user: UserRef<'a>,
     },
 }
 
@@ -234,25 +234,25 @@ impl Target<'_> {
             Target::PathExists { name, path } => Target::PathExists { name, path },
             Target::RepositoryOwner { path, user } => Target::RepositoryOwner {
                 path: own_path(path),
-                user: Cow::Owned(user.into_owned()),
+                user: user.into_static(),
             },
             Target::Repository { path, user } => Target::Repository {
                 path: own_path(path),
-                user: Cow::Owned(user.into_owned()),
+                user: user.into_static(),
             },
             Target::Program { path, source, mode } => Target::Program { path, source, mode },
             Target::Journals { path } => Target::Journals { path },
             Target::Leftovers { user, journals } => Target::Leftovers {
-                user: user.map(|user| Cow::Owned(user.into_owned())),
+                user: user.map(UserRef::into_static),
                 journals,
             },
             Target::Generations { path, user } => Target::Generations {
                 path: own_path(path),
-                user: Cow::Owned(user.into_owned()),
+                user: user.into_static(),
             },
             Target::HomeFiles { path, user } => Target::HomeFiles {
                 path: own_path(path),
-                user: Cow::Owned(user.into_owned()),
+                user: user.into_static(),
             },
         }
     }
@@ -356,11 +356,11 @@ fn push_user_targets<'a>(items: &mut Vec<Target<'a>>, cfg: &'a UserConfig) {
     items.push(state);
     items.push(Target::RepositoryOwner {
         path: Cow::Owned(repository.clone()),
-        user: Cow::Borrowed(&cfg.user),
+        user: UserRef::Borrowed(&cfg.user),
     });
     items.push(Target::Repository {
         path: Cow::Owned(repository),
-        user: Cow::Borrowed(&cfg.user),
+        user: UserRef::Borrowed(&cfg.user),
     });
     items.push(Target::GroupMember {
         group: MIX_USERS_GROUP,
@@ -368,11 +368,11 @@ fn push_user_targets<'a>(items: &mut Vec<Target<'a>>, cfg: &'a UserConfig) {
     });
     items.push(Target::Generations {
         path: Cow::Owned(generations),
-        user: Cow::Borrowed(&cfg.user),
+        user: UserRef::Borrowed(&cfg.user),
     });
     items.push(Target::HomeFiles {
         path: Cow::Borrowed(home),
-        user: Cow::Borrowed(&cfg.user),
+        user: UserRef::Borrowed(&cfg.user),
     });
 }
 
@@ -543,7 +543,7 @@ pub fn targets<'a>(user_config: Option<&'a UserConfig>, policy: &'a Policy) -> V
         push_user_targets(&mut items, cfg);
     }
     items.push(Target::Leftovers {
-        user: user_config.map(|cfg| Cow::Borrowed(&cfg.user)),
+        user: user_config.map(|cfg| UserRef::Borrowed(&cfg.user)),
         journals: JOURNAL_DIR,
     });
 

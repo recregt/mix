@@ -50,3 +50,47 @@ pub struct InvokingUser {
     pub name: String,
     pub home: std::path::PathBuf,
 }
+
+#[derive(Clone)]
+pub enum UserRef<'a> {
+    Borrowed(&'a InvokingUser),
+    Owned(Box<InvokingUser>),
+}
+
+impl UserRef<'_> {
+    pub fn into_static(self) -> UserRef<'static> {
+        match self {
+            UserRef::Borrowed(user) => UserRef::Owned(Box::new(user.clone())),
+            UserRef::Owned(user) => UserRef::Owned(user),
+        }
+    }
+}
+
+impl std::ops::Deref for UserRef<'_> {
+    type Target = InvokingUser;
+
+    fn deref(&self) -> &InvokingUser {
+        match self {
+            UserRef::Borrowed(user) => user,
+            UserRef::Owned(user) => user,
+        }
+    }
+}
+
+impl std::fmt::Debug for UserRef<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        InvokingUser::fmt(self, f)
+    }
+}
+
+impl<'a> From<&'a InvokingUser> for UserRef<'a> {
+    fn from(user: &'a InvokingUser) -> Self {
+        UserRef::Borrowed(user)
+    }
+}
+
+impl From<InvokingUser> for UserRef<'static> {
+    fn from(user: InvokingUser) -> Self {
+        UserRef::Owned(Box::new(user))
+    }
+}

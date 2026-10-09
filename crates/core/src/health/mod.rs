@@ -6,7 +6,7 @@ use crate::action::{
     Action, Expect, Fact, Failure, Kind, Owner, PathFacts, ProgramFacts, Query, UserSpec,
 };
 use crate::bootstrap::stale_restart;
-use crate::identity;
+use crate::identity::{self, InvokingUser};
 use crate::paths::{INDEX_LOCK, NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT};
 use crate::plan::{StepSpec, Title};
 use crate::targets::{Target, UnitSource};
@@ -217,7 +217,7 @@ pub fn queries(target: &Target<'_>) -> Vec<Query> {
         Target::Repository { path, user } => vec![
             Query::Path(path.join(INDEX_LOCK)),
             Query::Path(path.to_path_buf()),
-            Query::Repository(user.clone().into_owned()),
+            Query::Repository(InvokingUser::clone(user)),
             Query::Strangers {
                 path: path.to_path_buf(),
                 owner: (user.uid, user.gid),
@@ -241,8 +241,8 @@ pub fn queries(target: &Target<'_>) -> Vec<Query> {
             );
             queries
         }
-        Target::Generations { user, .. } => vec![Query::Profile(user.clone().into_owned())],
-        Target::HomeFiles { user, .. } => vec![Query::Clobbered(user.clone().into_owned())],
+        Target::Generations { user, .. } => vec![Query::Profile(InvokingUser::clone(user))],
+        Target::HomeFiles { user, .. } => vec![Query::Clobbered(InvokingUser::clone(user))],
     }
 }
 
@@ -845,7 +845,7 @@ pub fn fix(
                 .into_iter()
                 .collect();
             actions.push(Action::CreateRepository {
-                user: user.clone().into_owned(),
+                user: InvokingUser::clone(user),
             });
             actions
         }
@@ -895,7 +895,7 @@ pub fn fix(
                 .is_some_and(|active| profile.dangling.contains(&active))
             {
                 actions.push(Action::ActivateProfile {
-                    user: user.clone().into_owned(),
+                    user: InvokingUser::clone(user),
                     source: crate::action::FlakeSource::Git,
                 });
             }
@@ -904,7 +904,7 @@ pub fn fix(
                     .dangling
                     .iter()
                     .map(|generation| Action::DeleteGeneration {
-                        user: user.clone().into_owned(),
+                        user: InvokingUser::clone(user),
                         generation: *generation,
                     }),
             );
@@ -1004,7 +1004,7 @@ impl StepSpec for RecordRepaired {
 
 pub fn repair_steps(targets: Vec<Target<'_>>, request: &str) -> Vec<Box<dyn StepSpec>> {
     let user = targets.iter().find_map(|target| match target {
-        Target::Repository { user, .. } => Some(user.clone().into_owned()),
+        Target::Repository { user, .. } => Some(InvokingUser::clone(user)),
         _ => None,
     });
     let mut steps = target_steps(targets, request);

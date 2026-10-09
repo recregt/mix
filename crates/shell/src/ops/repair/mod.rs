@@ -493,7 +493,7 @@ mod tests {
     fn repository_target(user: &mix_core::identity::InvokingUser) -> Vec<Target<'static>> {
         vec![Target::Repository {
             path: mix_core::paths::repository_dir(&user.home).into(),
-            user: std::borrow::Cow::Owned(user.clone()),
+            user: user.clone().into(),
         }]
     }
 
