@@ -317,6 +317,10 @@ pub(crate) fn problem_of(found: &Diagnostic) -> Problem {
         Some(diagnostic::Detail::Unit(detail)) => {
             (detail.unit.clone(), Some(problem::Metadata::Unit(*detail)))
         }
+        Some(diagnostic::Detail::Program(detail)) => (
+            detail.program.clone(),
+            Some(problem::Metadata::Program(detail)),
+        ),
         None => (String::new(), None),
     };
     Problem {

@@ -3,7 +3,7 @@ source: crates/render/src/replay.rs
 expression: "std::str::from_utf8(observed).expect(\"what mix prints is UTF-8\")"
 ---
 {"header":{"format":"mix.capture.v1","mixVersion":"0.1.0","request":"01920000-0000-7000-8000-000000000004"}}
-{"record":{"offset":"0s","envelope":{"seq":"1","request":"01920000-0000-7000-8000-000000000004","nodeStarted":{"id":"1","key":"install","command":{"mixVersion":"0.1.0","schemaMinor":7,"install":{"packages":["hello"]}}}}}}
+{"record":{"offset":"0s","envelope":{"seq":"1","request":"01920000-0000-7000-8000-000000000004","nodeStarted":{"id":"1","key":"install","command":{"mixVersion":"0.1.0","schemaMinor":8,"install":{"packages":["hello"]}}}}}}
 {"record":{"offset":"1s","envelope":{"seq":"2","request":"01920000-0000-7000-8000-000000000004","nodeStarted":{"id":"2","parent":"1","key":"plan","planned":["write-config","activate"],"plan":{"title":"install"}}}}}
 {"record":{"offset":"2s","envelope":{"seq":"3","request":"01920000-0000-7000-8000-000000000004","nodeStarted":{"id":"3","parent":"2","key":"write-config","step":{"verb":"VERB_WRITING","subject":"package list"}}}}}
 {"record":{"offset":"3s","envelope":{"seq":"4","request":"01920000-0000-7000-8000-000000000004","nodeStarted":{"id":"4","parent":"3","key":"a1","action":{"operation":"OPERATION_PUT_FILE","subject":"/home/ciuser/.local/state/mix/state"}}}}}

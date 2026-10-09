@@ -3,7 +3,7 @@ use mix_events::Fault;
 use mix_events::v1::diagnostic::Detail;
 use mix_events::v1::{
     ConflictDetail, Diagnostic as Wire, FormatDetail, Host, HostDetail, IoDetail, PackagesDetail,
-    Severity, TargetDetail, Unfixable, UnitDetail, UnrepairableDetail,
+    ProgramDetail, Severity, TargetDetail, Unfixable, UnitDetail, UnrepairableDetail,
 };
 
 use super::*;
@@ -50,6 +50,11 @@ fn detail(code: Code) -> Option<Detail> {
             packages: vec!["git".into()],
         })),
         Code::NewerState => Some(Detail::Format(FormatDetail { format: 2 })),
+        Code::UnsupportedProgram => Some(Detail::Program(ProgramDetail {
+            program: "/usr/bin/git".into(),
+            found: "2.30.1".into(),
+            oldest: "2.34".into(),
+        })),
         Code::Unrepairable => Some(Detail::Unrepairable(UnrepairableDetail {
             artifact: "/nix".into(),
             reason: Unfixable::NotADirectory as i32,

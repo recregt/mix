@@ -614,6 +614,7 @@ enum Code {
   CODE_CROSS_DEVICE_STORE = 30;
   CODE_ROLLBACK_INCOMPLETE = 31;
   CODE_INVALID_MIRROR = 32;
+  CODE_UNSUPPORTED_PROGRAM = 33;
   CODE_NOT_BOOTSTRAPPED = 41;
   CODE_ROOT_NOT_ALLOWED = 42;
   CODE_INVALID_PACKAGE = 43;
@@ -668,6 +669,7 @@ message Diagnostic {
     StepsDetail steps = 21;
     ConflictDetail conflict = 22;
     UnitDetail unit = 23;
+    ProgramDetail program = 24;
   }
 }
 
@@ -700,6 +702,12 @@ message TargetDetail {
 message HostDetail {
   Host host = 1;
   string state = 2;
+}
+
+message ProgramDetail {
+  string program = 1;
+  string found = 2;
+  string oldest = 3;
 }
 
 message PathDetail {

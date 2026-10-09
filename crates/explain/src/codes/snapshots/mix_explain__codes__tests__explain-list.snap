@@ -28,6 +28,7 @@ Failure codes:
     cross-device-store     `/nix/store` is a separate mount from `/nix`
     rollback-incomplete    The command failed, and undoing its changes failed too
     invalid-mirror         The mirror settings are not usable
+    unsupported-program    A program `mix` runs is older than the oldest version it supports
     not-bootstrapped       `mix` has not been set up for your user on this machine
     root-not-allowed       Installing and removing packages cannot run as root
     invalid-package        A package name is not a plain Nix identifier

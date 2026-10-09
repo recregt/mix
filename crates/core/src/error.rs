@@ -29,6 +29,13 @@ pub enum Error {
     #[error("command `{command}` was interrupted")]
     Cancelled { command: String },
 
+    #[error("`{program}` reports version {found:?}; mix needs {oldest} or newer")]
+    Unsupported {
+        program: String,
+        found: String,
+        oldest: String,
+    },
+
     #[error("the lock at {} does not exist and cannot be created", path.display())]
     LockMissing { path: PathBuf },
 }

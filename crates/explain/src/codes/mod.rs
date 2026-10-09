@@ -197,6 +197,14 @@ pub fn explanation(code: Code) -> Explanation {
             "`--mirror` must be an http or https URL, and `--mirror-key` a single `<name>:<key>` entry.",
             ["pass the settings in that form", "run the command again"]
         ),
+        Code::UnsupportedProgram => explained!(
+            "A program `mix` runs is older than the oldest version it supports.",
+            "`mix` relies on behavior that older releases of the program do not have, so it stops instead of guessing.",
+            [
+                "install a newer version, or add one to your Nix profile",
+                "run the command again"
+            ]
+        ),
         Code::GitRecordFailed => explained!(
             "The change was made, but recording it in git failed.",
             "`mix` keeps your package list in a git repository so every change can be seen and undone. Committing fails most often because `git` is missing or the repository belongs to another user.",

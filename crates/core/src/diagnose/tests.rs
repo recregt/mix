@@ -12,7 +12,8 @@ fn every_error() -> Vec<Error> {
         | Error::Command { .. }
         | Error::Exec { .. }
         | Error::Cancelled { .. }
-        | Error::LockMissing { .. } => {}
+        | Error::LockMissing { .. }
+        | Error::Unsupported { .. } => {}
     };
     let errors = vec![
         Error::Io {
@@ -32,6 +33,11 @@ fn every_error() -> Vec<Error> {
         },
         Error::LockMissing {
             path: "/var/lib/mix/lock".into(),
+        },
+        Error::Unsupported {
+            program: "git".into(),
+            found: "2.30.1".into(),
+            oldest: "2.34".into(),
         },
     ];
     errors.iter().for_each(exhaustive);

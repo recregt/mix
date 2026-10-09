@@ -76,5 +76,6 @@ message Problem {
     mix.events.v1.StepsDetail steps = 21;
     mix.events.v1.ConflictDetail conflict = 22;
     mix.events.v1.UnitDetail unit = 23;
+    mix.events.v1.ProgramDetail program = 24;
   }
 }

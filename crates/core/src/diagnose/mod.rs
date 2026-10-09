@@ -1,7 +1,7 @@
 use mix_events::v1::diagnostic::Detail;
 use mix_events::v1::{
-    Cancellation, Code, CommandDetail, Diagnostic, IoDetail, LockDetail, PackagesDetail, Severity,
-    UnrepairableDetail,
+    Cancellation, Code, CommandDetail, Diagnostic, IoDetail, LockDetail, PackagesDetail,
+    ProgramDetail, Severity, UnrepairableDetail,
 };
 use mix_events::{Diagnose, Fault};
 use mix_nixlog::{NixFailure, nix_error};
@@ -141,6 +141,7 @@ impl Diagnose for Error {
             Error::Exec { .. } => Code::SpawnFailed,
             Error::Cancelled { .. } => return None,
             Error::LockMissing { .. } => Code::LockMissing,
+            Error::Unsupported { .. } => Code::UnsupportedProgram,
         })
     }
 
@@ -174,6 +175,19 @@ impl Diagnose for Error {
                 cause: Cancellation::Interrupted,
                 rolled_back: false,
             },
+            Error::Unsupported {
+                program,
+                found,
+                oldest,
+            } => Fault::failed(
+                Code::UnsupportedProgram,
+                self.to_string(),
+                Some(Detail::Program(ProgramDetail {
+                    program: program.clone(),
+                    found: found.clone(),
+                    oldest: oldest.clone(),
+                })),
+            ),
             Error::LockMissing { path } => lock(Code::LockMissing, path, |path| {
                 joined(&[
                     "the lock at ",

@@ -230,6 +230,7 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
         | Code::Conflict
         | Code::InvalidMirror
         | Code::UnsupportedTarget
+        | Code::UnsupportedProgram
         | Code::Unrepairable
         | Code::SystemdNotReady
         | Code::UnitFailed
@@ -282,6 +283,18 @@ fn detailed(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
             Diagnostic::new(phrase!("`mix` doesn't support this system ({target}) yet"))
                 .note(note!("`mix` runs on 64-bit Intel, AMD and ARM Linux"))
         }
+        Code::UnsupportedProgram => match detail {
+            Some(Detail::Program(program)) => Diagnostic::new(phrase!(
+                "`{}` is version {}, and `mix` needs {} or newer",
+                program.program,
+                program.found,
+                program.oldest
+            ))
+            .help(help!(
+                "install a newer version, or add a newer one to your Nix profile"
+            )),
+            _ => bug(),
+        },
         Code::Unrepairable => match detail {
             Some(Detail::Unrepairable(detail)) => {
                 unrepairable(&detail.artifact, detail.reason()).unwrap_or_else(bug)
