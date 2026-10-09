@@ -587,16 +587,19 @@ impl Performer {
         self.model.clone()
     }
 
+    #[inline]
     fn modelled_world(&self) -> Option<std::sync::MutexGuard<'_, World>> {
-        self.model.as_ref().map(|world| {
-            let mut world = world
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(request) = &self.acting_for {
-                world.acting_for.clone_from(request);
-            }
-            world
-        })
+        self.model.as_ref().map(|world| self.lock_model(world))
+    }
+
+    fn lock_model<'w>(&self, world: &'w Mutex<World>) -> std::sync::MutexGuard<'w, World> {
+        let mut world = world
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(request) = &self.acting_for {
+            world.acting_for.clone_from(request);
+        }
+        world
     }
 
     async fn crash(&self) -> Outcome {
@@ -625,7 +628,10 @@ impl Performer {
         for query in queries {
             let fact = match &self.prediction {
                 Some(prediction) if prediction.answers(query) => prediction.world.observe(query),
-                _ => self.observe_one(query, scope).await?,
+                _ => match self.observed(query) {
+                    Some(fact) => fact,
+                    None => self.observe_one(query, scope).await?,
+                },
             };
             facts.push(fact);
         }
@@ -742,39 +748,45 @@ impl Performer {
     }
 
     async fn observe_one(&mut self, query: &Query, scope: &Scope) -> Result<Fact, Failure> {
-        Ok({
-            match query {
-                Query::Unit(unit) => Fact::Unit(self.units().await?.observe(unit).await?),
-                Query::Journals(dir) => Fact::Journals(crate::effect::journal::abandoned(dir)),
-                Query::ActiveList(user) => Fact::Contents(
-                    std::fs::read(mix_core::paths::active_list_path(&user.home))
-                        .ok()
-                        .map(Into::into),
-                ),
-                Query::Program { path, source } => {
-                    Fact::Program(crate::effect::program::observe(path, source))
-                }
-                Query::Repository(user) => {
-                    let git = Git::resolve(user).await;
-                    let intact = git
-                        .verify(user, &repository_dir(&user.home), scope)
+        Ok(match query {
+            Query::Unit(unit) => Fact::Unit(self.units().await?.observe(unit).await?),
+            Query::Repository(user) => {
+                let git = Git::resolve(user).await;
+                let intact = git
+                    .verify(user, &repository_dir(&user.home), scope)
+                    .await
+                    .map_err(core_failure)?;
+                let recorded = intact
+                    && git
+                        .recorded(user, &mix_state_dir(&user.home), scope)
                         .await
-                        .map_err(core_failure)?;
-                    let recorded = intact
-                        && git
-                            .recorded(user, &mix_state_dir(&user.home), scope)
-                            .await
-                            .unwrap_or(false);
-                    Fact::Repository { intact, recorded }
-                }
-                query => self
-                    .files
-                    .observe(query)
-                    .or_else(|| identity::observe(query))
-                    .or_else(|| generations::observe(query))
-                    .expect("every query has an observer"),
+                        .unwrap_or(false);
+                Fact::Repository { intact, recorded }
             }
+            query => self.observed(query).expect("every query has an observer"),
         })
+    }
+
+    fn observed(&self, query: &Query) -> Option<Fact> {
+        match query {
+            Query::Unit(_) | Query::Repository(_) => None,
+            Query::Journals(dir) => Some(Fact::Journals(crate::effect::journal::abandoned(dir))),
+            Query::ActiveList(user) => Some(Fact::Contents(
+                std::fs::read(mix_core::paths::active_list_path(&user.home))
+                    .ok()
+                    .map(Into::into),
+            )),
+            Query::Program { path, source } => {
+                Some(Fact::Program(crate::effect::program::observe(path, source)))
+            }
+            Query::Group(_) | Query::User(_) => identity::observe(query),
+            Query::Profile(_) | Query::Clobbered(_) => generations::observe(query),
+            Query::Path(_)
+            | Query::Contents(_)
+            | Query::TreeOwner(_)
+            | Query::Leftovers(_)
+            | Query::Strangers { .. } => self.files.observe(query),
+        }
     }
 
     pub async fn perform(
