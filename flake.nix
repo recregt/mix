@@ -32,6 +32,7 @@
         fileset = lib.fileset.unions [
           ./Cargo.toml
           ./Cargo.lock
+          ./clippy.toml
           ./.cargo
           ./crates
         ];
@@ -40,21 +41,47 @@
         inherit src;
         strictDeps = true;
         CARGO_PROFILE = "";
+        cargoExtraArgs = "--locked --workspace";
         pname = "mix";
         version = "0.1.0";
       };
-      cargoArtifacts = craneLib.buildDepsOnly (common // { cargoExtraArgs = "--workspace"; });
+      cargoArtifacts = craneLib.buildDepsOnly common;
     in
     {
-      checks.${system}.tests = craneLib.cargoTest (
+      packages.${system}.default = craneLib.buildPackage (
         common
         // {
           inherit cargoArtifacts;
-          cargoTestExtraArgs = "--workspace";
-          CI = "true";
-          INSTA_UPDATE = "no";
-          SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+          cargoExtraArgs = "--locked --package mix-cli --package mix-daemon";
+          doCheck = false;
         }
       );
+
+      checks.${system} = {
+        tests = craneLib.cargoTest (
+          common
+          // {
+            inherit cargoArtifacts;
+            CI = "true";
+            INSTA_UPDATE = "no";
+            SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+          }
+        );
+
+        clippy = craneLib.cargoClippy (
+          common
+          // {
+            inherit cargoArtifacts;
+            cargoClippyExtraArgs = "--all-targets -- -D warnings";
+          }
+        );
+
+        fmt = craneLib.cargoFmt (
+          common
+          // {
+            cargoExtraArgs = "--all";
+          }
+        );
+      };
     };
 }
