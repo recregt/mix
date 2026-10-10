@@ -99,8 +99,13 @@ impl World {
 
     pub fn indexed(&self, user: &InvokingUser) -> bool {
         let repository = repository_dir(&user.home);
-        self.readable(&repository.join(REPOSITORY_INDEX), user.uid)
-            .is_some_and(|index| index.as_ref() == listing(&self.staged(user)).as_bytes())
+        let index = repository.join(REPOSITORY_INDEX);
+        let wanted = listing(&self.staged(user));
+        if !self.files.contains_key(&index) {
+            return wanted.is_empty();
+        }
+        self.readable(&index, user.uid)
+            .is_some_and(|index| index.as_ref() == wanted.as_bytes())
     }
 
     pub fn usable(&self, user: &InvokingUser) -> bool {
@@ -130,6 +135,7 @@ impl World {
         std::str::from_utf8(text)
             .ok()?
             .lines()
+            .filter(|line| !line.starts_with("parent ") && !line.starts_with("lost "))
             .map(|line| {
                 let (name, object) = line.split_once(' ')?;
                 MANAGED_FILES
@@ -346,15 +352,23 @@ impl World {
             None if staged.is_empty() => return Ok(false),
             None => {}
         }
-        let commit = digest(listing.as_bytes());
-        self.write_object(&objects.join(&commit), listing.as_bytes(), owner)?;
+        let named = self
+            .readable(&repository.join(BRANCH), user.uid)
+            .and_then(|named| std::str::from_utf8(named).ok())
+            .map(|named| named.trim().to_string());
+        let mut contents = String::new();
+        match (&head, &named) {
+            (Some(parent), _) => contents.push_str(&format!("parent {parent}\n")),
+            (None, Some(lost)) => contents.push_str(&format!("lost {lost}\n")),
+            (None, None) => {}
+        }
+        contents.push_str(&listing);
+        let commit = digest(contents.as_bytes());
+        self.write_object(&objects.join(&commit), contents.as_bytes(), owner)?;
         if !self.intact_object(&repository, &commit, user.uid)
             || self.snapshot_of(&repository, &commit, user.uid).as_ref() != Some(&staged)
         {
             return Err(conflict(&objects, "intact objects", "a damaged object"));
-        }
-        if head.is_none() && self.files.contains_key(&repository.join(BRANCH)) {
-            return Err(conflict(&repository.join(BRANCH), "no branch", "a branch"));
         }
         self.write_ref(
             &repository.join(BRANCH),
