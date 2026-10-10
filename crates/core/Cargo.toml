@@ -23,7 +23,7 @@ insta = { workspace = true }
 mix-render = { path = "../render" }
 proptest = { workspace = true }
 divan = { workspace = true }
-trybuild = "=1.0.121"
+trybuild = "=1.0.122"
 
 [[bench]]
 name = "runner"
