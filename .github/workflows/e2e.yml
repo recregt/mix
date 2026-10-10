@@ -36,12 +36,36 @@ jobs:
 
       - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
 
+      - name: Restore the mirror fixtures
+        id: mirror
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/mix-bootstrap-tests/cache
+            ~/.cache/mix-bootstrap-tests/cache-*.built
+            ~/.cache/mix-bootstrap-tests/nix-*.tar.xz
+            ~/.cache/mix-bootstrap-tests/nixpkgs-*.tar.gz
+            ~/.cache/mix-bootstrap-tests/home-manager-*.tar.gz
+          key: e2e-mirror-${{ hashFiles('crates/pins/src/lib.rs', 'e2e/support/mirror.py') }}
+
       - name: Run integration tests
         env:
           MIX_TEST_IMAGE: ghcr.io/recregt/mix-bootstrap-test
           MIX_TEST_ALLOW_NETWORK: "1"
           PYTHONUNBUFFERED: "1"
         run: bash e2e/run.sh --durations=15
+
+      - name: Save the mirror fixtures
+        if: always() && steps.mirror.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/mix-bootstrap-tests/cache
+            ~/.cache/mix-bootstrap-tests/cache-*.built
+            ~/.cache/mix-bootstrap-tests/nix-*.tar.xz
+            ~/.cache/mix-bootstrap-tests/nixpkgs-*.tar.gz
+            ~/.cache/mix-bootstrap-tests/home-manager-*.tar.gz
+          key: e2e-mirror-${{ hashFiles('crates/pins/src/lib.rs', 'e2e/support/mirror.py') }}
 
       - name: Upload the events of failed tests
         if: failure()

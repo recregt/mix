@@ -1010,6 +1010,13 @@ impl Files {
     }
 
     fn copy(&mut self, from: &Path, to: &Path, mode: u32, prepared: &mut Prepared<'_>) -> Outcome {
+        if to != from && to.starts_with(from) {
+            return Err(conflict(
+                to,
+                "a place outside the tree being copied",
+                "a place inside it",
+            ));
+        }
         let source = self.take(from)?;
         let place = self.take(to)?;
         let staged = self.sibling(&place, "new");

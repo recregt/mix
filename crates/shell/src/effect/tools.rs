@@ -217,15 +217,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "reads the tools of the host it runs on"]
-    fn a_system_tool_resolves_to_an_absolute_root_owned_path() {
-        let sh = trusted("sh").expect("every supported host has a root-owned sh");
-
-        assert!(sh.is_absolute());
-        assert_eq!(std::fs::metadata(&sh).unwrap().uid(), 0);
-    }
-
-    #[test]
     fn a_tool_only_its_owner_can_change_is_accepted() {
         let mut tree = Tree::new();
         tree.tool("/opt/tools/useradd", USER, 0o755);

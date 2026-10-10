@@ -629,6 +629,13 @@ impl World {
                 owner,
                 mode,
             } => {
+                if to != from && to.starts_with(from) {
+                    return Err(conflict(
+                        to,
+                        "a place outside the tree being copied",
+                        "a place inside it",
+                    ));
+                }
                 let copy: Vec<(PathBuf, Entry)> = self
                     .subtree(from)
                     .into_iter()
@@ -1359,6 +1366,28 @@ mod tests {
 
     fn id_of(world: &World, path: &str) -> FileId {
         world.files[Path::new(path)].id
+    }
+
+    #[test]
+    fn a_tree_is_never_copied_into_itself() {
+        let mut world = World::default();
+        world
+            .with_dir("/b", 0o755, ROOT)
+            .with_dir("/b/b", 0o755, ROOT);
+        let before = world.clone();
+
+        let refused = world.apply(&Action::CopyTree {
+            from: "/b".into(),
+            to: "/b/a".into(),
+            owner: ROOT,
+            mode: 0o755,
+        });
+
+        assert!(
+            matches!(refused, Err(Failure::Conflict { .. })),
+            "{refused:?}"
+        );
+        assert_eq!(world, before);
     }
 
     #[test]

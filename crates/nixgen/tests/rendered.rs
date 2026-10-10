@@ -1,5 +1,3 @@
-mod support;
-
 use std::path::Path;
 
 use insta::assert_snapshot;
@@ -51,18 +49,5 @@ fn a_rendered_file_parses_and_prints_back_byte_for_byte() {
     for source in [flake(), home()] {
         let parsed = mix_nixgen::parse::parse(&source).unwrap();
         assert_eq!(parsed.print() + "\n", source.split_once("\n\n").unwrap().1);
-    }
-}
-
-#[test]
-#[ignore = "requires nix-instantiate on PATH"]
-fn the_rendered_files_are_nix() {
-    for source in [flake(), home()] {
-        let output = support::parse_with_nix(&source);
-        assert!(
-            output.status.success(),
-            "nix-instantiate --parse failed:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
     }
 }

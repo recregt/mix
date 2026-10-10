@@ -119,6 +119,31 @@ fn a_created_tree_with_a_file_is_undone_to_nothing() {
 }
 
 #[test]
+fn a_tree_is_never_copied_into_itself() {
+    let mut root = root();
+    root.apply(Action::CreateDirs {
+        path: "/b/b".into(),
+        mode: 0o755,
+        owner: None,
+    })
+    .unwrap();
+    let before = root.tree();
+
+    let refused = root.apply(Action::CopyTree {
+        from: "/b".into(),
+        to: "/b/a".into(),
+        owner: (me(), me()),
+        mode: 0o755,
+    });
+
+    assert!(
+        matches!(refused, Err(Failure::Conflict { .. })),
+        "{refused:?}"
+    );
+    assert_eq!(root.tree(), before);
+}
+
+#[test]
 fn a_replaced_file_is_swapped_in_atomically_and_swapped_back_by_undo() {
     let mut root = root();
     std::fs::write(root.real("/etc/nix.conf"), "trusted-users = root alice\n").unwrap();
