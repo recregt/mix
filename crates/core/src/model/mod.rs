@@ -14,8 +14,9 @@ use crate::declared::paths::{
     DEFAULT_PROFILE_NIX_ENV, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SOCKET_SRC, is_leftover,
 };
 use crate::effect::{
-    Action, Expect, Fact, Failure, FileId, GroupFacts, Kind, Outcome, Owner, PathFacts, Performed,
-    ProfileFacts, Query, UnitFacts, UnitFailure, UnitOperation, UserFacts, UserSpec,
+    Accounted, Accounts, Action, Expect, Fact, Failure, FileId, Ground, GroupFacts, Kind, Node,
+    Outcome, Owner, PathFacts, Performed, ProfileFacts, Query, Spot, UnitFacts, UnitFailure,
+    UnitOperation, UserFacts, Verdict, account_precondition, precondition,
 };
 
 pub use crate::declared::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
@@ -55,6 +56,7 @@ pub struct Unit {
     pub enabled: bool,
     pub running: Option<Arc<[u8]>>,
     pub since: Option<u64>,
+    pub stamp: Option<u64>,
 }
 
 impl Unit {
@@ -106,6 +108,7 @@ pub struct World {
     pub logs: BTreeMap<String, Vec<crate::run::journal::Record>>,
     pub held: std::collections::BTreeSet<String>,
     pub acting_for: String,
+    pub runs_as: Option<Owner>,
     pub clobbered: BTreeMap<u32, Vec<PathBuf>>,
     pending: BTreeMap<String, Vec<PathBuf>>,
     next_ino: u64,
@@ -135,6 +138,80 @@ impl World {
     }
 }
 
+impl Ground for World {
+    type Handle = ();
+
+    fn spot(&self, path: &Path) -> (Spot, Option<()>) {
+        (self.spot_of(path), None)
+    }
+
+    fn running(&self, path: &Path) -> Owner {
+        self.running_for(path)
+    }
+}
+
+impl World {
+    fn spot_of(&self, path: &Path) -> Spot {
+        if path.parent().is_none() {
+            return Spot::Blocked(conflict(path, "a path below the root", "the root itself"));
+        }
+        if let Err(failure) = self.parent_is_dir(path) {
+            return Spot::Blocked(failure);
+        }
+        match self.files.get(path) {
+            None => Spot::Missing,
+            Some(entry) => Spot::Present(Node {
+                kind: match entry.content {
+                    Content::Directory => Kind::Directory,
+                    Content::File(_) => Kind::File,
+                },
+                id: entry.id,
+                mode: entry.mode,
+                owner: entry.owner,
+            }),
+        }
+    }
+}
+
+impl Accounts for World {
+    fn group(&self, name: &str) -> Option<GroupFacts> {
+        self.groups.get(name).cloned()
+    }
+
+    fn user(&self, name: &str) -> Option<UserFacts> {
+        self.users.get(name).cloned()
+    }
+
+    fn group_with_gid(&self, gid: u32) -> Option<String> {
+        self.groups
+            .iter()
+            .find(|(_, group)| group.gid == gid)
+            .map(|(name, _)| name.clone())
+    }
+
+    fn user_with_uid(&self, uid: u32) -> Option<String> {
+        self.users
+            .iter()
+            .find(|(_, user)| user.uid == uid)
+            .map(|(name, _)| name.clone())
+    }
+
+    fn primary_of(&self, gid: u32) -> Option<String> {
+        self.users
+            .iter()
+            .find(|(_, user)| user.gid == gid)
+            .map(|(name, _)| name.clone())
+    }
+
+    fn groups_of(&self, user: &str) -> Vec<String> {
+        self.groups
+            .iter()
+            .filter(|(_, group)| group.members.iter().any(|member| member == user))
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+}
+
 impl Default for World {
     fn default() -> Self {
         let mut world = Self {
@@ -147,6 +224,7 @@ impl Default for World {
             logs: BTreeMap::new(),
             held: std::collections::BTreeSet::new(),
             acting_for: "model".to_string(),
+            runs_as: None,
             clobbered: BTreeMap::new(),
             pending: BTreeMap::new(),
             next_ino: 1,
@@ -253,6 +331,10 @@ impl World {
         }
     }
 
+    fn stamp(&self, path: impl AsRef<Path>) -> Option<u64> {
+        self.files.get(path.as_ref()).map(|entry| entry.changed)
+    }
+
     pub fn now(&self) -> u64 {
         self.next_ino
     }
@@ -290,13 +372,21 @@ impl World {
     }
 
     fn parent_is_dir(&self, path: &Path) -> Result<(), Failure> {
-        match path.parent().and_then(|parent| self.files.get(parent)) {
-            Some(Entry {
-                content: Content::Directory,
-                ..
-            }) => Ok(()),
-            _ => Err(not_found(path)),
+        let mut above: Vec<&Path> = path.ancestors().skip(1).collect();
+        above.reverse();
+        for dir in above {
+            match self.files.get(dir).map(|entry| &entry.content) {
+                Some(Content::Directory) => {}
+                Some(Content::File(_)) => {
+                    return Err(Failure::Io {
+                        path: path.to_path_buf(),
+                        kind: std::io::ErrorKind::NotADirectory,
+                    });
+                }
+                None => return Err(not_found(path)),
+            }
         }
+        Ok(())
     }
 
     fn has_children(&self, path: &Path) -> bool {
@@ -336,16 +426,6 @@ impl World {
         path.with_file_name(format!(".{name}.mix-{purpose}-{}-{n}", self.acting_for))
     }
 
-    fn matches(&self, path: &Path, expect: Expect) -> Result<(), Failure> {
-        let found = self.files.get(path);
-        match (expect, found) {
-            (Expect::Absent, None) => Ok(()),
-            (Expect::Present(id), Some(entry)) if entry.id == id => Ok(()),
-            (Expect::Absent, found) => Err(conflict(path, "nothing", describe(found))),
-            (Expect::Present(id), found) => Err(conflict(path, format!("{id:?}"), describe(found))),
-        }
-    }
-
     fn put(
         &mut self,
         path: &Path,
@@ -354,8 +434,17 @@ impl World {
         owner: Owner,
         expect: Expect,
     ) -> Result<Vec<Action>, Failure> {
-        self.parent_is_dir(path)?;
-        self.matches(path, expect)?;
+        precondition(
+            &Action::PutFile {
+                path: path.to_path_buf(),
+                contents: Arc::clone(contents),
+                mode,
+                owner: Some(owner),
+                expect,
+            },
+            self,
+            &mut Vec::new(),
+        )?;
         let id = self.fresh();
         let entry = Entry {
             content: Content::File(Arc::clone(contents)),
@@ -390,10 +479,19 @@ impl World {
         if self.already(action) {
             return done(Vec::new());
         }
+        let verdict = match action {
+            Action::PutFile { .. } => Verdict::Go,
+            action => precondition(action, self, &mut Vec::new())?,
+        };
+        if verdict == Verdict::Done {
+            return done(Vec::new());
+        }
+        let undo = match account_precondition(action, self)? {
+            Accounted::Done => return done(Vec::new()),
+            Accounted::Go(undo) => undo,
+        };
         match action {
             Action::CreateDir { path, mode, owner } => {
-                self.parent_is_dir(path)?;
-                self.matches(path, Expect::Absent)?;
                 let id = self.fresh();
                 self.files.insert(
                     path.clone(),
@@ -411,19 +509,15 @@ impl World {
                 }])
             }
             Action::CreateDirs { path, mode, owner } => {
+                let Verdict::Below(top) = verdict else {
+                    return Err(conflict(path, "a top to create", "none"));
+                };
                 let mut missing: Vec<PathBuf> = path
                     .ancestors()
-                    .take_while(|dir| !self.files.contains_key(*dir))
+                    .take_while(|dir| dir.starts_with(&top))
                     .map(Path::to_path_buf)
                     .collect();
                 missing.reverse();
-                let Some(top) = missing.first().cloned() else {
-                    return match self.files.get(path).map(|entry| &entry.content) {
-                        Some(Content::Directory) => done(Vec::new()),
-                        _ => Err(conflict(path, "a directory", "something else")),
-                    };
-                };
-                self.parent_is_dir(&top)?;
                 let mut top_id = None;
                 for dir in missing {
                     let id = self.fresh();
@@ -453,13 +547,6 @@ impl World {
             } => done(self.put(path, contents, *mode, owner.unwrap_or(ROOT), *expect)?),
             Action::SetMode { path, mode, expect } => {
                 let entry = self.files.get_mut(path).ok_or_else(|| not_found(path))?;
-                if entry.mode != *expect {
-                    return Err(conflict(
-                        path,
-                        format!("mode {expect:o}"),
-                        format!("mode {:o}", entry.mode),
-                    ));
-                }
                 entry.mode = *mode;
                 done(vec![Action::SetMode {
                     path: path.clone(),
@@ -473,13 +560,6 @@ impl World {
                 expect,
             } => {
                 let entry = self.files.get_mut(path).ok_or_else(|| not_found(path))?;
-                if entry.owner != *expect {
-                    return Err(conflict(
-                        path,
-                        format!("owner {expect:?}"),
-                        format!("owner {:?}", entry.owner),
-                    ));
-                }
                 entry.owner = *owner;
                 done(vec![Action::SetOwner {
                     path: path.clone(),
@@ -487,8 +567,7 @@ impl World {
                     expect: *owner,
                 }])
             }
-            Action::SetAside { path, expect } => {
-                self.matches(path, Expect::Present(*expect))?;
+            Action::SetAside { path, .. } => {
                 let aside = self.sibling(path, "aside");
                 self.move_tree(path, &aside);
                 self.pend(aside.clone());
@@ -499,20 +578,8 @@ impl World {
                 }])
             }
             Action::ReclaimTree {
-                path,
-                expect,
-                owner,
-                mode,
+                path, owner, mode, ..
             } => {
-                let running = self.running_for(path);
-                if running != *owner {
-                    return Err(conflict(
-                        path,
-                        format!("a copy made as {owner:?}"),
-                        format!("a process running as {running:?}"),
-                    ));
-                }
-                self.matches(path, Expect::Present(*expect))?;
                 let aside = self.sibling(path, "aside");
                 let mut copy = Vec::new();
                 for old in self.subtree(path) {
@@ -562,19 +629,6 @@ impl World {
                 owner,
                 mode,
             } => {
-                let running = self.running_for(to);
-                if running != *owner {
-                    return Err(conflict(
-                        to,
-                        format!("a copy made as {owner:?}"),
-                        format!("a process running as {running:?}"),
-                    ));
-                }
-                self.matches(to, Expect::Absent)?;
-                self.parent_is_dir(to)?;
-                if !self.files.contains_key(from) {
-                    return Err(not_found(from));
-                }
                 let copy: Vec<(PathBuf, Entry)> = self
                     .subtree(from)
                     .into_iter()
@@ -611,8 +665,7 @@ impl World {
                     expect: top.expect("the top was copied"),
                 }])
             }
-            Action::RemoveCreated { path, expect } => {
-                self.matches(path, Expect::Present(*expect))?;
+            Action::RemoveCreated { path, .. } => {
                 if self.has_children(path) {
                     return Err(conflict(
                         path,
@@ -623,19 +676,13 @@ impl World {
                 self.files.remove(path);
                 done(Vec::new())
             }
-            Action::RemoveCreatedTree { path, expect } => {
-                self.matches(path, Expect::Present(*expect))?;
+            Action::RemoveCreatedTree { path, .. } => {
                 for entry in self.subtree(path) {
                     self.files.remove(&entry);
                 }
                 done(Vec::new())
             }
-            Action::Restore { path, from, expect } => {
-                self.parent_is_dir(path)?;
-                self.matches(path, *expect)?;
-                if !self.files.contains_key(from) {
-                    return Err(not_found(from));
-                }
+            Action::Restore { path, from, .. } => {
                 for discarded in self.subtree(path) {
                     self.files.remove(&discarded);
                 }
@@ -646,20 +693,6 @@ impl World {
                 done(Vec::new())
             }
             Action::AddGroup { name, gid } => {
-                if let Some(found) = self.groups.get(name) {
-                    return Err(account_conflict(
-                        name,
-                        "no group",
-                        format!("gid {}", found.gid),
-                    ));
-                }
-                if let Some((holder, _)) = self.groups.iter().find(|(_, group)| group.gid == *gid) {
-                    return Err(account_conflict(
-                        name,
-                        format!("gid {gid} free"),
-                        format!("gid {gid} held by {holder}"),
-                    ));
-                }
                 self.groups.insert(
                     name.clone(),
                     GroupFacts {
@@ -667,76 +700,24 @@ impl World {
                         members: Vec::new(),
                     },
                 );
-                done(vec![Action::DeleteGroup {
-                    name: name.clone(),
-                    expect: *gid,
-                }])
+                done(undo)
             }
             Action::SetGroupGid { name, gid, expect } => {
-                if let Some((holder, _)) = self
-                    .groups
-                    .iter()
-                    .find(|(other, group)| *other != name && group.gid == *gid)
-                {
-                    return Err(account_conflict(
-                        name,
-                        format!("gid {gid} free"),
-                        format!("gid {gid} held by {holder}"),
-                    ));
+                if let Some(group) = self.groups.get_mut(name) {
+                    group.gid = *gid;
                 }
-                let group = self.group(name, *expect)?;
-                group.gid = *gid;
-                done(vec![Action::SetGroupGid {
-                    name: name.clone(),
-                    gid: *expect,
-                    expect: *gid,
-                }])
+                for user in self.users.values_mut() {
+                    if user.gid == *expect {
+                        user.gid = *gid;
+                    }
+                }
+                done(undo)
             }
-            Action::DeleteGroup { name, expect } => {
-                let members = self.group(name, *expect)?.members.clone();
+            Action::DeleteGroup { name, .. } => {
                 self.groups.remove(name);
-                let mut undo = vec![Action::AddGroup {
-                    name: name.clone(),
-                    gid: *expect,
-                }];
-                undo.extend(members.into_iter().map(|user| Action::AddMember {
-                    group: name.clone(),
-                    user,
-                }));
                 done(undo)
             }
             Action::AddUser(spec) => {
-                if let Some(found) = self.users.get(&spec.name) {
-                    return Err(account_conflict(
-                        &spec.name,
-                        "no user",
-                        format!("uid {}", found.uid),
-                    ));
-                }
-                if let Some((holder, _)) = self.users.iter().find(|(_, user)| user.uid == spec.uid)
-                {
-                    return Err(account_conflict(
-                        &spec.name,
-                        format!("uid {} free", spec.uid),
-                        format!("uid {} held by {holder}", spec.uid),
-                    ));
-                }
-                let primary = spec.gid.to_string();
-                let missing = std::iter::once(&primary)
-                    .filter(|_| !self.groups.values().any(|group| group.gid == spec.gid))
-                    .chain(
-                        spec.groups
-                            .iter()
-                            .filter(|group| !self.groups.contains_key(*group)),
-                    )
-                    .next();
-                if let Some(missing) = missing {
-                    return Err(account_conflict(
-                        &spec.name,
-                        format!("group {missing}"),
-                        "no group",
-                    ));
-                }
                 self.users.insert(
                     spec.name.clone(),
                     UserFacts {
@@ -753,108 +734,33 @@ impl World {
                         group.members.sort();
                     }
                 }
-                done(vec![Action::DeleteUser {
-                    name: spec.name.clone(),
-                    expect: (spec.uid, spec.gid),
-                    comment: spec.comment.clone(),
-                }])
+                done(undo)
             }
-            Action::SetUserIds { name, ids, expect } => {
-                if let Some((holder, _)) = self
-                    .users
-                    .iter()
-                    .find(|(other, user)| *other != name && user.uid == ids.0)
-                {
-                    return Err(account_conflict(
-                        name,
-                        format!("uid {} free", ids.0),
-                        format!("uid {} held by {holder}", ids.0),
-                    ));
+            Action::SetUserIds { name, ids, .. } => {
+                if let Some(user) = self.users.get_mut(name) {
+                    (user.uid, user.gid) = *ids;
                 }
-                if !self.groups.values().any(|group| group.gid == ids.1) {
-                    return Err(account_conflict(
-                        name,
-                        format!("a group with gid {}", ids.1),
-                        "no such group",
-                    ));
-                }
-                let user = self.user(name, *expect)?;
-                (user.uid, user.gid) = *ids;
-                done(vec![Action::SetUserIds {
-                    name: name.clone(),
-                    ids: *expect,
-                    expect: *ids,
-                }])
+                done(undo)
             }
-            Action::DeleteUser {
-                name,
-                expect,
-                comment,
-            } => {
-                let user = self.user(name, *expect)?.clone();
-                if user.comment != *comment {
-                    return Err(account_conflict(
-                        name,
-                        format!("comment {comment:?}"),
-                        format!("comment {:?}", user.comment),
-                    ));
-                }
+            Action::DeleteUser { name, .. } => {
                 self.users.remove(name);
-                let groups: Vec<String> = self
-                    .groups
-                    .iter_mut()
-                    .filter_map(|(group, facts)| {
-                        let before = facts.members.len();
-                        facts.members.retain(|member| member != name);
-                        (facts.members.len() != before).then(|| group.clone())
-                    })
-                    .collect();
-                done(vec![Action::AddUser(UserSpec {
-                    name: name.clone(),
-                    uid: user.uid,
-                    gid: user.gid,
-                    home: user.home,
-                    shell: user.shell,
-                    comment: user.comment,
-                    groups,
-                })])
+                for facts in self.groups.values_mut() {
+                    facts.members.retain(|member| member != name);
+                }
+                done(undo)
             }
             Action::AddMember { group, user } => {
-                let facts = self
-                    .groups
-                    .get_mut(group)
-                    .ok_or_else(|| account_conflict(group, "a group", "no group"))?;
-                if facts.members.contains(user) {
-                    return Err(account_conflict(
-                        group,
-                        format!("{user} absent"),
-                        format!("{user} present"),
-                    ));
+                if let Some(facts) = self.groups.get_mut(group) {
+                    facts.members.push(user.clone());
+                    facts.members.sort();
                 }
-                facts.members.push(user.clone());
-                facts.members.sort();
-                done(vec![Action::RemoveMember {
-                    group: group.clone(),
-                    user: user.clone(),
-                }])
+                done(undo)
             }
             Action::RemoveMember { group, user } => {
-                let facts = self
-                    .groups
-                    .get_mut(group)
-                    .ok_or_else(|| account_conflict(group, "a group", "no group"))?;
-                if !facts.members.contains(user) {
-                    return Err(account_conflict(
-                        group,
-                        format!("{user} present"),
-                        format!("{user} absent"),
-                    ));
+                if let Some(facts) = self.groups.get_mut(group) {
+                    facts.members.retain(|member| member != user);
                 }
-                facts.members.retain(|member| member != user);
-                done(vec![Action::AddMember {
-                    group: group.clone(),
-                    user: user.clone(),
-                }])
+                done(undo)
             }
             Action::InstallUnit {
                 unit,
@@ -1058,40 +964,7 @@ impl World {
     }
 
     fn already(&self, action: &Action) -> bool {
-        let members = |name: &str| {
-            self.groups
-                .get(name)
-                .map(|group| group.members.clone())
-                .unwrap_or_default()
-        };
         match action {
-            Action::RemoveCreated { path, .. } | Action::RemoveCreatedTree { path, .. } => {
-                !self.files.contains_key(path)
-            }
-            Action::ReclaimTree {
-                path,
-                expect,
-                owner,
-                ..
-            } => self
-                .files
-                .get(path)
-                .is_some_and(|entry| entry.owner == *owner && entry.id != *expect),
-            Action::AddGroup { name, gid } | Action::SetGroupGid { name, gid, .. } => {
-                self.groups.get(name).is_some_and(|group| group.gid == *gid)
-            }
-            Action::DeleteGroup { name, .. } => !self.groups.contains_key(name),
-            Action::AddUser(spec) => self
-                .users
-                .get(&spec.name)
-                .is_some_and(|user| (user.uid, user.gid) == (spec.uid, spec.gid)),
-            Action::SetUserIds { name, ids, .. } => self
-                .users
-                .get(name)
-                .is_some_and(|user| (user.uid, user.gid) == *ids),
-            Action::DeleteUser { name, .. } => !self.users.contains_key(name),
-            Action::AddMember { group, user } => members(group).contains(user),
-            Action::RemoveMember { group, user } => !members(group).contains(user),
             Action::EnableUnit { unit } => self.units.get(unit).is_some_and(|unit| unit.enabled),
             Action::DisableUnit { unit } => !self.units.get(unit).is_some_and(|unit| unit.enabled),
             Action::StartUnit { unit } => self
@@ -1118,31 +991,8 @@ impl World {
     }
 
     fn running_for(&self, path: &Path) -> Owner {
-        self.tree_owner(path).unwrap_or(ROOT)
-    }
-
-    fn group(&mut self, name: &str, expect: u32) -> Result<&mut GroupFacts, Failure> {
-        match self.groups.get_mut(name) {
-            Some(group) if group.gid == expect => Ok(group),
-            Some(group) => Err(account_conflict(
-                name,
-                format!("gid {expect}"),
-                format!("gid {}", group.gid),
-            )),
-            None => Err(account_conflict(name, format!("gid {expect}"), "no group")),
-        }
-    }
-
-    fn user(&mut self, name: &str, expect: Owner) -> Result<&mut UserFacts, Failure> {
-        match self.users.get_mut(name) {
-            Some(user) if (user.uid, user.gid) == expect => Ok(user),
-            Some(user) => Err(account_conflict(
-                name,
-                format!("ids {expect:?}"),
-                format!("ids {:?}", (user.uid, user.gid)),
-            )),
-            None => Err(account_conflict(name, format!("ids {expect:?}"), "no user")),
-        }
+        self.runs_as
+            .unwrap_or_else(|| self.tree_owner(path).unwrap_or(ROOT))
     }
 
     fn reload(&mut self) {
@@ -1154,18 +1004,22 @@ impl World {
             .collect();
         for name in names {
             let loaded = self.contents(unit_path(&name)).map(Arc::from);
+            let stamp = self.stamp(unit_path(&name));
             let facts = self.units.entry(name).or_default();
             if facts.held() {
                 facts.loaded = loaded;
+                facts.stamp = stamp;
             }
         }
     }
 
     fn loaded_unit(&mut self, unit: &str, operation: UnitOperation) -> Result<&mut Unit, Failure> {
         let file = self.contents(unit_path(unit)).map(Arc::from);
+        let stamp = self.stamp(unit_path(unit));
         let facts = self.units.entry(unit.to_string()).or_default();
         if !facts.held() {
             facts.loaded = file;
+            facts.stamp = stamp;
         }
         if facts.loaded.is_none() {
             return Err(Failure::Unit(Box::new(UnitFailure {
@@ -1304,6 +1158,7 @@ impl World {
             .then(|| loaded.clone())
             .flatten();
         let since = running.is_some().then(|| self.fresh().ino);
+        let stamp = self.stamp(unit_path(name)).filter(|_| !found.needs_reload);
         self.units.insert(
             name.to_string(),
             Unit {
@@ -1311,6 +1166,7 @@ impl World {
                 enabled: found.enabled(),
                 running,
                 since,
+                stamp,
             },
         );
     }
@@ -1432,6 +1288,12 @@ impl World {
                 let facts = self.units.get(name).cloned().unwrap_or_default();
                 let file = self.contents(unit_path(name)).map(Arc::from);
                 let loaded = facts.seen(file.clone());
+                let stale = facts.held()
+                    && match (self.stamp(unit_path(name)), facts.stamp) {
+                        (Some(stamp), Some(loaded)) => stamp > loaded,
+                        (Some(_), None) | (None, Some(_)) => true,
+                        (None, None) => false,
+                    };
                 Fact::Unit(UnitFacts {
                     load_state: if loaded.is_some() {
                         "loaded"
@@ -1451,7 +1313,7 @@ impl World {
                         (false, None) => "",
                     }
                     .to_string(),
-                    needs_reload: loaded != file,
+                    needs_reload: stale,
                     active_since: facts.since.map(|since| (since as i64, 0)),
                 })
             }
@@ -1471,6 +1333,7 @@ impl World {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::effect::UserSpec;
     use crate::run::journal::rollback_order;
 
     fn bytes(text: &str) -> Arc<[u8]> {

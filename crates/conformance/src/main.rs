@@ -3,8 +3,9 @@ use std::process::ExitCode;
 
 use mix_conformance::contract::accounts::Accounts;
 use mix_conformance::contract::files::FileTree;
-use mix_conformance::contract::git::{GIT, Git};
+use mix_conformance::contract::git::{GIT, Git, known};
 use mix_conformance::contract::units::Units;
+use proptest::strategy::{Strategy, ValueTree};
 use proptest::test_runner::{
     Config, FailurePersistence, FileFailurePersistence, TestError, TestRunner,
 };
@@ -24,13 +25,41 @@ fn config(seeds: Option<&str>, suite: &str) -> Config {
     }
 }
 
-fn suite<T>(seeds: Option<&str>, name: &str) -> Result<u32, String>
+fn panicked(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|text| text.to_string()))
+        .unwrap_or_default()
+}
+
+fn suite<T>(
+    seeds: Option<&str>,
+    name: &str,
+    known: Vec<Vec<<T::Reference as ReferenceStateMachine>::Transition>>,
+) -> Result<u32, String>
 where
     T: StateMachineTest,
     T::Reference: ReferenceStateMachine,
 {
     let config = config(seeds, name);
     let mut runner = TestRunner::new(config.clone());
+    for transitions in known {
+        let state = <T::Reference as ReferenceStateMachine>::init_state()
+            .new_tree(&mut runner)
+            .map_err(|reason| format!("no starting state: {reason}"))?
+            .current();
+        let shown = format!("{transitions:#?}");
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            T::test_sequential(config.clone(), state, transitions, None);
+        }))
+        .map_err(|payload| {
+            format!(
+                "{}\nknown failing transitions: {shown}",
+                panicked(payload.as_ref())
+            )
+        })?;
+    }
     let strategy = <T::Reference as ReferenceStateMachine>::sequential_strategy(1..16);
     match runner.run(&strategy, |(state, transitions, seen)| {
         T::test_sequential(config.clone(), state, transitions, seen);
@@ -87,10 +116,10 @@ fn main() -> ExitCode {
     let mut failed = false;
     for name in &chosen {
         let result = match name.as_str() {
-            "files" => suite::<FileTree>(seeds.as_deref(), name),
-            "accounts" => suite::<Accounts>(seeds.as_deref(), name),
-            "units" => suite::<Units>(seeds.as_deref(), name),
-            "git" => suite::<Git>(seeds.as_deref(), name),
+            "files" => suite::<FileTree>(seeds.as_deref(), name, Vec::new()),
+            "accounts" => suite::<Accounts>(seeds.as_deref(), name, Vec::new()),
+            "units" => suite::<Units>(seeds.as_deref(), name, Vec::new()),
+            "git" => suite::<Git>(seeds.as_deref(), name, known()),
             _ => unreachable!("only known suites are chosen"),
         };
         match result {

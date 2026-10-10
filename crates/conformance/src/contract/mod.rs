@@ -14,6 +14,10 @@ pub fn runtime() -> tokio::runtime::Runtime {
         .expect("a runtime for the real performer")
 }
 
+thread_local! {
+    static FAILED: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
 pub fn perform(
     runtime: &tokio::runtime::Runtime,
     performer: &mut Performer,
@@ -22,7 +26,30 @@ pub fn perform(
     let scope = Scope::root();
     let mut progress = |_| {};
     let mut prepared = |_: &[Action]| Ok(());
-    runtime.block_on(performer.perform(action, &scope, &mut progress, &mut prepared))
+    let outcome = runtime.block_on(performer.perform(action, &scope, &mut progress, &mut prepared));
+    remember(&outcome);
+    outcome
+}
+
+pub fn remember(outcome: &Outcome) {
+    FAILED.with(|failed| {
+        *failed.borrow_mut() = match outcome {
+            Ok(_) => String::new(),
+            Err(failure) => format!("{failure:?}"),
+        }
+    });
+}
+
+pub fn request() -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    format!(
+        "contract-{}",
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )
+}
+
+pub fn failed() -> String {
+    FAILED.with(|failed| failed.borrow().clone())
 }
 
 pub fn observe(

@@ -1,11 +1,13 @@
 mod action;
 mod failure;
 mod observe;
+mod precondition;
 mod progress;
 
 pub use action::*;
 pub use failure::*;
 pub use observe::*;
+pub use precondition::*;
 pub use progress::*;
 
 use serde::{Deserialize, Serialize};

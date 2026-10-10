@@ -193,6 +193,7 @@ impl Git {
         let tree = self
             .run_as(user, &[&dir[..], &["write-tree"]].concat(), scope)
             .await?;
+        let head = self.found(user, &dir, BRANCH, scope).await?;
         let parent = self
             .found(user, &dir, &format!("{BRANCH}^{{commit}}"), scope)
             .await?;
@@ -213,8 +214,12 @@ impl Git {
             }
         }
 
+        let message = match (&parent, &head) {
+            (None, Some(lost)) => format!("{COMMIT_MESSAGE}\n\nrebuilt after losing {lost}"),
+            _ => COMMIT_MESSAGE.to_string(),
+        };
         let mut commit = dir.to_vec();
-        commit.extend(["commit-tree", &tree, "-m", COMMIT_MESSAGE]);
+        commit.extend(["commit-tree", &tree, "-m", &message]);
         if let Some(parent) = &parent {
             commit.extend(["-p", parent]);
         }
@@ -236,7 +241,7 @@ impl Git {
         self.run_as(user, &[&dir[..], &export(&only)].concat(), scope)
             .await?;
 
-        let old = parent.as_deref().unwrap_or("");
+        let old = head.as_deref().unwrap_or("");
         let publish = [
             &dir[..],
             &["update-ref", "-m", COMMIT_MESSAGE, BRANCH, &commit, old],
