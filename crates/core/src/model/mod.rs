@@ -631,6 +631,7 @@ impl World {
                 done(Vec::new())
             }
             Action::Restore { path, from, expect } => {
+                self.parent_is_dir(path)?;
                 self.matches(path, *expect)?;
                 if !self.files.contains_key(from) {
                     return Err(not_found(from));
@@ -672,6 +673,17 @@ impl World {
                 }])
             }
             Action::SetGroupGid { name, gid, expect } => {
+                if let Some((holder, _)) = self
+                    .groups
+                    .iter()
+                    .find(|(other, group)| *other != name && group.gid == *gid)
+                {
+                    return Err(account_conflict(
+                        name,
+                        format!("gid {gid} free"),
+                        format!("gid {gid} held by {holder}"),
+                    ));
+                }
                 let group = self.group(name, *expect)?;
                 group.gid = *gid;
                 done(vec![Action::SetGroupGid {
@@ -748,6 +760,24 @@ impl World {
                 }])
             }
             Action::SetUserIds { name, ids, expect } => {
+                if let Some((holder, _)) = self
+                    .users
+                    .iter()
+                    .find(|(other, user)| *other != name && user.uid == ids.0)
+                {
+                    return Err(account_conflict(
+                        name,
+                        format!("uid {} free", ids.0),
+                        format!("uid {} held by {holder}", ids.0),
+                    ));
+                }
+                if !self.groups.values().any(|group| group.gid == ids.1) {
+                    return Err(account_conflict(
+                        name,
+                        format!("a group with gid {}", ids.1),
+                        "no such group",
+                    ));
+                }
                 let user = self.user(name, *expect)?;
                 (user.uid, user.gid) = *ids;
                 done(vec![Action::SetUserIds {
