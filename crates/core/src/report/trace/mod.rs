@@ -7,7 +7,6 @@ use mix_events::v1::{
 
 use crate::declared::paths::repository_dir;
 use crate::effect::{Action, Fact, FileId, Kind, PathFacts, Query};
-use crate::run::describe;
 use crate::run::journal::Record;
 
 pub fn observed(queries: &[Query], facts: &[Fact]) -> Observed {
@@ -47,7 +46,7 @@ pub fn journaled(record: &Record) -> Journaled {
 }
 
 fn action(action: &Action) -> mix_events::v1::Action {
-    let (operation, subject) = describe(action);
+    let (operation, subject) = action.describe();
     mix_events::v1::Action {
         operation: operation as i32,
         subject,

@@ -67,7 +67,7 @@ pub fn abandoned(request: &str, records: &[Record]) -> crate::effect::Abandoned 
         Recovery::RollBack { uncertain, certain } => certain
             .iter()
             .chain(&uncertain)
-            .map(|action| crate::run::describe(action).1)
+            .map(|action| action.describe().1)
             .collect(),
         Recovery::FinishCommit { pending } => pending
             .iter()

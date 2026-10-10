@@ -7,13 +7,13 @@ use std::collections::VecDeque;
 use generativity::Id;
 pub use generativity::{Guard, make_guard};
 use mix_events::v1::{
-    Action as ActionNode, Cancellation, Code, ConflictDetail, Diagnostic, IntegrityDetail,
-    IoDetail, NetworkDetail, Operation, Plan, Rollback, Severity, Step, StepsDetail, UnitDetail,
-    Verb, diagnostic::Detail, node_started::Kind,
+    Action as ActionNode, Cancellation, Code, Diagnostic, Plan, Rollback, Severity, Step,
+    StepsDetail, Verb, diagnostic::Detail, node_started::Kind,
 };
 use mix_events::{Ending, NodeId, Start, Tree};
 
 use crate::effect::{Action, Fact, Failure, Outcome, Query};
+use crate::report::diagnose::diagnostic;
 use crate::run::journal::rollback_order;
 
 pub struct Title {
@@ -240,7 +240,7 @@ impl Runner {
 
     fn act<'id>(&mut self, tree: &mut Tree, parent: NodeId, action: Action) -> Next<'id> {
         self.performed += 1;
-        let (operation, subject) = describe(&action);
+        let (operation, subject) = action.describe();
         self.acting = Some(
             tree.start(
                 parent,
@@ -649,83 +649,6 @@ impl Runner {
     }
 }
 
-pub fn describe(action: &Action) -> (Operation, String) {
-    let path = |path: &std::path::Path| path.display().to_string();
-    match action {
-        Action::CreateDir { path: at, .. } => (Operation::CreateDir, path(at)),
-        Action::CreateDirs { path: at, .. } => (Operation::CreateDirs, path(at)),
-        Action::PutFile { path: at, .. } => (Operation::PutFile, path(at)),
-        Action::SetMode { path: at, .. } => (Operation::SetMode, path(at)),
-        Action::SetOwner { path: at, .. } => (Operation::SetOwner, path(at)),
-        Action::SetAside { path: at, .. } => (Operation::SetAside, path(at)),
-        Action::RemoveCreated { path: at, .. } => (Operation::RemoveCreated, path(at)),
-        Action::RemoveCreatedTree { path: at, .. } => (Operation::RemoveCreatedTree, path(at)),
-        Action::Restore { path: at, .. } => (Operation::Restore, path(at)),
-        Action::ReclaimTree { path: at, .. } => (Operation::ReclaimTree, path(at)),
-        Action::CopyTree { to, .. } => (Operation::CopyTree, path(to)),
-        Action::AddGroup { name, .. } => (Operation::AddGroup, name.clone()),
-        Action::SetGroupGid { name, .. } => (Operation::SetGroupGid, name.clone()),
-        Action::DeleteGroup { name, .. } => (Operation::DeleteGroup, name.clone()),
-        Action::AddUser(spec) => (Operation::AddUser, spec.name.clone()),
-        Action::SetUserIds { name, .. } => (Operation::SetUserIds, name.clone()),
-        Action::DeleteUser { name, .. } => (Operation::DeleteUser, name.clone()),
-        Action::AddMember { group, user } => (Operation::AddMember, format!("{user} in {group}")),
-        Action::RemoveMember { group, user } => {
-            (Operation::RemoveMember, format!("{user} in {group}"))
-        }
-        Action::InstallUnit { unit, .. } => (Operation::InstallUnit, unit.clone()),
-        Action::EnableUnit { unit } => (Operation::EnableUnit, unit.clone()),
-        Action::DisableUnit { unit } => (Operation::DisableUnit, unit.clone()),
-        Action::StartUnit { unit } => (Operation::StartUnit, unit.clone()),
-        Action::StopUnit { unit } => (Operation::StopUnit, unit.clone()),
-        Action::RestartUnit { unit } => (Operation::RestartUnit, unit.clone()),
-        Action::DrainService { unit } => (Operation::DrainService, unit.clone()),
-        Action::DaemonReload => (Operation::DaemonReload, String::new()),
-        Action::InstallRuntime { url, .. } => (Operation::InstallRuntime, url.clone()),
-        Action::RemoveRuntime { .. } => (Operation::RemoveRuntime, String::new()),
-        Action::ActivateProfile { user, .. } => (
-            Operation::ActivateProfile,
-            format!("{}'s profile", user.name),
-        ),
-        Action::SwitchGeneration {
-            user,
-            generation: Some(generation),
-            ..
-        } => (
-            Operation::SwitchGeneration,
-            format!("{}'s profile to generation {generation}", user.name),
-        ),
-        Action::SwitchGeneration {
-            user,
-            generation: None,
-            ..
-        } => (
-            Operation::SwitchGeneration,
-            format!("{}'s profile to no generation", user.name),
-        ),
-        Action::DeleteGeneration { user, generation } => (
-            Operation::DeleteGeneration,
-            format!("generation {generation} of {}'s profile", user.name),
-        ),
-        Action::RecordState { user } => (
-            Operation::RecordState,
-            format!("{}'s package list", user.name),
-        ),
-        Action::CreateRepository { user } => (
-            Operation::CreateRepository,
-            format!("{}'s config history", user.name),
-        ),
-        Action::ApplyGeneration { user } => (
-            Operation::ApplyGeneration,
-            format!("{}'s current generation", user.name),
-        ),
-        Action::CollectGarbage { .. } => {
-            (Operation::CollectGarbage, "unused store paths".to_string())
-        }
-        Action::Commit => (Operation::Commit, "changes".to_string()),
-    }
-}
-
 fn finish(tree: &mut Tree, node: NodeId, ending: Ending) {
     tree.finish(node, ending)
         .expect("the runner finishes its nodes children first");
@@ -754,107 +677,6 @@ fn rollback_diagnostic(failures: &[(Cow<'static, str>, Failure)], step: &str) ->
         .cloned()
         .collect();
     incomplete(&own)
-}
-
-pub fn diagnostic(failure: &Failure) -> Diagnostic {
-    let (code, message, detail) = match failure {
-        Failure::Conflict {
-            subject,
-            expected,
-            found,
-        } => (
-            Code::Conflict,
-            format!("{subject}: expected {expected}, found {found}"),
-            Some(Detail::Conflict(Box::new(ConflictDetail {
-                subject: subject.clone(),
-                expected: expected.clone(),
-                found: found.clone(),
-            }))),
-        ),
-        Failure::Io { path, kind } => (
-            if *kind == std::io::ErrorKind::PermissionDenied {
-                Code::PermissionDenied
-            } else {
-                Code::Io
-            },
-            format!("{}: {kind}", path.display()),
-            Some(Detail::Io(IoDetail {
-                path: path.display().to_string(),
-                kind: format!("{kind:?}"),
-            })),
-        ),
-        Failure::CommandFailed {
-            program,
-            status,
-            output_tail,
-        } => {
-            return crate::report::diagnose::command_failure(
-                program,
-                *status,
-                output_tail,
-                format!("{program} failed"),
-            );
-        }
-        Failure::SpawnFailed { program, kind } => {
-            (Code::SpawnFailed, format!("{program}: {kind}"), None)
-        }
-        Failure::Unit(unit) => (
-            Code::UnitFailed,
-            format!(
-                "could not {} {}: job {}, {} ({}), result {}",
-                unit.operation.verb(),
-                unit.unit,
-                unit.job_result,
-                unit.active_state,
-                unit.sub_state,
-                unit.unit_result
-            ),
-            Some(Detail::Unit(Box::new(UnitDetail {
-                operation: unit.operation.verb().to_string(),
-                unit: unit.unit.clone(),
-                invocation: unit.invocation.clone(),
-            }))),
-        ),
-        Failure::SystemdUnreachable => (
-            Code::SystemdUnreachable,
-            "systemd could not be reached".to_string(),
-            None,
-        ),
-        Failure::Network { url } => (
-            Code::Network,
-            url.clone(),
-            Some(Detail::Network(NetworkDetail { url: url.clone() })),
-        ),
-        Failure::Integrity {
-            artifact,
-            expected,
-            found,
-        } => (
-            Code::Integrity,
-            format!("{artifact}: expected {expected}, found {found}"),
-            Some(Detail::Integrity(IntegrityDetail {
-                artifact: artifact.clone(),
-                expected: expected.clone(),
-                actual: found.clone(),
-            })),
-        ),
-        Failure::Cancelled => (Code::Internal, "cancelled".to_string(), None),
-        Failure::Unrepairable { artifact, reason } => (
-            Code::Unrepairable,
-            format!("{artifact}: {reason}"),
-            Some(Detail::Unrepairable(crate::report::diagnose::unrepairable(
-                artifact, *reason,
-            ))),
-        ),
-    };
-    Diagnostic {
-        code: code as i32,
-        severity: Severity::Error as i32,
-        node: 0,
-        message,
-        causes: Vec::new(),
-        detail,
-    }
 }
 
 #[cfg(test)]

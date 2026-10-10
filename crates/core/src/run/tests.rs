@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use insta::assert_json_snapshot;
 use mix_events::v1::command::Request;
-use mix_events::v1::{Command, NotRunReason, Status};
+use mix_events::v1::{Command, NotRunReason, Operation, Status};
 use mix_events::{Outbox, Outcome as EventOutcome, ROOT, Start, Tree, validate};
 use proptest::prelude::*;
 

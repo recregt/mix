@@ -17,6 +17,7 @@ use crate::effect::Digest;
 use crate::model::World;
 use crate::model::testkit::{Run, Script, drive, requested};
 use crate::ops::bootstrap::{Runtime, Settings, steps};
+use crate::report::inspection;
 use crate::run::{Runner, StepOutcome};
 
 /// The binding between what an inspection found and what repair can do about it.
@@ -784,7 +785,7 @@ fn every_finding_and_category_reach_the_event_stream_as_their_own_kind() {
             | Finding::GenerationDangling { .. }
             | Finding::InTheWay { .. } => finding.clone(),
         };
-        let kind = wire::finding(listed)
+        let kind = inspection::finding(listed)
             .kind
             .expect("every finding has a kind");
         assert!(
@@ -794,7 +795,7 @@ fn every_finding_and_category_reach_the_event_stream_as_their_own_kind() {
     }
     for category in crate::declared::targets::Category::ALL {
         assert_ne!(
-            wire::category(category),
+            inspection::category(category),
             mix_events::v1::Category::Unspecified
         );
     }
@@ -810,11 +811,11 @@ fn a_report_tells_the_reader_what_repair_cannot_fix() {
     };
 
     assert_eq!(
-        wire::report(&report(Finding::RuntimeMissing)).unfixable(),
+        inspection::report(&report(Finding::RuntimeMissing)).unfixable(),
         mix_events::v1::Unfixable::MissingRuntime
     );
     assert_eq!(
-        wire::report(&report(Finding::Missing)).unfixable(),
+        inspection::report(&report(Finding::Missing)).unfixable(),
         mix_events::v1::Unfixable::Unspecified
     );
 }

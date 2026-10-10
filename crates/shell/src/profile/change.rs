@@ -1,6 +1,7 @@
 use mix_core::declared::targets::UserConfig;
 use mix_core::ops::change::{Change, NewerList, Unrenderable};
-use mix_core::run::{Runner, StepSpec, Verdict, diagnostic};
+use mix_core::report::diagnose::diagnostic;
+use mix_core::run::{Runner, StepSpec, Verdict};
 use mix_events::v1::{InstallResult, RemoveResult, node_finished};
 use mix_events::{Ending, ROOT};
 

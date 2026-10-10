@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use mix_events::v1::Operation;
 use serde::{Deserialize, Serialize};
 
 use super::{Digest, Expect, FileId, Owner};
@@ -283,5 +284,86 @@ impl Action {
                 | Action::StartUnit { .. }
                 | Action::StopUnit { .. }
         )
+    }
+}
+
+impl Action {
+    pub fn describe(&self) -> (Operation, String) {
+        let path = |path: &std::path::Path| path.display().to_string();
+        match self {
+            Action::CreateDir { path: at, .. } => (Operation::CreateDir, path(at)),
+            Action::CreateDirs { path: at, .. } => (Operation::CreateDirs, path(at)),
+            Action::PutFile { path: at, .. } => (Operation::PutFile, path(at)),
+            Action::SetMode { path: at, .. } => (Operation::SetMode, path(at)),
+            Action::SetOwner { path: at, .. } => (Operation::SetOwner, path(at)),
+            Action::SetAside { path: at, .. } => (Operation::SetAside, path(at)),
+            Action::RemoveCreated { path: at, .. } => (Operation::RemoveCreated, path(at)),
+            Action::RemoveCreatedTree { path: at, .. } => (Operation::RemoveCreatedTree, path(at)),
+            Action::Restore { path: at, .. } => (Operation::Restore, path(at)),
+            Action::ReclaimTree { path: at, .. } => (Operation::ReclaimTree, path(at)),
+            Action::CopyTree { to, .. } => (Operation::CopyTree, path(to)),
+            Action::AddGroup { name, .. } => (Operation::AddGroup, name.clone()),
+            Action::SetGroupGid { name, .. } => (Operation::SetGroupGid, name.clone()),
+            Action::DeleteGroup { name, .. } => (Operation::DeleteGroup, name.clone()),
+            Action::AddUser(spec) => (Operation::AddUser, spec.name.clone()),
+            Action::SetUserIds { name, .. } => (Operation::SetUserIds, name.clone()),
+            Action::DeleteUser { name, .. } => (Operation::DeleteUser, name.clone()),
+            Action::AddMember { group, user } => {
+                (Operation::AddMember, format!("{user} in {group}"))
+            }
+            Action::RemoveMember { group, user } => {
+                (Operation::RemoveMember, format!("{user} in {group}"))
+            }
+            Action::InstallUnit { unit, .. } => (Operation::InstallUnit, unit.clone()),
+            Action::EnableUnit { unit } => (Operation::EnableUnit, unit.clone()),
+            Action::DisableUnit { unit } => (Operation::DisableUnit, unit.clone()),
+            Action::StartUnit { unit } => (Operation::StartUnit, unit.clone()),
+            Action::StopUnit { unit } => (Operation::StopUnit, unit.clone()),
+            Action::RestartUnit { unit } => (Operation::RestartUnit, unit.clone()),
+            Action::DrainService { unit } => (Operation::DrainService, unit.clone()),
+            Action::DaemonReload => (Operation::DaemonReload, String::new()),
+            Action::InstallRuntime { url, .. } => (Operation::InstallRuntime, url.clone()),
+            Action::RemoveRuntime { .. } => (Operation::RemoveRuntime, String::new()),
+            Action::ActivateProfile { user, .. } => (
+                Operation::ActivateProfile,
+                format!("{}'s profile", user.name),
+            ),
+            Action::SwitchGeneration {
+                user,
+                generation: Some(generation),
+                ..
+            } => (
+                Operation::SwitchGeneration,
+                format!("{}'s profile to generation {generation}", user.name),
+            ),
+            Action::SwitchGeneration {
+                user,
+                generation: None,
+                ..
+            } => (
+                Operation::SwitchGeneration,
+                format!("{}'s profile to no generation", user.name),
+            ),
+            Action::DeleteGeneration { user, generation } => (
+                Operation::DeleteGeneration,
+                format!("generation {generation} of {}'s profile", user.name),
+            ),
+            Action::RecordState { user } => (
+                Operation::RecordState,
+                format!("{}'s package list", user.name),
+            ),
+            Action::CreateRepository { user } => (
+                Operation::CreateRepository,
+                format!("{}'s config history", user.name),
+            ),
+            Action::ApplyGeneration { user } => (
+                Operation::ApplyGeneration,
+                format!("{}'s current generation", user.name),
+            ),
+            Action::CollectGarbage { .. } => {
+                (Operation::CollectGarbage, "unused store paths".to_string())
+            }
+            Action::Commit => (Operation::Commit, "changes".to_string()),
+        }
     }
 }

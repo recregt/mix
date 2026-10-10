@@ -1,7 +1,8 @@
 use mix_events::v1::diagnostic::Detail;
 use mix_events::v1::{
-    Cancellation, Code, CommandDetail, Diagnostic, IoDetail, LockDetail, PackagesDetail,
-    ProgramDetail, Severity, UnrepairableDetail,
+    Cancellation, Code, CommandDetail, ConflictDetail, Diagnostic, IntegrityDetail, IoDetail,
+    LockDetail, NetworkDetail, PackagesDetail, ProgramDetail, Severity, UnitDetail,
+    UnrepairableDetail,
 };
 use mix_events::{Diagnose, Fault};
 use mix_nixlog::{NixFailure, nix_error};
@@ -9,7 +10,6 @@ use mix_nixlog::{NixFailure, nix_error};
 use crate::Error;
 use crate::effect::Failure;
 use crate::ops::health::Unfixable;
-use crate::run::diagnostic;
 
 fn command_code(tail: &str) -> Code {
     match nix_error(tail).and_then(|error| error.failure) {
@@ -93,7 +93,7 @@ pub fn warning(code: Code, message: impl Into<String>, cause: &dyn Diagnose) -> 
 pub fn unrepairable(artifact: &str, reason: Unfixable) -> UnrepairableDetail {
     UnrepairableDetail {
         artifact: artifact.to_string(),
-        reason: crate::ops::health::wire::unfixable(reason) as i32,
+        reason: crate::report::inspection::unfixable(reason) as i32,
     }
 }
 
@@ -196,6 +196,100 @@ impl Diagnose for Error {
                 ])
             }),
         }
+    }
+}
+
+pub fn diagnostic(failure: &Failure) -> Diagnostic {
+    let (code, message, detail) = match failure {
+        Failure::Conflict {
+            subject,
+            expected,
+            found,
+        } => (
+            Code::Conflict,
+            format!("{subject}: expected {expected}, found {found}"),
+            Some(Detail::Conflict(Box::new(ConflictDetail {
+                subject: subject.clone(),
+                expected: expected.clone(),
+                found: found.clone(),
+            }))),
+        ),
+        Failure::Io { path, kind } => (
+            if *kind == std::io::ErrorKind::PermissionDenied {
+                Code::PermissionDenied
+            } else {
+                Code::Io
+            },
+            format!("{}: {kind}", path.display()),
+            Some(Detail::Io(IoDetail {
+                path: path.display().to_string(),
+                kind: format!("{kind:?}"),
+            })),
+        ),
+        Failure::CommandFailed {
+            program,
+            status,
+            output_tail,
+        } => {
+            return command_failure(program, *status, output_tail, format!("{program} failed"));
+        }
+        Failure::SpawnFailed { program, kind } => {
+            (Code::SpawnFailed, format!("{program}: {kind}"), None)
+        }
+        Failure::Unit(unit) => (
+            Code::UnitFailed,
+            format!(
+                "could not {} {}: job {}, {} ({}), result {}",
+                unit.operation.verb(),
+                unit.unit,
+                unit.job_result,
+                unit.active_state,
+                unit.sub_state,
+                unit.unit_result
+            ),
+            Some(Detail::Unit(Box::new(UnitDetail {
+                operation: unit.operation.verb().to_string(),
+                unit: unit.unit.clone(),
+                invocation: unit.invocation.clone(),
+            }))),
+        ),
+        Failure::SystemdUnreachable => (
+            Code::SystemdUnreachable,
+            "systemd could not be reached".to_string(),
+            None,
+        ),
+        Failure::Network { url } => (
+            Code::Network,
+            url.clone(),
+            Some(Detail::Network(NetworkDetail { url: url.clone() })),
+        ),
+        Failure::Integrity {
+            artifact,
+            expected,
+            found,
+        } => (
+            Code::Integrity,
+            format!("{artifact}: expected {expected}, found {found}"),
+            Some(Detail::Integrity(IntegrityDetail {
+                artifact: artifact.clone(),
+                expected: expected.clone(),
+                actual: found.clone(),
+            })),
+        ),
+        Failure::Cancelled => (Code::Internal, "cancelled".to_string(), None),
+        Failure::Unrepairable { artifact, reason } => (
+            Code::Unrepairable,
+            format!("{artifact}: {reason}"),
+            Some(Detail::Unrepairable(unrepairable(artifact, *reason))),
+        ),
+    };
+    Diagnostic {
+        code: code as i32,
+        severity: Severity::Error as i32,
+        node: 0,
+        message,
+        causes: Vec::new(),
+        detail,
     }
 }
 

@@ -504,7 +504,7 @@ fn doctored(findings: &[(&str, Option<mix_core::ops::health::Finding>)]) -> Vec<
         reports: findings
             .iter()
             .map(|(target, finding)| {
-                mix_core::ops::health::wire::report(&mix_core::ops::health::HealthReport {
+                mix_core::report::inspection::report(&mix_core::ops::health::HealthReport {
                     name: (*target).into(),
                     category: mix_core::Category::Filesystem,
                     finding: finding.clone(),

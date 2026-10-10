@@ -243,12 +243,13 @@ pub fn unhealthy(reports: &[InspectionReport]) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use mix_core::Category;
-    use mix_core::ops::health::{Finding, HealthReport, wire};
+    use mix_core::ops::health::{Finding, HealthReport};
+    use mix_core::report::inspection;
 
     use super::*;
 
     fn report(name: &str, finding: Option<Finding>) -> InspectionReport {
-        wire::report(&HealthReport {
+        inspection::report(&HealthReport {
             name: name.to_string(),
             category: Category::Filesystem,
             finding,

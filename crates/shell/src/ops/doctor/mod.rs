@@ -3,7 +3,8 @@
 //! targets. Because both rely on the same logic, detection and repair never go out of sync.
 
 use mix_core::effect::Failure;
-use mix_core::ops::health::{self, wire};
+use mix_core::ops::health;
+use mix_core::report::inspection;
 use mix_events::v1::{
     DoctorRequest, DoctorResult, Inspection, InspectionResult, Plan, node_finished, node_started,
 };
@@ -53,7 +54,7 @@ pub(crate) async fn audit(ctx: &Context, root: &mut Root, _request: &DoctorReque
                 name.clone(),
                 node_started::Kind::Inspection(Inspection {
                     target: name.clone(),
-                    category: wire::category(target.category()) as i32,
+                    category: inspection::category(target.category()) as i32,
                 }),
             ),
         ) {
@@ -61,8 +62,8 @@ pub(crate) async fn audit(ctx: &Context, root: &mut Root, _request: &DoctorReque
                 node,
                 Ending::succeeded().with_result(node_finished::Result::Inspection(
                     InspectionResult {
-                        finding: finding.clone().map(wire::finding),
-                        drift: drift.as_ref().map(wire::drift),
+                        finding: finding.clone().map(inspection::finding),
+                        drift: drift.as_ref().map(inspection::drift),
                     },
                 )),
             );
@@ -75,7 +76,7 @@ pub(crate) async fn audit(ctx: &Context, root: &mut Root, _request: &DoctorReque
         });
     }
     let result = DoctorResult {
-        reports: reports.iter().map(wire::report).collect(),
+        reports: reports.iter().map(inspection::report).collect(),
     };
     let _ = tree.finish(plan, Ending::succeeded());
     let healthy = reports.iter().all(HealthReport::healthy);

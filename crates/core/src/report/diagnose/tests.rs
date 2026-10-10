@@ -225,7 +225,7 @@ fn a_warning_names_what_could_not_be_done_and_keeps_why() {
     assert_eq!(warning.code(), Code::JournalUnwritable);
     assert_eq!(warning.severity(), Severity::Warning);
     assert_eq!(warning.causes.len(), 1);
-    assert_eq!(warning.causes[0], crate::run::diagnostic(&cause));
+    assert_eq!(warning.causes[0], diagnostic(&cause));
 }
 
 #[test]

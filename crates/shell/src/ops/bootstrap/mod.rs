@@ -10,7 +10,8 @@ pub use error::{Error, Host, Result};
 
 use mix_core::effect::{Digest, Failure};
 use mix_core::ops::bootstrap::{Runtime, Settings, steps};
-use mix_core::run::{Runner, Verdict, diagnostic};
+use mix_core::report::diagnose::diagnostic;
+use mix_core::run::{Runner, Verdict};
 use mix_events::v1::{BootstrapRequest, BootstrapResult, Code, node_finished};
 use mix_events::{Ending, ROOT};
 

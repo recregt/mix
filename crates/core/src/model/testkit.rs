@@ -10,8 +10,9 @@ use serde_json::{Value, json};
 
 use crate::effect::{Action, Failure, Owner, Query};
 use crate::model::{Content, Entry, Unit, World};
+use crate::report::diagnose::diagnostic;
 use crate::run::journal::{Record, Recovery};
-use crate::run::{Input, Next, Report, Runner, Verdict, describe, diagnostic, make_guard};
+use crate::run::{Input, Next, Report, Runner, Verdict, make_guard};
 
 pub const REQUEST: &str = "request";
 
@@ -276,7 +277,7 @@ impl Run {
         self.performed
             .iter()
             .map(|action| {
-                let (operation, subject) = describe(action);
+                let (operation, subject) = action.describe();
                 format!("{operation:?} {subject}")
             })
             .collect()
