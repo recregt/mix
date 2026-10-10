@@ -30,7 +30,12 @@ pub fn detail(event: &Event) -> Detail {
         Event::NodeFinished(finished) if finished.status() == Status::Failed => Detail::Step,
         Event::NodeFinished(_) | Event::NotRun(_) => Detail::Action,
         Event::NodeProgress(progress) => match &progress.progress {
-            Some(Progress::Bytes(_) | Progress::Builds(_) | Progress::Stopping(_)) => Detail::Step,
+            Some(
+                Progress::Bytes(_)
+                | Progress::Builds(_)
+                | Progress::Stopping(_)
+                | Progress::Waiting(_),
+            ) => Detail::Step,
             Some(
                 Progress::Command(_)
                 | Progress::Fetch(_)

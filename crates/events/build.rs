@@ -174,7 +174,11 @@ fn normalize(descriptors: &FileDescriptorSet) -> String {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=proto");
     let descriptors = protox::compile(
-        ["mix/events/v1/events.proto", "mix/capture/v1/capture.proto"],
+        [
+            "mix/events/v1/events.proto",
+            "mix/capture/v1/capture.proto",
+            "mix/result/v1/result.proto",
+        ],
         ["proto"],
     )?;
     let encoded = descriptors.encode_to_vec();
@@ -199,6 +203,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ignore_unknown_fields()
         .ignore_unknown_enum_variants()
         .build(&[".mix.events.v1", ".mix.capture.v1"])?;
+
+    pbjson_build::Builder::new()
+        .register_descriptors(&encoded)?
+        .ignore_unknown_fields()
+        .ignore_unknown_enum_variants()
+        .emit_fields()
+        .build(&[".mix.result.v1"])?;
 
     Ok(())
 }

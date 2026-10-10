@@ -1,0 +1,22 @@
+---
+source: crates/render/src/replay.rs
+expression: "std::str::from_utf8(observed).expect(\"what mix prints is UTF-8\")"
+---
+    Blocking waiting for alice's `mix install` to finish
+     Writing package list
+     Writing /home/ciuser/.local/state/mix/state
+  Installing hello
+  Activating ciuser's profile
+    Fetching http://mirror.internal/hello.nar
+    Blocking waiting for ciuser's `nix-env -i hello` to release /home/ciuser/.local/state/nix/profiles/profile.lock
+     Running `/nix/var/nix/profiles/default/bin/nix build`
+    Fetching /nix/store/xl1h9i29pgq2q5cszjhm5wpfxfbbqwyi-glibc-2.40
+    Building /nix/store/bbx79xgf89bvd25i1sivdcykhy39bz14-hello-2.12.drv
+warning[git-record-failed]: the change was made but not recorded in git
+
+help: run `mix repair` to record it
+
+Caused by:
+  fatal: not a git repository
+
+   Installed hello in 31.00s

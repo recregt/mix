@@ -4,6 +4,7 @@ import functools
 import json
 import math
 import os
+import select
 import statistics
 import time
 from dataclasses import dataclass
@@ -15,11 +16,11 @@ HISTORY = CACHE_DIR / "resources.jsonl"
 BASELINE = TESTS_ROOT / "resources.json"
 LEDGER = CACHE_DIR / "admission.json"
 LEDGER_LOCK = CACHE_DIR / "admission.lock"
+WAKERS = CACHE_DIR / "admission"
 CGROUP_ROOT = Path("/sys/fs/cgroup")
 PRESSURE_ROOT = Path("/proc/pressure")
 
 KEPT_RUNS = 8
-ADMISSION_POLL_SECONDS = 1.0
 CALIBRATING = os.environ.get("MIX_TEST_CALIBRATE") == "1"
 
 
@@ -65,9 +66,9 @@ def estimates() -> dict[str, Demand]:
         if not _defined(test):
             continue
         known[test] = Demand(entry["peak_bytes"], entry["cpu_cores"], entry["seconds"])
-    for test, runs in measured.items():
-        latest = runs[-1].get("variant", "fresh")
-        runs = [run for run in runs if run.get("variant", "fresh") == latest]
+    for test, history in measured.items():
+        latest = history[-1].get("variant", "fresh")
+        runs = [run for run in history if run.get("variant", "fresh") == latest]
         known[test] = Demand(
             peak_bytes=max(run["peak_bytes"] for run in runs),
             cpu_cores=max(run["cpu_seconds"] / run["seconds"] for run in runs),
@@ -175,7 +176,7 @@ def worker_cap() -> int:
 def _load_ledger() -> dict:
     with contextlib.suppress(FileNotFoundError, ValueError):
         return json.loads(LEDGER.read_text())
-    return {"running": {}, "waiting": []}
+    return {"running": {}, "waiting": [], "memory": 0}
 
 
 @contextlib.contextmanager
@@ -184,6 +185,11 @@ def _locked():
     with open(LEDGER_LOCK, "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         ledger = _load_ledger()
+        ledger.setdefault("memory", 0)
+        ledger["running"] = {
+            name: entry for name, entry in ledger["running"].items() if alive(entry["pid"])
+        }
+        ledger["waiting"] = [entry for entry in ledger["waiting"] if alive(entry["pid"])]
         yield ledger
         LEDGER.write_text(json.dumps(ledger))
 
@@ -198,62 +204,95 @@ def alive(pid: int) -> bool:
     return True
 
 
-def _unused_reservation(entry: dict) -> int:
-    current = _read(Path(entry["cgroup"]) / "memory.current") if entry.get("cgroup") else None
-    used = int(current) if current else 0
-    return max(0, entry["peak_bytes"] - used)
-
-
 def _fits(ledger: dict, demand: Demand | None) -> bool:
     running = ledger["running"].values()
     if not running:
         return True
     if demand is None:
         return CALIBRATING
-    reserved = sum(_unused_reservation(entry) for entry in running)
+    reserved = sum(entry["peak_bytes"] for entry in running)
     cores = sum(entry["cpu_cores"] for entry in running)
     return (
-        memory_available() - reserved >= demand.peak_bytes
+        reserved + demand.peak_bytes <= ledger["memory"]
         and cores + demand.cpu_cores <= cpu_capacity()
     )
 
 
+def _waker(ticket: str) -> Path:
+    return WAKERS / ticket
+
+
+def _wake_waiters(ledger: dict) -> None:
+    for entry in ledger["waiting"]:
+        with contextlib.suppress(OSError):
+            waker = os.open(_waker(entry["ticket"]), os.O_WRONLY | os.O_NONBLOCK)
+            with contextlib.suppress(BlockingIOError):
+                os.write(waker, b"\n")
+            os.close(waker)
+
+
+def _watch(ledger: dict) -> list[int]:
+    """Pidfds of every other process in the ledger, readable once that process ends."""
+    watched = []
+    pids = {entry["pid"] for entry in [*ledger["running"].values(), *ledger["waiting"]]}
+    for pid in pids - {os.getpid()}:
+        with contextlib.suppress(ProcessLookupError):
+            watched.append(os.pidfd_open(pid))
+    return watched
+
+
 def admit(ticket: str, test: str, demand: Demand | None) -> float:
+    """Returns once `test` may start, in arrival order, with the seconds it waited.
+
+    A test is admitted when the peaks of everything running plus its own fit the memory that was
+    available when nothing of ours ran, and their cores fit the CPUs. Whether it fits changes
+    only when a test starts, ends or dies, so a waiter sleeps until one of those happens: a
+    release writes to every waiter's FIFO, and a death closes the pidfd it holds.
+    """
     started = time.monotonic()
-    queued = False
-    while True:
+    WAKERS.mkdir(parents=True, exist_ok=True)
+    waker = _waker(ticket)
+    os.mkfifo(waker)
+    wakes = os.open(waker, os.O_RDWR | os.O_NONBLOCK)
+    try:
         with _locked() as ledger:
-            ledger["running"] = {
-                name: entry for name, entry in ledger["running"].items() if alive(entry["pid"])
-            }
-            ledger["waiting"] = [entry for entry in ledger["waiting"] if alive(entry["pid"])]
-            if not queued:
-                ledger["waiting"].append({"ticket": ticket, "pid": os.getpid()})
-                queued = True
-            first = ledger["waiting"][0]["ticket"] == ticket
-            if first and _fits(ledger, demand):
-                ledger["waiting"].pop(0)
-                ledger["running"][ticket] = {
-                    "test": test,
-                    "pid": os.getpid(),
-                    "peak_bytes": demand.peak_bytes if demand else 0,
-                    "cpu_cores": demand.cpu_cores if demand else 0.0,
-                    "cgroup": None,
-                }
-                return time.monotonic() - started
-        time.sleep(ADMISSION_POLL_SECONDS)
-
-
-def attach(ticket: str, cgroup: Path) -> None:
-    with _locked() as ledger:
-        if ticket in ledger["running"]:
-            ledger["running"][ticket]["cgroup"] = str(cgroup)
+            ledger["waiting"].append({"ticket": ticket, "pid": os.getpid()})
+        while True:
+            with _locked() as ledger:
+                if not ledger["running"]:
+                    ledger["memory"] = memory_available()
+                first = ledger["waiting"][0]["ticket"] == ticket
+                if first and _fits(ledger, demand):
+                    ledger["waiting"].pop(0)
+                    ledger["running"][ticket] = {
+                        "test": test,
+                        "pid": os.getpid(),
+                        "peak_bytes": demand.peak_bytes if demand else 0,
+                        "cpu_cores": demand.cpu_cores if demand else 0.0,
+                    }
+                    _wake_waiters(ledger)
+                    return time.monotonic() - started
+                watched = _watch(ledger)
+            try:
+                select.select([wakes, *watched], [], [])
+                with contextlib.suppress(BlockingIOError):
+                    os.read(wakes, 4096)
+            finally:
+                for pidfd in watched:
+                    os.close(pidfd)
+    except BaseException:
+        release(ticket)
+        raise
+    finally:
+        os.close(wakes)
+        waker.unlink(missing_ok=True)
 
 
 def release(ticket: str) -> None:
     with _locked() as ledger:
         ledger["running"].pop(ticket, None)
         ledger["waiting"] = [entry for entry in ledger["waiting"] if entry["ticket"] != ticket]
+        _wake_waiters(ledger)
 
 
 def _refused_forks(cgroup: Path) -> int:
@@ -306,7 +345,9 @@ def trim_history() -> None:
 
 
 def session_runs(session: str) -> list[dict]:
-    return [run for kept in _runs_by_test().values() for run in kept if run.get("session") == session]
+    return [
+        run for kept in _runs_by_test().values() for run in kept if run.get("session") == session
+    ]
 
 
 def pressure() -> dict[str, int]:
@@ -317,7 +358,7 @@ def pressure() -> dict[str, int]:
             kind, *fields = line.split()
             for field in fields:
                 if field.startswith("total="):
-                    totals[f"{resource} {kind}"] = int(field[len("total="):])
+                    totals[f"{resource} {kind}"] = int(field[len("total=") :])
     return totals
 
 

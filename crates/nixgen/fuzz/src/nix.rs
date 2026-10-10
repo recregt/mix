@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 use std::io::Write as _;
 use std::process::Output;
 

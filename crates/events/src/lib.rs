@@ -19,6 +19,15 @@ mod fault;
 pub mod io_kind;
 pub mod mirror;
 mod outbox;
+pub mod result {
+    #[allow(clippy::all)]
+    pub mod v1 {
+        include!(concat!(env!("OUT_DIR"), "/mix.result.v1.rs"));
+        include!(concat!(env!("OUT_DIR"), "/mix.result.v1.serde.rs"));
+    }
+
+    pub const FORMAT_VERSION: &str = "1.0";
+}
 mod root;
 mod tree;
 mod validate;
@@ -31,4 +40,4 @@ pub use root::{Render, command, fail, key_of};
 pub use tree::{Ending, Misuse, Node, NodeId, ROOT, Start, Stopped, Tree, exit, output};
 pub use validate::{Entry, Outcome, Validated, Validator, Violation, validate};
 
-pub const SCHEMA_MINOR: u32 = 5;
+pub const SCHEMA_MINOR: u32 = 8;

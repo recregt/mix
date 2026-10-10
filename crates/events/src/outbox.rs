@@ -28,6 +28,7 @@ fn slot(event: &Event) -> Option<Slot> {
                 | Progress::Build(_)
                 | Progress::Substitution(_)
                 | Progress::Stopping(_)
+                | Progress::Waiting(_)
                 | Progress::Observed(_)
                 | Progress::Journaled(_),
             )

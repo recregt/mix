@@ -8,8 +8,8 @@ use mix_core::Error as CoreError;
 use mix_exec::Scope;
 use nix::unistd::{Gid, Uid, User};
 
-use mix_core::identity::NIXBLD_GID;
-use mix_core::paths::{NIX_PROVISIONING_MANIFEST, NIX_STORE};
+use mix_core::declared::identity::NIXBLD_GID;
+use mix_core::declared::paths::{NIX_PROVISIONING_MANIFEST, NIX_STORE};
 
 use crate::effect::fs::chown_tree;
 use crate::ops::bootstrap::error::{Error, Result};

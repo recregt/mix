@@ -1,0 +1,1129 @@
+---
+source: crates/core/src/ops/bootstrap/tests.rs
+expression: "forced.case(&installed, &replaced)"
+---
+{
+  "document": {
+    "cancellation": "CANCELLATION_UNSPECIFIED",
+    "changes": [
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_STOP_UNIT",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nix-daemon.socket",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_DISABLE_UNIT",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nix-daemon.socket",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_SET_ASIDE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "/etc/systemd/system/nix-daemon.service",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_SET_ASIDE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "/etc/systemd/system/nix-daemon.socket",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_DAEMON_RELOAD",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld1",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld2",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld3",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld4",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld5",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld6",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld7",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld8",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld9",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld10",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld11",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld12",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld13",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld14",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld15",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld16",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld17",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld18",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld19",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld20",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld21",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld22",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld23",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld24",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld25",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld26",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld27",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld28",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld29",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld30",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld31",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld32",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_GROUP",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "nixbld",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_DELETE_GROUP",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "mix-users",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_SET_ASIDE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "/etc/nix/nix.conf",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_SET_ASIDE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "/etc/profile.d/mix-nix.sh",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_SET_ASIDE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "/etc/mix/policy.json",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_SET_ASIDE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "remove-existing-installation",
+        "subject": "/nix",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-dir",
+        "subject": "/nix",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_PUT_FILE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-dir",
+        "subject": "/nix/.mix-managed",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/log",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/log/nix",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/log/nix/drvs",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/nix",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/nix/db",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/nix/gcroots",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/nix/gcroots/per-user",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/nix/profiles",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/nix/profiles/per-user",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/nix/temproots",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/nix/userpool",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/nix/daemon-socket",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_GROUP",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_GROUP",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "mix-users",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld1",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld2",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld3",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld4",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld5",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld6",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld7",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld8",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld9",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld10",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld11",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld12",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld13",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld14",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld15",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld16",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld17",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld18",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld19",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld20",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld21",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld22",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld23",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld24",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld25",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld26",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld27",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld28",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld29",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld30",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld31",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld32",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_INSTALL_RUNTIME",
+        "status": "STATUS_SUCCEEDED",
+        "step": "fetch-runtime",
+        "subject": "https://mirror.internal/nix-2.35.2-x86_64-linux.tar.xz",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_PUT_FILE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "write-nix-conf",
+        "subject": "/etc/mix/policy.json",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_PUT_FILE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "write-nix-conf",
+        "subject": "/etc/nix/nix.conf",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_PUT_FILE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "write-nix-conf",
+        "subject": "/etc/profile.d/mix-nix.sh",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_INSTALL_UNIT",
+        "status": "STATUS_SUCCEEDED",
+        "step": "configure-daemon",
+        "subject": "nix-daemon.service",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_INSTALL_UNIT",
+        "status": "STATUS_SUCCEEDED",
+        "step": "configure-daemon",
+        "subject": "nix-daemon.socket",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_DAEMON_RELOAD",
+        "status": "STATUS_SUCCEEDED",
+        "step": "configure-daemon",
+        "subject": "",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_ENABLE_UNIT",
+        "status": "STATUS_SUCCEEDED",
+        "step": "configure-daemon",
+        "subject": "nix-daemon.socket",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_START_UNIT",
+        "status": "STATUS_SUCCEEDED",
+        "step": "configure-daemon",
+        "subject": "nix-daemon.socket",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_MEMBER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "write-home-config",
+        "subject": "alice in mix-users",
+        "undone": false,
+        "unknown": []
+      }
+    ],
+    "command": "bootstrap",
+    "dryRun": false,
+    "exit": 0,
+    "formatVersion": "1.0",
+    "problems": [],
+    "request": "request",
+    "status": "STATUS_SUCCEEDED",
+    "steps": [
+      {
+        "key": "remove-existing-installation",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "existing installation",
+        "undone": false,
+        "verb": "VERB_REMOVING"
+      },
+      {
+        "key": "create-nix-dir",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "Nix directory",
+        "undone": false,
+        "verb": "VERB_CREATING"
+      },
+      {
+        "key": "create-nix-tree",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "runtime directories",
+        "undone": false,
+        "verb": "VERB_CREATING"
+      },
+      {
+        "key": "create-users-and-groups",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "build users and groups",
+        "undone": false,
+        "verb": "VERB_CREATING"
+      },
+      {
+        "key": "fetch-runtime",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "Nix runtime",
+        "undone": false,
+        "verb": "VERB_INSTALLING"
+      },
+      {
+        "key": "write-nix-conf",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "runtime configuration",
+        "undone": false,
+        "verb": "VERB_WRITING"
+      },
+      {
+        "key": "configure-daemon",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "Nix daemon service",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "install-mix-daemon",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "mix daemon service",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "write-home-config",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "profile configuration",
+        "undone": false,
+        "verb": "VERB_WRITING"
+      },
+      {
+        "key": "activate-home",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "profile",
+        "undone": false,
+        "verb": "VERB_ACTIVATING"
+      }
+    ],
+    "waits": [],
+    "warnings": []
+  },
+  "machine": {
+    "files": {
+      "/etc/nix/nix.conf": {
+        "contents": [
+          "-trusted-users = root alice",
+          "+build-users-group = nixbld",
+          "+experimental-features = nix-command flakes",
+          "+trusted-users = root",
+          "+substituters = https://mirror.internal/cache",
+          "+trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= mirror:AAAA"
+        ]
+      }
+    }
+  },
+  "performed": [
+    "StopUnit nix-daemon.socket",
+    "DisableUnit nix-daemon.socket",
+    "SetAside /etc/systemd/system/nix-daemon.service",
+    "SetAside /etc/systemd/system/nix-daemon.socket",
+    "DaemonReload ",
+    "DeleteUser nixbld1",
+    "DeleteUser nixbld2",
+    "DeleteUser nixbld3",
+    "DeleteUser nixbld4",
+    "DeleteUser nixbld5",
+    "DeleteUser nixbld6",
+    "DeleteUser nixbld7",
+    "DeleteUser nixbld8",
+    "DeleteUser nixbld9",
+    "DeleteUser nixbld10",
+    "DeleteUser nixbld11",
+    "DeleteUser nixbld12",
+    "DeleteUser nixbld13",
+    "DeleteUser nixbld14",
+    "DeleteUser nixbld15",
+    "DeleteUser nixbld16",
+    "DeleteUser nixbld17",
+    "DeleteUser nixbld18",
+    "DeleteUser nixbld19",
+    "DeleteUser nixbld20",
+    "DeleteUser nixbld21",
+    "DeleteUser nixbld22",
+    "DeleteUser nixbld23",
+    "DeleteUser nixbld24",
+    "DeleteUser nixbld25",
+    "DeleteUser nixbld26",
+    "DeleteUser nixbld27",
+    "DeleteUser nixbld28",
+    "DeleteUser nixbld29",
+    "DeleteUser nixbld30",
+    "DeleteUser nixbld31",
+    "DeleteUser nixbld32",
+    "DeleteGroup nixbld",
+    "DeleteGroup mix-users",
+    "SetAside /etc/nix/nix.conf",
+    "SetAside /etc/profile.d/mix-nix.sh",
+    "SetAside /etc/mix/policy.json",
+    "SetAside /nix",
+    "CreateDir /nix",
+    "PutFile /nix/.mix-managed",
+    "CreateDir /nix/var",
+    "CreateDir /nix/var/log",
+    "CreateDir /nix/var/log/nix",
+    "CreateDir /nix/var/log/nix/drvs",
+    "CreateDir /nix/var/nix",
+    "CreateDir /nix/var/nix/db",
+    "CreateDir /nix/var/nix/gcroots",
+    "CreateDir /nix/var/nix/gcroots/per-user",
+    "CreateDir /nix/var/nix/profiles",
+    "CreateDir /nix/var/nix/profiles/per-user",
+    "CreateDir /nix/var/nix/temproots",
+    "CreateDir /nix/var/nix/userpool",
+    "CreateDir /nix/var/nix/daemon-socket",
+    "AddGroup nixbld",
+    "AddGroup mix-users",
+    "AddUser nixbld1",
+    "AddUser nixbld2",
+    "AddUser nixbld3",
+    "AddUser nixbld4",
+    "AddUser nixbld5",
+    "AddUser nixbld6",
+    "AddUser nixbld7",
+    "AddUser nixbld8",
+    "AddUser nixbld9",
+    "AddUser nixbld10",
+    "AddUser nixbld11",
+    "AddUser nixbld12",
+    "AddUser nixbld13",
+    "AddUser nixbld14",
+    "AddUser nixbld15",
+    "AddUser nixbld16",
+    "AddUser nixbld17",
+    "AddUser nixbld18",
+    "AddUser nixbld19",
+    "AddUser nixbld20",
+    "AddUser nixbld21",
+    "AddUser nixbld22",
+    "AddUser nixbld23",
+    "AddUser nixbld24",
+    "AddUser nixbld25",
+    "AddUser nixbld26",
+    "AddUser nixbld27",
+    "AddUser nixbld28",
+    "AddUser nixbld29",
+    "AddUser nixbld30",
+    "AddUser nixbld31",
+    "AddUser nixbld32",
+    "InstallRuntime https://mirror.internal/nix-2.35.2-x86_64-linux.tar.xz",
+    "PutFile /etc/mix/policy.json",
+    "PutFile /etc/nix/nix.conf",
+    "PutFile /etc/profile.d/mix-nix.sh",
+    "InstallUnit nix-daemon.service",
+    "InstallUnit nix-daemon.socket",
+    "DaemonReload ",
+    "EnableUnit nix-daemon.socket",
+    "StartUnit nix-daemon.socket",
+    "AddMember alice in mix-users",
+    "Commit changes"
+  ]
+}

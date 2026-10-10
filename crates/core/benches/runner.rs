@@ -1,8 +1,8 @@
 use std::borrow::Cow;
 use std::sync::{Arc, LazyLock};
 
-use mix_core::action::{Action, Fact, Failure, Performed, Query};
-use mix_core::plan::{Closed, Input, Next, Runner, Session, StepSpec, Verdict, make_guard};
+use mix_core::effect::{Action, Fact, Failure, Performed, Query};
+use mix_core::run::{Closed, Input, Next, Runner, Session, StepSpec, Verdict, make_guard};
 use mix_events::v1::Command;
 use mix_events::{Outbox, ROOT, Start, Tree};
 
@@ -26,8 +26,8 @@ impl StepSpec for Noop {
         self.key.into()
     }
 
-    fn title(&self) -> mix_core::plan::Title {
-        mix_core::plan::Title::new(mix_events::v1::Verb::Creating, "do nothing")
+    fn title(&self) -> mix_core::run::Title {
+        mix_core::run::Title::new(mix_events::v1::Verb::Creating, "do nothing")
     }
 
     fn queries(&self) -> Vec<Query> {

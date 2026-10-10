@@ -16,7 +16,7 @@ use tokio::sync::OwnedMutexGuard;
 const LOCK_MODE: u32 = 0o644;
 const LOCK_DIR_MODE: u32 = 0o755;
 
-pub use mix_core::locks::Need;
+pub use mix_core::run::locks::Need;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Holder {
@@ -41,6 +41,22 @@ pub struct Locks {
     path: PathBuf,
     users: Mutex<HashMap<u32, Arc<tokio::sync::Mutex<()>>>>,
     registry: Arc<Mutex<Registry>>,
+    waiting: tokio::sync::watch::Sender<usize>,
+}
+
+struct Waiting<'a>(&'a tokio::sync::watch::Sender<usize>);
+
+impl<'a> Waiting<'a> {
+    fn begin(count: &'a tokio::sync::watch::Sender<usize>) -> Self {
+        count.send_modify(|waiting| *waiting += 1);
+        Self(count)
+    }
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        self.0.send_modify(|waiting| *waiting -= 1);
+    }
 }
 
 pub struct Held {
@@ -77,7 +93,12 @@ impl Locks {
             path: path.into(),
             users: Mutex::new(HashMap::new()),
             registry: Arc::new(Mutex::new(Registry::default())),
+            waiting: tokio::sync::watch::Sender::new(0),
         }
+    }
+
+    pub fn waiting(&self) -> tokio::sync::watch::Receiver<usize> {
+        self.waiting.subscribe()
     }
 
     fn named_machine_holder(&self, file: &mut File) -> Option<Holder> {
@@ -99,7 +120,23 @@ impl Locks {
         stopped: &Stopped,
     ) -> Result<Held, Blocked> {
         let exclusive = need == Need::Exclusive;
-        let file = open(&self.path).map_err(Blocked::Failed)?;
+        let file = if need == Need::Observe {
+            match open_existing(&self.path).map_err(Blocked::Failed)? {
+                Some(file) => file,
+                None => {
+                    return Ok(Held {
+                        flock: None,
+                        exclusive: false,
+                        _user: None,
+                        registry: Arc::clone(&self.registry),
+                        ticket: 0,
+                        uid: None,
+                    });
+                }
+            }
+        } else {
+            open(&self.path).map_err(Blocked::Failed)?
+        };
         let mut flock = match Flock::lock(file, flock_arg(exclusive, false)) {
             Ok(flock) => flock,
             Err((mut file, Errno::EWOULDBLOCK)) => {
@@ -116,7 +153,11 @@ impl Locks {
                         let _ = sender.send(flock);
                     }
                 });
-                match scope.guard(receiver).await {
+                let waited = {
+                    let _waiting = Waiting::begin(&self.waiting);
+                    scope.guard(receiver).await
+                };
+                match waited {
                     Ok(Ok(flock)) => {
                         let _ = tree.finish(node, Ending::succeeded());
                         flock
@@ -143,7 +184,7 @@ impl Locks {
         if exclusive {
             let _ = write_holder(&mut flock, &holder);
         }
-        let user_uid = uid.filter(|_| need == Need::SharedForUser);
+        let user_uid = uid.filter(|_| matches!(need, Need::SharedForUser | Need::Observe));
         let user = if let Some(uid) = user_uid {
             let mutex = Arc::clone(
                 self.users
@@ -164,7 +205,11 @@ impl Locks {
                         .cloned();
                     let node =
                         start_wait(tree, "user-lock", &format!("user {}", holder.user), named);
-                    match scope.guard(mutex.lock_owned()).await {
+                    let waited = {
+                        let _waiting = Waiting::begin(&self.waiting);
+                        scope.guard(mutex.lock_owned()).await
+                    };
+                    match waited {
                         Ok(guard) => {
                             let _ = tree.finish(node, Ending::succeeded());
                             guard
@@ -249,6 +294,17 @@ fn written(file: &mut File) -> Option<Holder> {
     let command = fields.next()?.to_string();
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).ok()?;
     Some(Holder { user, command })
+}
+
+fn open_existing(path: &Path) -> Result<Option<File>, Error> {
+    match File::open(path) {
+        Ok(file) => Ok(Some(file)),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(Error::Io {
+            path: path.to_path_buf(),
+            source: error,
+        }),
+    }
 }
 
 #[allow(clippy::disallowed_methods)]

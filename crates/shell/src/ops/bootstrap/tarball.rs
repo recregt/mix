@@ -32,8 +32,8 @@ fn pin_filename(pin: &TarballPin) -> &'static str {
 
 fn host_target_key() -> String {
     match (
-        mix_core::system::Arch::current(),
-        mix_core::system::Os::current(),
+        mix_core::ops::bootstrap::system::Arch::current(),
+        mix_core::ops::bootstrap::system::Os::current(),
     ) {
         (Some(arch), Some(os)) => format!("{arch}-{os}"),
         _ => format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
@@ -300,13 +300,7 @@ mod tests {
             std::fs::write(src.path().join(name), contents).unwrap();
         }
 
-        let output = tar_of(src.path());
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        output.stdout
+        tar_of(src.path())
     }
 
     #[test]
@@ -502,12 +496,14 @@ mod tests {
         assert!(matches!(err, Error::Network(_)));
     }
 
-    #[tokio::test]
-    async fn fetch_and_verify_lets_a_slow_server_finish() {
+    #[tokio::test(start_paused = true)]
+    async fn fetch_and_verify_waits_out_a_server_silent_for_an_hour() {
         let body = b"slow but steady".to_vec();
         let expected = sha256_hex(&body);
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
+        let (fell_silent, silent) = tokio::sync::oneshot::channel();
+        let (resume, resumed) = std::sync::mpsc::channel::<()>();
         std::thread::spawn(move || {
             use std::io::{BufRead as _, Write as _};
             if let Ok((mut conn, _)) = listener.accept() {
@@ -517,31 +513,36 @@ mod tests {
                     line.clear();
                 }
                 let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
+                let (first, rest) = body.split_at(5);
                 let _ = conn.write_all(head.as_bytes());
-                for chunk in body.chunks(5) {
-                    std::thread::sleep(std::time::Duration::from_millis(400));
-                    let _ = conn.write_all(chunk);
+                let _ = conn.write_all(first);
+                let _ = fell_silent.send(());
+                if resumed.recv().is_ok() {
+                    let _ = conn.write_all(rest);
                 }
             }
         });
+        let an_hour_later = async {
+            silent.await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_secs(60 * 60)).await;
+            resume.send(()).unwrap();
+        };
 
-        let bytes = fetch_and_verify(
-            &format!("http://{addr}/"),
-            &expected,
-            15,
-            &mix_core::NoopProgress,
-            &Scope::root(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(bytes, b"slow but steady");
+        let url = format!("http://{addr}/");
+        let scope = Scope::root();
+        let (bytes, ()) = tokio::join!(
+            fetch_and_verify(&url, &expected, 15, &mix_core::NoopProgress, &scope),
+            an_hour_later
+        );
+
+        assert_eq!(bytes.unwrap(), b"slow but steady");
     }
 
     #[tokio::test]
     async fn a_cancelled_request_stops_waiting_for_a_silent_server() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
-        let (accepted, wait_for_accept) = std::sync::mpsc::channel();
+        let (accepted, wait_for_accept) = tokio::sync::oneshot::channel();
         std::thread::spawn(move || {
             let conn = listener.accept();
             let _ = accepted.send(());
@@ -550,9 +551,10 @@ mod tests {
         });
         let scope = Scope::root();
         let cancelling = scope.clone();
-        tokio::task::spawn_blocking(move || {
-            let _ = wait_for_accept.recv();
-            cancelling.cancel(mix_exec::Reason::Interrupted);
+        tokio::spawn(async move {
+            if wait_for_accept.await.is_ok() {
+                cancelling.cancel(mix_exec::Reason::Interrupted);
+            }
         });
 
         let err = fetch_and_verify(
@@ -601,23 +603,17 @@ mod tests {
         assert!(pin_for(&host_target_key()).is_some());
     }
 
-    fn tar_of(dir: &std::path::Path) -> std::process::Output {
-        mix_exec::Command::new("tar")
-            .args(["cJf", "-", "-C"])
-            .arg(dir)
-            .arg(".")
-            .output_blocking(&mix_exec::Scope::root())
-            .expect("tar must be on PATH to build test fixtures")
+    fn tar_of(dir: &std::path::Path) -> Vec<u8> {
+        let mut archive = tar::Builder::new(Vec::new());
+        archive.append_dir_all(".", dir).unwrap();
+        xz_compress(&archive.into_inner().unwrap())
     }
 
     fn xz_compress(bytes: &[u8]) -> Vec<u8> {
-        let output = mix_exec::Command::new("xz")
-            .args(["-z", "-c"])
-            .input(bytes.to_vec())
-            .output_blocking(&mix_exec::Scope::root())
-            .expect("xz must be on PATH to build test fixtures");
-        assert!(output.status.success());
-        output.stdout
+        use std::io::Write as _;
+        let mut encoder = liblzma::write::XzEncoder::new(Vec::new(), 6);
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
     }
 
     #[test]
@@ -644,11 +640,10 @@ mod tests {
         )
         .unwrap();
 
-        let output = tar_of(src.path());
-        assert!(output.status.success());
+        let tarball = tar_of(src.path());
 
         let dest = tempfile::tempdir().unwrap();
-        unpack(&output.stdout, dest.path()).unwrap();
+        unpack(&tarball, dest.path()).unwrap();
 
         assert_eq!(
             std::fs::read(dest.path().join("locked/first")).unwrap(),

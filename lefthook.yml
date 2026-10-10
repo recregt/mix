@@ -5,15 +5,22 @@ remotes:
       - lefthook-remote.yml
 
 pre-commit:
+  parallel: true
   commands:
     fmt:
       glob: "*.rs"
       run: cargo fmt --all -- --check
     dependencies:
       glob: "{Cargo.toml,Cargo.lock,**/Cargo.toml}"
-      run: scripts/check_dependencies.py
+      run: for layer in core cli explain render ui; do cargo deny --log-level error --manifest-path "crates/$layer/Cargo.toml" --config "deny/$layer.toml" check bans || exit 1; done
+    ruff:
+      glob: "*.py"
+      run: >-
+        uv run --project e2e --locked --only-group dev ruff check {staged_files} &&
+        uv run --project e2e --locked --only-group dev ruff format --check {staged_files}
 
 pre-push:
+  parallel: true
   commands:
     doc:
       run: cargo doc --workspace --no-deps --document-private-items --locked

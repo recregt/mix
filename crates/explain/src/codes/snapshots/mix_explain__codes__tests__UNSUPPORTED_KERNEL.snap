@@ -1,0 +1,19 @@
+---
+source: crates/explain/src/codes/tests.rs
+expression: shown(code)
+---
+$ mix install ripgrep
+error: `mix` needs WSL 2, and this is WSL 1
+
+help: upgrade it from Windows PowerShell:
+        wsl --set-version <distro> 2
+
+$ mix explain unsupported-kernel
+UNSUPPORTED_KERNEL
+
+This system is WSL 1, and `mix` needs WSL 2.
+
+Nix builds packages in a sandbox that needs a real Linux kernel. WSL 1 translates system calls instead of running one, so it cannot host Nix.
+
+To fix it:
+  - upgrade the distro from Windows PowerShell with `wsl --set-version <distro> 2`

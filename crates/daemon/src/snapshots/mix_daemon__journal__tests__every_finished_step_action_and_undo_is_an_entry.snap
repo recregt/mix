@@ -1,0 +1,10 @@
+---
+source: crates/daemon/src/journal.rs
+expression: entries
+---
+[
+  "MESSAGE=create dir /nix: succeeded PRIORITY=6 SYSLOG_IDENTIFIER=mix-daemon MIX_USER=alice MIX_COMMAND=bootstrap MIX_REQUEST=request MIX_STATUS=succeeded MIX_OPERATION=create dir MIX_SUBJECT=/nix MIX_STEP=create-nix-dir",
+  "MESSAGE=put file /nix/.mix-managed: failed PRIORITY=4 SYSLOG_IDENTIFIER=mix-daemon MIX_USER=alice MIX_COMMAND=bootstrap MIX_REQUEST=request MIX_STATUS=failed MIX_OPERATION=put file MIX_SUBJECT=/nix/.mix-managed MIX_STEP=create-nix-dir",
+  "MESSAGE=create-nix-dir failed PRIORITY=4 SYSLOG_IDENTIFIER=mix-daemon MIX_USER=alice MIX_COMMAND=bootstrap MIX_REQUEST=request MIX_STATUS=failed MIX_STEP=create-nix-dir",
+  "MESSAGE=remove created /nix: succeeded PRIORITY=6 SYSLOG_IDENTIFIER=mix-daemon MIX_USER=alice MIX_COMMAND=bootstrap MIX_REQUEST=request MIX_STATUS=succeeded MIX_OPERATION=remove created MIX_SUBJECT=/nix MIX_UNDO=1 MIX_STEP=create-nix-dir"
+]

@@ -1,7 +1,7 @@
 //! Turning a child process's live byte stream into display lines, cheaply.
 
 use mix_core::ActivityReporter;
-use mix_core::nix_log::{Event, NixLog};
+use mix_nixlog::{Event, NixLog};
 
 /// Bytes a single unterminated line may buffer before it is handed over anyway.
 const MAX_LINE: usize = 4 * 1024;
@@ -324,7 +324,7 @@ mod tests {
 
     impl ActivityReporter for Builds {
         fn line(&self, _line: &str) {}
-        fn progress(&self, _progress: &mix_core::BuildProgress) {}
+        fn progress(&self, _progress: &mix_nixlog::BuildProgress) {}
         fn clear(&self) {}
         fn build_started(&self, derivation: &str) {
             self.0.lock().unwrap().push(derivation.to_string());

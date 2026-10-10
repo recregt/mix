@@ -1,0 +1,7 @@
+---
+source: crates/render/src/replay.rs
+expression: "std::str::from_utf8(observed).expect(\"what mix prints is UTF-8\")"
+---
+     Checked /nix
+     Checked nix-daemon.service
+     Checked system in 1.00s

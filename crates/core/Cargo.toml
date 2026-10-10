@@ -5,26 +5,25 @@ edition = "2024"
 authors = ["Ömer Tekin"]
 license = "MPL-2.0"
 
-[features]
-world = []
-
 [dependencies]
 similar = "3.2.0"
 mix-events = { path = "../events" }
 mix-nixgen = { path = "../nixgen" }
+mix-nixlog = { path = "../nixlog" }
 serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 generativity = "1.2.1"
 
+[features]
+testkit = []
+
 [dev-dependencies]
+insta = { workspace = true }
+mix-render = { path = "../render" }
 proptest = { workspace = true }
 divan = { workspace = true }
 trybuild = "=1.0.121"
-
-[[bench]]
-name = "nix_log"
-harness = false
 
 [[bench]]
 name = "runner"

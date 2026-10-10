@@ -5,7 +5,8 @@ use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 
-use mix_core::action::{
+use mix_core::declared::paths::is_leftover;
+use mix_core::effect::{
     Action, Expect, Fact, Failure, FileId, Kind, Outcome, Owner, PathFacts, Performed, Query,
 };
 use rustix::fs::{
@@ -153,6 +154,22 @@ impl Files {
 
     fn place(&self, path: &Path) -> Result<Place, Failure> {
         self.place_with(path, ResolveFlags::NO_SYMLINKS | ResolveFlags::BENEATH)
+    }
+
+    fn place_of(&self, path: &Path) -> Result<Option<Place>, Failure> {
+        match self.place(path) {
+            Ok(place) => Ok(Some(place)),
+            Err(Failure::Io {
+                kind: std::io::ErrorKind::NotFound,
+                ..
+            }) => Ok(None),
+            Err(failure) => Err(failure),
+        }
+    }
+
+    fn place_holding(&self, path: &Path, expect: FileId) -> Result<Place, Failure> {
+        self.place_of(path)?
+            .ok_or_else(|| conflict(path, format!("{expect:?}"), "nothing"))
     }
 
     fn forget(&self) {
@@ -785,7 +802,7 @@ impl Files {
     }
 
     fn set_aside(&mut self, path: &Path, expect: FileId, prepared: &mut Prepared<'_>) -> Outcome {
-        let place = self.place(path)?;
+        let place = self.place_holding(path, expect)?;
         let pinned = Self::pinned(&place, &place.name, expect)?;
         let aside = self.sibling(&place, "aside");
         let undo = vec![Action::Restore {
@@ -810,7 +827,9 @@ impl Files {
     }
 
     fn remove_created(&mut self, path: &Path, expect: FileId) -> Outcome {
-        let place = self.place(path)?;
+        let Some(place) = self.place_of(path)? else {
+            return done(Vec::new());
+        };
         let Some(pinned) = Self::pin(&place, &place.name, expect)? else {
             return done(Vec::new());
         };
@@ -856,7 +875,9 @@ impl Files {
     }
 
     fn remove_created_tree(&mut self, path: &Path, expect: FileId) -> Outcome {
-        let place = self.place(path)?;
+        let Some(place) = self.place_of(path)? else {
+            return done(Vec::new());
+        };
         let Some(pinned) = Self::pin(&place, &place.name, expect)? else {
             return done(Vec::new());
         };
@@ -982,6 +1003,7 @@ impl Files {
                 Self::rename(&place, &from_name, &place.name, RenameFlags::NOREPLACE).map_err(
                     |errno| match errno {
                         Errno::EXIST => conflict(path, "nothing", "something already there"),
+                        Errno::NOENT => io(from, errno),
                         errno => io(path, errno),
                     },
                 )?;
@@ -990,6 +1012,11 @@ impl Files {
                 let pinned = Self::pinned(&place, &place.name, current)?;
                 Self::rename(&place, &from_name, &place.name, RenameFlags::EXCHANGE).map_err(
                     |errno| match errno {
+                        Errno::NOENT
+                            if Self::stat(&place, &place.name).ok().flatten().is_some() =>
+                        {
+                            io(from, errno)
+                        }
                         Errno::NOENT => conflict(path, format!("{current:?}"), "nothing"),
                         errno => io(path, errno),
                     },
@@ -1025,7 +1052,7 @@ impl Files {
                 format!("a process running as {running:?}"),
             ));
         }
-        let place = self.place(path)?;
+        let place = self.place_holding(path, expect)?;
         let pinned = Self::pinned(&place, &place.name, expect)?;
         let staged = self.sibling(&place, "reclaim");
         let discard = |files: &Self| {
@@ -1125,8 +1152,53 @@ impl Files {
             Query::Path(path) => Fact::Path(self.path_facts(path)),
             Query::Contents(path) => Fact::Contents(self.contents(path).map(Into::into)),
             Query::TreeOwner(path) => Fact::TreeOwner(self.tree_owner(path)),
+            Query::Leftovers(dir) => Fact::Leftovers(self.leftovers(dir)),
+            Query::Strangers { path, owner } => Fact::Stranger(self.stranger(path, *owner)),
             _ => return None,
         })
+    }
+
+    fn open_dir(&self, path: &Path) -> Option<OwnedFd> {
+        let (parent, name) = self.resolve(path, false).ok()?;
+        sys::openat(
+            &parent,
+            &*name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .ok()
+    }
+
+    /// The siblings in `dir` that an interrupted write of mix's left behind.
+    fn leftovers(&self, dir: &Path) -> Vec<(PathBuf, FileId)> {
+        let Some(fd) = self.open_dir(dir) else {
+            return Vec::new();
+        };
+        let mut found: Vec<(PathBuf, FileId)> = entries(&fd)
+            .into_iter()
+            .filter(|name| is_leftover(&name.to_string_lossy()))
+            .filter_map(|name| {
+                let stat = sys::statx(&fd, &name, AtFlags::SYMLINK_NOFOLLOW, WANTED).ok()?;
+                Some((dir.join(&name), id(&stat)))
+            })
+            .collect();
+        found.sort_by(|(a, _), (b, _)| a.cmp(b));
+        found
+    }
+
+    /// The first entry under `path`, itself included, that is not owned by `owner`.
+    fn stranger(&self, path: &Path, owner: Owner) -> Option<(PathBuf, Owner)> {
+        let (parent, name) = self.resolve(path, false).ok()?;
+        stranger_at(&parent, &name, path, &|found| found != owner)
+    }
+
+    /// Whether anything under `path`, itself included, is owned by another user than `uid`.
+    pub fn holds_other_than(&self, path: &Path, uid: u32) -> bool {
+        self.resolve(path, false)
+            .ok()
+            .is_some_and(|(parent, name)| {
+                stranger_at(&parent, &name, path, &|(found, _)| found != uid).is_some()
+            })
     }
 
     fn path_facts(&self, path: &Path) -> PathFacts {
@@ -1305,6 +1377,43 @@ fn copy_tree_at(
         }
         _ => Err(Errno::OPNOTSUPP),
     }
+}
+
+fn entries(dir: &OwnedFd) -> Vec<OsString> {
+    let Ok(listing) = sys::Dir::read_from(dir) else {
+        return Vec::new();
+    };
+    listing
+        .filter_map(Result::ok)
+        .map(|entry| OsStr::from_bytes(entry.file_name().to_bytes()).to_os_string())
+        .filter(|entry| entry != "." && entry != "..")
+        .collect()
+}
+
+fn stranger_at(
+    dir: &OwnedFd,
+    name: &OsStr,
+    path: &Path,
+    foreign: &dyn Fn(Owner) -> bool,
+) -> Option<(PathBuf, Owner)> {
+    let stat = sys::statx(dir, name, AtFlags::SYMLINK_NOFOLLOW, WANTED).ok()?;
+    let found = owner_of(&stat);
+    if foreign(found) {
+        return Some((path.to_path_buf(), found));
+    }
+    if kind(&stat) != Kind::Directory {
+        return None;
+    }
+    let child = sys::openat(
+        dir,
+        name,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .ok()?;
+    entries(&child)
+        .into_iter()
+        .find_map(|entry| stranger_at(&child, &entry, &path.join(&entry), foreign))
 }
 
 fn walk(root: &OwnedFd, path: &Path) -> Option<u32> {

@@ -1,0 +1,13 @@
+[package]
+name = "mix-testchild"
+version.workspace = true
+edition = "2024"
+authors = ["Ömer Tekin"]
+license = "MPL-2.0"
+publish = false
+
+[dependencies]
+nix = { workspace = true, features = ["signal", "process", "poll"] }
+
+[lints]
+workspace = true

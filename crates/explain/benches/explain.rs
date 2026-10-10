@@ -1,5 +1,6 @@
 use mix_core::Category;
-use mix_core::health::{HealthReport, wire};
+use mix_core::ops::health::HealthReport;
+use mix_core::report::inspection;
 use mix_events::Diagnose;
 use mix_events::v1::InspectionReport;
 use mix_explain as explain;
@@ -52,7 +53,7 @@ fn word_an_unrepairable_target(bencher: divan::Bencher) {
 }
 
 fn report(name: &str, finding: Finding) -> InspectionReport {
-    wire::report(&HealthReport {
+    inspection::report(&HealthReport {
         name: name.to_string(),
         category: Category::Filesystem,
         finding: Some(finding),

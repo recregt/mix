@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use mix_core::plan::{Next, Runner, Verdict, make_guard};
+use mix_core::run::{Next, Runner, Verdict, make_guard};
 use mix_events::v1::Command;
 use mix_events::{Outbox, ROOT, Start, Tree};
 

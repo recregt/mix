@@ -90,15 +90,16 @@ def _calls(trace: str) -> list[Call]:
     pending: dict[str, str] = {}
     calls = []
     for raw in trace.splitlines():
-        if match := UNFINISHED.match(raw):
+        line = raw
+        if match := UNFINISHED.match(line):
             pending[match["pid"]] = match["head"]
             continue
-        if match := RESUMED.match(raw):
+        if match := RESUMED.match(line):
             head = pending.pop(match["pid"], None)
             if head is None:
                 continue
-            raw = f"{match['pid']} {head}{match['tail']}"
-        if match := LINE.match(raw):
+            line = f"{match['pid']} {head}{match['tail']}"
+        if match := LINE.match(line):
             calls.append(
                 Call(
                     int(match["pid"]),

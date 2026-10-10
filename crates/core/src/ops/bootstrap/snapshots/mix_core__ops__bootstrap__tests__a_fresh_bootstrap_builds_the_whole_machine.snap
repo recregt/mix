@@ -1,0 +1,1578 @@
+---
+source: crates/core/src/ops/bootstrap/tests.rs
+expression: "run.case(&before, &world)"
+---
+{
+  "document": {
+    "cancellation": "CANCELLATION_UNSPECIFIED",
+    "changes": [
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-dir",
+        "subject": "/nix",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_PUT_FILE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-dir",
+        "subject": "/nix/.mix-managed",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/log",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/log/nix",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/log/nix/drvs",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/nix",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/nix/db",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/nix/gcroots",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/nix/gcroots/per-user",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/nix/profiles",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/nix/profiles/per-user",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/nix/temproots",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/nix/userpool",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-nix-tree",
+        "subject": "/nix/var/nix/daemon-socket",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_SET_MODE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "/var/empty",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_GROUP",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_GROUP",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "mix-users",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld1",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld2",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld3",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld4",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld5",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld6",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld7",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld8",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld9",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld10",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld11",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld12",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld13",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld14",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld15",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld16",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld17",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld18",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld19",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld20",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld21",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld22",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld23",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld24",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld25",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld26",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld27",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld28",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld29",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld30",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld31",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_ADD_USER",
+        "status": "STATUS_SUCCEEDED",
+        "step": "create-users-and-groups",
+        "subject": "nixbld32",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_INSTALL_RUNTIME",
+        "status": "STATUS_SUCCEEDED",
+        "step": "fetch-runtime",
+        "subject": "https://mirror.internal/nix-2.35.2-x86_64-linux.tar.xz",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "write-nix-conf",
+        "subject": "/etc/mix",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_PUT_FILE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "write-nix-conf",
+        "subject": "/etc/mix/policy.json",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "write-nix-conf",
+        "subject": "/etc/nix",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_PUT_FILE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "write-nix-conf",
+        "subject": "/etc/nix/nix.conf",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "write-nix-conf",
+        "subject": "/etc/profile.d",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_PUT_FILE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "write-nix-conf",
+        "subject": "/etc/profile.d/mix-nix.sh",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_INSTALL_UNIT",
+        "status": "STATUS_SUCCEEDED",
+        "step": "configure-daemon",
+        "subject": "nix-daemon.service",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_INSTALL_UNIT",
+        "status": "STATUS_SUCCEEDED",
+        "step": "configure-daemon",
+        "subject": "nix-daemon.socket",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_DAEMON_RELOAD",
+        "status": "STATUS_SUCCEEDED",
+        "step": "configure-daemon",
+        "subject": "",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_ENABLE_UNIT",
+        "status": "STATUS_SUCCEEDED",
+        "step": "configure-daemon",
+        "subject": "nix-daemon.socket",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_START_UNIT",
+        "status": "STATUS_SUCCEEDED",
+        "step": "configure-daemon",
+        "subject": "nix-daemon.socket",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "install-mix-daemon",
+        "subject": "/var/lib/mix",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_DIR",
+        "status": "STATUS_SUCCEEDED",
+        "step": "install-mix-daemon",
+        "subject": "/var/lib/mix/bin",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_PUT_FILE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "install-mix-daemon",
+        "subject": "/var/lib/mix/bin/mix-daemon",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_INSTALL_UNIT",
+        "status": "STATUS_SUCCEEDED",
+        "step": "install-mix-daemon",
+        "subject": "mix-daemon.socket",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_INSTALL_UNIT",
+        "status": "STATUS_SUCCEEDED",
+        "step": "install-mix-daemon",
+        "subject": "mix-daemon.service",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_DAEMON_RELOAD",
+        "status": "STATUS_SUCCEEDED",
+        "step": "install-mix-daemon",
+        "subject": "",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_ENABLE_UNIT",
+        "status": "STATUS_SUCCEEDED",
+        "step": "install-mix-daemon",
+        "subject": "mix-daemon.socket",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_START_UNIT",
+        "status": "STATUS_SUCCEEDED",
+        "step": "install-mix-daemon",
+        "subject": "mix-daemon.socket",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_ENABLE_UNIT",
+        "status": "STATUS_SUCCEEDED",
+        "step": "install-mix-daemon",
+        "subject": "mix-daemon.service",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_START_UNIT",
+        "status": "STATUS_SUCCEEDED",
+        "step": "install-mix-daemon",
+        "subject": "mix-daemon.service",
+        "undone": false,
+        "unknown": []
+      }
+    ],
+    "command": "bootstrap",
+    "dryRun": false,
+    "exit": 0,
+    "formatVersion": "1.0",
+    "problems": [],
+    "request": "request",
+    "status": "STATUS_SUCCEEDED",
+    "steps": [
+      {
+        "key": "create-nix-dir",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "Nix directory",
+        "undone": false,
+        "verb": "VERB_CREATING"
+      },
+      {
+        "key": "create-nix-tree",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "runtime directories",
+        "undone": false,
+        "verb": "VERB_CREATING"
+      },
+      {
+        "key": "create-users-and-groups",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "build users and groups",
+        "undone": false,
+        "verb": "VERB_CREATING"
+      },
+      {
+        "key": "fetch-runtime",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "Nix runtime",
+        "undone": false,
+        "verb": "VERB_INSTALLING"
+      },
+      {
+        "key": "write-nix-conf",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "runtime configuration",
+        "undone": false,
+        "verb": "VERB_WRITING"
+      },
+      {
+        "key": "configure-daemon",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "Nix daemon service",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "install-mix-daemon",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "mix daemon service",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      }
+    ],
+    "waits": [],
+    "warnings": []
+  },
+  "machine": {
+    "files": {
+      "/etc/mix": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/etc/mix/policy.json": {
+        "added": {
+          "contents": [
+            "{",
+            "  \"format\": 1,",
+            "  \"mirror\": {",
+            "    \"url\": \"https://mirror.internal\",",
+            "    \"key\": \"mirror:AAAA\"",
+            "  }",
+            "}"
+          ],
+          "mode": "0644",
+          "owner": "0:0"
+        }
+      },
+      "/etc/nix": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/etc/nix/nix.conf": {
+        "added": {
+          "contents": [
+            "build-users-group = nixbld",
+            "experimental-features = nix-command flakes",
+            "trusted-users = root",
+            "substituters = https://mirror.internal/cache",
+            "trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= mirror:AAAA"
+          ],
+          "mode": "0644",
+          "owner": "0:0"
+        }
+      },
+      "/etc/profile.d": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/etc/profile.d/mix-nix.sh": {
+        "added": {
+          "contents": [
+            "# Managed by mix -- do not edit, changes are overwritten and will trip `mix doctor`.",
+            "if [ -e '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh' ]; then",
+            "    . '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'",
+            "fi"
+          ],
+          "mode": "0644",
+          "owner": "0:0"
+        }
+      },
+      "/etc/systemd/system/mix-daemon.service": {
+        "added": {
+          "contents": [
+            "[Unit]",
+            "Description=mix daemon",
+            "Requires=mix-daemon.socket",
+            "After=mix-daemon.socket nix-daemon.socket",
+            "",
+            "[Service]",
+            "Type=notify",
+            "ExecStart=/var/lib/mix/bin/mix-daemon serve",
+            "KillMode=mixed",
+            "TimeoutStopSec=infinity",
+            "Restart=on-failure",
+            "RestartForceExitStatus=75",
+            "SuccessExitStatus=75",
+            "ProtectSystem=yes",
+            "PrivateTmp=yes",
+            "PrivateDevices=yes",
+            "ProtectKernelTunables=yes",
+            "ProtectKernelModules=yes",
+            "ProtectKernelLogs=yes",
+            "ProtectControlGroups=yes",
+            "ProtectClock=yes",
+            "LockPersonality=yes",
+            "NoNewPrivileges=yes",
+            "",
+            "[Install]",
+            "WantedBy=multi-user.target"
+          ],
+          "mode": "0644",
+          "owner": "0:0"
+        }
+      },
+      "/etc/systemd/system/mix-daemon.socket": {
+        "added": {
+          "contents": [
+            "[Unit]",
+            "Description=mix daemon socket",
+            "",
+            "[Socket]",
+            "ListenStream=/run/mix/daemon.sock",
+            "SocketMode=0666",
+            "DirectoryMode=0755",
+            "",
+            "[Install]",
+            "WantedBy=sockets.target"
+          ],
+          "mode": "0644",
+          "owner": "0:0"
+        }
+      },
+      "/etc/systemd/system/nix-daemon.service": {
+        "added": {
+          "contents": [
+            "[Service]",
+            "ExecStart=nix-daemon"
+          ],
+          "mode": "0644",
+          "owner": "0:0"
+        }
+      },
+      "/etc/systemd/system/nix-daemon.socket": {
+        "added": {
+          "contents": [
+            "[Socket]",
+            "ListenStream=/nix/var/nix/daemon-socket/socket"
+          ],
+          "mode": "0644",
+          "owner": "0:0"
+        }
+      },
+      "/nix": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/.mix-managed": {
+        "added": {
+          "contents": [],
+          "mode": "0644",
+          "owner": "0:0"
+        }
+      },
+      "/nix/store": {
+        "added": {
+          "directory": true,
+          "mode": "1775",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/log": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/log/nix": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/log/nix/drvs": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/daemon-socket": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/db": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/gcroots": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/gcroots/per-user": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/profiles": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/profiles/default": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/profiles/default/bin": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/profiles/default/bin/nix-env": {
+        "added": {
+          "contents": [
+            "nix-env"
+          ],
+          "mode": "0444",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/profiles/default/lib": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/profiles/default/lib/systemd": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/profiles/default/lib/systemd/system": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/profiles/default/lib/systemd/system/nix-daemon.service": {
+        "added": {
+          "contents": [
+            "[Service]",
+            "ExecStart=nix-daemon"
+          ],
+          "mode": "0444",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/profiles/default/lib/systemd/system/nix-daemon.socket": {
+        "added": {
+          "contents": [
+            "[Socket]",
+            "ListenStream=/nix/var/nix/daemon-socket/socket"
+          ],
+          "mode": "0444",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/profiles/per-user": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/temproots": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/nix/var/nix/userpool": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/var/empty": {
+        "mode": {
+          "after": "0555",
+          "before": "0755"
+        }
+      },
+      "/var/lib/mix": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/var/lib/mix/bin": {
+        "added": {
+          "directory": true,
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      },
+      "/var/lib/mix/bin/mix-daemon": {
+        "added": {
+          "contents": [
+            "mix-daemon"
+          ],
+          "mode": "0755",
+          "owner": "0:0"
+        }
+      }
+    },
+    "groups": {
+      "mix-users": {
+        "added": {
+          "gid": 30100,
+          "members": []
+        }
+      },
+      "nixbld": {
+        "added": {
+          "gid": 30000,
+          "members": [
+            "nixbld1",
+            "nixbld10",
+            "nixbld11",
+            "nixbld12",
+            "nixbld13",
+            "nixbld14",
+            "nixbld15",
+            "nixbld16",
+            "nixbld17",
+            "nixbld18",
+            "nixbld19",
+            "nixbld2",
+            "nixbld20",
+            "nixbld21",
+            "nixbld22",
+            "nixbld23",
+            "nixbld24",
+            "nixbld25",
+            "nixbld26",
+            "nixbld27",
+            "nixbld28",
+            "nixbld29",
+            "nixbld3",
+            "nixbld30",
+            "nixbld31",
+            "nixbld32",
+            "nixbld4",
+            "nixbld5",
+            "nixbld6",
+            "nixbld7",
+            "nixbld8",
+            "nixbld9"
+          ]
+        }
+      }
+    },
+    "units": {
+      "mix-daemon.service": {
+        "added": {
+          "enabled": true,
+          "loaded": [
+            "[Unit]",
+            "Description=mix daemon",
+            "Requires=mix-daemon.socket",
+            "After=mix-daemon.socket nix-daemon.socket",
+            "",
+            "[Service]",
+            "Type=notify",
+            "ExecStart=/var/lib/mix/bin/mix-daemon serve",
+            "KillMode=mixed",
+            "TimeoutStopSec=infinity",
+            "Restart=on-failure",
+            "RestartForceExitStatus=75",
+            "SuccessExitStatus=75",
+            "ProtectSystem=yes",
+            "PrivateTmp=yes",
+            "PrivateDevices=yes",
+            "ProtectKernelTunables=yes",
+            "ProtectKernelModules=yes",
+            "ProtectKernelLogs=yes",
+            "ProtectControlGroups=yes",
+            "ProtectClock=yes",
+            "LockPersonality=yes",
+            "NoNewPrivileges=yes",
+            "",
+            "[Install]",
+            "WantedBy=multi-user.target"
+          ],
+          "running": [
+            "[Unit]",
+            "Description=mix daemon",
+            "Requires=mix-daemon.socket",
+            "After=mix-daemon.socket nix-daemon.socket",
+            "",
+            "[Service]",
+            "Type=notify",
+            "ExecStart=/var/lib/mix/bin/mix-daemon serve",
+            "KillMode=mixed",
+            "TimeoutStopSec=infinity",
+            "Restart=on-failure",
+            "RestartForceExitStatus=75",
+            "SuccessExitStatus=75",
+            "ProtectSystem=yes",
+            "PrivateTmp=yes",
+            "PrivateDevices=yes",
+            "ProtectKernelTunables=yes",
+            "ProtectKernelModules=yes",
+            "ProtectKernelLogs=yes",
+            "ProtectControlGroups=yes",
+            "ProtectClock=yes",
+            "LockPersonality=yes",
+            "NoNewPrivileges=yes",
+            "",
+            "[Install]",
+            "WantedBy=multi-user.target"
+          ]
+        }
+      },
+      "mix-daemon.socket": {
+        "added": {
+          "enabled": true,
+          "loaded": [
+            "[Unit]",
+            "Description=mix daemon socket",
+            "",
+            "[Socket]",
+            "ListenStream=/run/mix/daemon.sock",
+            "SocketMode=0666",
+            "DirectoryMode=0755",
+            "",
+            "[Install]",
+            "WantedBy=sockets.target"
+          ],
+          "running": [
+            "[Unit]",
+            "Description=mix daemon socket",
+            "",
+            "[Socket]",
+            "ListenStream=/run/mix/daemon.sock",
+            "SocketMode=0666",
+            "DirectoryMode=0755",
+            "",
+            "[Install]",
+            "WantedBy=sockets.target"
+          ]
+        }
+      },
+      "nix-daemon.socket": {
+        "added": {
+          "enabled": true,
+          "loaded": [
+            "[Socket]",
+            "ListenStream=/nix/var/nix/daemon-socket/socket"
+          ],
+          "running": [
+            "[Socket]",
+            "ListenStream=/nix/var/nix/daemon-socket/socket"
+          ]
+        }
+      }
+    },
+    "users": {
+      "nixbld1": {
+        "added": {
+          "comment": "mix build user 1 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30001
+        }
+      },
+      "nixbld10": {
+        "added": {
+          "comment": "mix build user 10 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30010
+        }
+      },
+      "nixbld11": {
+        "added": {
+          "comment": "mix build user 11 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30011
+        }
+      },
+      "nixbld12": {
+        "added": {
+          "comment": "mix build user 12 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30012
+        }
+      },
+      "nixbld13": {
+        "added": {
+          "comment": "mix build user 13 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30013
+        }
+      },
+      "nixbld14": {
+        "added": {
+          "comment": "mix build user 14 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30014
+        }
+      },
+      "nixbld15": {
+        "added": {
+          "comment": "mix build user 15 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30015
+        }
+      },
+      "nixbld16": {
+        "added": {
+          "comment": "mix build user 16 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30016
+        }
+      },
+      "nixbld17": {
+        "added": {
+          "comment": "mix build user 17 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30017
+        }
+      },
+      "nixbld18": {
+        "added": {
+          "comment": "mix build user 18 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30018
+        }
+      },
+      "nixbld19": {
+        "added": {
+          "comment": "mix build user 19 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30019
+        }
+      },
+      "nixbld2": {
+        "added": {
+          "comment": "mix build user 2 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30002
+        }
+      },
+      "nixbld20": {
+        "added": {
+          "comment": "mix build user 20 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30020
+        }
+      },
+      "nixbld21": {
+        "added": {
+          "comment": "mix build user 21 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30021
+        }
+      },
+      "nixbld22": {
+        "added": {
+          "comment": "mix build user 22 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30022
+        }
+      },
+      "nixbld23": {
+        "added": {
+          "comment": "mix build user 23 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30023
+        }
+      },
+      "nixbld24": {
+        "added": {
+          "comment": "mix build user 24 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30024
+        }
+      },
+      "nixbld25": {
+        "added": {
+          "comment": "mix build user 25 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30025
+        }
+      },
+      "nixbld26": {
+        "added": {
+          "comment": "mix build user 26 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30026
+        }
+      },
+      "nixbld27": {
+        "added": {
+          "comment": "mix build user 27 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30027
+        }
+      },
+      "nixbld28": {
+        "added": {
+          "comment": "mix build user 28 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30028
+        }
+      },
+      "nixbld29": {
+        "added": {
+          "comment": "mix build user 29 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30029
+        }
+      },
+      "nixbld3": {
+        "added": {
+          "comment": "mix build user 3 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30003
+        }
+      },
+      "nixbld30": {
+        "added": {
+          "comment": "mix build user 30 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30030
+        }
+      },
+      "nixbld31": {
+        "added": {
+          "comment": "mix build user 31 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30031
+        }
+      },
+      "nixbld32": {
+        "added": {
+          "comment": "mix build user 32 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30032
+        }
+      },
+      "nixbld4": {
+        "added": {
+          "comment": "mix build user 4 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30004
+        }
+      },
+      "nixbld5": {
+        "added": {
+          "comment": "mix build user 5 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30005
+        }
+      },
+      "nixbld6": {
+        "added": {
+          "comment": "mix build user 6 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30006
+        }
+      },
+      "nixbld7": {
+        "added": {
+          "comment": "mix build user 7 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30007
+        }
+      },
+      "nixbld8": {
+        "added": {
+          "comment": "mix build user 8 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30008
+        }
+      },
+      "nixbld9": {
+        "added": {
+          "comment": "mix build user 9 for request request-1",
+          "gid": 30000,
+          "home": "/var/empty",
+          "shell": "/usr/sbin/nologin",
+          "uid": 30009
+        }
+      }
+    }
+  },
+  "performed": [
+    "CreateDir /nix",
+    "PutFile /nix/.mix-managed",
+    "CreateDir /nix/var",
+    "CreateDir /nix/var/log",
+    "CreateDir /nix/var/log/nix",
+    "CreateDir /nix/var/log/nix/drvs",
+    "CreateDir /nix/var/nix",
+    "CreateDir /nix/var/nix/db",
+    "CreateDir /nix/var/nix/gcroots",
+    "CreateDir /nix/var/nix/gcroots/per-user",
+    "CreateDir /nix/var/nix/profiles",
+    "CreateDir /nix/var/nix/profiles/per-user",
+    "CreateDir /nix/var/nix/temproots",
+    "CreateDir /nix/var/nix/userpool",
+    "CreateDir /nix/var/nix/daemon-socket",
+    "SetMode /var/empty",
+    "AddGroup nixbld",
+    "AddGroup mix-users",
+    "AddUser nixbld1",
+    "AddUser nixbld2",
+    "AddUser nixbld3",
+    "AddUser nixbld4",
+    "AddUser nixbld5",
+    "AddUser nixbld6",
+    "AddUser nixbld7",
+    "AddUser nixbld8",
+    "AddUser nixbld9",
+    "AddUser nixbld10",
+    "AddUser nixbld11",
+    "AddUser nixbld12",
+    "AddUser nixbld13",
+    "AddUser nixbld14",
+    "AddUser nixbld15",
+    "AddUser nixbld16",
+    "AddUser nixbld17",
+    "AddUser nixbld18",
+    "AddUser nixbld19",
+    "AddUser nixbld20",
+    "AddUser nixbld21",
+    "AddUser nixbld22",
+    "AddUser nixbld23",
+    "AddUser nixbld24",
+    "AddUser nixbld25",
+    "AddUser nixbld26",
+    "AddUser nixbld27",
+    "AddUser nixbld28",
+    "AddUser nixbld29",
+    "AddUser nixbld30",
+    "AddUser nixbld31",
+    "AddUser nixbld32",
+    "InstallRuntime https://mirror.internal/nix-2.35.2-x86_64-linux.tar.xz",
+    "CreateDir /etc/mix",
+    "PutFile /etc/mix/policy.json",
+    "CreateDir /etc/nix",
+    "PutFile /etc/nix/nix.conf",
+    "CreateDir /etc/profile.d",
+    "PutFile /etc/profile.d/mix-nix.sh",
+    "InstallUnit nix-daemon.service",
+    "InstallUnit nix-daemon.socket",
+    "DaemonReload ",
+    "EnableUnit nix-daemon.socket",
+    "StartUnit nix-daemon.socket",
+    "CreateDir /var/lib/mix",
+    "CreateDir /var/lib/mix/bin",
+    "PutFile /var/lib/mix/bin/mix-daemon",
+    "InstallUnit mix-daemon.socket",
+    "InstallUnit mix-daemon.service",
+    "DaemonReload ",
+    "EnableUnit mix-daemon.socket",
+    "StartUnit mix-daemon.socket",
+    "EnableUnit mix-daemon.service",
+    "StartUnit mix-daemon.service",
+    "Commit changes"
+  ]
+}

@@ -37,6 +37,7 @@ pub type Controls = mpsc::UnboundedReceiver<Control>;
 
 pub trait Worker: Send + Sync + 'static {
     const VERSION: &'static str;
+    const SCHEMA: u32 = mix_events::SCHEMA_MINOR;
 
     fn admits(&self, caller: Caller) -> bool;
 
@@ -71,6 +72,9 @@ pub enum Error {
 
     #[error("the privileged worker is mix {theirs}, but this is mix {ours}")]
     VersionMismatch { ours: String, theirs: String },
+
+    #[error("the mix daemon reads requests of schema {theirs}, but this request is schema {ours}")]
+    Outdated { ours: u32, theirs: u32 },
 
     #[error(transparent)]
     Malformed(#[from] Malformed),
@@ -137,6 +141,13 @@ async fn command(calls: &mut Streaming<proto::RunRequest>) -> Result<Command, St
             "the request ended before its command",
         )),
     }
+}
+
+fn allows_older_schema(command: &Command) -> bool {
+    matches!(
+        command.request,
+        Some(mix_events::v1::command::Request::Bootstrap(_))
+    )
 }
 
 fn control_from_wire(control: i32) -> Option<Control> {
@@ -213,6 +224,7 @@ impl<W: Worker> proto::worker_service_server::WorkerService for Service<W> {
         Ok(Response::new(proto::HelloResponse {
             version: W::VERSION.to_string(),
             protocol: PROTOCOL,
+            schema: W::SCHEMA,
         }))
     }
 
@@ -223,6 +235,13 @@ impl<W: Worker> proto::worker_service_server::WorkerService for Service<W> {
         let caller = self.admit(&request)?;
         let mut calls = request.into_inner();
         let command = command(&mut calls).await?;
+        if command.schema_minor > W::SCHEMA && !allows_older_schema(&command) {
+            return Err(Status::failed_precondition(format!(
+                "this daemon reads requests of schema {}, but the request is schema {}",
+                W::SCHEMA,
+                command.schema_minor
+            )));
+        }
         let permit = Arc::clone(&self.one_at_a_time)
             .try_acquire_owned()
             .map_err(|_| Status::resource_exhausted("the worker is already running a request"))?;
@@ -351,6 +370,7 @@ impl Stream for Replies {
 pub struct Client {
     inner: WorkerServiceClient<Channel>,
     worker: Option<mix_exec::Foreground>,
+    schema: u32,
 }
 
 impl Client {
@@ -385,6 +405,7 @@ impl Client {
         Ok(Self {
             inner,
             worker: None,
+            schema: answer.schema,
         })
     }
 
@@ -411,6 +432,12 @@ impl Client {
     }
 
     pub async fn run(&mut self, command: &Command) -> Result<(Controller, Replies), Error> {
+        if command.schema_minor > self.schema && !allows_older_schema(command) {
+            return Err(Error::Outdated {
+                ours: command.schema_minor,
+                theirs: self.schema,
+            });
+        }
         let first = proto::RunRequest {
             call: Some(Call::Command(command.encode_to_vec())),
         };

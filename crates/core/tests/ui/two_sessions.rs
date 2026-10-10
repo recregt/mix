@@ -1,4 +1,4 @@
-use mix_core::plan::{Runner, make_guard};
+use mix_core::run::{Runner, make_guard};
 use mix_events::ROOT;
 use mix_events::v1::Cancellation;
 

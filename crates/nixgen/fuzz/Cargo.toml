@@ -18,17 +18,42 @@ path = ".."
 features = ["parse"]
 
 [[bin]]
-name = "printer"
-path = "fuzz_targets/printer.rs"
+name = "attr-path"
+path = "fuzz_targets/attr-path.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "installable"
-path = "fuzz_targets/installable.rs"
+name = "flake"
+path = "fuzz_targets/flake.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "home"
+path = "fuzz_targets/home.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ident"
+path = "fuzz_targets/ident.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse"
+path = "fuzz_targets/parse.rs"
 test = false
 doc = false
 bench = false
 
 [workspace]
+
+[lints.clippy]
+disallowed_methods = "allow"
+disallowed_macros = "allow"

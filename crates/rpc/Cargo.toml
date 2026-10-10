@@ -24,6 +24,7 @@ tonic-prost-build = "0.14.6"
 
 [dev-dependencies]
 divan = { workspace = true }
+mix-testchild = { path = "../testchild" }
 
 [[bench]]
 name = "stream"

@@ -3,7 +3,7 @@ use std::path::Path;
 use mix_events::Fault;
 use mix_events::Render;
 use mix_events::v1::Code;
-use mix_events::v1::command::Request;
+use mix_events::v1::Command;
 use mix_render::{Sinks, View};
 use mix_rpc::{Client, Controller, Replies, Reply};
 use nix::sys::signal::Signal;
@@ -19,7 +19,6 @@ const SERVE_STDIN: &str = "serve-stdin";
 pub enum Failure {
     Failed(Box<Fault>),
     Transport(mix_rpc::Error),
-    Output(std::io::Error),
 }
 
 impl Failure {
@@ -27,18 +26,13 @@ impl Failure {
         match self {
             Failure::Failed(fault) => (**fault).clone(),
             Failure::Transport(error) => Fault::failed(transported(error), error.to_string(), None),
-            Failure::Output(error) => Fault::failed(
-                Code::Io,
-                format!("could not create the events file: {error}"),
-                None,
-            ),
         }
     }
 
     pub fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Failure::Transport(error) => std::error::Error::source(error),
-            Failure::Failed(_) | Failure::Output(_) => None,
+            Failure::Failed(_) => None,
         }
     }
 }
@@ -52,6 +46,7 @@ fn transported(error: &mix_rpc::Error) -> Code {
         }
         Error::Ended => Code::WorkerEnded,
         Error::VersionMismatch { .. } => Code::VersionMismatch,
+        Error::Outdated { .. } => Code::DaemonOutdated,
         Error::Denied(_) => Code::NotBootstrapped,
         Error::Malformed(_) | Error::NotAConnection(_) => Code::Internal,
     }
@@ -79,7 +74,7 @@ fn steer(controller: &Controller, control: Control, view: &View) -> bool {
 
 async fn replay(controller: Controller, mut replies: Replies, view: &View) -> Result<(), Failure> {
     let mut terminal = Terminal::listen();
-    let mut sinks: Sinks = view.sinks().map_err(Failure::Output)?;
+    let mut sinks: Sinks = view.sinks();
     let mut translator = Translator::default();
     let mut pausing = false;
     loop {
@@ -147,7 +142,7 @@ async fn socket(path: &Path) -> Result<Client, Failure> {
 }
 
 pub async fn run(
-    request: &Request,
+    command: &Command,
     route: Route,
     view: &View,
     socket_path: &Path,
@@ -156,8 +151,7 @@ pub async fn run(
         Route::OneShot => one_shot(view).await.map_err(Failure::Transport)?,
         Route::Socket => socket(socket_path).await?,
     };
-    let command = mix_events::command(request.clone());
-    let (controller, replies) = client.run(&command).await.map_err(Failure::Transport)?;
+    let (controller, replies) = client.run(command).await.map_err(Failure::Transport)?;
     let replayed = replay(controller, replies, view).await;
     let _ = client.wait().await;
     replayed
@@ -186,7 +180,6 @@ mod tests {
         let daemon = Fault::failed(Code::RootNotAllowed, "root", None);
         for (failure, code) in [
             (Failure::Failed(Box::new(daemon)), Code::RootNotAllowed),
-            (Failure::Output(io("read-only")), Code::Io),
             (
                 Failure::Transport(Error::Spawn(io("x"))),
                 Code::PrivilegesUnavailable,
@@ -219,6 +212,10 @@ mod tests {
                 Code::VersionMismatch,
             ),
             (
+                Failure::Transport(Error::Outdated { ours: 7, theirs: 0 }),
+                Code::DaemonOutdated,
+            ),
+            (
                 Failure::Transport(Error::Malformed(mix_rpc::Malformed("x".into()))),
                 Code::Internal,
             ),
@@ -239,7 +236,6 @@ mod tests {
             failure.source().map(ToString::to_string).as_deref(),
             Some("sudo: command not found")
         );
-        assert!(Failure::Output(io("x")).source().is_none());
     }
 
     #[test]

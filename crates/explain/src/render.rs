@@ -47,6 +47,10 @@ pub(crate) fn unfixable(reason: Unfixable) -> Option<Help> {
             help!("recreate the user, or ignore this if it was removed on purpose")
         }
         Unfixable::MissingRuntime => help!("run `mix bootstrap` to reinstall it"),
+        Unfixable::Unrecovered => {
+            help!("see `journalctl -u mix-daemon` for what failed, then run `mix repair` again")
+        }
+        Unfixable::InTheWay => help!("move them somewhere else, then run `mix doctor` again"),
         Unfixable::Unspecified => return None,
     })
 }
@@ -56,6 +60,8 @@ fn unfixable_reason(reason: Unfixable) -> Option<&'static str> {
         Unfixable::NotADirectory => "exists but is not a directory",
         Unfixable::MissingUser => "the user no longer exists",
         Unfixable::MissingRuntime => "missing, and `mix repair` can't restore it",
+        Unfixable::Unrecovered => "an interrupted request couldn't be put back",
+        Unfixable::InTheWay => "in the way of a file `mix` manages",
         Unfixable::Unspecified => return None,
     })
 }
@@ -206,15 +212,25 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
             .help(help!(
                 "run the same command again to pick up where it stopped"
             )),
+        Code::DaemonOutdated => {
+            Diagnostic::new(phrase!("the running `mix` daemon is older than this `mix`"))
+                .note(note!("nothing was changed"))
+                .help(help!(
+                    "run `mix bootstrap` to install the daemon that matches this `mix`"
+                ))
+        }
         Code::VersionMismatch => Diagnostic::new(phrase!(
             "the `mix` program was replaced while this command was starting"
         ))
         .note(note!("nothing was changed"))
         .help(help!("run the same command again")),
+        Code::Usage => Diagnostic::new(phrase!("the command line isn't one `mix` understands"))
+            .help(help!("run `mix help` to see the commands and their flags")),
         Code::PermissionDenied
         | Code::Conflict
         | Code::InvalidMirror
         | Code::UnsupportedTarget
+        | Code::UnsupportedProgram
         | Code::Unrepairable
         | Code::SystemdNotReady
         | Code::UnitFailed
@@ -267,6 +283,18 @@ fn detailed(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
             Diagnostic::new(phrase!("`mix` doesn't support this system ({target}) yet"))
                 .note(note!("`mix` runs on 64-bit Intel, AMD and ARM Linux"))
         }
+        Code::UnsupportedProgram => match detail {
+            Some(Detail::Program(program)) => Diagnostic::new(phrase!(
+                "`{}` is version {}, and `mix` needs {} or newer",
+                program.program,
+                program.found,
+                program.oldest
+            ))
+            .help(help!(
+                "install a newer version, or add a newer one to your Nix profile"
+            )),
+            _ => bug(),
+        },
         Code::Unrepairable => match detail {
             Some(Detail::Unrepairable(detail)) => {
                 unrepairable(&detail.artifact, detail.reason()).unwrap_or_else(bug)

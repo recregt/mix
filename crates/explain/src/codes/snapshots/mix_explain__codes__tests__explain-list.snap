@@ -1,0 +1,48 @@
+---
+source: crates/explain/src/codes/tests.rs
+expression: "format!(\"$ mix explain --list\\n{}\\n\", list_text(defined()))"
+---
+$ mix explain --list
+Failure codes:
+    internal               Something went wrong inside `mix` itself
+    io                     Reading or writing a file failed for a reason other than permissions
+    permission-denied      `mix` was not allowed to use a file or directory
+    command-failed         A program `mix` ran, such as `nix` or `git`, exited with an error
+    spawn-failed           `mix` could not start a program it needs, such as `nix`
+    lock-missing           `mix` has not been set up on this machine
+    conflict               A file or account changed while `mix` was working on it
+    unit-failed            A unit `mix` manages could not be started, stopped, enabled or reloaded
+    systemd-unreachable    `mix` could not reach systemd
+    journal-unwritable     `mix` could not record its progress
+    cleanup-incomplete     `mix` could not clean up after a step that did not finish
+    network                A download failed
+    integrity              A downloaded file did not match the checksum `mix` has pinned for it
+    unsupported-target     `mix` does not support this system's architecture or operating system
+    decompression          A downloaded archive could not be unpacked
+    malformed-archive      A downloaded archive is not laid out the way the Nix runtime is
+    not-root               Setting up `mix` needs administrator rights
+    unsupported-host       This system is NixOS
+    unsupported-kernel     This system is WSL 1, and `mix` needs WSL 2
+    systemd-not-ready      This system does not run systemd as its init system
+    already-managed        Nix is already installed here by something other than `mix`
+    cross-device-store     `/nix/store` is a separate mount from `/nix`
+    rollback-incomplete    The command failed, and undoing its changes failed too
+    invalid-mirror         The mirror settings are not usable
+    unsupported-program    A program `mix` runs is older than the oldest version it supports
+    not-bootstrapped       `mix` has not been set up for your user on this machine
+    root-not-allowed       Installing and removing packages cannot run as root
+    invalid-package        A package name is not a plain Nix identifier
+    invalid-state          The package list `mix` would write is not valid
+    newer-state            Your package list was written by a newer version of `mix`
+    protected-package      `mix` needs this package to work
+    git-record-failed      The change was made, but recording it in git failed
+    unknown-package        The package list names a package that does not exist
+    build-failed           A package could not be built from source, and nothing was changed
+    unrepairable           `mix repair` found something it will not change on its own
+    privileges-unavailable `mix` could not get administrator rights
+    worker-ended           The privileged helper stopped before it answered
+    version-mismatch       The privileged helper is a different version of `mix` than the command that started it
+    usage                  The command line was not one `mix` understands
+    daemon-outdated        The running `mix` daemon is older than the `mix` that sent the request
+
+Run `mix explain <code>` to read about one of them.

@@ -1,21 +1,27 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use mix_events::v1::command::Request;
+use mix_events::v1::Command;
 use mix_render::View;
 
 use crate::client::{self, Failure};
 use crate::request;
 
-pub async fn run(request: Request, view: &View, socket: &Path) -> ExitCode {
-    let result = match request::refused(&request) {
+pub async fn run(command: Command, view: &View, socket: &Path) -> ExitCode {
+    let result = match command.request.as_ref().and_then(request::refused) {
         Some(fault) => Err(Failure::Failed(Box::new(fault))),
-        None => client::run(&request, request::route(&request), view, socket).await,
+        None => {
+            let route = command
+                .request
+                .as_ref()
+                .map_or(request::Route::Socket, request::route);
+            client::run(&command, route, view, socket).await
+        }
     };
     if let Err(failure) = &result {
         view.failed(
             uuid::Uuid::now_v7().to_string(),
-            &request,
+            &command,
             &failure.fault(),
             failure.source(),
         );
@@ -36,13 +42,11 @@ mod tests {
     use std::process::ExitCode;
     use std::sync::Arc;
 
+    use mix_events::result::v1::{Result as Document, result};
     use mix_events::v1::command::Request;
-    use mix_events::v1::{
-        Code, Command, Envelope, ExplainRequest, InstallRequest, NodeFinished, envelope,
-        node_finished,
-    };
+    use mix_events::v1::{Code, Command, Envelope, ExplainRequest, InstallRequest};
     use mix_events::{Detail, Ending, Outbox, ROOT, Render, Start, Tree};
-    use mix_render::{Exit, Format, View};
+    use mix_render::{Exit, Json, View};
     use mix_rpc::{Caller, Controls, Events, Reply, Worker};
 
     use super::run;
@@ -143,58 +147,48 @@ mod tests {
         path
     }
 
-    fn recording(directory: &Path) -> View {
-        View {
-            format: Format::Human,
-            events_file: Some(directory.join("events.ndjson")),
-            verbose: 0,
-            quiet: true,
-            exit: Exit::default(),
+    #[derive(Default)]
+    struct Recorded(Arc<std::sync::Mutex<Vec<Document>>>);
+
+    impl Recorded {
+        fn view(&self) -> View {
+            View {
+                json: Json::Into(Arc::clone(&self.0)),
+                verbose: 0,
+                quiet: true,
+                exit: Exit::default(),
+            }
+        }
+
+        fn document(&self) -> Document {
+            let documents = self.0.lock().unwrap();
+            let [document] = documents.as_slice() else {
+                panic!("one document per run: {documents:?}");
+            };
+            document.clone()
         }
     }
 
-    fn root(directory: &Path) -> NodeFinished {
-        let file = std::fs::File::open(directory.join("events.ndjson")).unwrap();
-        let captured = mix_events::capture::read(std::io::BufReader::new(file)).unwrap();
-        mix_events::validate(captured.envelopes.iter()).unwrap();
-        captured
-            .envelopes
-            .into_iter()
-            .find_map(|envelope| match envelope.event {
-                Some(envelope::Event::NodeFinished(finished)) if finished.id == ROOT => {
-                    Some(finished)
-                }
-                _ => None,
-            })
-            .expect("every run records its root")
-    }
-
-    fn explain(code: Code) -> Request {
-        Request::Explain(ExplainRequest {
+    fn explain(code: Code) -> Command {
+        mix_events::command(Request::Explain(ExplainRequest {
             code: Some(code as i32),
-        })
+        }))
     }
 
     #[tokio::test]
     async fn a_code_is_explained_by_the_daemon_like_every_other_command() {
         let directory = tempfile::tempdir().unwrap();
         let socket = listening(directory.path(), || RequestHost);
+        let recorded = Recorded::default();
 
-        let exit = run(
-            explain(Code::Network),
-            &recording(directory.path()),
-            &socket,
-        )
-        .await;
+        let exit = run(explain(Code::Network), &recorded.view(), &socket).await;
 
         assert_eq!(exit, ExitCode::SUCCESS);
         assert_eq!(
-            root(directory.path()).result,
-            Some(node_finished::Result::Explain(
-                mix_events::v1::ExplainResult {
-                    codes: vec![Code::Network as i32],
-                }
-            ))
+            recorded.document().result,
+            Some(result::Result::Explain(mix_events::v1::ExplainResult {
+                codes: vec![Code::Network as i32],
+            }))
         );
     }
 
@@ -202,17 +196,19 @@ mod tests {
     async fn without_a_daemon_the_command_fails_as_not_set_up() {
         let directory = tempfile::tempdir().unwrap();
 
+        let recorded = Recorded::default();
+
         let exit = run(
             explain(Code::Network),
-            &recording(directory.path()),
+            &recorded.view(),
             &directory.path().join("daemon.sock"),
         )
         .await;
 
         assert_eq!(exit, ExitCode::FAILURE);
-        let root = root(directory.path());
-        assert_eq!(root.diagnostic.unwrap().code(), Code::NotBootstrapped);
-        assert_eq!(root.exit_code, mix_events::exit::FAILED);
+        let document = recorded.document();
+        assert_eq!(document.problems[0].code(), Code::NotBootstrapped);
+        assert_eq!(document.exit, mix_events::exit::FAILED);
     }
 
     #[tokio::test]
@@ -220,17 +216,13 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let socket = directory.path().join("daemon.sock");
         drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+        let recorded = Recorded::default();
 
-        let exit = run(
-            explain(Code::Network),
-            &recording(directory.path()),
-            &socket,
-        )
-        .await;
+        let exit = run(explain(Code::Network), &recorded.view(), &socket).await;
 
         assert_eq!(exit, ExitCode::FAILURE);
         assert_eq!(
-            root(directory.path()).diagnostic.unwrap().code(),
+            recorded.document().problems[0].code(),
             Code::NotBootstrapped
         );
     }
@@ -239,35 +231,26 @@ mod tests {
     async fn the_exit_code_is_the_one_the_daemons_root_ends_with() {
         let directory = tempfile::tempdir().unwrap();
         let socket = listening(directory.path(), || EndsWithProblems);
-        let request = Request::Install(InstallRequest {
+        let command = mix_events::command(Request::Install(InstallRequest {
             packages: vec!["hello".to_string()],
-        });
+        }));
+        let recorded = Recorded::default();
 
-        let exit = run(request, &recording(directory.path()), &socket).await;
+        let exit = run(command, &recorded.view(), &socket).await;
 
         assert_eq!(exit, ExitCode::from(3));
-        assert_eq!(
-            root(directory.path()).exit_code,
-            mix_events::exit::PROBLEMS_REMAIN
-        );
+        assert_eq!(recorded.document().exit, mix_events::exit::PROBLEMS_REMAIN);
     }
 
     #[tokio::test]
     async fn a_worker_that_stops_without_an_ending_is_reported_as_ended() {
         let directory = tempfile::tempdir().unwrap();
         let socket = listening(directory.path(), || EndsSilently);
+        let recorded = Recorded::default();
 
-        let exit = run(
-            explain(Code::Network),
-            &recording(directory.path()),
-            &socket,
-        )
-        .await;
+        let exit = run(explain(Code::Network), &recorded.view(), &socket).await;
 
         assert_eq!(exit, ExitCode::FAILURE);
-        assert_eq!(
-            root(directory.path()).diagnostic.unwrap().code(),
-            Code::WorkerEnded
-        );
+        assert_eq!(recorded.document().problems[0].code(), Code::WorkerEnded);
     }
 }

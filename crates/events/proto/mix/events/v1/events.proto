@@ -40,6 +40,7 @@ message NodeStarted {
 message Command {
   string mix_version = 1;
   uint32 schema_minor = 2;
+  bool dry_run = 3;
   oneof request {
     BootstrapRequest bootstrap = 10;
     InstallRequest install = 11;
@@ -171,6 +172,7 @@ enum Operation {
   OPERATION_CREATE_DIRS = 34;
   OPERATION_COLLECT_GARBAGE = 35;
   OPERATION_DRAIN_SERVICE = 36;
+  OPERATION_CREATE_REPOSITORY = 37;
 }
 
 message Action {
@@ -197,6 +199,7 @@ message NodeProgress {
     Observed observed = 10;
     Journaled journaled = 11;
     SubstitutionStarted substitution = 12;
+    LockWait waiting = 13;
   }
 }
 
@@ -219,6 +222,12 @@ message Observation {
     string unit = 5;
     string profile = 6;
     string tree_owner = 7;
+    string repository = 8;
+    string journals = 22;
+    string leftovers = 23;
+    string strangers = 24;
+    string clobbered = 25;
+    string program = 26;
   }
   oneof fact {
     PathFact path_fact = 10;
@@ -228,6 +237,12 @@ message Observation {
     UnitFact unit_fact = 14;
     ProfileFact profile_fact = 15;
     TreeOwnerFact tree_owner_fact = 16;
+    RepositoryFact repository_fact = 17;
+    PathsFact journals_fact = 18;
+    PathsFact leftovers_fact = 19;
+    StrangerFact stranger_fact = 20;
+    PathsFact clobbered_fact = 21;
+    ProgramFact program_fact = 30;
   }
 }
 
@@ -289,10 +304,30 @@ message UnitFact {
 message ProfileFact {
   repeated uint64 generations = 1;
   optional uint64 active = 2;
+  repeated uint64 dangling = 3;
 }
 
 message TreeOwnerFact {
   optional uint32 uid = 1;
+}
+
+message RepositoryFact {
+  bool intact = 1;
+  bool recorded = 2;
+}
+
+message ProgramFact {
+  bool same = 1;
+}
+
+message PathsFact {
+  repeated string paths = 1;
+}
+
+message StrangerFact {
+  optional string path = 1;
+  uint32 uid = 2;
+  uint32 gid = 3;
 }
 
 message Journaled {
@@ -486,7 +521,26 @@ message Finding {
     google.protobuf.Empty unit_drift = 14;
     google.protobuf.Empty unit_inactive = 15;
     google.protobuf.Empty runtime_missing = 16;
+    google.protobuf.Empty repository_broken = 17;
+    google.protobuf.Empty repository_locked = 18;
+    Interrupted interrupted = 19;
+    Paths leftovers = 20;
+    Generation generation_dangling = 21;
+    Paths in_the_way = 22;
   }
+}
+
+message Interrupted {
+  repeated string requests = 1;
+  repeated string pending = 2;
+}
+
+message Paths {
+  repeated string paths = 1;
+}
+
+message Generation {
+  uint64 generation = 1;
 }
 
 message Unreadable {
@@ -560,6 +614,7 @@ enum Code {
   CODE_CROSS_DEVICE_STORE = 30;
   CODE_ROLLBACK_INCOMPLETE = 31;
   CODE_INVALID_MIRROR = 32;
+  CODE_UNSUPPORTED_PROGRAM = 33;
   CODE_NOT_BOOTSTRAPPED = 41;
   CODE_ROOT_NOT_ALLOWED = 42;
   CODE_INVALID_PACKAGE = 43;
@@ -573,6 +628,8 @@ enum Code {
   CODE_PRIVILEGES_UNAVAILABLE = 70;
   CODE_WORKER_ENDED = 71;
   CODE_VERSION_MISMATCH = 72;
+  CODE_USAGE = 73;
+  CODE_DAEMON_OUTDATED = 74;
 }
 
 enum Host {
@@ -587,6 +644,8 @@ enum Unfixable {
   UNFIXABLE_NOT_A_DIRECTORY = 1;
   UNFIXABLE_MISSING_USER = 2;
   UNFIXABLE_MISSING_RUNTIME = 3;
+  UNFIXABLE_UNRECOVERED = 4;
+  UNFIXABLE_IN_THE_WAY = 5;
 }
 
 message Diagnostic {
@@ -610,6 +669,7 @@ message Diagnostic {
     StepsDetail steps = 21;
     ConflictDetail conflict = 22;
     UnitDetail unit = 23;
+    ProgramDetail program = 24;
   }
 }
 
@@ -642,6 +702,12 @@ message TargetDetail {
 message HostDetail {
   Host host = 1;
   string state = 2;
+}
+
+message ProgramDetail {
+  string program = 1;
+  string found = 2;
+  string oldest = 3;
 }
 
 message PathDetail {

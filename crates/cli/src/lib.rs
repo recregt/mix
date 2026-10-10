@@ -7,18 +7,18 @@ mod session;
 
 use std::process::ExitCode;
 
-use args::{Args, Color, Output};
+use args::{Args, Color};
 
 pub async fn run() -> ExitCode {
     let args = Args::parse_with_color();
     let environment = env::Environment::read();
-    let request = request::from_args(&args.command, &environment);
+    let command = request::command_of(&args.command, args.dry_run(), &environment);
     let view = mix_render::View {
-        format: match args.output {
-            Output::Human => mix_render::Format::Human,
-            Output::Json => mix_render::Format::Json,
+        json: if args.json {
+            mix_render::Json::Stdout
+        } else {
+            mix_render::Json::Off
         },
-        events_file: args.events_file.clone(),
         verbose: args.verbose,
         quiet: args.quiet,
         exit: mix_render::Exit::default(),
@@ -31,5 +31,5 @@ pub async fn run() -> ExitCode {
         },
         args.draws_progress(environment.ci),
     );
-    session::run(request, &view, std::path::Path::new(mix_rpc::SOCKET_PATH)).await
+    session::run(command, &view, std::path::Path::new(mix_rpc::SOCKET_PATH)).await
 }

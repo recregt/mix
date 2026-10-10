@@ -1108,6 +1108,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "insta"
+version = "1.49.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b67d3d2e287e4b86c10b3f3b641033d1f89b74bdb39d05f34952e2b9a6fe21cd"
+dependencies = [
+ "console",
+ "once_cell",
+ "serde",
+ "similar 2.7.0",
+ "tempfile",
+]
+
+[[package]]
 name = "ipnet"
 version = "2.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1413,13 +1426,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "mix-conformance"
+version = "0.1.0"
+dependencies = [
+ "mix-core",
+ "mix-events",
+ "mix-exec",
+ "mix-render",
+ "mix-shell",
+ "nix",
+ "proptest",
+ "proptest-state-machine",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "mix-core"
 version = "0.1.0"
 dependencies = [
  "codspeed-divan-compat",
  "generativity",
+ "insta",
  "mix-events",
  "mix-nixgen",
+ "mix-nixlog",
+ "mix-render",
  "proptest",
  "serde",
  "serde_json",
@@ -1433,6 +1466,7 @@ name = "mix-daemon"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "insta",
  "mix-core",
  "mix-events",
  "mix-exec",
@@ -1466,6 +1500,7 @@ dependencies = [
 name = "mix-exec"
 version = "0.1.0"
 dependencies = [
+ "mix-testchild",
  "nix",
  "thiserror",
  "tokio",
@@ -1477,6 +1512,7 @@ name = "mix-explain"
 version = "0.1.0"
 dependencies = [
  "codspeed-divan-compat",
+ "insta",
  "mix-core",
  "mix-events",
  "mix-nixgen",
@@ -1489,11 +1525,22 @@ name = "mix-nixgen"
 version = "0.1.0"
 dependencies = [
  "codspeed-divan-compat",
+ "insta",
  "mix-exec",
+ "mix-nixgen",
  "mix-pins",
  "proptest",
  "tempfile",
  "thiserror",
+]
+
+[[package]]
+name = "mix-nixlog"
+version = "0.1.0"
+dependencies = [
+ "codspeed-divan-compat",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1508,11 +1555,11 @@ dependencies = [
 name = "mix-render"
 version = "0.1.0"
 dependencies = [
+ "insta",
  "mix-core",
  "mix-events",
  "mix-explain",
  "mix-ui",
- "pbjson-types",
  "serde_json",
  "tempfile",
 ]
@@ -1526,6 +1573,7 @@ dependencies = [
  "hyper-util",
  "mix-events",
  "mix-exec",
+ "mix-testchild",
  "prost",
  "protox",
  "thiserror",
@@ -1548,7 +1596,9 @@ dependencies = [
  "mix-events",
  "mix-exec",
  "mix-nixgen",
+ "mix-nixlog",
  "mix-pins",
+ "mix-testchild",
  "mockito",
  "nix",
  "reqwest",
@@ -1562,6 +1612,13 @@ dependencies = [
  "tokio",
  "uuid",
  "zbus",
+]
+
+[[package]]
+name = "mix-testchild"
+version = "0.1.0"
+dependencies = [
+ "nix",
 ]
 
 [[package]]
@@ -1841,6 +1898,15 @@ dependencies = [
  "rusty-fork",
  "tempfile",
  "unarray",
+]
+
+[[package]]
+name = "proptest-state-machine"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1675727965d66ff6f335e7d398e477184da08f4bed22f1a7f0dbf2f077f56f2e"
+dependencies = [
+ "proptest",
 ]
 
 [[package]]

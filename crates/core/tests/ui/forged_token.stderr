@@ -4,8 +4,9 @@ error[E0423]: cannot initialize a tuple struct which contains private fields
 10 |     session.report(Closed(unimplemented!()));
    |                    ^^^^^^
    |
+   = note: a struct named `Closed` exists in another namespace
 note: constructor is not visible here due to private fields
-  --> src/plan/mod.rs
+  --> src/run/mod.rs
    |
    | pub struct Closed<'id>(Id<'id>);
    |                        ^^^^^^^ private field

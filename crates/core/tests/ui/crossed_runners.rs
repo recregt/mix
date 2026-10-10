@@ -1,4 +1,4 @@
-use mix_core::plan::{Closed, Runner, Session, make_guard};
+use mix_core::run::{Closed, Runner, Session, make_guard};
 use mix_events::ROOT;
 
 fn finished<'id>(_: &Session<'id, '_>) -> Closed<'id> {

@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package mix.result.v1;
+
+import "mix/events/v1/events.proto";
+
+message Result {
+  string format_version = 1;
+  string request = 2;
+  string command = 3;
+  bool dry_run = 4;
+  mix.events.v1.Status status = 5;
+  uint32 exit = 6;
+  mix.events.v1.Cancellation cancellation = 7;
+  oneof result {
+    mix.events.v1.BootstrapResult bootstrap = 10;
+    mix.events.v1.InstallResult install = 11;
+    mix.events.v1.RemoveResult remove = 12;
+    mix.events.v1.RepairResult repair = 13;
+    mix.events.v1.DoctorResult doctor = 14;
+    mix.events.v1.CleanResult clean = 15;
+    mix.events.v1.ExplainResult explain = 16;
+  }
+  repeated Change changes = 20;
+  repeated Problem problems = 21;
+  repeated Problem warnings = 22;
+  repeated StepResult steps = 23;
+  repeated mix.events.v1.LockWait waits = 24;
+}
+
+message StepResult {
+  string key = 1;
+  mix.events.v1.Verb verb = 2;
+  string subject = 3;
+  mix.events.v1.Status status = 4;
+  bool undone = 5;
+}
+
+enum ChangeAction {
+  CHANGE_ACTION_UNSPECIFIED = 0;
+  CHANGE_ACTION_CREATE = 1;
+  CHANGE_ACTION_UPDATE = 2;
+  CHANGE_ACTION_DELETE = 3;
+}
+
+message Change {
+  string step = 1;
+  ChangeAction action = 2;
+  mix.events.v1.Operation operation = 3;
+  string subject = 4;
+  mix.events.v1.Status status = 5;
+  bool undone = 6;
+  repeated string unknown = 7;
+}
+
+message Problem {
+  string type = 1;
+  mix.events.v1.Code code = 2;
+  string title = 3;
+  string detail = 4;
+  string subject = 5;
+  repeated string help = 6;
+  repeated Problem causes = 7;
+  oneof metadata {
+    mix.events.v1.IoDetail io = 10;
+    mix.events.v1.CommandDetail command = 11;
+    mix.events.v1.NetworkDetail network = 12;
+    mix.events.v1.IntegrityDetail integrity = 13;
+    mix.events.v1.TargetDetail target = 14;
+    mix.events.v1.HostDetail host = 15;
+    mix.events.v1.PathDetail path = 16;
+    mix.events.v1.PackagesDetail packages = 17;
+    mix.events.v1.FormatDetail format = 18;
+    mix.events.v1.UnrepairableDetail unrepairable = 19;
+    mix.events.v1.LockDetail lock = 20;
+    mix.events.v1.StepsDetail steps = 21;
+    mix.events.v1.ConflictDetail conflict = 22;
+    mix.events.v1.UnitDetail unit = 23;
+    mix.events.v1.ProgramDetail program = 24;
+  }
+}

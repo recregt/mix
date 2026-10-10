@@ -1,0 +1,15 @@
+---
+source: crates/explain/src/codes/tests.rs
+expression: shown(code)
+---
+$ mix install ripgrep
+error: this system is NixOS, which already does what `mix` does
+
+note: `mix` has nothing to do here
+
+$ mix explain unsupported-host
+UNSUPPORTED_HOST
+
+This system is NixOS.
+
+NixOS manages packages with Nix natively. `mix` exists to bring that to other distributions, so it has nothing to do here.

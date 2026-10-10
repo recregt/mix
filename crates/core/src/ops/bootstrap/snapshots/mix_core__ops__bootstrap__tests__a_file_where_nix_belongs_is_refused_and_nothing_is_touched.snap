@@ -1,0 +1,47 @@
+---
+source: crates/core/src/ops/bootstrap/tests.rs
+expression: "run.case(&before, &world)"
+---
+{
+  "document": {
+    "cancellation": "CANCELLATION_UNSPECIFIED",
+    "changes": [],
+    "command": "bootstrap",
+    "dryRun": false,
+    "exit": 0,
+    "formatVersion": "1.0",
+    "problems": [
+      {
+        "causes": [],
+        "code": "CODE_CONFLICT",
+        "conflict": {
+          "expected": "a directory",
+          "found": "file",
+          "subject": "/nix"
+        },
+        "detail": "/nix: expected a directory, found file",
+        "help": [
+          "run the command again to start from what is there now"
+        ],
+        "subject": "/nix",
+        "title": "A file or account changed while `mix` was working on it",
+        "type": "urn:mix:problem:conflict"
+      }
+    ],
+    "request": "request",
+    "status": "STATUS_FAILED",
+    "steps": [
+      {
+        "key": "create-nix-dir",
+        "status": "STATUS_FAILED",
+        "subject": "Nix directory",
+        "undone": false,
+        "verb": "VERB_CREATING"
+      }
+    ],
+    "waits": [],
+    "warnings": []
+  },
+  "machine": {},
+  "performed": []
+}

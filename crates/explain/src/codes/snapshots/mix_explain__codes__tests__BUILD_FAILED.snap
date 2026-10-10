@@ -1,0 +1,19 @@
+---
+source: crates/explain/src/codes/tests.rs
+expression: shown(code)
+---
+$ mix install ripgrep
+error: something went wrong inside `mix`
+
+help: report this bug at https://github.com/recregt/mix/issues
+
+$ mix explain build-failed
+BUILD_FAILED
+
+A package could not be built from source, and nothing was changed.
+
+The build's own output is under `Caused by`. A package that fails to build here usually fails for everyone.
+
+To fix it:
+  - run the command again with `-vv` to see the whole build
+  - use a different version or package

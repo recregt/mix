@@ -39,7 +39,14 @@ jobs:
         with:
           tool: cargo-deny
 
-      - run: cargo deny check bans licenses sources
+      - run: cargo deny --config deny/workspace.toml check bans licenses sources
+
+      - name: Every layer depends only on what it may
+        run: |
+          for layer in core cli explain render ui; do
+            cargo deny --log-level error --manifest-path "crates/$layer/Cargo.toml" \
+              --config "deny/$layer.toml" check bans
+          done
 
   zizmor:
     name: Zizmor

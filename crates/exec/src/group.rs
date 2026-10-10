@@ -82,50 +82,36 @@ pub(crate) fn spawn(command: &mut Command, set: &ProcessSet) -> std::io::Result<
 mod tests {
     use std::process::Stdio;
 
-    use std::time::Duration;
+    use tokio::io::{AsyncBufReadExt, BufReader, Lines};
+    use tokio::process::ChildStdout;
 
     use super::*;
 
-    fn sh(script: &str) -> Command {
-        let mut command = crate::Command::new("sh").args(["-c", script]).process();
+    mix_testchild::install!();
+
+    fn child(steps: &[&str]) -> Command {
+        let mut command = crate::Command::new(mix_testchild::program())
+            .args(mix_testchild::args(steps.iter().copied()))
+            .process();
         command.stdout(Stdio::piped()).stderr(Stdio::null());
         command
     }
 
-    fn exited(pid: i32) -> bool {
-        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-            Err(_) => true,
-            Ok(stat) => stat
-                .rsplit_once(')')
-                .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z')),
-        }
+    fn said(child: &mut Child) -> Lines<BufReader<ChildStdout>> {
+        BufReader::new(child.stdout.take().unwrap()).lines()
     }
 
-    async fn exits_soon(pid: i32) -> bool {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while std::time::Instant::now() < deadline {
-            if exited(pid) {
-                return true;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        false
-    }
-
-    async fn read_pid(child: &mut Child) -> i32 {
-        use tokio::io::AsyncBufReadExt;
-        let stdout = child.stdout.take().unwrap();
-        let mut line = String::new();
-        tokio::io::BufReader::new(stdout)
-            .read_line(&mut line)
+    async fn next(lines: &mut Lines<BufReader<ChildStdout>>) -> String {
+        lines
+            .next_line()
             .await
-            .unwrap();
-        line.trim().parse().unwrap()
+            .unwrap()
+            .expect("the child said more")
     }
 
     #[tokio::test]
     async fn a_child_leads_its_own_process_group() {
-        let (child, group) = spawn(&mut sh("sleep 5"), &ProcessSet::default()).unwrap();
+        let (child, group) = spawn(&mut child(&["sleep"]), &ProcessSet::default()).unwrap();
 
         let pid = child.id().unwrap() as i32;
         assert_eq!(
@@ -141,26 +127,23 @@ mod tests {
     #[tokio::test]
     async fn stop_asks_first_and_the_whole_group_goes() {
         let (mut child, group) =
-            spawn(&mut sh("sleep 30 & echo $!; wait"), &ProcessSet::default()).unwrap();
-        let grandchild = read_pid(&mut child).await;
+            spawn(&mut child(&["spawn", "wait"]), &ProcessSet::default()).unwrap();
+        let grandchild: i32 = next(&mut said(&mut child)).await.parse().unwrap();
 
         group.stop(&mut child).await;
 
         assert!(child.try_wait().unwrap().is_some());
-        assert!(
-            exits_soon(grandchild).await,
-            "the grandchild outlived its group"
-        );
+        tokio::task::spawn_blocking(move || mix_testchild::ended(grandchild))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
     async fn a_stop_reaches_a_frozen_child() {
-        let (mut child, group) = spawn(&mut sh("sleep 30"), &ProcessSet::default()).unwrap();
+        let (mut child, group) = spawn(&mut child(&["sleep"]), &ProcessSet::default()).unwrap();
         group.signal(Signal::SIGSTOP);
 
-        tokio::time::timeout(Duration::from_secs(5), group.stop(&mut child))
-            .await
-            .expect("a frozen child is woken to receive the stop");
+        group.stop(&mut child).await;
 
         assert!(child.try_wait().unwrap().is_some());
     }
@@ -168,36 +151,30 @@ mod tests {
     #[tokio::test]
     async fn a_stop_waits_for_the_child_until_the_request_is_killed() {
         let set = ProcessSet::default();
-        let (mut child, group) = spawn(
-            &mut sh("trap '' TERM; echo $$; while :; do sleep 0.1; done"),
-            &set,
-        )
-        .unwrap();
-        let _ = read_pid(&mut child).await;
+        let (mut child, group) = spawn(&mut child(&["trap-term", "pid", "sleep"]), &set).unwrap();
+        let mut lines = said(&mut child);
+        next(&mut lines).await;
 
         let stopping = tokio::spawn(async move {
             group.stop(&mut child).await;
             child
         });
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(next(&mut lines).await, "term");
         assert!(
             !stopping.is_finished(),
-            "a stop must not give up on its own"
+            "the child was asked to stop and is still running, so the stop still waits"
         );
 
         set.kill();
 
-        let mut child = tokio::time::timeout(Duration::from_secs(5), stopping)
-            .await
-            .expect("a killed request ends at once")
-            .unwrap();
+        let mut child = stopping.await.unwrap();
         assert!(child.try_wait().unwrap().is_some());
     }
 
     #[tokio::test]
     async fn a_finished_child_is_no_longer_tracked() {
         let set = ProcessSet::default();
-        let (mut child, group) = spawn(&mut sh("true"), &set).unwrap();
+        let (mut child, group) = spawn(&mut child(&[]), &set).unwrap();
         let pgid = group.pgid;
         child.wait().await.unwrap();
 

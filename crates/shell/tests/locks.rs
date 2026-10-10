@@ -255,3 +255,76 @@ async fn another_process_reads_the_exclusive_holder_from_the_lock_file() {
     assert!(task.await.unwrap());
     assert_eq!(std::fs::read_to_string(lock_in(&dir)).unwrap(), "");
 }
+
+#[tokio::test]
+async fn every_request_waiting_for_a_lock_is_counted_while_it_waits() {
+    let dir = tempfile::tempdir().unwrap();
+    let locks = Arc::new(Locks::new(lock_in(&dir)));
+    let mut waiting = locks.waiting();
+    let mut first = request();
+    let held = acquire(
+        &locks,
+        &mut first,
+        holder(1, "install"),
+        Need::SharedForUser,
+    )
+    .await
+    .unwrap();
+    assert_eq!(*waiting.borrow_and_update(), 0);
+
+    let mut queued = Vec::new();
+    for command in ["remove", "clean"] {
+        let mut next = request();
+        let shared = Arc::clone(&locks);
+        queued.push(tokio::spawn(async move {
+            acquire(&shared, &mut next, holder(1, command), Need::SharedForUser)
+                .await
+                .map(drop)
+                .is_ok()
+        }));
+    }
+    waiting.wait_for(|count| *count == 2).await.unwrap();
+
+    drop(held);
+    for done in queued {
+        assert!(done.await.unwrap());
+    }
+    assert_eq!(*locks.waiting().borrow(), 0);
+}
+
+#[tokio::test]
+async fn a_dry_run_on_a_machine_without_the_lock_creates_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let lock = dir.path().join("var/lib/mix/lock");
+    let locks = Locks::new(&lock);
+    let mut dry_run = request();
+
+    let held = acquire(&locks, &mut dry_run, holder(1, "bootstrap"), Need::Observe)
+        .await
+        .unwrap();
+    drop(held);
+
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn a_dry_run_waits_for_a_change_that_holds_the_machine() {
+    let dir = tempfile::tempdir().unwrap();
+    let locks = Arc::new(Locks::new(lock_in(&dir)));
+    let mut change = request();
+    let held = acquire(&locks, &mut change, holder(0, "repair"), Need::Exclusive)
+        .await
+        .unwrap();
+
+    let mut dry_run = request();
+    let outbox = Arc::clone(&dry_run.outbox);
+    let observing = tokio::spawn({
+        let locks = Arc::clone(&locks);
+        async move { acquire(&locks, &mut dry_run, holder(1, "install"), Need::Observe).await }
+    });
+    let wait = until_waiting(&outbox).await;
+    assert_eq!(wait.command.as_deref(), Some("repair"));
+
+    drop(held);
+    observing.await.unwrap().unwrap();
+}

@@ -1,0 +1,11 @@
+[graph]
+targets = ["x86_64-unknown-linux-gnu"]
+exclude-dev = true
+
+[bans]
+multiple-versions = "allow"
+deny = [
+    { crate = "mix-core", reason = "the client reads the protocol, never the daemon's model" },
+    { crate = "mix-nixgen", reason = "the client reads the protocol, never the daemon's model" },
+    { crate = "mix-pins", reason = "the client reads the protocol, never the daemon's model" },
+]

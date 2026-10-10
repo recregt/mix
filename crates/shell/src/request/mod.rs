@@ -3,13 +3,14 @@ mod delivery;
 pub mod lock;
 pub mod sink;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use mix_core::identity::InvokingUser;
-use mix_core::locks::Need;
-use mix_core::locks::locks_for;
-use mix_core::policy::Policy;
-use mix_core::targets::UserConfig;
+use mix_core::declared::identity::InvokingUser;
+use mix_core::declared::policy::Policy;
+use mix_core::declared::targets::UserConfig;
+use mix_core::run::locks::Need;
+use mix_core::run::locks::locks_for;
 use mix_events::v1::{Cancellation, Code, Command, command};
 use mix_events::{Diagnose, Ending, Fault, Outbox, ROOT, Start, Stopped, Tree};
 use mix_exec::Scope;
@@ -43,6 +44,9 @@ pub struct Session {
     pub locks: Option<Arc<Locks>>,
     pub caller: Caller,
     pub policy: Option<Policy>,
+    pub journals: PathBuf,
+    pub host: context::Host,
+    pub faults: Option<Arc<crate::drive::Faults>>,
 }
 
 impl Session {
@@ -53,7 +57,25 @@ impl Session {
             locks: None,
             caller: Caller::Fixed(None),
             policy: None,
+            journals: PathBuf::from(crate::effect::journal::JOURNAL_DIR),
+            host: context::Host::Machine,
+            faults: None,
         }
+    }
+
+    pub fn with_faults(mut self, faults: Arc<crate::drive::Faults>) -> Self {
+        self.faults = Some(faults);
+        self
+    }
+
+    pub fn with_host(mut self, host: context::Host) -> Self {
+        self.host = host;
+        self
+    }
+
+    pub fn with_journals(mut self, journals: impl Into<PathBuf>) -> Self {
+        self.journals = journals.into();
+        self
     }
 
     pub fn with_render(mut self, render: impl Render + 'static) -> Self {
@@ -111,9 +133,9 @@ impl Session {
             } => {
                 let config = account.clone().and_then(|account| {
                     if enrolling {
-                        crate::profile::user_config_for(account, locked)
+                        crate::profile::user_config_for(account, &self.host, locked)
                     } else {
-                        crate::profile::existing_user_config_for(account, locked)
+                        crate::profile::existing_user_config_for(account, &self.host, locked)
                     }
                 });
                 (config, *peer_is_root)
@@ -161,10 +183,11 @@ impl Root {
     }
 }
 
-fn command_of(request: command::Request) -> Command {
+fn command_of(request: command::Request, dry_run: bool) -> Command {
     Command {
         mix_version: env!("CARGO_PKG_VERSION").to_string(),
         schema_minor: mix_events::SCHEMA_MINOR,
+        dry_run,
         request: Some(request),
     }
 }
@@ -179,18 +202,19 @@ fn ending_of(blocked: &Blocked) -> Ending {
 async fn host(
     session: &Session,
     request: &command::Request,
+    dry_run: bool,
     policy: Option<Policy>,
     op: impl AsyncFnOnce(&Context, &mut Root) -> Concluded,
 ) {
     let key = mix_events::key_of(Some(request));
     let (opened, delivery) = open(&session.render);
     let stopped = stopped_by(&session.scope);
-    let need = locks_for(request);
+    let need = locks_for(request, dry_run);
     let enrolling = matches!(request, command::Request::Bootstrap(_));
     let mut tree = Tree::new(
         Arc::clone(&opened.outbox),
         Arc::clone(&stopped),
-        Start::command(key, command_of(request.clone())),
+        Start::command(key, command_of(request.clone(), dry_run)),
     );
     let held = match (&session.locks, need) {
         (None, _) | (_, Need::Nothing) => None,
@@ -222,7 +246,12 @@ async fn host(
             .unwrap_or_else(stored_policy),
         render: Arc::clone(&session.render),
         locked,
+        journals: session.journals.clone(),
+        dry_run,
+        host: session.host.clone(),
+        faults: session.faults.clone(),
     };
+    let _released = Released(&ctx);
     let mut root = Root { tree, stopped };
     let concluded = op(&ctx, &mut root).await;
     let _ = root
@@ -235,7 +264,7 @@ async fn host(
 
 #[allow(clippy::disallowed_methods)]
 fn stored_policy() -> Policy {
-    let stored = std::fs::read_to_string(mix_core::paths::POLICY_FILE).ok();
+    let stored = std::fs::read_to_string(mix_core::declared::paths::POLICY_FILE).ok();
     Policy::load(stored.as_deref())
 }
 
@@ -254,7 +283,7 @@ pub async fn recover(
                 user: "root".to_string(),
                 command: "recover".to_string(),
             },
-            mix_core::locks::Need::Exclusive,
+            mix_core::run::locks::Need::Exclusive,
             None,
             &mut tree,
             scope,
@@ -275,7 +304,13 @@ pub async fn recover(
         path: "/".into(),
         source,
     })?;
-    let mut performer = crate::drive::Performer::new(files);
+    let mut performer = crate::drive::Performer::new(files).with_profile(
+        crate::effect::generations::ProfileContext {
+            mirror: stored_policy()
+                .mirror()
+                .map(|mirror| mirror.url().to_string()),
+        },
+    );
     Ok(crate::effect::journal::recover_all(
         std::path::Path::new(crate::effect::journal::JOURNAL_DIR),
         &mut performer,
@@ -284,7 +319,16 @@ pub async fn recover(
     .await)
 }
 
+struct Released<'c>(&'c Context);
+
+impl Drop for Released<'_> {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
 pub async fn run(session: &Session, command: Command) {
+    let dry_run = command.dry_run;
     let Some(request) = command.request else {
         let mut render = session
             .render
@@ -302,13 +346,19 @@ pub async fn run(session: &Session, command: Command) {
         command::Request::Bootstrap(bootstrap) => {
             match Policy::new(bootstrap.mirror.as_deref(), bootstrap.mirror_key.as_deref()) {
                 Ok(policy) => {
-                    host(session, &request, Some(policy), async |ctx, root| {
-                        crate::ops::bootstrap::bootstrap(ctx, root, bootstrap).await
-                    })
+                    host(
+                        session,
+                        &request,
+                        dry_run,
+                        Some(policy),
+                        async |ctx, root| {
+                            crate::ops::bootstrap::bootstrap(ctx, root, bootstrap).await
+                        },
+                    )
                     .await
                 }
                 Err(invalid) => {
-                    host(session, &request, None, async |_, root| {
+                    host(session, &request, dry_run, None, async |_, root| {
                         root.refuse(crate::ops::bootstrap::Error::InvalidMirror(
                             invalid.to_string(),
                         ))
@@ -318,37 +368,37 @@ pub async fn run(session: &Session, command: Command) {
             }
         }
         command::Request::Install(install) => {
-            host(session, &request, None, async |ctx, root| {
+            host(session, &request, dry_run, None, async |ctx, root| {
                 crate::ops::install::install(ctx, root, install).await
             })
             .await
         }
         command::Request::Remove(remove) => {
-            host(session, &request, None, async |ctx, root| {
+            host(session, &request, dry_run, None, async |ctx, root| {
                 crate::ops::remove::remove(ctx, root, remove).await
             })
             .await
         }
         command::Request::Clean(clean) => {
-            host(session, &request, None, async |ctx, root| {
+            host(session, &request, dry_run, None, async |ctx, root| {
                 crate::ops::clean::clean(ctx, root, clean).await
             })
             .await
         }
         command::Request::Repair(repair) => {
-            host(session, &request, None, async |ctx, root| {
+            host(session, &request, dry_run, None, async |ctx, root| {
                 crate::ops::repair::repair(ctx, root, repair).await
             })
             .await
         }
         command::Request::Doctor(doctor) => {
-            host(session, &request, None, async |ctx, root| {
+            host(session, &request, dry_run, None, async |ctx, root| {
                 crate::ops::doctor::audit(ctx, root, doctor).await
             })
             .await
         }
         command::Request::Explain(explain) => {
-            host(session, &request, None, async |ctx, root| {
+            host(session, &request, dry_run, None, async |ctx, root| {
                 crate::ops::explain::explain(ctx, root, explain).await
             })
             .await

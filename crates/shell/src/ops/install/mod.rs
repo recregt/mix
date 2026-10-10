@@ -11,28 +11,24 @@ pub(crate) async fn install(ctx: &Context, root: &mut Root, request: &InstallReq
     let Some(cfg) = ctx.user.as_ref() else {
         return root.refuse(change::Error::NotBootstrapped);
     };
-    let decided =
-        match mix_core::change::install(&request.packages, change::settled(cfg, &ctx.locked)) {
-            Ok(decided) => decided,
-            Err(refused) => return root.refuse(change::Error::from(refused)),
-        };
-    change::run(
-        ctx,
-        root,
-        cfg,
-        change::Verb::Install,
-        &decided,
-        &mut Vec::new(),
-    )
-    .await
+    let mut performer = match change::begin(ctx, root).await {
+        Ok(performer) => performer,
+        Err(concluded) => return *concluded,
+    };
+    let settled = change::settled(&mut performer, cfg, &ctx.scope).await;
+    let decided = match mix_core::ops::change::install(&request.packages, settled) {
+        Ok(decided) => decided,
+        Err(refused) => return root.refuse(change::Error::from(refused)),
+    };
+    change::run(ctx, root, performer, cfg, change::Verb::Install, &decided).await
 }
 
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod tests {
-    use mix_core::identity::InvokingUser;
-    use mix_core::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
-    use mix_core::state::StateManifest;
+    use mix_core::declared::identity::InvokingUser;
+    use mix_core::declared::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
+    use mix_core::declared::state::StateManifest;
 
     use mix_events::v1::command::Request;
     use mix_events::v1::{Code, InstallRequest, InstallResult, node_finished};
@@ -51,11 +47,13 @@ mod tests {
     }
 
     fn context(home: &std::path::Path) -> crate::Session {
-        crate::Session::new(mix_exec::Scope::root()).with_user(Some(user_config(home)))
+        crate::Session::new(mix_exec::Scope::root())
+            .with_user(Some(user_config(home)))
+            .with_journals(home.join("journal"))
     }
 
-    fn user_config(home: &std::path::Path) -> mix_core::targets::UserConfig {
-        mix_core::targets::UserConfig {
+    fn user_config(home: &std::path::Path) -> mix_core::declared::targets::UserConfig {
+        mix_core::declared::targets::UserConfig {
             user: InvokingUser {
                 uid: 1000,
                 gid: 1000,

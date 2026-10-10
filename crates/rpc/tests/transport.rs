@@ -1,7 +1,6 @@
 use std::os::unix::fs::MetadataExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 use futures_util::StreamExt;
 use mix_events::v1::{
@@ -9,6 +8,8 @@ use mix_events::v1::{
     node_started,
 };
 use mix_rpc::{Caller, Client, Control, Controls, Events, Reply, Worker, serve_connection};
+
+mix_testchild::install!();
 
 fn marked(seq: u64, request: String) -> Envelope {
     Envelope {
@@ -61,6 +62,7 @@ fn bootstrap(force: bool) -> Command {
     Command {
         mix_version: "1.2.3".into(),
         schema_minor: mix_events::SCHEMA_MINOR,
+        dry_run: false,
         request: Some(command::Request::Bootstrap(Box::new(BootstrapRequest {
             force,
             mirror: Some("http://mirror.internal".into()),
@@ -71,6 +73,7 @@ fn bootstrap(force: bool) -> Command {
 
 fn repair() -> Command {
     Command {
+        schema_minor: mix_events::SCHEMA_MINOR,
         request: Some(command::Request::Repair(RepairRequest {})),
         ..Command::default()
     }
@@ -127,14 +130,12 @@ async fn the_worker_stops_once_its_client_is_gone() {
 
     drop(client);
 
-    tokio::time::timeout(Duration::from_secs(10), server)
-        .await
-        .expect("the worker must shut down once its only client disconnects")
-        .unwrap()
-        .unwrap();
+    server.await.unwrap().unwrap();
 }
 
 struct CleansUpWhenAbandoned {
+    abandoned: Arc<tokio::sync::Notify>,
+    may_clean_up: Arc<tokio::sync::Notify>,
     cleaned_up: Arc<AtomicBool>,
 }
 
@@ -148,7 +149,8 @@ impl Worker for CleansUpWhenAbandoned {
     async fn run(&self, _caller: Caller, _command: Command, _controls: Controls, events: Events) {
         let _ = events.send(Reply::Envelope(marked(1, String::new())));
         events.closed().await;
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        self.abandoned.notify_one();
+        self.may_clean_up.notified().await;
         self.cleaned_up.store(true, Ordering::SeqCst);
     }
 }
@@ -156,9 +158,13 @@ impl Worker for CleansUpWhenAbandoned {
 #[tokio::test]
 async fn the_worker_waits_for_a_request_its_client_left() {
     let cleaned_up = Arc::new(AtomicBool::new(false));
+    let abandoned = Arc::new(tokio::sync::Notify::new());
+    let may_clean_up = Arc::new(tokio::sync::Notify::new());
     let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
     let server = tokio::spawn(serve_connection(
         CleansUpWhenAbandoned {
+            abandoned: Arc::clone(&abandoned),
+            may_clean_up: Arc::clone(&may_clean_up),
             cleaned_up: Arc::clone(&cleaned_up),
         },
         theirs,
@@ -173,12 +179,14 @@ async fn the_worker_waits_for_a_request_its_client_left() {
     drop(controls);
     drop(events);
     drop(client);
+    abandoned.notified().await;
 
-    tokio::time::timeout(Duration::from_secs(10), server)
-        .await
-        .expect("the worker must shut down once the request is over")
-        .unwrap()
-        .unwrap();
+    assert!(
+        !server.is_finished(),
+        "the worker returned while the abandoned request was still cleaning up"
+    );
+    may_clean_up.notify_one();
+    server.await.unwrap().unwrap();
     assert!(
         cleaned_up.load(Ordering::SeqCst),
         "the worker returned before the abandoned request cleaned up"
@@ -255,9 +263,7 @@ async fn a_worker_that_dies_mid_request_reads_as_ended_not_refused() {
 
     worker_process.shutdown_background();
 
-    let next = tokio::time::timeout(Duration::from_secs(5), events.next())
-        .await
-        .expect("a dead worker ends the stream");
+    let next = events.next().await;
     assert!(
         matches!(next, None | Some(Err(mix_rpc::Error::Ended))),
         "{next:?}"
@@ -266,12 +272,10 @@ async fn a_worker_that_dies_mid_request_reads_as_ended_not_refused() {
 
 #[tokio::test]
 async fn a_program_that_exits_without_answering_is_refused() {
-    let started = tokio::time::timeout(
-        Duration::from_secs(5),
-        Client::start(std::path::Path::new("sh"), &["-c", "exit 3"], None, VERSION),
-    )
-    .await
-    .expect("a program that exited cannot keep the client waiting");
+    let args = mix_testchild::args(["exit:3"]);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+
+    let started = Client::start(&mix_testchild::program(), &args, None, VERSION).await;
 
     assert!(
         matches!(
@@ -414,4 +418,57 @@ async fn a_connection_checks_its_caller_once() {
     every_envelope(&mut client, &repair()).await;
 
     assert_eq!(admissions.load(Ordering::SeqCst), 1);
+}
+
+struct OlderDaemon(Arc<AtomicBool>);
+
+impl Worker for OlderDaemon {
+    const VERSION: &'static str = VERSION;
+    const SCHEMA: u32 = 0;
+
+    fn admits(&self, _caller: Caller) -> bool {
+        true
+    }
+
+    async fn run(&self, _caller: Caller, _command: Command, _controls: Controls, _events: Events) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+#[tokio::test]
+async fn a_request_a_daemon_of_an_older_schema_cannot_read_is_never_sent() {
+    let ran = Arc::new(AtomicBool::new(false));
+    let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
+    let _server = tokio::spawn(serve_connection(OlderDaemon(Arc::clone(&ran)), theirs));
+    let mut client = Client::connect(ours, VERSION).await.unwrap();
+
+    let refused = client.run(&repair()).await.err();
+
+    let Some(mix_rpc::Error::Outdated { ours, theirs }) = refused else {
+        panic!("a request newer than the daemon must be refused, got {refused:?}");
+    };
+    assert_eq!((ours, theirs), (mix_events::SCHEMA_MINOR, 0));
+    assert!(
+        !ran.load(Ordering::SeqCst),
+        "the older daemon ran the request"
+    );
+}
+
+#[tokio::test]
+async fn a_bootstrap_request_can_be_sent_to_a_daemon_of_an_older_schema() {
+    let ran = Arc::new(AtomicBool::new(false));
+    let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
+    let _server = tokio::spawn(serve_connection(OlderDaemon(Arc::clone(&ran)), theirs));
+    let mut client = Client::connect(ours, VERSION).await.unwrap();
+
+    let outcome = client.run(&bootstrap(false)).await;
+    assert!(outcome.is_ok());
+    let (_controller, mut replies) = outcome.unwrap();
+    while let Some(reply) = replies.next().await {
+        let _ = reply.unwrap();
+    }
+    assert!(
+        ran.load(Ordering::SeqCst),
+        "the older daemon should run the bootstrap request"
+    );
 }

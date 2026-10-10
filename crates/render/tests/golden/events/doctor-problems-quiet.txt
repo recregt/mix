@@ -1,3 +1,0 @@
-error: found 4 problems
-  |
-  = help: run `mix repair` to fix the ones it can

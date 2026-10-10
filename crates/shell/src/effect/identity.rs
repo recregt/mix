@@ -1,4 +1,4 @@
-use mix_core::action::{
+use mix_core::effect::{
     Action, Fact, Failure, GroupFacts, Outcome, Owner, Performed, Query, UserFacts, UserSpec,
 };
 use mix_exec::Scope;
@@ -31,6 +31,20 @@ fn user(name: &str) -> Option<UserFacts> {
         shell: user.shell,
         comment: user.gecos.to_string_lossy().into_owned(),
     })
+}
+
+fn user_by_uid(uid: u32) -> Option<String> {
+    nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid))
+        .ok()
+        .flatten()
+        .map(|user| user.name)
+}
+
+fn gid_exists(gid: u32) -> bool {
+    nix::unistd::Group::from_gid(nix::unistd::Gid::from_raw(gid))
+        .ok()
+        .flatten()
+        .is_some()
 }
 
 fn conflict(subject: &str, expected: impl Into<String>, found: impl Into<String>) -> Failure {
@@ -221,6 +235,25 @@ fn precondition(action: &Action) -> Result<Vec<Action>, Failure> {
                     format!("uid {}", found.uid),
                 ));
             }
+            if let Some(holder) = user_by_uid(spec.uid) {
+                return Err(conflict(
+                    &spec.name,
+                    format!("uid {} free", spec.uid),
+                    format!("uid {} held by {holder}", spec.uid),
+                ));
+            }
+            let missing = std::iter::once(spec.gid.to_string())
+                .filter(|_| !gid_exists(spec.gid))
+                .chain(
+                    spec.groups
+                        .iter()
+                        .filter(|name| group(name).is_none())
+                        .cloned(),
+                )
+                .next();
+            if let Some(missing) = missing {
+                return Err(conflict(&spec.name, format!("group {missing}"), "no group"));
+            }
             vec![Action::DeleteUser {
                 name: spec.name.clone(),
                 expect: (spec.uid, spec.gid),
@@ -259,17 +292,23 @@ fn precondition(action: &Action) -> Result<Vec<Action>, Failure> {
                 groups,
             })]
         }
-        Action::AddMember { group: name, user } => {
-            if members(name).contains(user) {
+        Action::AddMember {
+            group: name,
+            user: member,
+        } => {
+            let Some(found) = group(name) else {
+                return Err(conflict(name, "a group", "no group"));
+            };
+            if found.members.contains(member) {
                 return Err(conflict(
                     name,
-                    format!("{user} absent"),
-                    format!("{user} present"),
+                    format!("{member} absent"),
+                    format!("{member} present"),
                 ));
             }
             vec![Action::RemoveMember {
                 group: name.clone(),
-                user: user.clone(),
+                user: member.clone(),
             }]
         }
         Action::RemoveMember { group: name, user } => {

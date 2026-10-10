@@ -1,4 +1,4 @@
-use mix_core::health::Unfixable;
+use mix_core::ops::health::Unfixable;
 use mix_events::v1::diagnostic::Detail;
 use mix_events::v1::{Cancellation, Code};
 use mix_events::{Diagnose, Fault};
@@ -80,7 +80,8 @@ fn every_change_error() -> Vec<ChangeError> {
         | ChangeError::InvalidState(_)
         | ChangeError::NewerState(_)
         | ChangeError::NotRoot
-        | ChangeError::NotBootstrapped => {}
+        | ChangeError::NotBootstrapped
+        | ChangeError::Unrecovered => {}
     };
     let rejected = mix_nixgen::HomeModule::new(
         "mix-user",
@@ -97,6 +98,7 @@ fn every_change_error() -> Vec<ChangeError> {
         ChangeError::NewerState(2),
         ChangeError::NotRoot,
         ChangeError::NotBootstrapped,
+        ChangeError::Unrecovered,
     ];
     errors.iter().for_each(exhaustive);
     errors

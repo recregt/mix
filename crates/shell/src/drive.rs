@@ -5,24 +5,31 @@ use std::sync::Mutex;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use mix_core::action::{Action, Fact, Failure, Kind, Outcome, PathFacts, Performed, Query};
-use mix_core::identity::InvokingUser;
-use mix_core::journal::Record;
-use mix_core::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
-use mix_core::paths::mix_state_dir;
-use mix_core::plan::{Input, Next, Report, Runner, make_guard};
-use mix_core::{ActivityReporter, BuildProgress, DownloadProgress};
+use mix_core::declared::identity::InvokingUser;
+use mix_core::declared::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
+use mix_core::declared::paths::{
+    REPOSITORY_CONFIG, REPOSITORY_CONFIG_CONTENTS, REPOSITORY_INDEX, mix_state_dir, repository_dir,
+};
+use mix_core::effect::{
+    Action, Expect, Fact, Failure, Kind, Outcome, PathFacts, Performed, Query, Subject,
+};
+use mix_core::model::World;
+use mix_core::run::journal::Record;
+use mix_core::run::{Input, Next, Report, Runner, make_guard};
+use mix_core::{ActivityReporter, DownloadProgress};
 use mix_events::v1::node_progress::Progress;
 use mix_events::v1::{
     BuildStarted, Builds, Bytes, Cancellation, Code, CommandFinished, CommandStarted, Diagnostic,
-    FetchStarted, Stream, SubstitutionStarted,
+    FetchStarted, LockWait, Stream, SubstitutionStarted,
 };
 use mix_events::{NodeId, ROOT, Stopped, Tree, output};
 use mix_exec::Scope;
+use mix_nixlog::{BuildProgress, package_name};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::effect::files::{Files, Prepared};
-use crate::effect::generations::{self, ProfileContext};
+use crate::effect::generations::{self, ProfileContext, core_failure};
+use crate::effect::git::Git;
 use crate::effect::home::{self, Agent};
 use crate::effect::identity;
 use crate::effect::runtime;
@@ -127,14 +134,22 @@ impl ActivityReporter for Activity {
     fn build_started(&self, derivation: &str) {
         self.send(Progress::Build(BuildStarted {
             derivation: derivation.to_string(),
-            name: mix_core::nix_log::package_name(derivation).to_string(),
+            name: package_name(derivation).to_string(),
         }));
     }
 
     fn fetch_started(&self, path: &str) {
         self.send(Progress::Substitution(SubstitutionStarted {
             path: path.to_string(),
-            name: mix_core::nix_log::package_name(path).to_string(),
+            name: package_name(path).to_string(),
+        }));
+    }
+
+    fn waiting(&self, lock: &str, holder: Option<&str>, command: Option<&str>) {
+        self.send(Progress::Waiting(LockWait {
+            lock: lock.to_string(),
+            holder: holder.map(str::to_string),
+            command: command.map(str::to_string),
         }));
     }
 }
@@ -178,8 +193,95 @@ impl DownloadProgress for Relay<'_> {
     }
 }
 
+#[derive(Default)]
+struct Prediction {
+    world: mix_core::model::World,
+    seeded: std::collections::HashSet<Subject>,
+    touched: Vec<Subject>,
+}
+
+impl Prediction {
+    fn answers(&self, query: &Query) -> bool {
+        let near = |path: &Path| {
+            self.touched.iter().any(|subject| {
+                matches!(subject, Subject::Path(touched)
+                    if touched.starts_with(path) || path.starts_with(touched))
+            })
+        };
+        match query {
+            Query::Path(path)
+            | Query::Contents(path)
+            | Query::TreeOwner(path)
+            | Query::Leftovers(path)
+            | Query::Strangers { path, .. }
+            | Query::Program { path, .. } => near(path),
+            Query::Repository(user) => near(&repository_dir(&user.home)),
+            Query::ActiveList(user) => self.touched.contains(&Subject::Profile(user.clone())),
+            Query::Group(name) => self.touched.contains(&Subject::Group(name.clone())),
+            Query::User(name) => self.touched.contains(&Subject::User(name.clone())),
+            Query::Unit(name) => self.touched.contains(&Subject::Unit(name.clone())),
+            Query::Profile(user) | Query::Clobbered(user) => {
+                self.touched.contains(&Subject::Profile(user.clone()))
+            }
+            Query::Journals(_) => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Fault {
+    Fail(Failure),
+    CrashBefore,
+    CrashAfter,
+}
+
+#[derive(Default)]
+pub struct Faults {
+    plan: Mutex<Option<(usize, Fault)>>,
+    crashed: tokio::sync::Notify,
+}
+
+impl Faults {
+    pub fn arm(&self, at: usize, fault: Fault) {
+        *self
+            .plan
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((at, fault));
+    }
+
+    pub fn disarm(&self) {
+        *self
+            .plan
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+
+    pub async fn crashed(&self) {
+        self.crashed.notified().await;
+    }
+
+    fn next(&self) -> Option<Fault> {
+        let mut plan = self
+            .plan
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match plan.as_mut() {
+            Some((0, _)) => plan.take().map(|(_, fault)| fault),
+            Some((left, _)) => {
+                *left -= 1;
+                None
+            }
+            None => None,
+        }
+    }
+}
+
 pub struct Performer {
     files: Files,
+    model: Option<std::sync::Arc<Mutex<World>>>,
+    faults: Option<std::sync::Arc<Faults>>,
+    acting_for: Option<String>,
+    prediction: Option<Prediction>,
     agents: BTreeMap<u32, Agent>,
     units: Option<Units>,
     profile: Option<ProfileContext>,
@@ -192,6 +294,10 @@ impl Performer {
     pub fn new(files: Files) -> Self {
         Self {
             files,
+            model: None,
+            faults: None,
+            acting_for: None,
+            prediction: None,
             agents: BTreeMap::new(),
             units: None,
             profile: None,
@@ -225,7 +331,7 @@ impl Performer {
 
     async fn find_built(
         &mut self,
-        user: &mix_core::identity::InvokingUser,
+        user: &mix_core::declared::identity::InvokingUser,
         scope: &Scope,
     ) -> Result<Option<u64>, Failure> {
         let generations = generations::existing(user);
@@ -254,9 +360,11 @@ impl Performer {
             _ => None,
         };
         let running = nix::unistd::geteuid().as_raw();
+        let tree_removal = matches!(action, Action::RemoveCreatedTree { .. });
         match removed
             .or_else(|| self.files.tree_owner(path))
             .filter(|uid| *uid != running)
+            .filter(|uid| !(tree_removal && self.files.holds_other_than(path, *uid)))
         {
             Some(uid) => {
                 let agent = self.agent(uid, path, scope)?;
@@ -269,8 +377,8 @@ impl Performer {
     async fn reclaim_by_copy(
         &mut self,
         path: &Path,
-        expect: mix_core::action::FileId,
-        owner: mix_core::action::Owner,
+        expect: mix_core::effect::FileId,
+        owner: mix_core::effect::Owner,
         mode: u32,
         scope: &Scope,
         prepared: &mut Prepared<'_>,
@@ -290,7 +398,7 @@ impl Performer {
         let restore = Action::Restore {
             path: path.to_path_buf(),
             from: staging,
-            expect: mix_core::action::Expect::Absent,
+            expect: mix_core::effect::Expect::Absent,
         };
         prepared(std::slice::from_ref(&restore))?;
         let mut announced = |_: &[Action]| Ok(());
@@ -303,6 +411,53 @@ impl Performer {
         self.perform_file(&restore, path, scope, &mut announced)
             .await?;
         Ok(Performed { undo: Vec::new() })
+    }
+
+    /// Sets `path` aside where a rename cannot, as for a directory in a lower overlayfs layer: the
+    /// tree is copied aside, the original removed, and the copy removed when the request commits.
+    async fn set_aside_by_copy(
+        &mut self,
+        path: &Path,
+        expect: mix_core::effect::FileId,
+        scope: &Scope,
+        prepared: &mut Prepared<'_>,
+    ) -> Outcome {
+        let Some(Fact::Path(found)) = self.files.observe(&Query::Path(path.to_path_buf())) else {
+            return Err(Failure::Conflict {
+                subject: path.display().to_string(),
+                expected: format!("{expect:?}"),
+                found: "nothing".to_string(),
+            });
+        };
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let aside = path.with_file_name(format!(".{name}.mix-aside-{}", self.files.request()));
+        let copy = Action::CopyTree {
+            from: path.to_path_buf(),
+            to: aside.clone(),
+            owner: found.owner,
+            mode: found.mode,
+        };
+        self.perform_file(&copy, &aside, scope, prepared).await?;
+        let restore = Action::Restore {
+            path: path.to_path_buf(),
+            from: aside.clone(),
+            expect: mix_core::effect::Expect::Absent,
+        };
+        prepared(std::slice::from_ref(&restore))?;
+        let mut announced = |_: &[Action]| Ok(());
+        let removal = Action::RemoveCreatedTree {
+            path: path.to_path_buf(),
+            expect,
+        };
+        self.perform_file(&removal, path, scope, &mut announced)
+            .await?;
+        Box::pin(self.adopt(vec![aside], scope)).await?;
+        Ok(Performed {
+            undo: vec![restore],
+        })
     }
 
     async fn commit(&mut self, prepared: &mut Prepared<'_>) -> Outcome {
@@ -334,7 +489,7 @@ impl Performer {
         report: &mut (dyn FnMut(Signal) + Send),
         scope: &Scope,
     ) -> Outcome {
-        let git = mix_state_dir(&user.home).join(".git");
+        let git = repository_dir(&user.home);
         let existed = !matches!(
             self.files.observe(&Query::Path(git.clone())),
             Some(Fact::Path(PathFacts {
@@ -343,23 +498,74 @@ impl Performer {
             }))
         );
         prepared(&[])?;
-        if let Err(error) = profile::record(user, scope).await {
-            report(Signal::Warning(Box::new(mix_core::diagnose::warning(
-                Code::GitRecordFailed,
-                "could not record the change in git",
-                &error,
-            ))));
-        }
-        let undo = match self.files.observe(&Query::Path(git.clone())) {
-            Some(Fact::Path(PathFacts { id: Some(id), .. })) if !existed => {
-                vec![Action::RemoveCreatedTree {
-                    path: git,
-                    expect: id,
-                }]
-            }
-            _ => Vec::new(),
+        let mut undo = Vec::new();
+        let owned = match existed {
+            true => self.own_config(user, scope, prepared).await,
+            false => Ok(Vec::new()),
         };
+        let recorded = match owned {
+            Ok(restore) => {
+                undo.extend(restore);
+                profile::record(user, scope).await.map_err(core_failure)
+            }
+            Err(failure) => Err(failure),
+        };
+        let recorded = match recorded {
+            Ok(()) if !existed => self.own_config(user, scope, prepared).await.map(|_| ()),
+            other => other,
+        };
+        if let Err(failure) = recorded {
+            report(Signal::Warning(Box::new(
+                mix_core::report::diagnose::warning(
+                    Code::GitRecordFailed,
+                    "could not record the change in git",
+                    &failure,
+                ),
+            )));
+        }
+        if let Some(Fact::Path(PathFacts { id: Some(id), .. })) =
+            self.files.observe(&Query::Path(git.clone()))
+            && !existed
+        {
+            undo.push(Action::RemoveCreatedTree {
+                path: git,
+                expect: id,
+            });
+        }
         Ok(Performed { undo })
+    }
+
+    async fn own_config(
+        &mut self,
+        user: &InvokingUser,
+        scope: &Scope,
+        prepared: &mut Prepared<'_>,
+    ) -> Result<Vec<Action>, Failure> {
+        let config = repository_dir(&user.home).join(REPOSITORY_CONFIG);
+        let Some(Fact::Path(found)) = self.files.observe(&Query::Path(config.clone())) else {
+            return Ok(Vec::new());
+        };
+        let ours = matches!(
+            self.files.observe(&Query::Contents(config.clone())),
+            Some(Fact::Contents(Some(bytes))) if *bytes == *REPOSITORY_CONFIG_CONTENTS.as_bytes()
+        );
+        if found.kind == Kind::File && ours {
+            return Ok(Vec::new());
+        }
+        let put = Action::PutFile {
+            path: config.clone(),
+            contents: std::sync::Arc::from(REPOSITORY_CONFIG_CONTENTS.as_bytes()),
+            mode: 0o644,
+            owner: Some((user.uid, user.gid)),
+            expect: match found.id {
+                Some(id) => Expect::Present(id),
+                None => Expect::Absent,
+            },
+        };
+        Ok(self
+            .perform_file(&put, &config, scope, prepared)
+            .await?
+            .undo)
     }
 
     async fn units(&mut self) -> Result<&Units, Failure> {
@@ -369,21 +575,309 @@ impl Performer {
         Ok(self.units.as_ref().expect("connected above"))
     }
 
-    pub async fn observe(&mut self, queries: &[Query]) -> Result<Vec<Fact>, Failure> {
+    async fn create_repository(
+        &mut self,
+        user: &InvokingUser,
+        prepared: &mut Prepared<'_>,
+        scope: &Scope,
+    ) -> Outcome {
+        let repository = repository_dir(&user.home);
+        let found = self.files.observe(&Query::Path(repository.clone()));
+        if !matches!(
+            found,
+            Some(Fact::Path(PathFacts {
+                kind: Kind::Missing,
+                ..
+            }))
+        ) {
+            return Err(Failure::Conflict {
+                subject: repository.display().to_string(),
+                expected: "nothing".to_string(),
+                found: "something already there".to_string(),
+            });
+        }
+        prepared(&[])?;
+        let created = match Git::resolve(user, scope).await {
+            Ok(git) => git.create(user, &mix_state_dir(&user.home), scope).await,
+            Err(error) => Err(error),
+        };
+        let undo = match self.files.observe(&Query::Path(repository.clone())) {
+            Some(Fact::Path(PathFacts { id: Some(id), .. })) => vec![Action::RemoveCreatedTree {
+                path: repository.clone(),
+                expect: id,
+            }],
+            _ => Vec::new(),
+        };
+        let created = match created {
+            Ok(()) => self.own_config(user, scope, prepared).await.map(|_| ()),
+            Err(error) => Err(core_failure(error)),
+        };
+        if let Err(failure) = created {
+            let mut announced = |_: &[Action]| Ok(());
+            for removal in &undo {
+                self.perform_file(removal, &repository, &scope.shielded(), &mut announced)
+                    .await?;
+            }
+            return Err(failure);
+        }
+        Ok(Performed { undo })
+    }
+
+    pub fn modelled(world: std::sync::Arc<Mutex<World>>) -> std::io::Result<Self> {
+        Ok(Self {
+            model: Some(world),
+            ..Self::new(Files::open(Path::new("/"), "model")?)
+        })
+    }
+
+    pub fn acting_for(mut self, request: &str) -> Self {
+        self.acting_for = Some(request.to_string());
+        self
+    }
+
+    pub fn with_faults(mut self, faults: Option<std::sync::Arc<Faults>>) -> Self {
+        self.faults = faults;
+        self
+    }
+
+    pub(crate) fn model(&self) -> Option<std::sync::Arc<Mutex<World>>> {
+        self.model.clone()
+    }
+
+    #[inline]
+    fn modelled_world(&self) -> Option<std::sync::MutexGuard<'_, World>> {
+        self.model.as_ref().map(|world| self.lock_model(world))
+    }
+
+    fn lock_model<'w>(&self, world: &'w Mutex<World>) -> std::sync::MutexGuard<'w, World> {
+        let mut world = world
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(request) = &self.acting_for {
+            world.acting_for.clone_from(request);
+        }
+        world
+    }
+
+    async fn crash(&self) -> Outcome {
+        if let Some(faults) = &self.faults {
+            faults.crashed.notify_one();
+        }
+        std::future::pending().await
+    }
+
+    pub fn predicting(files: Files) -> Self {
+        Self {
+            prediction: Some(Prediction::default()),
+            ..Self::new(files)
+        }
+    }
+
+    pub async fn observe(
+        &mut self,
+        queries: &[Query],
+        scope: &Scope,
+    ) -> Result<Vec<Fact>, Failure> {
+        if let Some(world) = self.modelled_world() {
+            return Ok(queries.iter().map(|query| world.observe(query)).collect());
+        }
         let mut facts = Vec::with_capacity(queries.len());
         for query in queries {
-            let fact = match query {
-                Query::Unit(unit) => Fact::Unit(self.units().await?.observe(unit).await?),
-                query => self
-                    .files
-                    .observe(query)
-                    .or_else(|| identity::observe(query))
-                    .or_else(|| generations::observe(query))
-                    .expect("every query has an observer"),
+            let fact = match &self.prediction {
+                Some(prediction) if prediction.answers(query) => prediction.world.observe(query),
+                _ => match self.observed(query) {
+                    Some(fact) => fact,
+                    None => self.observe_one(query, scope).await?,
+                },
             };
             facts.push(fact);
         }
         Ok(facts)
+    }
+
+    async fn seed(&mut self, subject: &Subject, scope: &Scope) -> Result<(), Failure> {
+        if self
+            .prediction
+            .as_ref()
+            .is_none_or(|prediction| prediction.seeded.contains(subject))
+        {
+            return Ok(());
+        }
+        match subject {
+            Subject::Path(path) => {
+                let mut chain: Vec<&Path> = path
+                    .ancestors()
+                    .filter(|at| at.parent().is_some())
+                    .collect();
+                chain.reverse();
+                for at in chain {
+                    let at_subject = Subject::Path(at.to_path_buf());
+                    if self
+                        .prediction
+                        .as_ref()
+                        .is_some_and(|prediction| prediction.seeded.contains(&at_subject))
+                    {
+                        continue;
+                    }
+                    let Fact::Path(found) =
+                        self.observe_one(&Query::Path(at.into()), scope).await?
+                    else {
+                        continue;
+                    };
+                    let contents = match found.kind {
+                        Kind::File => {
+                            match self.observe_one(&Query::Contents(at.into()), scope).await? {
+                                Fact::Contents(contents) => contents,
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    };
+                    if let Some(prediction) = &mut self.prediction {
+                        prediction.world.seed_path(at, &found, contents);
+                        prediction.seeded.insert(at_subject);
+                    }
+                }
+                return Ok(());
+            }
+            Subject::Group(name) => {
+                if let Fact::Group(found) =
+                    self.observe_one(&Query::Group(name.clone()), scope).await?
+                    && let Some(prediction) = &mut self.prediction
+                {
+                    prediction.world.seed_group(name, found);
+                }
+            }
+            Subject::User(name) => {
+                if let Fact::User(found) =
+                    self.observe_one(&Query::User(name.clone()), scope).await?
+                    && let Some(prediction) = &mut self.prediction
+                {
+                    prediction.world.seed_user(name, found);
+                }
+            }
+            Subject::Unit(name) => {
+                let file = Path::new(UNIT_DIR).join(name);
+                Box::pin(self.seed(&Subject::Path(file.clone()), scope)).await?;
+                let found = self.units().await?.observe(name).await?;
+                let contents = match self.observe_one(&Query::Contents(file), scope).await? {
+                    Fact::Contents(contents) => contents,
+                    _ => None,
+                };
+                if let Some(prediction) = &mut self.prediction {
+                    prediction.world.seed_unit(name, &found, contents);
+                }
+            }
+            Subject::Profile(user) => {
+                if let Fact::Profile(found) = self
+                    .observe_one(&Query::Profile(user.clone()), scope)
+                    .await?
+                    && let Some(prediction) = &mut self.prediction
+                {
+                    prediction.world.seed_profile(user.uid, &found);
+                }
+            }
+        }
+        if let Some(prediction) = &mut self.prediction {
+            prediction.seeded.insert(subject.clone());
+        }
+        Ok(())
+    }
+
+    async fn predict(
+        &mut self,
+        action: &Action,
+        scope: &Scope,
+        prepared: &mut Prepared<'_>,
+    ) -> Outcome {
+        let subjects = action.subjects();
+        for subject in &subjects {
+            self.seed(subject, scope).await?;
+        }
+        let prediction = self
+            .prediction
+            .as_mut()
+            .expect("only a predicting performer predicts");
+        let performed = prediction.world.apply(action)?;
+        prepared(&performed.undo)?;
+        prediction.touched.extend(subjects);
+        Ok(performed)
+    }
+
+    async fn observe_one(&mut self, query: &Query, scope: &Scope) -> Result<Fact, Failure> {
+        Ok(match query {
+            Query::Unit(unit) => Fact::Unit(self.units().await?.observe(unit).await?),
+            Query::Repository(user) => {
+                let repository = repository_dir(&user.home);
+                let config = self
+                    .files
+                    .observe(&Query::Contents(repository.join(REPOSITORY_CONFIG)));
+                let index = self
+                    .files
+                    .observe(&Query::Path(repository.join(REPOSITORY_INDEX)));
+                let usable = matches!(
+                    config,
+                    Some(Fact::Contents(Some(bytes))) if *bytes == *REPOSITORY_CONFIG_CONTENTS.as_bytes()
+                ) && matches!(
+                    index,
+                    Some(Fact::Path(PathFacts {
+                        kind: Kind::Missing | Kind::File,
+                        ..
+                    }))
+                );
+                if !usable {
+                    return Ok(Fact::Repository {
+                        intact: false,
+                        recorded: false,
+                    });
+                }
+                let git = Git::resolve(user, scope).await.map_err(core_failure)?;
+                let state_dir = mix_state_dir(&user.home);
+                let verified = git
+                    .verify(user, &repository_dir(&user.home), scope)
+                    .await
+                    .map_err(core_failure)?;
+                let unrecorded = match verified {
+                    true => git.unrecorded(user, &state_dir, scope).await.ok(),
+                    false => None,
+                };
+                let reusable = match &unrecorded {
+                    Some(files) if !files.is_empty() => git
+                        .reusable(user, &state_dir, files, scope)
+                        .await
+                        .map_err(core_failure)?,
+                    _ => true,
+                };
+                let intact = verified && reusable;
+                Fact::Repository {
+                    intact,
+                    recorded: intact && unrecorded.is_some_and(|files| files.is_empty()),
+                }
+            }
+            query => self.observed(query).expect("every query has an observer"),
+        })
+    }
+
+    fn observed(&self, query: &Query) -> Option<Fact> {
+        match query {
+            Query::Unit(_) | Query::Repository(_) => None,
+            Query::Journals(dir) => Some(Fact::Journals(crate::effect::journal::abandoned(dir))),
+            Query::ActiveList(user) => Some(Fact::Contents(
+                std::fs::read(mix_core::declared::paths::active_list_path(&user.home))
+                    .ok()
+                    .map(Into::into),
+            )),
+            Query::Program { path, source } => {
+                Some(Fact::Program(crate::effect::program::observe(path, source)))
+            }
+            Query::Group(_) | Query::User(_) => identity::observe(query),
+            Query::Profile(_) | Query::Clobbered(_) => generations::observe(query),
+            Query::Path(_)
+            | Query::Contents(_)
+            | Query::TreeOwner(_)
+            | Query::Leftovers(_)
+            | Query::Strangers { .. } => self.files.observe(query),
+        }
     }
 
     pub async fn perform(
@@ -393,6 +887,30 @@ impl Performer {
         report: &mut (dyn FnMut(Signal) + Send),
         prepared: &mut Prepared<'_>,
     ) -> Outcome {
+        if self.model.is_some() {
+            let fault = self.faults.as_ref().and_then(|faults| faults.next());
+            if let Some(Fault::Fail(failure)) = fault {
+                return Err(failure);
+            }
+            let undo = self
+                .modelled_world()
+                .expect("checked above")
+                .clone()
+                .apply(action)?
+                .undo;
+            prepared(&undo)?;
+            if matches!(fault, Some(Fault::CrashBefore)) {
+                return self.crash().await;
+            }
+            let performed = self.modelled_world().expect("checked above").apply(action);
+            if matches!(fault, Some(Fault::CrashAfter)) {
+                return self.crash().await;
+            }
+            return performed;
+        }
+        if self.prediction.is_some() {
+            return Box::pin(self.predict(action, scope, prepared)).await;
+        }
         match action {
             Action::InstallRuntime { url, sha256, size } => {
                 let relay = Relay {
@@ -437,6 +955,9 @@ impl Performer {
                 performed.undo.push(Action::DaemonReload);
                 return Ok(performed);
             }
+            Action::CreateRepository { user } => {
+                return Box::pin(self.create_repository(user, prepared, scope)).await;
+            }
             Action::Commit => return Box::pin(self.commit(prepared)).await,
             _ => {}
         }
@@ -458,6 +979,13 @@ impl Performer {
                     Box::pin(self.reclaim_by_copy(path, *expect, *owner, *mode, scope, prepared))
                         .await
                 }
+                (
+                    Action::SetAside { path, expect },
+                    Err(Failure::Io {
+                        kind: std::io::ErrorKind::CrossesDevices,
+                        ..
+                    }),
+                ) => Box::pin(self.set_aside_by_copy(path, *expect, scope, prepared)).await,
                 (Action::ReclaimTree { .. }, Ok(performed)) => {
                     let asides = performed
                         .undo
@@ -503,6 +1031,10 @@ impl Performer {
     }
 
     pub async fn adopt(&mut self, pending: Vec<PathBuf>, scope: &Scope) -> Result<(), Failure> {
+        if let Some(mut world) = self.modelled_world() {
+            world.adopt(pending);
+            return Ok(());
+        }
         let mut theirs: BTreeMap<u32, Vec<PathBuf>> = BTreeMap::new();
         let mut ours = Vec::new();
         let running = nix::unistd::geteuid().as_raw();
@@ -512,7 +1044,9 @@ impl Performer {
                 .owner_of(&path)
                 .or(home::owner(&self.files, &path))
             {
-                Some(uid) if uid != running => theirs.entry(uid).or_default().push(path),
+                Some(uid) if uid != running && !self.files.holds_other_than(&path, uid) => {
+                    theirs.entry(uid).or_default().push(path);
+                }
                 _ => ours.push(path),
             }
         }
@@ -545,7 +1079,7 @@ impl Journal for Vec<Record> {
 }
 
 fn journaled(record: &Record) -> Progress {
-    Progress::Journaled(mix_core::trace::journaled(record))
+    Progress::Journaled(mix_core::report::trace::journaled(record))
 }
 
 fn keep(journal: &mut dyn Journal, record: &Record, tree: &mut Tree, node: NodeId, traced: bool) {
@@ -557,7 +1091,7 @@ fn keep(journal: &mut dyn Journal, record: &Record, tree: &mut Tree, node: NodeI
         Err(failure) => {
             let _ = tree.warn(
                 node,
-                mix_core::diagnose::warning(
+                mix_core::report::diagnose::warning(
                     Code::JournalUnwritable,
                     "could not record progress in the journal",
                     &failure,
@@ -611,11 +1145,11 @@ pub async fn drive<'r>(
         let next = runner.step(tree, input.take());
         match next {
             Next::Observe(queries) => {
-                let facts = performer.observe(&queries).await;
+                let facts = performer.observe(&queries, scope).await;
                 if traced && let Ok(found) = &facts {
                     let _ = tree.progress(
                         runner.current_node().unwrap_or(ROOT),
-                        Progress::Observed(mix_core::trace::observed(&queries, found)),
+                        Progress::Observed(mix_core::report::trace::observed(&queries, found)),
                     );
                 }
                 input = Some(Input::Facts(facts));
@@ -727,8 +1261,8 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use mix_core::action::{Expect, Kind};
-    use mix_core::plan::{StepSpec, Verdict};
+    use mix_core::effect::{Expect, Kind};
+    use mix_core::run::{StepSpec, Verdict};
     use mix_events::v1::{Cancellation, Command};
     use mix_events::{Outbox, ROOT, Start, validate};
 
@@ -772,11 +1306,13 @@ mod tests {
         activity.connect(Some(sender));
         mix_exec::Watch::started(&activity, "nix build .#hello");
         activity.build_started("/nix/store/x-hello.drv");
-        activity.signal(Signal::Warning(Box::new(mix_core::diagnose::warning(
-            Code::GitRecordFailed,
-            "could not record the change in git",
-            &Failure::Cancelled,
-        ))));
+        activity.signal(Signal::Warning(Box::new(
+            mix_core::report::diagnose::warning(
+                Code::GitRecordFailed,
+                "could not record the change in git",
+                &Failure::Cancelled,
+            ),
+        )));
 
         let outbox = Arc::new(Outbox::new("request", || {}));
         let mut tree = Tree::new(
@@ -818,8 +1354,8 @@ mod tests {
             self.key.into()
         }
 
-        fn title(&self) -> mix_core::plan::Title {
-            mix_core::plan::Title::new(mix_events::v1::Verb::Creating, "ensure")
+        fn title(&self) -> mix_core::run::Title {
+            mix_core::run::Title::new(mix_events::v1::Verb::Creating, "ensure")
         }
 
         fn queries(&self) -> Vec<Query> {
@@ -1076,6 +1612,175 @@ mod tests {
                     total: Some(10)
                 }))
             ]
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn a_change_git_cannot_record_still_takes_effect_and_says_so() {
+        let home = tempfile::tempdir().unwrap();
+        let user = InvokingUser {
+            uid: nix::unistd::Uid::current().as_raw(),
+            gid: nix::unistd::Gid::current().as_raw(),
+            name: "mix-user".to_string(),
+            home: home.path().to_path_buf(),
+        };
+        let profile_git = home.path().join(".nix-profile/bin/git");
+        std::fs::create_dir_all(profile_git.parent().unwrap()).unwrap();
+        std::fs::write(&profile_git, "not a program").unwrap();
+        let state_dir = mix_state_dir(&user.home);
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(
+            state_dir.join(mix_core::declared::paths::FLAKE_NIX),
+            "flake-content",
+        )
+        .unwrap();
+        let mut performer = Performer::new(Files::open(Path::new("/"), "r1").unwrap());
+        let mut signals = Vec::new();
+
+        let outcome = performer
+            .perform(
+                &Action::RecordState { user: user.clone() },
+                &Scope::root(),
+                &mut |signal| signals.push(signal),
+                &mut |_: &[Action]| Ok(()),
+            )
+            .await;
+
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(matches!(
+            signals.as_slice(),
+            [Signal::Warning(warning)] if warning.code() == Code::GitRecordFailed
+        ));
+    }
+
+    #[tokio::test]
+    async fn the_running_program_is_compared_through_its_proc_link() {
+        let mut performer = Performer::new(Files::open(Path::new("/"), "r1").unwrap());
+        let running = std::env::current_exe().unwrap();
+
+        let facts = performer
+            .observe(
+                &[Query::Program {
+                    path: running,
+                    source: mix_core::declared::paths::RUNNING_PROGRAM.into(),
+                }],
+                &Scope::root(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            facts,
+            [Fact::Program(mix_core::effect::ProgramFacts {
+                same: true,
+                source: None
+            })]
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn a_prediction_answers_from_what_it_predicted_and_the_machine_is_left_alone() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("etc")).unwrap();
+        std::fs::write(root.path().join("etc/nix.conf"), "legacy\n").unwrap();
+        let before = listing(root.path());
+        let me = nix::unistd::Uid::current().as_raw();
+        let mut performer =
+            Performer::predicting(Files::open_trusting(root.path(), "r1", me).unwrap());
+        let scope = Scope::root();
+        let Fact::Path(found) = performer
+            .observe(&[Query::Path("/etc/nix.conf".into())], &scope)
+            .await
+            .unwrap()
+            .remove(0)
+        else {
+            panic!("a path is observed as a path");
+        };
+        let mut undone = Vec::new();
+
+        for action in [
+            Action::PutFile {
+                path: "/etc/nix.conf".into(),
+                contents: Arc::from(&b"trusted-users = root\n"[..]),
+                mode: 0o644,
+                owner: None,
+                expect: Expect::Present(found.id.unwrap()),
+            },
+            Action::CreateDirs {
+                path: "/nix/var".into(),
+                mode: 0o755,
+                owner: None,
+            },
+        ] {
+            let performed = performer
+                .perform(&action, &scope, &mut |_| {}, &mut |undo: &[Action]| {
+                    undone.extend_from_slice(undo);
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            assert!(!performed.undo.is_empty(), "{action:?}");
+        }
+        let facts = performer
+            .observe(
+                &[
+                    Query::Contents("/etc/nix.conf".into()),
+                    Query::Path("/nix/var".into()),
+                ],
+                &scope,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            facts[0],
+            Fact::Contents(Some(Arc::from(&b"trusted-users = root\n"[..])))
+        );
+        assert!(matches!(
+            &facts[1],
+            Fact::Path(PathFacts {
+                kind: Kind::Directory,
+                ..
+            })
+        ));
+        assert_eq!(listing(root.path()), before);
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("etc/nix.conf")).unwrap(),
+            "legacy\n"
+        );
+        assert!(!undone.is_empty());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn a_prediction_refuses_what_the_machine_would_refuse() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("etc")).unwrap();
+        std::fs::write(root.path().join("etc/nix.conf"), "legacy\n").unwrap();
+        let me = nix::unistd::Uid::current().as_raw();
+        let mut performer =
+            Performer::predicting(Files::open_trusting(root.path(), "r1", me).unwrap());
+
+        let refused = performer
+            .perform(
+                &Action::PutFile {
+                    path: "/etc/nix.conf".into(),
+                    contents: Arc::from(&b"x"[..]),
+                    mode: 0o644,
+                    owner: None,
+                    expect: Expect::Absent,
+                },
+                &Scope::root(),
+                &mut |_| {},
+                &mut |_: &[Action]| Ok(()),
+            )
+            .await;
+
+        assert!(
+            matches!(refused, Err(Failure::Conflict { .. })),
+            "{refused:?}"
         );
     }
 }

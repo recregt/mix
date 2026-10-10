@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     container:
-      image: ghcr.io/recregt/mix-nix-test@sha256:e9f551ac9ed040e69ca69f0a61a1207adf8ba1a8103e1d3b6d6b28f31eb8b43e # latest
+      image: ghcr.io/recregt/mix-nix-test@sha256:fa53d429adf376b7d7b9541b52167ccc560a6086077dc40654b601ced8ac6c11 # latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -33,4 +33,47 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - run: cargo test --workspace --locked -- --include-ignored
+      - uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
+        with:
+          tool: cargo-insta@1.49.0
+
+      - run: cargo metadata --locked --format-version 1 > /dev/null
+
+      - run: cargo insta test --workspace --check --unreferenced=reject
+
+      - name: Every snapshot is named after its test or given a name
+        run: |
+          if find crates -path '*/snapshots/*' -name '*-[0-9]*.snap' | grep .; then
+            echo "these snapshots were numbered by insta; name each one" >&2
+            exit 1
+          fi
+
+  sandbox:
+    name: Nix Sandbox
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+
+      - run: nix flake check -L
+
+  contract:
+    name: Nix Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: ghcr.io/recregt/mix-nix-test@sha256:fa53d429adf376b7d7b9541b52167ccc560a6086077dc40654b601ced8ac6c11 # latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - run: cargo test --workspace --locked -- --ignored

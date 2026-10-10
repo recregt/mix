@@ -2,25 +2,22 @@
 //! it should be, and reports what it finds. `mix repair` uses the same checks to fix those
 //! targets. Because both rely on the same logic, detection and repair never go out of sync.
 
-use std::path::Path;
-
-use mix_core::action::Failure;
-use mix_core::health::{self, wire};
+use mix_core::effect::Failure;
+use mix_core::ops::health;
+use mix_core::report::inspection;
 use mix_events::v1::{
     DoctorRequest, DoctorResult, Inspection, InspectionResult, Plan, node_finished, node_started,
 };
 use mix_events::{Ending, ROOT, Start};
 
 use crate::Context;
-use crate::drive::Performer;
-use crate::effect::files::Files;
 use crate::request::{Concluded, Root};
 use crate::target::Finding;
 
-use mix_core::health::HealthReport;
+use mix_core::ops::health::HealthReport;
 
 pub(crate) async fn audit(ctx: &Context, root: &mut Root, _request: &DoctorRequest) -> Concluded {
-    let items = mix_core::targets::targets(ctx.user.as_ref(), &ctx.policy);
+    let items = mix_core::declared::targets::targets(ctx.user.as_ref(), &ctx.policy);
     let tree = &mut root.tree;
     let plan = tree
         .start(
@@ -29,11 +26,14 @@ pub(crate) async fn audit(ctx: &Context, root: &mut Root, _request: &DoctorReque
                 .planned(items.iter().map(|target| target.label().into_owned())),
         )
         .expect("the root is open");
-    let mut performer = Files::open(Path::new("/"), "audit").map(Performer::new);
+    let mut performer = ctx.performer();
     let mut reports = Vec::with_capacity(items.len());
     for target in &items {
         let (finding, drift) = match &mut performer {
-            Ok(performer) => match performer.observe(&health::queries(target)).await {
+            Ok(performer) => match performer
+                .observe(&health::queries(target), &ctx.scope)
+                .await
+            {
                 Ok(facts) => (
                     health::classify(target, &facts),
                     health::drift(target, &facts),
@@ -54,7 +54,7 @@ pub(crate) async fn audit(ctx: &Context, root: &mut Root, _request: &DoctorReque
                 name.clone(),
                 node_started::Kind::Inspection(Inspection {
                     target: name.clone(),
-                    category: wire::category(target.category()) as i32,
+                    category: inspection::category(target.category()) as i32,
                 }),
             ),
         ) {
@@ -62,8 +62,8 @@ pub(crate) async fn audit(ctx: &Context, root: &mut Root, _request: &DoctorReque
                 node,
                 Ending::succeeded().with_result(node_finished::Result::Inspection(
                     InspectionResult {
-                        finding: finding.map(wire::finding),
-                        drift: drift.as_ref().map(wire::drift),
+                        finding: finding.clone().map(inspection::finding),
+                        drift: drift.as_ref().map(inspection::drift),
                     },
                 )),
             );
@@ -76,7 +76,7 @@ pub(crate) async fn audit(ctx: &Context, root: &mut Root, _request: &DoctorReque
         });
     }
     let result = DoctorResult {
-        reports: reports.iter().map(wire::report).collect(),
+        reports: reports.iter().map(inspection::report).collect(),
     };
     let _ = tree.finish(plan, Ending::succeeded());
     let healthy = reports.iter().all(HealthReport::healthy);
@@ -97,15 +97,15 @@ fn kind_of(failure: &Failure) -> std::io::ErrorKind {
 mod tests {
     use std::path::PathBuf;
 
-    use mix_core::identity::InvokingUser;
+    use mix_core::declared::identity::InvokingUser;
     use mix_events::v1::InspectionReport;
     use mix_events::v1::command::Request;
 
     use super::*;
     use crate::request::ran::{Ran, ran};
 
-    fn user_config() -> mix_core::targets::UserConfig {
-        mix_core::targets::UserConfig {
+    fn user_config() -> mix_core::declared::targets::UserConfig {
+        mix_core::declared::targets::UserConfig {
             user: InvokingUser {
                 uid: 1000,
                 gid: 1000,
@@ -121,7 +121,7 @@ mod tests {
 
     fn session() -> crate::Session {
         crate::Session::new(mix_exec::Scope::root())
-            .with_policy(mix_core::policy::Policy::default())
+            .with_policy(mix_core::declared::policy::Policy::default())
     }
 
     async fn audited(session: crate::Session) -> (Ran, Vec<InspectionReport>) {
@@ -138,7 +138,11 @@ mod tests {
         let (_, reports) = audited(session()).await;
         assert_eq!(
             reports.len(),
-            mix_core::targets::targets(None, &mix_core::policy::Policy::default()).len()
+            mix_core::declared::targets::targets(
+                None,
+                &mix_core::declared::policy::Policy::default()
+            )
+            .len()
         );
     }
 
@@ -150,7 +154,11 @@ mod tests {
 
         assert_eq!(
             reports.len(),
-            mix_core::targets::targets(Some(&cfg), &mix_core::policy::Policy::default()).len(),
+            mix_core::declared::targets::targets(
+                Some(&cfg),
+                &mix_core::declared::policy::Policy::default()
+            )
+            .len(),
             "every target of the injected config must be reported"
         );
         assert!(reports.len() > audited(session()).await.1.len());

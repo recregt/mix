@@ -1,16 +1,18 @@
-use std::path::Path;
-
-use mix_core::change::{Change, NewerList, Unrenderable};
-use mix_core::plan::{Runner, StepSpec, Verdict, diagnostic};
-use mix_core::targets::UserConfig;
+use mix_core::declared::targets::UserConfig;
+use mix_core::ops::change::{Change, NewerList, Unrenderable};
+use mix_core::report::diagnose::diagnostic;
+use mix_core::run::{Runner, StepSpec, Verdict};
 use mix_events::v1::{InstallResult, RemoveResult, node_finished};
 use mix_events::{Ending, ROOT};
 
 use crate::Context;
-use crate::drive::{Journal, Performer, drive};
-use crate::effect::files::Files;
+use mix_events::v1::Code;
+
+use crate::drive::{Performer, drive};
 use crate::effect::generations::ProfileContext;
-use crate::profile::state::{self, Invalid, Settled, Source};
+use crate::effect::home::core_error;
+
+use crate::profile::state::{Invalid, Settled, Source};
 use crate::request::{Concluded, Root};
 
 #[derive(Debug, thiserror::Error)]
@@ -32,6 +34,9 @@ pub enum Error {
 
     #[error("no managed environment was found for the invoking user")]
     NotBootstrapped,
+
+    #[error("an interrupted request could not be put back, so nothing more was changed")]
+    Unrecovered,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -51,8 +56,52 @@ impl From<NewerList> for Error {
     }
 }
 
-pub fn settled(cfg: &UserConfig, locked: &crate::request::Locked) -> Settled {
-    state::settle(&cfg.user.home, locked)
+pub async fn begin(
+    ctx: &Context,
+    root: &mut Root,
+) -> std::result::Result<Performer, Box<Concluded>> {
+    let performer = match ctx.performer() {
+        Ok(performer) => performer,
+        Err(source) => {
+            return Err(Box::new(root.refuse(Error::Core(mix_core::Error::Io {
+                path: "/".into(),
+                source,
+            }))));
+        }
+    };
+    let mut performer = performer.with_profile(ProfileContext {
+        mirror: ctx.mirror().map(str::to_string),
+    });
+    if !crate::ops::recover_interrupted(ctx, &mut root.tree, &mut performer, false).await {
+        return Err(Box::new(root.refuse(Error::Unrecovered)));
+    }
+    Ok(performer)
+}
+
+pub async fn settled(
+    performer: &mut Performer,
+    cfg: &UserConfig,
+    scope: &mix_exec::Scope,
+) -> Settled {
+    let state = mix_core::declared::paths::mix_state_dir(&cfg.user.home)
+        .join(mix_core::declared::paths::STATE_FILE);
+    let facts = performer
+        .observe(
+            &[
+                mix_core::effect::Query::Contents(state),
+                mix_core::effect::Query::ActiveList(cfg.user.clone()),
+            ],
+            scope,
+        )
+        .await
+        .unwrap_or_default();
+    let text = |index: usize| match facts.get(index) {
+        Some(mix_core::effect::Fact::Contents(Some(bytes))) => {
+            Some(String::from_utf8_lossy(bytes).into_owned())
+        }
+        _ => None,
+    };
+    mix_core::ops::change::settle(text(0).as_deref(), text(1).as_deref())
 }
 
 pub enum Verb {
@@ -88,54 +137,81 @@ impl Verb {
 pub async fn run(
     ctx: &Context,
     root: &mut Root,
+    performer: Performer,
     cfg: &UserConfig,
     verb: Verb,
     change: &Change,
-    journal: &mut dyn Journal,
 ) -> Concluded {
-    let steps = match mix_core::change::steps(&cfg.user, change, verb.doing()) {
+    let steps = match mix_core::ops::change::steps(&cfg.user, change, verb.doing()) {
         Ok(steps) => steps,
         Err(error) => return root.refuse(Error::from(error)),
     };
-    perform(ctx, root, steps, || verb.result(change), journal).await
+    perform(ctx, root, performer, steps, || verb.result(change)).await
 }
 
 pub async fn perform(
     ctx: &Context,
     root: &mut Root,
+    mut performer: Performer,
     steps: Vec<Box<dyn StepSpec>>,
     result: impl FnOnce() -> node_finished::Result,
-    journal: &mut dyn Journal,
 ) -> Concluded {
     let verdict = if steps.is_empty() {
         Verdict::Succeeded
     } else {
-        let files = match Files::open(Path::new("/"), &ctx.request.id) {
-            Ok(files) => files,
-            Err(source) => {
-                return root.refuse(Error::Core(mix_core::Error::Io {
-                    path: "/".into(),
-                    source,
-                }));
-            }
-        };
-        let mut performer = Performer::new(files).with_profile(ProfileContext {
-            mirror: ctx.mirror().map(str::to_string),
-        });
         let mut runner = Runner::new(ROOT, steps);
-        drive(
+        if ctx.dry_run {
+            let verdict = drive(
+                &mut runner,
+                &mut root.tree,
+                &mut performer,
+                &ctx.scope,
+                &root.stopped,
+                &mut Vec::new(),
+                &mut ctx.relay(),
+            )
+            .await
+            .verdict
+            .clone();
+            return conclude(root, verdict, result);
+        }
+        let mut journal = match ctx.journal(&ctx.journals) {
+            Ok(journal) => journal,
+            Err(failure) => return root.refuse(Error::Core(core_error(failure, &ctx.journals))),
+        };
+        let report = drive(
             &mut runner,
             &mut root.tree,
             &mut performer,
             &ctx.scope,
             &root.stopped,
-            journal,
+            &mut journal,
             &mut ctx.relay(),
         )
-        .await
-        .verdict
-        .clone()
+        .await;
+        let verdict = report.verdict.clone();
+        if report.rollback_failures.is_empty()
+            && let Err(failure) = journal.finish()
+        {
+            let _ = root.tree.warn(
+                ROOT,
+                mix_core::report::diagnose::warning(
+                    Code::CleanupIncomplete,
+                    "could not remove the finished journal",
+                    &failure,
+                ),
+            );
+        }
+        verdict
     };
+    conclude(root, verdict, result)
+}
+
+fn conclude(
+    root: &mut Root,
+    verdict: Verdict,
+    result: impl FnOnce() -> node_finished::Result,
+) -> Concluded {
     root.conclude(match verdict {
         Verdict::Succeeded => Ending::succeeded().with_result(result()),
         Verdict::Failed { failure, .. } => Ending::failed(diagnostic(&failure)),
@@ -145,7 +221,7 @@ pub async fn perform(
 
 #[cfg(test)]
 mod tests {
-    use mix_core::state::StateManifest;
+    use mix_core::declared::state::StateManifest;
 
     use super::*;
 

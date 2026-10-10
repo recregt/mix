@@ -197,6 +197,14 @@ pub fn explanation(code: Code) -> Explanation {
             "`--mirror` must be an http or https URL, and `--mirror-key` a single `<name>:<key>` entry.",
             ["pass the settings in that form", "run the command again"]
         ),
+        Code::UnsupportedProgram => explained!(
+            "A program `mix` runs is older than the oldest version it supports.",
+            "`mix` relies on behavior that older releases of the program do not have, so it stops instead of guessing.",
+            [
+                "install a newer version, or add one to your Nix profile",
+                "run the command again"
+            ]
+        ),
         Code::GitRecordFailed => explained!(
             "The change was made, but recording it in git failed.",
             "`mix` keeps your package list in a git repository so every change can be seen and undone. Committing fails most often because `git` is missing or the repository belongs to another user.",
@@ -264,6 +272,16 @@ pub fn explanation(code: Code) -> Explanation {
             "The privileged helper stopped before it answered.",
             "`mix` starts a helper with administrator rights for this command. Whatever it had changed is undone by the next command.",
             ["run the command again to finish"]
+        ),
+        Code::Usage => explained!(
+            "The command line was not one `mix` understands.",
+            "A subcommand, flag or value was misspelled, missing, or given where it does not belong.",
+            ["run `mix help` to see the commands and their flags"]
+        ),
+        Code::DaemonOutdated => explained!(
+            "The running `mix` daemon is older than the `mix` that sent the request.",
+            "The daemon does the work for every command after `mix bootstrap`, and it was installed by an earlier `mix`. A request can carry settings an older daemon does not know, such as `--dry-run`, and an older daemon would carry the request out without them. So `mix` refused to send it, and nothing was changed.",
+            ["run `mix bootstrap` to install the daemon that matches this `mix`"]
         ),
         Code::VersionMismatch => explained!(
             "The privileged helper is a different version of `mix` than the command that started it.",

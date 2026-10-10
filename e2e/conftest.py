@@ -55,11 +55,7 @@ def pytest_xdist_auto_num_workers(config):
 
 def pytest_collection_modifyitems(items):
     known = resources.snapshotted(os.environ.get("MIX_TEST_SESSION", ""))
-    items.sort(
-        key=lambda item: (
-            -known[item.nodeid].seconds if item.nodeid in known else -math.inf
-        )
-    )
+    items.sort(key=lambda item: -known[item.nodeid].seconds if item.nodeid in known else -math.inf)
 
 
 def pytest_terminal_summary(terminalreporter, config):

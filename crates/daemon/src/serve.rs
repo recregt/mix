@@ -30,11 +30,15 @@ fn stopped(reason: String) -> ExitCode {
     ExitCode::FAILURE
 }
 
-fn serving(count: usize) -> String {
-    match count {
+fn serving(count: usize, waiting: usize) -> String {
+    let serving = match count {
         0 => "Waiting for requests".to_string(),
         1 => "Serving 1 request".to_string(),
         count => format!("Serving {count} requests"),
+    };
+    match waiting {
+        0 => serving,
+        waiting => format!("{serving}, {waiting} waiting for a lock"),
     }
 }
 
@@ -75,21 +79,25 @@ pub async fn serve() -> ExitCode {
     if stopping {
         return ExitCode::SUCCESS;
     }
-    crate::notify::status(&serving(0));
+    let mut waiting = host.locks.waiting();
+    crate::notify::status(&serving(0, 0));
     let mut connections = tokio::task::JoinSet::new();
     let ended = loop {
         tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => {
                     connections.spawn(mix_rpc::serve_connection(host.clone(), stream));
-                    crate::notify::status(&serving(connections.len()));
+                    crate::notify::status(&serving(connections.len(), *waiting.borrow()));
                 }
                 Err(error) => break Ended::Failed(format!("accepting a connection failed: {error}")),
             },
             _ = terminate.recv() => break Ended::Stopped,
             _ = drain.recv() => break Ended::Drained,
+            Ok(()) = waiting.changed() => {
+                crate::notify::status(&serving(connections.len(), *waiting.borrow()));
+            }
             Some(_) = connections.join_next(), if !connections.is_empty() => {
-                crate::notify::status(&serving(connections.len()));
+                crate::notify::status(&serving(connections.len(), *waiting.borrow()));
             }
         }
     };
@@ -106,7 +114,7 @@ pub async fn serve() -> ExitCode {
     while connections.join_next().await.is_some() {}
     match ended {
         Ended::Stopped => ExitCode::SUCCESS,
-        Ended::Drained => ExitCode::from(mix_core::targets::MIX_DAEMON_DRAINED),
+        Ended::Drained => ExitCode::from(mix_core::declared::targets::MIX_DAEMON_DRAINED),
         Ended::Failed(reason) => stopped(reason),
     }
 }
@@ -119,10 +127,19 @@ enum Ended {
 
 #[cfg(test)]
 mod tests {
+    use super::serving;
+
+    #[test]
+    fn the_status_counts_the_requests_served_and_the_ones_waiting_for_a_lock() {
+        assert_eq!(serving(0, 0), "Waiting for requests");
+        assert_eq!(serving(1, 0), "Serving 1 request");
+        assert_eq!(serving(3, 2), "Serving 3 requests, 2 waiting for a lock");
+    }
+
     #[test]
     fn the_installed_socket_listens_where_the_client_dials() {
         assert!(
-            mix_core::targets::MIX_DAEMON_SOCKET
+            mix_core::declared::targets::MIX_DAEMON_SOCKET
                 .contains(&format!("ListenStream={}\n", mix_rpc::SOCKET_PATH))
         );
     }

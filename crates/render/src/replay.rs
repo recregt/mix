@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -62,6 +61,7 @@ fn command() -> Start {
         Command {
             mix_version: "0.1.0".into(),
             schema_minor: mix_events::SCHEMA_MINOR,
+            dry_run: false,
             request: Some(Request::Install(InstallRequest {
                 packages: vec!["hello".into()],
             })),
@@ -208,6 +208,11 @@ fn installed() -> Vec<Envelope> {
         .unwrap();
     tree.finish(activity, Ending::succeeded()).unwrap();
     for progress in [
+        Progress::Waiting(LockWait {
+            lock: "/home/ciuser/.local/state/nix/profiles/profile.lock".into(),
+            holder: Some("ciuser".into()),
+            command: Some("nix-env -i hello".into()),
+        }),
         Progress::Command(CommandStarted {
             line: "/nix/var/nix/profiles/default/bin/nix build".into(),
         }),
@@ -239,10 +244,10 @@ fn installed() -> Vec<Envelope> {
     tree.finish(profile, Ending::succeeded()).unwrap();
     tree.warn(
         activate,
-        mix_core::diagnose::warning(
+        mix_core::report::diagnose::warning(
             mix_events::v1::Code::GitRecordFailed,
             "could not record the change in git",
-            &mix_core::action::Failure::CommandFailed {
+            &mix_core::effect::Failure::CommandFailed {
                 program: "git commit".into(),
                 status: Some(128),
                 output_tail: "fatal: not a git repository".into(),
@@ -402,7 +407,7 @@ fn failed() -> Vec<Envelope> {
             start(action(Operation::ActivateProfile, "ciuser's profile"), "a2"),
         )
         .unwrap();
-    let failure = mix_core::diagnose::command_failure(
+    let failure = mix_core::report::diagnose::command_failure(
         "/nix/var/nix/profiles/default/bin/nix build",
         Some(1),
         "error: attribute 'hello' missing\n       at /nix/store/x5piy362vlnbxc71zd6alpswvgsdsv55-source/home.nix:10:7:\n            9|       pkgs.git\n           10|       pkgs.hello\n             |       ^\n           11|     ];\n       Did you mean hello2?\n",
@@ -449,8 +454,8 @@ fn failed() -> Vec<Envelope> {
     outbox.drain()
 }
 
-fn drift(target: &str) -> Option<mix_core::health::Drift> {
-    let hunk = |found_line, found: &[&str], expected: &[&str]| mix_core::health::Hunk {
+fn drift(target: &str) -> Option<mix_core::ops::health::Drift> {
+    let hunk = |found_line, found: &[&str], expected: &[&str]| mix_core::ops::health::Hunk {
         found_line,
         found: found.iter().map(|line| line.to_string()).collect(),
         expected: expected.iter().map(|line| line.to_string()).collect(),
@@ -474,13 +479,13 @@ fn drift(target: &str) -> Option<mix_core::health::Drift> {
         ),
         _ => return None,
     };
-    Some(mix_core::health::Drift {
+    Some(mix_core::ops::health::Drift {
         path: path.into(),
         hunks,
     })
 }
 
-fn doctored(findings: &[(&str, Option<mix_core::health::Finding>)]) -> Vec<Envelope> {
+fn doctored(findings: &[(&str, Option<mix_core::ops::health::Finding>)]) -> Vec<Envelope> {
     let outbox = Arc::new(Outbox::new("01920000-0000-7000-8000-000000000005", || {}));
     let mut tree = Tree::new(
         Arc::clone(&outbox),
@@ -490,6 +495,7 @@ fn doctored(findings: &[(&str, Option<mix_core::health::Finding>)]) -> Vec<Envel
             Command {
                 mix_version: "0.1.0".into(),
                 schema_minor: mix_events::SCHEMA_MINOR,
+                dry_run: false,
                 request: Some(Request::Doctor(mix_events::v1::DoctorRequest::default())),
             },
         ),
@@ -498,10 +504,10 @@ fn doctored(findings: &[(&str, Option<mix_core::health::Finding>)]) -> Vec<Envel
         reports: findings
             .iter()
             .map(|(target, finding)| {
-                mix_core::health::wire::report(&mix_core::health::HealthReport {
+                mix_core::report::inspection::report(&mix_core::ops::health::HealthReport {
                     name: (*target).into(),
                     category: mix_core::Category::Filesystem,
-                    finding: *finding,
+                    finding: finding.clone(),
                     drift: drift(target),
                 })
             })
@@ -521,7 +527,7 @@ fn doctored(findings: &[(&str, Option<mix_core::health::Finding>)]) -> Vec<Envel
 
 #[test]
 fn doctor_reads_at_every_level_as_recorded() {
-    use mix_core::health::Finding;
+    use mix_core::ops::health::Finding;
 
     let healthy = doctored(&[("/nix", None), ("nix-daemon.service", None)]);
     let problems = doctored(&[
@@ -546,7 +552,7 @@ fn doctor_reads_at_every_level_as_recorded() {
             (Detail::Action, "v"),
         ] {
             golden(
-                &format!("{name}-{suffix}.txt"),
+                &format!("{name}-{suffix}"),
                 rendered(&captured, level).as_bytes(),
             );
         }
@@ -582,11 +588,12 @@ fn slot(envelope: &Envelope) -> Option<usize> {
             Progress::Observed(_) => 21,
             Progress::Journaled(_) => 22,
             Progress::Substitution(_) => 23,
+            Progress::Waiting(_) => 24,
         },
     })
 }
 
-const SLOTS: usize = 24;
+const SLOTS: usize = 25;
 
 fn captured(envelopes: &[Envelope]) -> (Vec<u8>, Captured) {
     let mut capture = Capture::start(
@@ -627,19 +634,9 @@ fn rendered(captured: &Captured, level: Detail) -> String {
 }
 
 fn golden(name: &str, observed: &[u8]) {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/golden/events")
-        .join(name);
-    if std::env::var("MIX_UPDATE_GOLDEN").is_ok_and(|value| value == "1") {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, observed).unwrap();
-    }
-    let expected = std::fs::read(&path).unwrap_or_else(|_| panic!("{} is missing", path.display()));
-    assert_eq!(
-        String::from_utf8_lossy(observed),
-        String::from_utf8_lossy(&expected),
-        "{}",
-        path.display()
+    insta::assert_snapshot!(
+        name,
+        std::str::from_utf8(observed).expect("what mix prints is UTF-8")
     );
 }
 
@@ -656,7 +653,7 @@ fn every_kind_of_event_renders_at_every_level_as_recorded() {
             seen[index] = true;
         }
         let (bytes, captured) = captured(&envelopes);
-        golden(&format!("{name}.ndjson"), &bytes);
+        golden(&format!("{name}-events"), &bytes);
         for (level, suffix) in [
             (Detail::Outcome, "quiet"),
             (Detail::Step, "default"),
@@ -664,7 +661,7 @@ fn every_kind_of_event_renders_at_every_level_as_recorded() {
             (Detail::Trace, "vv"),
         ] {
             golden(
-                &format!("{name}-{suffix}.txt"),
+                &format!("{name}-{suffix}"),
                 rendered(&captured, level).as_bytes(),
             );
         }

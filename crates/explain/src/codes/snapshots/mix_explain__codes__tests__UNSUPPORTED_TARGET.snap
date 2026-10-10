@@ -1,0 +1,15 @@
+---
+source: crates/explain/src/codes/tests.rs
+expression: shown(code)
+---
+$ mix install ripgrep
+error: `mix` doesn't support this system (armv7l-linux) yet
+
+note: `mix` runs on 64-bit Intel, AMD and ARM Linux
+
+$ mix explain unsupported-target
+UNSUPPORTED_TARGET
+
+`mix` does not support this system's architecture or operating system.
+
+`mix` runs on 64-bit Intel, AMD and ARM Linux.

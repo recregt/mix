@@ -1,0 +1,18 @@
+---
+source: crates/explain/src/codes/tests.rs
+expression: shown(code)
+---
+$ mix install ripgrep
+error: the command line isn't one `mix` understands
+
+help: run `mix help` to see the commands and their flags
+
+$ mix explain usage
+USAGE
+
+The command line was not one `mix` understands.
+
+A subcommand, flag or value was misspelled, missing, or given where it does not belong.
+
+To fix it:
+  - run `mix help` to see the commands and their flags

@@ -1,60 +1,73 @@
-use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use mix_exec::Scope;
 
-fn sleep_in(
-    request: &Scope,
-) -> tokio::task::JoinHandle<Result<std::process::Output, mix_exec::Error>> {
-    let request = request.clone();
-    tokio::spawn(async move {
-        mix_exec::Command::new("sleep")
-            .arg("30")
-            .output(&request)
-            .await
-    })
+mix_testchild::install!();
+
+fn child<'s>(steps: impl IntoIterator<Item = &'s str>) -> mix_exec::Command {
+    mix_exec::Command::new(mix_testchild::program()).args(mix_testchild::args(steps))
+}
+
+struct Running {
+    session: mix_exec::Session,
+    stdin: tokio::process::ChildStdin,
+    lines: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+}
+
+async fn running(request: &Scope) -> Running {
+    let (session, stdin, stdout) = child(["pid", "echo:got ", "sleep"])
+        .session(request)
+        .unwrap();
+    let mut lines = BufReader::new(stdout).lines();
+    lines
+        .next_line()
+        .await
+        .unwrap()
+        .expect("the child says it runs");
+    Running {
+        session,
+        stdin,
+        lines,
+    }
 }
 
 #[tokio::test]
 async fn kill_stops_every_running_child_of_the_request() {
-    let request = mix_exec::Scope::root();
-    let running = sleep_in(&request.child());
-    let shielded = sleep_in(&request.shielded());
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    let request = Scope::root();
+    let ordinary = running(&request.child()).await;
+    let shielded = running(&request.shielded()).await;
 
     request.processes().kill();
 
-    for child in [running, shielded] {
-        let output = tokio::time::timeout(Duration::from_secs(5), child)
-            .await
-            .expect("a killed child ends at once")
-            .unwrap()
-            .unwrap();
+    for child in [ordinary, shielded] {
+        let output = child.session.finish().await.unwrap();
         assert!(!output.status.success());
     }
 }
 
 #[tokio::test]
 async fn killing_one_request_leaves_another_running() {
-    let killed = mix_exec::Scope::root();
-    let other = mix_exec::Scope::root();
-    let running = sleep_in(&other);
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    let killed = Scope::root();
+    let other = Scope::root();
+    let mut alive = running(&other).await;
 
     killed.processes().kill();
     killed.processes().pause();
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
-    assert!(!running.is_finished());
-    running.abort();
+    alive.stdin.write_all(b"still here\n").await.unwrap();
+    assert_eq!(
+        alive.lines.next_line().await.unwrap().as_deref(),
+        Some("got still here"),
+        "the other request's child neither died nor froze"
+    );
+    other.processes().kill();
+    alive.session.finish().await.unwrap();
 }
 
 #[tokio::test]
 async fn a_session_talks_both_ways_and_reports_how_it_ended() {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-
-    let request = mix_exec::Scope::root();
-    let (session, mut stdin, stdout) = mix_exec::Command::new("sh")
-        .args(["-c", "read line; echo \"got $line\"; echo done >&2; exit 3"])
+    let request = Scope::root();
+    let (session, mut stdin, stdout) = child(["echo:got ", "eprint:done", "exit:3"])
         .session(&request)
         .unwrap();
 
@@ -87,35 +100,26 @@ impl mix_exec::Watch for Started {
 #[tokio::test]
 async fn a_watched_scope_hears_of_every_command_it_starts_and_how_it_ended() {
     let started = std::sync::Arc::new(Started::default());
-    let request = mix_exec::Scope::root().watched(started.clone());
+    let request = Scope::root().watched(started.clone());
 
-    mix_exec::Command::new("true")
-        .output(&request.child())
-        .await
-        .unwrap();
-    mix_exec::Command::new("echo")
-        .arg("two words")
+    child([]).output(&request.child()).await.unwrap();
+    child(["print:two words"])
         .output(&request.shielded())
         .await
         .unwrap();
-    mix_exec::Command::new("false")
-        .output(&request)
-        .await
-        .unwrap();
-    mix_exec::Command::new("true")
-        .output(&mix_exec::Scope::root())
-        .await
-        .unwrap();
+    child(["exit:1"]).output(&request).await.unwrap();
+    child([]).output(&Scope::root()).await.unwrap();
 
+    let program = mix_testchild::program().display().to_string();
     assert_eq!(
         *started.0.lock().unwrap(),
         [
-            "true",
-            "true exited Some(0)",
-            r#"echo "two words""#,
-            r#"echo "two words" exited Some(0)"#,
-            "false",
-            "false exited Some(1)"
+            format!("{program} --mix-test-child"),
+            format!("{program} --mix-test-child exited Some(0)"),
+            format!(r#"{program} --mix-test-child "print:two words""#),
+            format!(r#"{program} --mix-test-child "print:two words" exited Some(0)"#),
+            format!("{program} --mix-test-child exit:1"),
+            format!("{program} --mix-test-child exit:1 exited Some(1)"),
         ]
     );
 }

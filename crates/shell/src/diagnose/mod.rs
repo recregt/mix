@@ -1,5 +1,5 @@
-use mix_core::change::Invalid;
-use mix_core::diagnose::unrepairable;
+use mix_core::ops::change::Invalid;
+use mix_core::report::diagnose::unrepairable;
 use mix_events::v1::diagnostic::Detail;
 use mix_events::v1::{
     Cancellation, Code, ConflictDetail, FormatDetail, Host as WireHost, HostDetail, PackagesDetail,
@@ -159,6 +159,7 @@ impl Diagnose for ChangeError {
             ChangeError::NewerState(_) => Code::NewerState,
             ChangeError::NotRoot => Code::RootNotAllowed,
             ChangeError::NotBootstrapped => Code::NotBootstrapped,
+            ChangeError::Unrecovered => Code::CleanupIncomplete,
         })
     }
 
@@ -187,6 +188,9 @@ impl Diagnose for ChangeError {
             ChangeError::NotRoot => Fault::failed(Code::RootNotAllowed, self.to_string(), None),
             ChangeError::NotBootstrapped => {
                 Fault::failed(Code::NotBootstrapped, self.to_string(), None)
+            }
+            ChangeError::Unrecovered => {
+                Fault::failed(Code::CleanupIncomplete, self.to_string(), None)
             }
         }
     }

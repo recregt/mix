@@ -8,19 +8,18 @@ pub mod tarball;
 
 pub use error::{Error, Host, Result};
 
-use std::path::Path;
-
-use mix_core::action::{Digest, Failure};
-use mix_core::bootstrap::{Runtime, Settings, steps};
-use mix_core::plan::{Runner, Verdict, diagnostic};
-use mix_events::v1::{BootstrapRequest, BootstrapResult, Code, Step, node_finished, node_started};
-use mix_events::{Ending, ROOT, Start};
+use mix_core::effect::{Digest, Failure};
+use mix_core::ops::bootstrap::{Runtime, Settings, steps};
+use mix_core::report::diagnose::diagnostic;
+use mix_core::run::{Runner, Verdict};
+use mix_events::v1::{BootstrapRequest, BootstrapResult, Code, node_finished};
+use mix_events::{Ending, ROOT};
 
 use crate::Context;
 use crate::drive::{Performer, drive};
-use crate::effect::files::Files;
 use crate::effect::generations::ProfileContext;
-use crate::effect::journal::{FileJournal, JOURNAL_DIR, recover_all, unfinished};
+use crate::profile::config::observed_user_config;
+
 use crate::effect::mirror::{filter_mirror, mirror_url};
 use crate::request::{Concluded, Root};
 
@@ -103,15 +102,10 @@ pub fn error_from(failure: Failure) -> Error {
 }
 
 async fn prepare(ctx: &Context, force: bool) -> Result<(Settings, Performer)> {
-    if !crate::effect::accounts::is_root() {
+    if !ctx.host.is_root() {
         return Err(Error::NotRoot("bootstrap the managed environment"));
     }
-    preflight::check_not_nixos().await?;
-    preflight::check_not_wsl1().await?;
-    preflight::check_systemd_ready().await?;
-    if !force {
-        preflight::check_nix_not_installed(&ctx.scope).await?;
-    }
+    ctx.host.preflight(force, &ctx.scope).await?;
     let request = ctx.request.id.clone();
     let settings = Settings {
         policy: ctx.policy.clone(),
@@ -124,14 +118,26 @@ async fn prepare(ctx: &Context, force: bool) -> Result<(Settings, Performer)> {
             source,
         })?,
     };
-    let files = Files::open(Path::new("/"), &request).map_err(|source| mix_core::Error::Io {
+    let performer = ctx.performer().map_err(|source| mix_core::Error::Io {
         path: "/".into(),
         source,
     })?;
-    let performer = Performer::new(files).with_profile(ProfileContext {
+    let performer = performer.with_profile(ProfileContext {
         mirror: ctx.mirror().map(str::to_string),
     });
     Ok((settings, performer))
+}
+
+fn ending_of(verdict: &Verdict) -> Ending {
+    match verdict {
+        Verdict::Succeeded => {
+            Ending::succeeded().with_result(node_finished::Result::Bootstrap(BootstrapResult {
+                profile_snippet: mix_core::declared::paths::PROFILE_SNIPPET_DEST.to_string(),
+            }))
+        }
+        Verdict::Failed { failure, .. } => Ending::failed(diagnostic(failure)),
+        Verdict::Cancelled(cause) => Ending::cancelled(*cause),
+    }
 }
 
 pub(crate) async fn bootstrap(
@@ -139,41 +145,35 @@ pub(crate) async fn bootstrap(
     root: &mut Root,
     request: &BootstrapRequest,
 ) -> Concluded {
-    let (settings, mut performer) = match prepare(ctx, request.force).await {
+    let (mut settings, mut performer) = match prepare(ctx, request.force).await {
         Ok(prepared) => prepared,
         Err(error) => return root.refuse(error),
     };
     let scope = &ctx.scope;
     let tree = &mut root.tree;
-    let journals = Path::new(JOURNAL_DIR);
-    if !unfinished(journals).is_empty() {
-        let node = tree
-            .start(
-                ROOT,
-                Start::new(
-                    "recover",
-                    node_started::Kind::Step(Step {
-                        verb: mix_events::v1::Verb::Recovering as i32,
-                        subject: "interrupted request".to_string(),
-                    }),
-                )
-                .shielded(),
-            )
-            .expect("the root is open");
-        let recovered = recover_all(journals, &mut performer, &scope.shielded()).await;
-        for (_, failure) in &recovered.failures {
-            let _ = tree.warn(
-                node,
-                mix_core::diagnose::warning(
-                    Code::CleanupIncomplete,
-                    "could not finish an interrupted request",
-                    failure,
-                ),
-            );
-        }
-        let _ = tree.finish(node, Ending::succeeded());
+    let journals = ctx.journals.as_path();
+    crate::ops::recover_interrupted(ctx, tree, &mut performer, true).await;
+    if let Some(user) = ctx.user.as_ref().map(|cfg| cfg.user.clone()) {
+        settings.user = observed_user_config(user, &mut performer, scope)
+            .await
+            .or(settings.user);
     }
-    let mut journal = match FileJournal::create(journals, &ctx.request.id) {
+    if ctx.dry_run {
+        let mut runner = Runner::new(ROOT, steps(&settings));
+        let report = drive(
+            &mut runner,
+            &mut root.tree,
+            &mut performer,
+            scope,
+            &root.stopped,
+            &mut Vec::new(),
+            &mut ctx.relay(),
+        )
+        .await;
+        let ending = ending_of(&report.verdict);
+        return root.conclude(ending);
+    }
+    let mut journal = match ctx.journal(journals) {
         Ok(journal) => journal,
         Err(failure) => return root.refuse(error_from(failure)),
     };
@@ -188,19 +188,13 @@ pub(crate) async fn bootstrap(
         &mut ctx.relay(),
     )
     .await;
-    let ending = match &report.verdict {
-        Verdict::Succeeded => {
-            Ending::succeeded().with_result(node_finished::Result::Bootstrap(BootstrapResult {
-                profile_snippet: mix_core::paths::PROFILE_SNIPPET_DEST.to_string(),
-            }))
-        }
-        Verdict::Failed { failure, .. } => Ending::failed(diagnostic(failure)),
-        Verdict::Cancelled(cause) => Ending::cancelled(*cause),
-    };
-    if let Err(failure) = journal.finish() {
+    let ending = ending_of(&report.verdict);
+    if report.rollback_failures.is_empty()
+        && let Err(failure) = journal.finish()
+    {
         let _ = root.tree.warn(
             ROOT,
-            mix_core::diagnose::warning(
+            mix_core::report::diagnose::warning(
                 Code::CleanupIncomplete,
                 "could not remove the finished journal",
                 &failure,

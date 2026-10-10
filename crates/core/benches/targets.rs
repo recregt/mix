@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use mix_core::identity::InvokingUser;
-use mix_core::policy::Policy;
-use mix_core::targets::{UserConfig, targets, user_targets};
+use mix_core::declared::identity::InvokingUser;
+use mix_core::declared::policy::Policy;
+use mix_core::declared::targets::{UserConfig, targets, user_targets};
 
 fn main() {
     divan::main();

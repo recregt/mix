@@ -3,10 +3,10 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use mix_core::health;
-use mix_core::journal::Record;
-use mix_core::plan::Runner;
-use mix_core::targets::Target;
+use mix_core::declared::targets::Target;
+use mix_core::ops::health;
+use mix_core::run::Runner;
+use mix_core::run::journal::Record;
 use mix_events::v1::Command;
 use mix_events::{Ending, Outbox, ROOT, Start, Tree};
 use mix_shell::drive::{Performer, drive};
@@ -105,12 +105,16 @@ fn inspect_the_declared_targets(bencher: divan::Bencher, n: usize) {
     let targets = declared_tree(root.path(), n);
     let rt = runtime();
     let mut performer = performer();
+    let scope = mix_exec::Scope::root();
 
     bencher.bench_local(|| {
         rt.block_on(async {
             let mut drifted = 0usize;
             for item in divan::black_box(&targets) {
-                let facts = performer.observe(&health::queries(item)).await.unwrap();
+                let facts = performer
+                    .observe(&health::queries(item), &scope)
+                    .await
+                    .unwrap();
                 drifted += usize::from(health::classify(item, &facts).is_some());
             }
             drifted

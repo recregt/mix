@@ -1,0 +1,50 @@
+---
+source: crates/core/src/ops/change/tests.rs
+expression: "run.case(&before, &world)"
+---
+{
+  "document": {
+    "cancellation": "CANCELLATION_UNSPECIFIED",
+    "changes": [
+      {
+        "action": "CHANGE_ACTION_DELETE",
+        "operation": "OPERATION_COLLECT_GARBAGE",
+        "status": "STATUS_SUCCEEDED",
+        "step": "collect",
+        "subject": "unused store paths",
+        "undone": false,
+        "unknown": []
+      }
+    ],
+    "command": "clean",
+    "dryRun": false,
+    "exit": 0,
+    "formatVersion": "1.0",
+    "problems": [],
+    "request": "request",
+    "status": "STATUS_SUCCEEDED",
+    "steps": [
+      {
+        "key": "prune",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "old generations",
+        "undone": false,
+        "verb": "VERB_REMOVING"
+      },
+      {
+        "key": "collect",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "unused store paths",
+        "undone": false,
+        "verb": "VERB_REMOVING"
+      }
+    ],
+    "waits": [],
+    "warnings": []
+  },
+  "machine": {},
+  "performed": [
+    "CollectGarbage unused store paths",
+    "Commit changes"
+  ]
+}

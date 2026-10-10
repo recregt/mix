@@ -15,6 +15,7 @@ message HelloRequest {
 message HelloResponse {
   string version = 1;
   uint32 protocol = 2;
+  uint32 schema = 3;
 }
 
 enum Control {
