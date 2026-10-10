@@ -8,14 +8,15 @@ use mix_core::declared::identity::{
 };
 use mix_core::declared::paths::{
     DEFAULT_PROFILE_NIX_ENV, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, NIX_DAEMON_SERVICE_SRC,
-    NIX_DAEMON_SOCKET_SRC, NIX_TREE_MODE, NIX_TREE_PATHS, POLICY_FILE, STATE_FILE, mix_state_dir,
+    NIX_DAEMON_SOCKET_SRC, NIX_TREE_MODE, NIX_TREE_PATHS, POLICY_FILE, REPOSITORY_CONFIG,
+    REPOSITORY_CONFIG_CONTENTS, STATE_FILE, mix_state_dir,
 };
 use mix_core::declared::policy::Policy;
 use mix_core::effect::{
     Action, Expect, Fact, Kind as PathKind, Owner, PathFacts, ProfileFacts, Query, UserSpec,
-    rollback_order,
 };
 use mix_core::model::{Profile, World};
+use mix_core::run::journal::rollback_order;
 use mix_exec::Scope;
 use mix_shell::drive::Performer;
 use mix_shell::effect::files::Files;
@@ -329,7 +330,13 @@ fn every_profile_action_and_its_undo_match_the_model() {
         .with_dir(user.home.join(".local"), 0o755, owner)
         .with_dir(user.home.join(".local/state"), 0o755, owner)
         .with_dir(&state, 0o700, owner)
-        .with_dir(state.join(".git"), 0o755, owner);
+        .with_dir(state.join(".git"), 0o755, owner)
+        .with_file(
+            state.join(".git").join(REPOSITORY_CONFIG),
+            REPOSITORY_CONFIG_CONTENTS.as_bytes(),
+            0o644,
+            owner,
+        );
     for (file, contents) in [FLAKE_NIX, HOME_NIX, FLAKE_LOCK, STATE_FILE]
         .iter()
         .zip(&config)

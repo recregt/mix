@@ -9,7 +9,7 @@ from support.paths import REPO_ROOT
 
 USER = MIRROR_TEST_USERS[0]
 
-FIXTURES = REPO_ROOT / "crates/core/fixtures/nix"
+FIXTURES = REPO_ROOT / "crates/nixlog/fixtures/nix"
 PLAN = "/tmp/plan.nix"
 ACT_BUILD = 105
 UPDATE = os.environ.get("MIX_UPDATE_NIX_FIXTURES", "").strip().lower() in (
