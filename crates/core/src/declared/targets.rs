@@ -17,7 +17,7 @@ use crate::declared::paths::{
 };
 use crate::declared::paths::{
     GIT_DIR, HOME_MANAGER_PROFILE_NAME, JOURNAL_DIR, MIX_DAEMON_BIN, MIX_DAEMON_BIN_MODE,
-    REPOSITORY_CONFIG, REPOSITORY_CONFIG_CONTENTS, RUNNING_PROGRAM,
+    MIX_VAR_DIR_MODE, REPOSITORY_CONFIG, REPOSITORY_CONFIG_CONTENTS, RUNNING_PROGRAM,
 };
 use crate::declared::policy::Policy;
 use crate::declared::tree::{Builder, Handle, Tree};
@@ -201,7 +201,9 @@ pub enum Target<'a> {
         name: &'static str,
         src: UnitSource,
         dest: &'static str,
-        must_be_active: bool,
+    },
+    UnitActive {
+        name: &'static str,
     },
     PathExists {
         name: &'static str,
@@ -254,6 +256,7 @@ const LEFTOVERS: &str = " leftovers";
 const IN_THE_WAY: &str = " files in the way";
 const PROFILE: &str = " profile";
 const OLD_GENERATIONS: &str = " old generations";
+const ACTIVATION: &str = " activation";
 
 fn suffixed(path: &Path, suffix: &str) -> Cow<'static, str> {
     let path = text(path);
@@ -297,17 +300,8 @@ impl Target<'_> {
             Target::Group { name, gid } => Target::Group { name, gid },
             Target::GroupMember { group, user } => Target::GroupMember { group, user },
             Target::User { n, uid, gid } => Target::User { n, uid, gid },
-            Target::SystemdUnit {
-                name,
-                src,
-                dest,
-                must_be_active,
-            } => Target::SystemdUnit {
-                name,
-                src,
-                dest,
-                must_be_active,
-            },
+            Target::SystemdUnit { name, src, dest } => Target::SystemdUnit { name, src, dest },
+            Target::UnitActive { name } => Target::UnitActive { name },
             Target::PathExists {
                 name,
                 path,
@@ -373,6 +367,7 @@ impl Target<'_> {
             Target::GroupMember { user, .. } => Cow::Borrowed(user),
             Target::User { n, .. } => identity::user_name(*n),
             Target::SystemdUnit { name, .. } => Cow::Borrowed(name),
+            Target::UnitActive { name } => suffixed(Path::new(name), ACTIVATION),
             Target::PathExists { name, .. } => Cow::Borrowed(name),
             Target::History { path, .. } => suffixed(path, HISTORY),
             Target::HomeFiles { path, .. } => suffixed(path, IN_THE_WAY),
@@ -395,7 +390,7 @@ impl Target<'_> {
             Target::Group { .. } | Target::GroupMember { .. } | Target::User { .. } => {
                 Category::Identity
             }
-            Target::SystemdUnit { .. } => Category::Services,
+            Target::SystemdUnit { .. } | Target::UnitActive { .. } => Category::Services,
             Target::PathExists { .. }
             | Target::Repository { .. }
             | Target::History { .. }
@@ -527,29 +522,28 @@ fn user_tree<'a>(
         }
     };
     tree.path(state_path, state);
-    let git = tree.path(
-        repository.clone(),
-        Target::Repository {
-            path: Cow::Owned(repository.clone()),
-            user: user(),
-        },
-    );
     let config = join(&repository, REPOSITORY_CONFIG);
-    tree.path(
-        config.clone(),
-        Target::File {
-            path: Cow::Owned(config),
-            expected: Some(Cow::Borrowed(REPOSITORY_CONFIG_CONTENTS)),
-            owner,
-        },
-    );
-    tree.up(
-        git,
-        Target::History {
-            path: Cow::Owned(repository),
-            user: user(),
-        },
-    );
+    let repo = Target::Repository {
+        path: Cow::Owned(repository.clone()),
+        user: user(),
+    };
+    let config_file = Target::File {
+        path: Cow::Owned(config.clone()),
+        expected: Some(Cow::Borrowed(REPOSITORY_CONFIG_CONTENTS)),
+        owner,
+    };
+    let history = Target::History {
+        path: Cow::Owned(repository.clone()),
+        user: user(),
+    };
+    let mut deferred = Vec::new();
+    if intent.runtime.is_some() {
+        deferred.extend([repo, config_file, history]);
+    } else {
+        let git = tree.path(repository, repo);
+        tree.path(config, config_file);
+        tree.up(git, history);
+    }
     tree.path(
         profiles_dir.clone(),
         Target::Directory {
@@ -595,6 +589,9 @@ fn user_tree<'a>(
             subject,
         },
     );
+    for target in deferred {
+        tree.up(above, target);
+    }
 }
 
 fn precondition(tree: &mut Builder<'_>, path: &'static str) -> Handle {
@@ -706,8 +703,8 @@ pub fn tree_for<'a>(intent: &Intent<'a>) -> Tree<'a> {
         precondition(&mut tree, path);
     }
     directory(&mut tree, NIXBLD_HOME, NIXBLD_HOME_MODE);
-    for (path, bits) in [(MIX_VAR_DIR, 0o700), (MIX_BIN_DIR, 0o700)] {
-        parent(&mut tree, path, bits);
+    for path in [MIX_VAR_DIR, MIX_BIN_DIR] {
+        parent(&mut tree, path, MIX_VAR_DIR_MODE);
     }
     let program = tree.path(
         MIX_DAEMON_BIN,
@@ -725,44 +722,31 @@ pub fn tree_for<'a>(intent: &Intent<'a>) -> Tree<'a> {
     file(&mut tree, POLICY_FILE, policy.render());
     file(&mut tree, NIX_CONF_DEST, policy.nix_conf());
     file(&mut tree, PROFILE_SNIPPET_DEST, PROFILE_SNIPPET);
-    for path in ["/etc/systemd", SYSTEMD_UNIT_DIR] {
-        precondition(&mut tree, path);
-    }
-    for (name, src, dest, must_be_active) in [
+    precondition(&mut tree, "/etc/systemd");
+    let unit_dir = precondition(&mut tree, SYSTEMD_UNIT_DIR);
+    for (name, src, dest) in [
         (
             NIX_DAEMON_SERVICE_UNIT,
             UnitSource::File(NIX_DAEMON_SERVICE_SRC),
             NIX_DAEMON_SERVICE_DEST,
-            false,
         ),
         (
             NIX_DAEMON_SOCKET_UNIT,
             UnitSource::File(NIX_DAEMON_SOCKET_SRC),
             NIX_DAEMON_SOCKET_DEST,
-            true,
         ),
         (
             MIX_DAEMON_SERVICE_UNIT,
             UnitSource::Text(MIX_DAEMON_SERVICE),
             MIX_DAEMON_SERVICE_DEST,
-            true,
         ),
         (
             MIX_DAEMON_SOCKET_UNIT,
             UnitSource::Text(MIX_DAEMON_SOCKET),
             MIX_DAEMON_SOCKET_DEST,
-            true,
         ),
     ] {
-        let unit = tree.path(
-            dest,
-            Target::SystemdUnit {
-                name,
-                src,
-                dest,
-                must_be_active,
-            },
-        );
+        let unit = tree.path(dest, Target::SystemdUnit { name, src, dest });
         match src {
             UnitSource::File(_) => tree.refers(unit, runtime),
             UnitSource::Text(_) if name == MIX_DAEMON_SERVICE_UNIT => {
@@ -770,6 +754,13 @@ pub fn tree_for<'a>(intent: &Intent<'a>) -> Tree<'a> {
             }
             UnitSource::Text(_) => {}
         }
+    }
+    for name in [
+        NIX_DAEMON_SOCKET_UNIT,
+        MIX_DAEMON_SOCKET_UNIT,
+        MIX_DAEMON_SERVICE_UNIT,
+    ] {
+        tree.up(unit_dir, Target::UnitActive { name });
     }
     if let Some(cfg) = intent.user {
         user_tree(&mut tree, intent, cfg, members);
@@ -863,6 +854,7 @@ mod tests {
                     | Target::Leftovers { .. }
                     | Target::Activation { .. }
                     | Target::Retention { .. }
+                    | Target::UnitActive { .. }
             ) {
                 continue;
             }
@@ -953,7 +945,6 @@ mod tests {
                 name: NIX_DAEMON_SOCKET_UNIT,
                 src: UnitSource::File(NIX_DAEMON_SOCKET_SRC),
                 dest: NIX_DAEMON_SOCKET_DEST,
-                must_be_active: true,
             }
             .category(),
             Category::Services

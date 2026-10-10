@@ -529,6 +529,27 @@ expression: "again.case(&before, &world)"
         "verb": "VERB_CONFIGURING"
       },
       {
+        "key": "nix-daemon.socket activation",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nix-daemon.socket activation",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "mix-daemon.socket activation",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "mix-daemon.socket activation",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "mix-daemon.service activation",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "mix-daemon.service activation",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
         "key": "/home/alice",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/home/alice",
@@ -553,27 +574,6 @@ expression: "again.case(&before, &world)"
         "key": "/home/alice/.local/state/mix",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/home/alice/.local/state/mix",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
-        "key": "/home/alice/.local/state/mix/.git",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/home/alice/.local/state/mix/.git",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
-        "key": "/home/alice/.local/state/mix/.git/config",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/home/alice/.local/state/mix/.git/config",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
-        "key": "/home/alice/.local/state/mix/.git history",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/home/alice/.local/state/mix/.git history",
         "undone": false,
         "verb": "VERB_CONFIGURING"
       },
@@ -630,6 +630,27 @@ expression: "again.case(&before, &world)"
         "key": "/home/alice profile",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/home/alice profile",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/alice/.local/state/mix/.git",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/mix/.git",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/alice/.local/state/mix/.git/config",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/mix/.git/config",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/alice/.local/state/mix/.git history",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/mix/.git history",
         "undone": false,
         "verb": "VERB_CONFIGURING"
       },

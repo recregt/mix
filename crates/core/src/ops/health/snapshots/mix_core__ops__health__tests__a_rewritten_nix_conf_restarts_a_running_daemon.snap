@@ -636,6 +636,27 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_REPAIRING"
       },
       {
+        "key": "nix-daemon.socket activation",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nix-daemon.socket activation",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "mix-daemon.socket activation",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "mix-daemon.socket activation",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "mix-daemon.service activation",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "mix-daemon.service activation",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
         "key": "/etc/systemd/system leftovers",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/etc/systemd/system leftovers",

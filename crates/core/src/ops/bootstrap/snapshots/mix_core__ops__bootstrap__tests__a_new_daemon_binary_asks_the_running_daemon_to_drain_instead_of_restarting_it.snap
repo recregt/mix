@@ -531,6 +531,27 @@ expression: "upgraded.case(&before, &world)"
         "verb": "VERB_CONFIGURING"
       },
       {
+        "key": "nix-daemon.socket activation",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nix-daemon.socket activation",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "mix-daemon.socket activation",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "mix-daemon.socket activation",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "mix-daemon.service activation",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "mix-daemon.service activation",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
         "key": "restart-nix-daemon",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "Nix daemon",

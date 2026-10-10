@@ -575,24 +575,6 @@ expression: "run.case(&before, &world)"
       },
       {
         "action": "CHANGE_ACTION_UPDATE",
-        "operation": "OPERATION_ENABLE_UNIT",
-        "status": "STATUS_SUCCEEDED",
-        "step": "mix-daemon.service",
-        "subject": "mix-daemon.service",
-        "undone": false,
-        "unknown": []
-      },
-      {
-        "action": "CHANGE_ACTION_UPDATE",
-        "operation": "OPERATION_START_UNIT",
-        "status": "STATUS_SUCCEEDED",
-        "step": "mix-daemon.service",
-        "subject": "mix-daemon.service",
-        "undone": false,
-        "unknown": []
-      },
-      {
-        "action": "CHANGE_ACTION_UPDATE",
         "operation": "OPERATION_INSTALL_UNIT",
         "status": "STATUS_SUCCEEDED",
         "step": "mix-daemon.socket",
@@ -606,24 +588,6 @@ expression: "run.case(&before, &world)"
         "status": "STATUS_SUCCEEDED",
         "step": "mix-daemon.socket",
         "subject": "",
-        "undone": false,
-        "unknown": []
-      },
-      {
-        "action": "CHANGE_ACTION_UPDATE",
-        "operation": "OPERATION_ENABLE_UNIT",
-        "status": "STATUS_SUCCEEDED",
-        "step": "mix-daemon.socket",
-        "subject": "mix-daemon.socket",
-        "undone": false,
-        "unknown": []
-      },
-      {
-        "action": "CHANGE_ACTION_UPDATE",
-        "operation": "OPERATION_START_UNIT",
-        "status": "STATUS_SUCCEEDED",
-        "step": "mix-daemon.socket",
-        "subject": "mix-daemon.socket",
         "undone": false,
         "unknown": []
       },
@@ -667,7 +631,7 @@ expression: "run.case(&before, &world)"
         "action": "CHANGE_ACTION_UPDATE",
         "operation": "OPERATION_ENABLE_UNIT",
         "status": "STATUS_SUCCEEDED",
-        "step": "nix-daemon.socket",
+        "step": "nix-daemon.socket activation",
         "subject": "nix-daemon.socket",
         "undone": false,
         "unknown": []
@@ -676,16 +640,43 @@ expression: "run.case(&before, &world)"
         "action": "CHANGE_ACTION_UPDATE",
         "operation": "OPERATION_START_UNIT",
         "status": "STATUS_SUCCEEDED",
-        "step": "nix-daemon.socket",
+        "step": "nix-daemon.socket activation",
         "subject": "nix-daemon.socket",
         "undone": false,
         "unknown": []
       },
       {
         "action": "CHANGE_ACTION_UPDATE",
-        "operation": "OPERATION_DRAIN_SERVICE",
+        "operation": "OPERATION_ENABLE_UNIT",
         "status": "STATUS_SUCCEEDED",
-        "step": "drain-mix-daemon",
+        "step": "mix-daemon.socket activation",
+        "subject": "mix-daemon.socket",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_START_UNIT",
+        "status": "STATUS_SUCCEEDED",
+        "step": "mix-daemon.socket activation",
+        "subject": "mix-daemon.socket",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_ENABLE_UNIT",
+        "status": "STATUS_SUCCEEDED",
+        "step": "mix-daemon.service activation",
+        "subject": "mix-daemon.service",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_START_UNIT",
+        "status": "STATUS_SUCCEEDED",
+        "step": "mix-daemon.service activation",
         "subject": "mix-daemon.service",
         "undone": false,
         "unknown": []
@@ -1197,6 +1188,27 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_CONFIGURING"
       },
       {
+        "key": "nix-daemon.socket activation",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "nix-daemon.socket activation",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "mix-daemon.socket activation",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "mix-daemon.socket activation",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "mix-daemon.service activation",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "mix-daemon.service activation",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
         "key": "restart-nix-daemon",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "Nix daemon",
@@ -1205,7 +1217,7 @@ expression: "run.case(&before, &world)"
       },
       {
         "key": "drain-mix-daemon",
-        "status": "STATUS_SUCCEEDED",
+        "status": "STATUS_ALREADY_SATISFIED",
         "subject": "mix daemon",
         "undone": false,
         "verb": "VERB_RESTARTING"
@@ -1534,14 +1546,14 @@ expression: "run.case(&before, &world)"
       "/var/lib/mix": {
         "added": {
           "directory": true,
-          "mode": "0700",
+          "mode": "0755",
           "owner": "0:0"
         }
       },
       "/var/lib/mix/bin": {
         "added": {
           "directory": true,
-          "mode": "0700",
+          "mode": "0755",
           "owner": "0:0"
         }
       },
@@ -2062,19 +2074,18 @@ expression: "run.case(&before, &world)"
     "PutFile /etc/profile.d/mix-nix.sh",
     "InstallUnit mix-daemon.service",
     "DaemonReload ",
-    "EnableUnit mix-daemon.service",
-    "StartUnit mix-daemon.service",
     "InstallUnit mix-daemon.socket",
     "DaemonReload ",
-    "EnableUnit mix-daemon.socket",
-    "StartUnit mix-daemon.socket",
     "InstallUnit nix-daemon.service",
     "DaemonReload ",
     "InstallUnit nix-daemon.socket",
     "DaemonReload ",
     "EnableUnit nix-daemon.socket",
     "StartUnit nix-daemon.socket",
-    "DrainService mix-daemon.service",
+    "EnableUnit mix-daemon.socket",
+    "StartUnit mix-daemon.socket",
+    "EnableUnit mix-daemon.service",
+    "StartUnit mix-daemon.service",
     "Commit changes"
   ]
 }

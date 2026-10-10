@@ -365,16 +365,31 @@ def _start_container(image: str, name: str, binary: pathlib.Path) -> str:
         ],
         check=True,
     )
-    probe = subprocess.run(
-        ["podman", "exec", name, "systemctl", "is-system-running", "--wait"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if probe.stdout.strip() in ("running", "degraded"):
-        return name
+    while True:
+        probe = subprocess.run(
+            ["podman", "exec", name, "systemctl", "is-system-running", "--wait"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if probe.stdout.strip() in ("running", "degraded"):
+            return name
+        state = subprocess.run(
+            ["podman", "inspect", "-f", "{{json .State}}", name],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        if probe.stdout.strip() or '"Running":true' not in state:
+            break
+    logs = subprocess.run(["podman", "logs", name], capture_output=True, text=True, check=False)
     subprocess.run(["podman", "rm", "-f", name], capture_output=True, check=False)
-    raise RuntimeError(f"container systemd ended booting as {probe.stdout.strip()!r}")
+    raise RuntimeError(
+        f"container systemd ended booting as {probe.stdout.strip()!r}\n"
+        f"exec exited {probe.returncode}: {probe.stderr.strip()}\n"
+        f"state: {state}\n"
+        f"logs: {logs.stdout.strip()}{logs.stderr.strip()}"
+    )
 
 
 def create_user(container: Container, name: str, sudo: bool = False) -> None:
