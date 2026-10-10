@@ -892,24 +892,6 @@ expression: "forced.case(&installed, &replaced)"
         "action": "CHANGE_ACTION_UPDATE",
         "operation": "OPERATION_INSTALL_UNIT",
         "status": "STATUS_SUCCEEDED",
-        "step": "nix-daemon.service",
-        "subject": "nix-daemon.service",
-        "undone": false,
-        "unknown": []
-      },
-      {
-        "action": "CHANGE_ACTION_UPDATE",
-        "operation": "OPERATION_DAEMON_RELOAD",
-        "status": "STATUS_SUCCEEDED",
-        "step": "nix-daemon.service",
-        "subject": "",
-        "undone": false,
-        "unknown": []
-      },
-      {
-        "action": "CHANGE_ACTION_UPDATE",
-        "operation": "OPERATION_INSTALL_UNIT",
-        "status": "STATUS_SUCCEEDED",
         "step": "nix-daemon.socket",
         "subject": "nix-daemon.socket",
         "undone": false,
@@ -939,6 +921,24 @@ expression: "forced.case(&installed, &replaced)"
         "status": "STATUS_SUCCEEDED",
         "step": "nix-daemon.socket",
         "subject": "nix-daemon.socket",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_INSTALL_UNIT",
+        "status": "STATUS_SUCCEEDED",
+        "step": "nix-daemon.service",
+        "subject": "nix-daemon.service",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_UPDATE",
+        "operation": "OPERATION_DAEMON_RELOAD",
+        "status": "STATUS_SUCCEEDED",
+        "step": "nix-daemon.service",
+        "subject": "",
         "undone": false,
         "unknown": []
       }
@@ -1435,13 +1435,6 @@ expression: "forced.case(&installed, &replaced)"
         "verb": "VERB_CONFIGURING"
       },
       {
-        "key": "mix-daemon.service",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "mix-daemon.service",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
         "key": "mix-daemon.socket",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "mix-daemon.socket",
@@ -1449,16 +1442,23 @@ expression: "forced.case(&installed, &replaced)"
         "verb": "VERB_CONFIGURING"
       },
       {
-        "key": "nix-daemon.service",
+        "key": "nix-daemon.socket",
         "status": "STATUS_SUCCEEDED",
-        "subject": "nix-daemon.service",
+        "subject": "nix-daemon.socket",
         "undone": false,
         "verb": "VERB_CONFIGURING"
       },
       {
-        "key": "nix-daemon.socket",
+        "key": "mix-daemon.service",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "mix-daemon.service",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nix-daemon.service",
         "status": "STATUS_SUCCEEDED",
-        "subject": "nix-daemon.socket",
+        "subject": "nix-daemon.service",
         "undone": false,
         "verb": "VERB_CONFIGURING"
       },
@@ -1712,12 +1712,12 @@ expression: "forced.case(&installed, &replaced)"
     "PutFile /etc/mix/policy.json",
     "PutFile /etc/nix/nix.conf",
     "PutFile /etc/profile.d/mix-nix.sh",
-    "InstallUnit nix-daemon.service",
-    "DaemonReload ",
     "InstallUnit nix-daemon.socket",
     "DaemonReload ",
     "EnableUnit nix-daemon.socket",
     "StartUnit nix-daemon.socket",
+    "InstallUnit nix-daemon.service",
+    "DaemonReload ",
     "Commit changes"
   ]
 }

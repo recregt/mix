@@ -503,13 +503,6 @@ expression: "upgraded.case(&before, &world)"
         "verb": "VERB_CONFIGURING"
       },
       {
-        "key": "mix-daemon.service",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "mix-daemon.service",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
         "key": "mix-daemon.socket",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "mix-daemon.socket",
@@ -517,16 +510,23 @@ expression: "upgraded.case(&before, &world)"
         "verb": "VERB_CONFIGURING"
       },
       {
-        "key": "nix-daemon.service",
+        "key": "nix-daemon.socket",
         "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "nix-daemon.service",
+        "subject": "nix-daemon.socket",
         "undone": false,
         "verb": "VERB_CONFIGURING"
       },
       {
-        "key": "nix-daemon.socket",
+        "key": "mix-daemon.service",
         "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "nix-daemon.socket",
+        "subject": "mix-daemon.service",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nix-daemon.service",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nix-daemon.service",
         "undone": false,
         "verb": "VERB_CONFIGURING"
       },

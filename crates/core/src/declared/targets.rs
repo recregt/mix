@@ -728,6 +728,10 @@ pub fn tree_for<'a>(intent: &Intent<'a>) -> Tree<'a> {
     for path in ["/etc/systemd", SYSTEMD_UNIT_DIR] {
         precondition(&mut tree, path);
     }
+    let mut mix_service = None;
+    let mut mix_socket = None;
+    let mut nix_service = None;
+    let mut nix_socket = None;
     for (name, src, dest, must_be_active) in [
         (
             NIX_DAEMON_SERVICE_UNIT,
@@ -763,6 +767,13 @@ pub fn tree_for<'a>(intent: &Intent<'a>) -> Tree<'a> {
                 must_be_active,
             },
         );
+        match name {
+            MIX_DAEMON_SERVICE_UNIT => mix_service = Some(unit),
+            MIX_DAEMON_SOCKET_UNIT => mix_socket = Some(unit),
+            NIX_DAEMON_SERVICE_UNIT => nix_service = Some(unit),
+            NIX_DAEMON_SOCKET_UNIT => nix_socket = Some(unit),
+            _ => {}
+        }
         match src {
             UnitSource::File(_) => tree.refers(unit, runtime),
             UnitSource::Text(_) if name == MIX_DAEMON_SERVICE_UNIT => {
@@ -770,6 +781,15 @@ pub fn tree_for<'a>(intent: &Intent<'a>) -> Tree<'a> {
             }
             UnitSource::Text(_) => {}
         }
+    }
+    if let (Some(mix_service), Some(mix_socket)) = (mix_service, mix_socket) {
+        tree.refers(mix_service, mix_socket);
+    }
+    if let (Some(nix_service), Some(nix_socket)) = (nix_service, nix_socket) {
+        tree.refers(nix_service, nix_socket);
+    }
+    if let (Some(mix_service), Some(nix_socket)) = (mix_service, nix_socket) {
+        tree.refers(mix_service, nix_socket);
     }
     if let Some(cfg) = intent.user {
         user_tree(&mut tree, intent, cfg, members);
