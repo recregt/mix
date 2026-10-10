@@ -473,6 +473,7 @@ message RepairReport {
   string target = 1;
   bool fixed = 2;
   Diagnostic failure = 3;
+  string blocked_by = 4;
 }
 
 message DoctorResult {
@@ -485,6 +486,7 @@ message InspectionReport {
   Finding finding = 3;
   Drift drift = 4;
   Unfixable unfixable = 5;
+  string blocked_by = 6;
 }
 
 message InspectionResult {
@@ -572,12 +574,14 @@ enum NotRunReason {
   NOT_RUN_REASON_UNSPECIFIED = 0;
   NOT_RUN_REASON_NOT_REACHED = 1;
   NOT_RUN_REASON_SKIPPED = 2;
+  NOT_RUN_REASON_BLOCKED = 3;
 }
 
 message NotRun {
   fixed64 parent = 1;
   string key = 2;
   NotRunReason reason = 3;
+  string blocked_by = 4;
 }
 
 enum Severity {
@@ -646,6 +650,7 @@ enum Unfixable {
   UNFIXABLE_MISSING_RUNTIME = 3;
   UNFIXABLE_UNRECOVERED = 4;
   UNFIXABLE_IN_THE_WAY = 5;
+  UNFIXABLE_OUTSIDE = 6;
 }
 
 message Diagnostic {

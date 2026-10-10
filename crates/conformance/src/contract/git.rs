@@ -552,7 +552,16 @@ impl Real {
 
     fn tracked(&mut self) -> Option<Vec<String>> {
         let repository = repository();
+        let heads = repository.join("refs/heads");
         let repository = repository.to_string_lossy();
+        let branch = ["rev-parse", "--verify", "--quiet", "refs/heads/main"];
+        if (heads.is_dir() || !heads.exists())
+            && stdout(&["--git-dir", &repository, "symbolic-ref", "--quiet", "HEAD"]).as_deref()
+                == Some("refs/heads/main")
+            && stdout(&[&["--git-dir", &repository][..], &branch].concat()).is_none()
+        {
+            return Some(Vec::new());
+        }
         let verified = ["rev-parse", "--verify", "--quiet", "HEAD^{tree}"];
         stdout(&[&["--git-dir", &repository][..], &verified].concat())?;
         let listed = stdout(&["--git-dir", &repository, "ls-tree", "--name-only", "HEAD"])?;

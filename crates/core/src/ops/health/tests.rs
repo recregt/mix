@@ -12,7 +12,7 @@ use crate::declared::paths::{
     POLICY_FILE, STATE_FILE, mix_state_dir, repository_dir,
 };
 use crate::declared::policy::Policy;
-use crate::declared::targets::{UserConfig, targets};
+use crate::declared::targets::{UserConfig, tree};
 use crate::effect::Digest;
 use crate::model::World;
 use crate::model::testkit::{Run, Script, drive, requested};
@@ -139,23 +139,19 @@ fn bootstrapped(users: &[UserConfig]) -> World {
 
 fn audit(world: &World, config: &UserConfig) -> Vec<(String, Finding)> {
     let policy = policy();
-    targets(Some(config), &policy)
-        .iter()
-        .filter_map(|target| {
-            let facts: Vec<Fact> = queries(target)
-                .iter()
-                .map(|query| world.observe(query))
-                .collect();
-            classify(target, &facts).map(|finding| (target.label().into_owned(), finding))
-        })
-        .collect()
+    super::audit(tree(Some(config), &policy), |queries| {
+        Ok(queries.iter().map(|query| world.observe(query)).collect())
+    })
+    .into_iter()
+    .filter_map(|report| report.finding.map(|finding| (report.name, finding)))
+    .collect()
 }
 
 fn repair(world: &mut World, config: &UserConfig) -> Run {
     let policy = policy();
     drive(
         world,
-        Runner::new(ROOT, repair_steps(targets(Some(config), &policy), "repair")).independent(),
+        Runner::new(ROOT, repair_steps(tree(Some(config), &policy), "repair")).independent(),
         requested(Request::Repair(RepairRequest {})),
         &Script::default(),
     )
@@ -211,19 +207,13 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
                 let state = mix_state_dir(Path::new("/home/alice"));
                 world.files.get_mut(&state).unwrap().owner = (0, 0);
             },
-            vec![
-                (
-                    "/home/alice/.local/state/mix",
-                    Finding::Owner {
-                        actual: (0, 0),
-                        expected: (1000, 1000),
-                    },
-                ),
-                (
-                    "/home/alice/.local/state/mix/.git history",
-                    Finding::RepositoryBroken,
-                ),
-            ],
+            vec![(
+                "/home/alice/.local/state/mix",
+                Finding::Owner {
+                    actual: (0, 0),
+                    expected: (1000, 1000),
+                },
+            )],
         ),
         (
             "a rewritten configuration file",
@@ -252,10 +242,7 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
             |world: &mut World| {
                 world.groups.remove("mix-users");
             },
-            vec![
-                ("mix-users", Finding::GroupMissing),
-                ("alice", Finding::NotAMember { group: "mix-users" }),
-            ],
+            vec![("mix-users", Finding::GroupMissing)],
         ),
         (
             "a group with another gid",
@@ -382,34 +369,14 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
             |world: &mut World| {
                 remove_tree(world, &mix_state_dir(Path::new("/home/alice")));
             },
-            vec![
-                ("/home/alice/.local/state/mix", Finding::Missing),
-                ("/home/alice/.local/state/mix/home.nix", Finding::Missing),
-                ("/home/alice/.local/state/mix/flake.nix", Finding::Missing),
-                ("/home/alice/.local/state/mix/flake.lock", Finding::Missing),
-                ("/home/alice/.local/state/mix/.gitignore", Finding::Missing),
-                ("/home/alice/.local/state/mix/state", Finding::Missing),
-                ("/home/alice/.local/state/mix/.git", Finding::Missing),
-                ("/home/alice/.local/state/mix/.git/config", Finding::Missing),
-                (
-                    "/home/alice/.local/state/mix/.git history",
-                    Finding::RepositoryBroken,
-                ),
-            ],
+            vec![("/home/alice/.local/state/mix", Finding::Missing)],
         ),
         (
             "a missing repository",
             |world: &mut World| {
                 remove_tree(world, &repository_dir(Path::new("/home/alice")));
             },
-            vec![
-                ("/home/alice/.local/state/mix/.git", Finding::Missing),
-                ("/home/alice/.local/state/mix/.git/config", Finding::Missing),
-                (
-                    "/home/alice/.local/state/mix/.git history",
-                    Finding::RepositoryBroken,
-                ),
-            ],
+            vec![("/home/alice/.local/state/mix/.git", Finding::Missing)],
         ),
         (
             "a repository whose history does not verify",
@@ -430,17 +397,10 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
                 remove_tree(world, &repository);
                 world.with_file(&repository, b"gitdir: /elsewhere\n", 0o644, (1000, 1000));
             },
-            vec![
-                (
-                    "/home/alice/.local/state/mix/.git",
-                    Finding::RepositoryBroken,
-                ),
-                ("/home/alice/.local/state/mix/.git/config", Finding::Missing),
-                (
-                    "/home/alice/.local/state/mix/.git history",
-                    Finding::RepositoryBroken,
-                ),
-            ],
+            vec![(
+                "/home/alice/.local/state/mix/.git",
+                Finding::RepositoryBroken,
+            )],
         ),
         (
             "an index lock no mix command holds",
@@ -519,7 +479,7 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
                 );
             },
             vec![(
-                crate::declared::targets::LEFTOVERS,
+                "/home/alice/.local/state/mix leftovers",
                 Finding::Leftovers {
                     paths: vec!["/home/alice/.local/state/mix/.state.mix-backup-r9-1".into()],
                 },
@@ -572,7 +532,7 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
                     .insert(1000, vec![PathBuf::from("/home/alice/.bashrc")]);
             },
             vec![(
-                "/home/alice",
+                "/home/alice files in the way",
                 Finding::InTheWay {
                     paths: vec!["/home/alice/.bashrc".into()],
                 },
@@ -660,6 +620,47 @@ fn an_unfixable_finding_does_not_stop_the_others_being_fixed() {
     );
 }
 
+#[test]
+fn a_missing_home_is_one_finding_and_repair_leaves_everything_in_it_alone() {
+    let alice = user("alice", 1000);
+    let mut world = bootstrapped(std::slice::from_ref(&alice));
+    remove_tree(&mut world, Path::new("/home/alice"));
+
+    assert_eq!(
+        audit(&world, &alice),
+        [("/home/alice".to_string(), Finding::Missing)]
+    );
+    let run = repair(&mut world, &alice);
+    let report = run.report();
+    let outcome = |key: &str| {
+        report
+            .steps
+            .iter()
+            .find(|(step, _)| step == key)
+            .map(|(_, outcome)| outcome.clone())
+    };
+    assert!(matches!(
+        outcome("/home/alice"),
+        Some(StepOutcome::Failed(Failure::Unrepairable {
+            reason: Unfixable::Outside,
+            ..
+        }))
+    ));
+    for inside in [
+        "/home/alice/.local",
+        "/home/alice/.local/state/mix",
+        "/home/alice/.local/state/mix/.git history",
+        "/home/alice files in the way",
+    ] {
+        assert_eq!(
+            outcome(inside),
+            Some(StepOutcome::Blocked("/home/alice".into())),
+            "{inside}"
+        );
+    }
+    assert!(!world.files.contains_key(Path::new("/home/alice")));
+}
+
 fn r9() -> crate::effect::Abandoned {
     crate::effect::Abandoned {
         request: "r9".into(),
@@ -694,7 +695,7 @@ fn what_an_unrecovered_request_left_belongs_to_it_and_everything_else_is_cleaned
                 }
             ),
             (
-                crate::declared::targets::LEFTOVERS.to_string(),
+                format!("{} leftovers", state.display()),
                 Finding::Leftovers {
                     paths: vec![stray.display().to_string()],
                 }
@@ -842,6 +843,7 @@ fn a_report_tells_the_reader_what_repair_cannot_fix() {
         category: crate::declared::targets::Category::Filesystem,
         finding: Some(finding),
         drift: None,
+        blocked_by: None,
     };
 
     assert_eq!(

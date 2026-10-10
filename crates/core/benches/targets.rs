@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use mix_core::declared::identity::InvokingUser;
 use mix_core::declared::policy::Policy;
-use mix_core::declared::targets::{UserConfig, targets, user_targets};
+use mix_core::declared::targets::{UserConfig, tree};
 
 fn main() {
     divan::main();
@@ -24,33 +24,28 @@ fn user_config() -> UserConfig {
 }
 
 #[divan::bench]
-fn build_the_system_target_list(bencher: divan::Bencher) {
+fn build_the_system_tree(bencher: divan::Bencher) {
     let policy = Policy::default();
-    bencher.bench(|| targets(None, divan::black_box(&policy)));
+    bencher.bench(|| tree(None, divan::black_box(&policy)));
 }
 
 #[divan::bench]
-fn build_the_target_list_with_a_user(bencher: divan::Bencher) {
+fn build_the_tree_with_a_user(bencher: divan::Bencher) {
     let cfg = user_config();
     let policy = Policy::default();
-    bencher.bench(|| targets(Some(divan::black_box(&cfg)), divan::black_box(&policy)));
+    bencher.bench(|| tree(Some(divan::black_box(&cfg)), divan::black_box(&policy)));
 }
 
 #[divan::bench]
-fn build_the_per_user_target_list(bencher: divan::Bencher) {
-    let cfg = user_config();
-    bencher.bench(|| user_targets(divan::black_box(&cfg)));
-}
-
-#[divan::bench]
-fn label_and_categorize_every_target(bencher: divan::Bencher) {
+fn label_and_categorize_every_check(bencher: divan::Bencher) {
     let cfg = user_config();
     let policy = Policy::default();
-    let items = targets(Some(&cfg), &policy);
+    let tree = tree(Some(&cfg), &policy);
     bencher.bench(|| {
-        divan::black_box(&items)
+        divan::black_box(&tree)
+            .checks()
             .iter()
-            .map(|target| (target.label(), target.category()))
+            .map(|check| (check.label(), check.target.category()))
             .collect::<Vec<_>>()
     });
 }

@@ -140,6 +140,14 @@ pub fn fixable(doctor: &Value) -> Vec<String> {
         .collect()
 }
 
+fn recovery_blocked(doctor: &Value) -> bool {
+    reports(doctor).any(|report| {
+        report
+            .get("unfixable")
+            .is_some_and(|reason| reason != "UNFIXABLE_UNRECOVERED")
+    })
+}
+
 pub fn unfixable(doctor: &Value) -> bool {
     reports(doctor).any(|report| report.get("unfixable").is_some())
 }
@@ -295,13 +303,14 @@ async fn finale(model: &Model) -> Vec<String> {
     let mut found = Vec::new();
     let repaired = model.run(repair(), false, true).await;
     let world = model.snapshot();
-    if !world.logs.is_empty() {
+    let doctored = model.run(doctor(), false, false).await;
+    if !world.logs.is_empty() && !recovery_blocked(&doctored) {
         found.push(format!(
             "a final repair left journals {:?}: {repaired:#}",
             world.logs.keys()
         ));
     }
-    let left = fixable(&model.run(doctor(), false, false).await);
+    let left = fixable(&doctored);
     if !left.is_empty() {
         found.push(format!("a final repair left {left:?}"));
     }

@@ -11,7 +11,6 @@ use mix_core::effect::Failure;
 use mix_core::ops::health;
 
 use crate::profile::config::observed_user_config;
-use mix_core::declared::targets::targets;
 use mix_core::run::{Runner, StepOutcome, Verdict};
 use mix_events::v1::{Cancellation, Code, RepairRequest, RepairResult, node_finished};
 use mix_events::{Diagnose, Ending, Fault, ROOT, Stopped, Tree};
@@ -29,6 +28,7 @@ use crate::target::Error;
 pub struct RepairReport {
     pub name: String,
     pub fixed: bool,
+    pub blocked_by: Option<String>,
     /// What stopped the repair. It reaches the client as a diagnostic, and the client decides
     /// how it reads.
     pub error: Option<Error>,
@@ -39,6 +39,7 @@ impl RepairReport {
         mix_events::v1::RepairReport {
             target: self.name.clone(),
             fixed: self.fixed,
+            blocked_by: self.blocked_by.clone().unwrap_or_default(),
             failure: self.error.as_ref().and_then(|error| match error.fault() {
                 Fault::Failed(diagnostic) => Some(diagnostic),
                 Fault::Cancelled { .. } => None,
@@ -50,6 +51,16 @@ impl RepairReport {
         Self {
             name: name.into(),
             fixed: true,
+            blocked_by: None,
+            error: None,
+        }
+    }
+
+    fn blocked(name: impl Into<String>, by: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            fixed: false,
+            blocked_by: Some(by.into()),
             error: None,
         }
     }
@@ -58,6 +69,7 @@ impl RepairReport {
         Self {
             name: name.into(),
             fixed: false,
+            blocked_by: None,
             error: Some(error.into()),
         }
     }
@@ -124,7 +136,7 @@ async fn repaired(
             .or_else(|| ctx.user.clone()),
         None => None,
     };
-    let items = targets(user_config.as_ref(), &ctx.policy);
+    let items = mix_core::declared::targets::tree(user_config.as_ref(), &ctx.policy);
     if ctx.dry_run {
         let (reports, interrupted, _) = put_back(
             health::repair_steps(items, request),
@@ -231,6 +243,7 @@ async fn put_back(
                 let error = error_of(failure, &name);
                 reports.push(RepairReport::failed(name, error));
             }
+            StepOutcome::Blocked(by) => reports.push(RepairReport::blocked(name, by)),
             StepOutcome::Satisfied | StepOutcome::Cancelled(_) => {}
         }
     }
@@ -314,7 +327,13 @@ mod tests {
             Start::command("repair", Command::default()),
         );
         let repaired = put_back(
-            health::target_steps(targets, "r1"),
+            health::target_steps(
+                targets
+                    .into_iter()
+                    .map(mix_core::declared::tree::Check::alone)
+                    .collect(),
+                "r1",
+            ),
             &mut performer,
             &mut journal,
             scope,

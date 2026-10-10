@@ -1,0 +1,11 @@
+---
+source: crates/render/src/replay.rs
+expression: "std::str::from_utf8(observed).expect(\"what mix prints is UTF-8\")"
+---
+warning: couldn't repair /home/alice/.local/state/mix
+
+help: run it again with `-v` to see what went wrong
+
+warning: left /home/alice/.local/state/mix/home.nix alone because /home/alice/.local/state/mix couldn't be repaired
+    Repaired /etc/nix/nix.conf in 1.00s
+error: some problems couldn't be repaired automatically

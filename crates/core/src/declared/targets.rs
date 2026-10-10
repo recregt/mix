@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::declared::identity::{
     self, MIX_USERS_GID, MIX_USERS_GROUP, NIXBLD_GID, NIXBLD_GROUP, NIXBLD_UID_BASE,
@@ -13,13 +13,14 @@ use crate::declared::paths::{
     NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_SRC, NIX_DAEMON_SERVICE_UNIT,
     NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_SRC, NIX_DAEMON_SOCKET_UNIT, NIX_OWNERSHIP_MARKER,
     NIX_PROFILES_DIR_MODE, NIX_STORE, NIX_TREE_MODE, NIX_TREE_PATHS, POLICY_FILE,
-    PROFILE_SNIPPET_DEST, STATE_FILE, join, mix_state_dir, nix_profiles_dir,
+    PROFILE_SNIPPET_DEST, STATE_FILE, SYSTEMD_UNIT_DIR, join, mix_state_dir, nix_profiles_dir,
 };
 use crate::declared::paths::{
-    GIT_DIR, HOME_MANAGER_PROFILE_NAME, INDEX_LOCK, JOURNAL_DIR, MIX_DAEMON_BIN,
-    MIX_DAEMON_BIN_MODE, REPOSITORY_CONFIG, REPOSITORY_CONFIG_CONTENTS, RUNNING_PROGRAM,
+    GIT_DIR, HOME_MANAGER_PROFILE_NAME, JOURNAL_DIR, MIX_DAEMON_BIN, MIX_DAEMON_BIN_MODE,
+    REPOSITORY_CONFIG, REPOSITORY_CONFIG_CONTENTS, RUNNING_PROGRAM,
 };
 use crate::declared::policy::Policy;
+use crate::declared::tree::{Builder, Handle, Tree};
 
 pub const MIX_DAEMON_SOCKET: &str = "[Unit]
 Description=mix daemon socket
@@ -112,6 +113,9 @@ pub enum UnitSource {
 
 #[derive(Debug, Clone)]
 pub enum Target<'a> {
+    Precondition {
+        path: Cow<'a, Path>,
+    },
     Parent {
         path: Cow<'a, Path>,
         bits: u32,
@@ -172,7 +176,7 @@ pub enum Target<'a> {
         path: &'static str,
     },
     Leftovers {
-        user: Option<UserRef<'a>>,
+        dir: Cow<'a, Path>,
         journals: &'static str,
     },
     Generations {
@@ -185,14 +189,25 @@ pub enum Target<'a> {
     },
 }
 
-/// Name of the target that collects what interrupted writes left behind.
-pub const LEFTOVERS: &str = "leftovers of interrupted writes";
 const HISTORY: &str = " history";
+const LEFTOVERS: &str = " leftovers";
+const IN_THE_WAY: &str = " files in the way";
+
+fn suffixed(path: &Path, suffix: &str) -> Cow<'static, str> {
+    let path = text(path);
+    let mut label = String::with_capacity(path.len() + suffix.len());
+    label.push_str(&path);
+    label.push_str(suffix);
+    Cow::Owned(label)
+}
 
 impl Target<'_> {
     pub fn into_owned(self) -> Target<'static> {
         let own_path = |path: Cow<'_, Path>| Cow::Owned(path.into_owned());
         match self {
+            Target::Precondition { path } => Target::Precondition {
+                path: own_path(path),
+            },
             Target::Parent { path, bits, owner } => Target::Parent {
                 path: own_path(path),
                 bits,
@@ -242,8 +257,8 @@ impl Target<'_> {
             },
             Target::Program { path, source, mode } => Target::Program { path, source, mode },
             Target::Journals { path } => Target::Journals { path },
-            Target::Leftovers { user, journals } => Target::Leftovers {
-                user: user.map(UserRef::into_static),
+            Target::Leftovers { dir, journals } => Target::Leftovers {
+                dir: own_path(dir),
                 journals,
             },
             Target::Generations { path, user } => Target::Generations {
@@ -259,7 +274,9 @@ impl Target<'_> {
 
     pub fn label(&self) -> Cow<'_, str> {
         match self {
-            Target::Parent { path, .. } | Target::Directory { path, .. } => text(path),
+            Target::Precondition { path }
+            | Target::Parent { path, .. }
+            | Target::Directory { path, .. } => text(path),
             Target::File { path, .. } => text(path),
             Target::SeededFile { path, .. } => text(path),
             Target::Group { name, .. } => Cow::Borrowed(name),
@@ -267,24 +284,19 @@ impl Target<'_> {
             Target::User { n, .. } => identity::user_name(*n),
             Target::SystemdUnit { name, .. } => Cow::Borrowed(name),
             Target::PathExists { name, .. } => Cow::Borrowed(name),
-            Target::History { path, .. } => {
-                let path = text(path);
-                let mut label = String::with_capacity(path.len() + HISTORY.len());
-                label.push_str(&path);
-                label.push_str(HISTORY);
-                Cow::Owned(label)
-            }
-            Target::Repository { path, .. }
-            | Target::Generations { path, .. }
-            | Target::HomeFiles { path, .. } => text(path),
+            Target::History { path, .. } => suffixed(path, HISTORY),
+            Target::HomeFiles { path, .. } => suffixed(path, IN_THE_WAY),
+            Target::Leftovers { dir, .. } => suffixed(dir, LEFTOVERS),
+            Target::Repository { path, .. } | Target::Generations { path, .. } => text(path),
             Target::Program { path, .. } | Target::Journals { path } => Cow::Borrowed(path),
-            Target::Leftovers { .. } => Cow::Borrowed(LEFTOVERS),
         }
     }
 
     pub fn category(&self) -> Category {
         match self {
-            Target::Parent { .. } | Target::Directory { .. } => Category::Filesystem,
+            Target::Precondition { .. } | Target::Parent { .. } | Target::Directory { .. } => {
+                Category::Filesystem
+            }
             Target::File { path, .. } if is_configuration(path) => Category::Configuration,
             Target::File { .. } => Category::Filesystem,
             Target::SeededFile { .. } => Category::Filesystem,
@@ -302,6 +314,19 @@ impl Target<'_> {
             Target::Generations { .. } => Category::Configuration,
         }
     }
+
+    pub fn writes(&self) -> bool {
+        matches!(
+            self,
+            Target::Parent { .. }
+                | Target::Directory { .. }
+                | Target::File { .. }
+                | Target::SeededFile { .. }
+                | Target::SystemdUnit { .. }
+                | Target::Program { .. }
+                | Target::Repository { .. }
+        )
+    }
 }
 
 fn text(path: &Path) -> Cow<'_, str> {
@@ -318,248 +343,283 @@ fn is_configuration(path: &Path) -> bool {
         .any(|configuration| configuration.as_bytes() == path)
 }
 
-fn push_user_targets<'a>(items: &mut Vec<Target<'a>>, cfg: &'a UserConfig) {
+fn user_tree<'a>(tree: &mut Builder<'a>, cfg: &'a UserConfig, members: Handle) {
     let home = &cfg.user.home;
     let state_dir = mix_state_dir(home);
     let profiles_dir = nix_profiles_dir(home);
     let generations = join(&profiles_dir, HOME_MANAGER_PROFILE_NAME);
     let repository = join(&state_dir, GIT_DIR);
     let owner = Some((cfg.user.uid, cfg.user.gid));
-    items.extend(USER_PARENTS.iter().map(|parent| Target::Parent {
-        path: Cow::Owned(join(home, parent)),
-        bits: USER_PARENT_BITS,
-        owner,
-    }));
-    let file = |name: &str, expected: &'a str| Target::File {
-        path: Cow::Owned(join(&state_dir, name)),
-        expected: Some(Cow::Borrowed(expected)),
-        owner,
+    let user = || UserRef::Borrowed(&cfg.user);
+    tree.account(
+        Some(members),
+        Target::GroupMember {
+            group: MIX_USERS_GROUP,
+            user: cfg.user.name.clone(),
+        },
+    );
+    let home_node = tree.path(
+        home.clone(),
+        Target::Precondition {
+            path: Cow::Borrowed(home.as_path()),
+        },
+    );
+    tree.up(
+        home_node,
+        Target::HomeFiles {
+            path: Cow::Borrowed(home.as_path()),
+            user: user(),
+        },
+    );
+    for parent in USER_PARENTS {
+        let path = join(home, parent);
+        tree.path(
+            path.clone(),
+            Target::Parent {
+                path: Cow::Owned(path),
+                bits: USER_PARENT_BITS,
+                owner,
+            },
+        );
+    }
+    tree.path(
+        state_dir.clone(),
+        Target::Directory {
+            path: Cow::Owned(state_dir.clone()),
+            mode: MIX_STATE_DIR_MODE,
+            owner,
+        },
+    );
+    let file = |name: &str, expected: &'a str| {
+        let path = join(&state_dir, name);
+        (
+            path.clone(),
+            Target::File {
+                path: Cow::Owned(path),
+                expected: Some(Cow::Borrowed(expected)),
+                owner,
+            },
+        )
     };
-    let files = [
+    for (path, target) in [
         file(HOME_NIX, &cfg.home),
         file(FLAKE_NIX, &cfg.flake),
         file(FLAKE_LOCK, &cfg.lock),
         file(GITIGNORE, GITIGNORE_CONTENTS),
-    ];
-    let state = match &cfg.restored_state {
+    ] {
+        tree.path(path, target);
+    }
+    let (state_path, state) = match &cfg.restored_state {
         Some(restored) => file(STATE_FILE, restored),
-        None => Target::SeededFile {
-            path: Cow::Owned(join(&state_dir, STATE_FILE)),
-            seed: Cow::Borrowed(crate::declared::state::StateManifest::seed_rendered()),
+        None => {
+            let path = join(&state_dir, STATE_FILE);
+            (
+                path.clone(),
+                Target::SeededFile {
+                    path: Cow::Owned(path),
+                    seed: Cow::Borrowed(crate::declared::state::StateManifest::seed_rendered()),
+                    owner,
+                },
+            )
+        }
+    };
+    tree.path(state_path, state);
+    let git = tree.path(
+        repository.clone(),
+        Target::Repository {
+            path: Cow::Owned(repository.clone()),
+            user: user(),
+        },
+    );
+    let config = join(&repository, REPOSITORY_CONFIG);
+    tree.path(
+        config.clone(),
+        Target::File {
+            path: Cow::Owned(config),
+            expected: Some(Cow::Borrowed(REPOSITORY_CONFIG_CONTENTS)),
             owner,
         },
-    };
-    items.push(Target::Directory {
-        path: Cow::Owned(state_dir),
-        mode: MIX_STATE_DIR_MODE,
-        owner,
-    });
-    items.push(Target::Directory {
-        path: Cow::Owned(profiles_dir),
-        mode: NIX_PROFILES_DIR_MODE,
-        owner,
-    });
-    items.extend(files);
-    items.push(state);
-    items.push(Target::Repository {
-        path: Cow::Owned(repository.clone()),
-        user: UserRef::Borrowed(&cfg.user),
-    });
-    items.push(Target::File {
-        path: Cow::Owned(join(&repository, REPOSITORY_CONFIG)),
-        expected: Some(Cow::Borrowed(REPOSITORY_CONFIG_CONTENTS)),
-        owner,
-    });
-    items.push(Target::History {
-        path: Cow::Owned(repository),
-        user: UserRef::Borrowed(&cfg.user),
-    });
-    items.push(Target::GroupMember {
-        group: MIX_USERS_GROUP,
-        user: cfg.user.name.clone(),
-    });
-    items.push(Target::Generations {
-        path: Cow::Owned(generations),
-        user: UserRef::Borrowed(&cfg.user),
-    });
-    items.push(Target::HomeFiles {
-        path: Cow::Borrowed(home),
-        user: UserRef::Borrowed(&cfg.user),
-    });
+    );
+    tree.up(
+        git,
+        Target::History {
+            path: Cow::Owned(repository),
+            user: user(),
+        },
+    );
+    tree.path(
+        profiles_dir.clone(),
+        Target::Directory {
+            path: Cow::Owned(profiles_dir),
+            mode: NIX_PROFILES_DIR_MODE,
+            owner,
+        },
+    );
+    tree.path(
+        generations.clone(),
+        Target::Generations {
+            path: Cow::Owned(generations),
+            user: user(),
+        },
+    );
 }
 
-/// Every directory mix writes into for the machine and `user`: where a write it was
-/// interrupted in leaves its siblings.
-pub fn written_dirs(user: Option<&InvokingUser>) -> Vec<PathBuf> {
-    let policy = Policy::default();
-    let config = user.map(|user| UserConfig {
-        user: user.clone(),
-        flake: String::new(),
-        lock: String::new(),
-        home: String::new(),
-        restored_state: None,
-    });
-    let items = targets(config.as_ref(), &policy);
-    let mut dirs: Vec<PathBuf> = Vec::with_capacity(items.len());
-    let mut add = |path: &Path| {
-        if let Some(parent) = path.parent() {
-            dirs.push(parent.to_path_buf());
-        }
-    };
-    for item in &items {
-        match item {
-            Target::Parent { path, .. }
-            | Target::Directory { path, .. }
-            | Target::File { path, .. }
-            | Target::SeededFile { path, .. } => add(path),
-            Target::SystemdUnit { dest, .. } => add(Path::new(dest)),
-            Target::Program { path, .. } => add(Path::new(path)),
-            Target::Repository { path, .. } => {
-                add(path);
-                add(&path.join(INDEX_LOCK));
-            }
-            Target::History { .. } => {}
-            Target::Group { .. }
-            | Target::GroupMember { .. }
-            | Target::User { .. }
-            | Target::PathExists { .. }
-            | Target::Journals { .. }
-            | Target::Leftovers { .. }
-            | Target::Generations { .. }
-            | Target::HomeFiles { .. } => {}
-        }
-    }
-    dirs.sort();
-    dirs.dedup();
-    dirs
+fn precondition(tree: &mut Builder<'_>, path: &'static str) -> Handle {
+    tree.path(
+        path,
+        Target::Precondition {
+            path: Cow::Borrowed(Path::new(path)),
+        },
+    )
 }
 
-const SYSTEM_PARENTS: [(&str, u32); 5] = [
-    ("/etc/mix", 0o755),
-    ("/etc/nix", 0o755),
-    ("/etc/profile.d", 0o755),
-    (MIX_VAR_DIR, 0o700),
-    (MIX_BIN_DIR, 0o700),
-];
+fn parent(tree: &mut Builder<'_>, path: &'static str, bits: u32) -> Handle {
+    tree.path(
+        path,
+        Target::Parent {
+            path: Cow::Borrowed(Path::new(path)),
+            bits,
+            owner: Some((0, 0)),
+        },
+    )
+}
+
 const USER_PARENTS: [&str; 3] = [".local", ".local/state", ".local/state/nix"];
 const USER_PARENT_BITS: u32 = 0o700;
 
-const SYSTEM_TARGET_COUNT: usize =
-    16 + SYSTEM_PARENTS.len() + NIX_TREE_PATHS.len() + NIXBLD_USER_COUNT as usize;
-const USER_TARGET_COUNT: usize = 13 + USER_PARENTS.len();
-
-pub fn user_targets(cfg: &UserConfig) -> Vec<Target<'_>> {
-    let mut items = Vec::with_capacity(USER_TARGET_COUNT);
-    push_user_targets(&mut items, cfg);
-    items
+fn file<'a>(tree: &mut Builder<'a>, path: &'static str, expected: &'a str) -> Handle {
+    tree.path(
+        path,
+        Target::File {
+            path: Cow::Borrowed(Path::new(path)),
+            expected: Some(Cow::Borrowed(expected)),
+            owner: None,
+        },
+    )
 }
 
-pub fn targets<'a>(user_config: Option<&'a UserConfig>, policy: &'a Policy) -> Vec<Target<'a>> {
-    let mut items = Vec::with_capacity(
-        SYSTEM_TARGET_COUNT
-            + if user_config.is_some() {
-                USER_TARGET_COUNT
-            } else {
-                0
-            },
+fn directory(tree: &mut Builder<'_>, path: &'static str, mode: u32) -> Handle {
+    tree.path(
+        path,
+        Target::Directory {
+            path: Cow::Borrowed(Path::new(path)),
+            mode,
+            owner: None,
+        },
+    )
+}
+
+pub fn tree<'a>(user_config: Option<&'a UserConfig>, policy: &'a Policy) -> Tree<'a> {
+    let mut tree = Builder::new(Some(JOURNAL_DIR));
+    let nixbld = tree.account(
+        None,
+        Target::Group {
+            name: NIXBLD_GROUP,
+            gid: NIXBLD_GID,
+        },
     );
-    items.extend(SYSTEM_PARENTS.iter().map(|(path, bits)| Target::Parent {
-        path: Cow::Borrowed(Path::new(*path)),
-        bits: *bits,
-        owner: Some((0, 0)),
-    }));
-    items.push(Target::Directory {
-        path: Cow::Borrowed(Path::new("/nix")),
-        mode: 0o755,
-        owner: None,
-    });
-    items.push(Target::Directory {
-        path: Cow::Borrowed(Path::new(NIX_STORE)),
-        mode: 0o1775,
-        owner: None,
-    });
-    items.extend(NIX_TREE_PATHS.iter().map(|&path| Target::Directory {
-        path: Cow::Borrowed(Path::new(path)),
-        mode: NIX_TREE_MODE,
-        owner: None,
-    }));
-    items.push(Target::File {
-        path: Cow::Borrowed(Path::new(NIX_OWNERSHIP_MARKER)),
-        expected: Some(Cow::Borrowed("")),
-        owner: None,
-    });
-    items.push(Target::File {
-        path: Cow::Borrowed(Path::new(POLICY_FILE)),
-        expected: Some(Cow::Borrowed(policy.render())),
-        owner: None,
-    });
-    items.push(Target::File {
-        path: Cow::Borrowed(Path::new(NIX_CONF_DEST)),
-        expected: Some(Cow::Borrowed(policy.nix_conf())),
-        owner: None,
-    });
-    items.push(Target::File {
-        path: Cow::Borrowed(Path::new(PROFILE_SNIPPET_DEST)),
-        expected: Some(Cow::Borrowed(PROFILE_SNIPPET)),
-        owner: None,
-    });
-    items.push(Target::Group {
-        name: NIXBLD_GROUP,
-        gid: NIXBLD_GID,
-    });
-    items.push(Target::Group {
-        name: MIX_USERS_GROUP,
-        gid: MIX_USERS_GID,
-    });
-    items.extend((1..=NIXBLD_USER_COUNT).map(|n| Target::User {
-        n,
-        uid: NIXBLD_UID_BASE + n,
-        gid: NIXBLD_GID,
-    }));
-    items.push(Target::SystemdUnit {
-        name: NIX_DAEMON_SERVICE_UNIT,
-        src: UnitSource::File(NIX_DAEMON_SERVICE_SRC),
-        dest: NIX_DAEMON_SERVICE_DEST,
-        must_be_active: false,
-    });
-    items.push(Target::SystemdUnit {
-        name: NIX_DAEMON_SOCKET_UNIT,
-        src: UnitSource::File(NIX_DAEMON_SOCKET_SRC),
-        dest: NIX_DAEMON_SOCKET_DEST,
-        must_be_active: true,
-    });
-    items.push(Target::SystemdUnit {
-        name: MIX_DAEMON_SERVICE_UNIT,
-        src: UnitSource::Text(MIX_DAEMON_SERVICE),
-        dest: MIX_DAEMON_SERVICE_DEST,
-        must_be_active: false,
-    });
-    items.push(Target::SystemdUnit {
-        name: MIX_DAEMON_SOCKET_UNIT,
-        src: UnitSource::Text(MIX_DAEMON_SOCKET),
-        dest: MIX_DAEMON_SOCKET_DEST,
-        must_be_active: true,
-    });
-    items.push(Target::PathExists {
-        name: "default profile",
-        path: DEFAULT_PROFILE_NIX_ENV,
-    });
-    items.push(Target::Program {
-        path: MIX_DAEMON_BIN,
-        source: RUNNING_PROGRAM,
-        mode: MIX_DAEMON_BIN_MODE,
-    });
-    items.push(Target::Journals { path: JOURNAL_DIR });
-
-    if let Some(cfg) = user_config {
-        push_user_targets(&mut items, cfg);
+    for n in 1..=NIXBLD_USER_COUNT {
+        tree.account(
+            Some(nixbld),
+            Target::User {
+                n,
+                uid: NIXBLD_UID_BASE + n,
+                gid: NIXBLD_GID,
+            },
+        );
     }
-    items.push(Target::Leftovers {
-        user: user_config.map(|cfg| UserRef::Borrowed(&cfg.user)),
-        journals: JOURNAL_DIR,
-    });
-
-    items
+    let members = tree.account(
+        None,
+        Target::Group {
+            name: MIX_USERS_GROUP,
+            gid: MIX_USERS_GID,
+        },
+    );
+    directory(&mut tree, "/nix", 0o755);
+    directory(&mut tree, NIX_STORE, 0o1775);
+    for &path in NIX_TREE_PATHS {
+        directory(&mut tree, path, NIX_TREE_MODE);
+    }
+    file(&mut tree, NIX_OWNERSHIP_MARKER, "");
+    let runtime = tree.path(
+        DEFAULT_PROFILE_NIX_ENV,
+        Target::PathExists {
+            name: "default profile",
+            path: DEFAULT_PROFILE_NIX_ENV,
+        },
+    );
+    for path in ["/var", "/var/lib"] {
+        precondition(&mut tree, path);
+    }
+    for (path, bits) in [(MIX_VAR_DIR, 0o700), (MIX_BIN_DIR, 0o700)] {
+        parent(&mut tree, path, bits);
+    }
+    let program = tree.path(
+        MIX_DAEMON_BIN,
+        Target::Program {
+            path: MIX_DAEMON_BIN,
+            source: RUNNING_PROGRAM,
+            mode: MIX_DAEMON_BIN_MODE,
+        },
+    );
+    tree.path(JOURNAL_DIR, Target::Journals { path: JOURNAL_DIR });
+    precondition(&mut tree, "/etc");
+    for path in ["/etc/mix", "/etc/nix", "/etc/profile.d"] {
+        parent(&mut tree, path, 0o755);
+    }
+    file(&mut tree, POLICY_FILE, policy.render());
+    file(&mut tree, NIX_CONF_DEST, policy.nix_conf());
+    file(&mut tree, PROFILE_SNIPPET_DEST, PROFILE_SNIPPET);
+    for path in ["/etc/systemd", SYSTEMD_UNIT_DIR] {
+        precondition(&mut tree, path);
+    }
+    for (name, src, dest, must_be_active) in [
+        (
+            NIX_DAEMON_SERVICE_UNIT,
+            UnitSource::File(NIX_DAEMON_SERVICE_SRC),
+            NIX_DAEMON_SERVICE_DEST,
+            false,
+        ),
+        (
+            NIX_DAEMON_SOCKET_UNIT,
+            UnitSource::File(NIX_DAEMON_SOCKET_SRC),
+            NIX_DAEMON_SOCKET_DEST,
+            true,
+        ),
+        (
+            MIX_DAEMON_SERVICE_UNIT,
+            UnitSource::Text(MIX_DAEMON_SERVICE),
+            MIX_DAEMON_SERVICE_DEST,
+            false,
+        ),
+        (
+            MIX_DAEMON_SOCKET_UNIT,
+            UnitSource::Text(MIX_DAEMON_SOCKET),
+            MIX_DAEMON_SOCKET_DEST,
+            true,
+        ),
+    ] {
+        let unit = tree.path(
+            dest,
+            Target::SystemdUnit {
+                name,
+                src,
+                dest,
+                must_be_active,
+            },
+        );
+        match src {
+            UnitSource::File(_) => tree.refers(unit, runtime),
+            UnitSource::Text(_) if name == MIX_DAEMON_SERVICE_UNIT => {
+                tree.refers(unit, program);
+            }
+            UnitSource::Text(_) => {}
+        }
+    }
+    if let Some(cfg) = user_config {
+        user_tree(&mut tree, cfg, members);
+    }
+    tree.finish()
 }
 
 #[cfg(test)]
@@ -571,6 +631,24 @@ mod tests {
     fn default_policy() -> &'static Policy {
         static POLICY: std::sync::OnceLock<Policy> = std::sync::OnceLock::new();
         POLICY.get_or_init(Policy::default)
+    }
+
+    fn listed<'a>(user: Option<&'a UserConfig>, policy: &'a Policy) -> Vec<Target<'a>> {
+        tree(user, policy)
+            .into_checks()
+            .into_iter()
+            .map(|check| check.target)
+            .collect()
+    }
+
+    fn user_targets(cfg: &UserConfig) -> Vec<Target<'_>> {
+        let home = cfg.user.home.to_string_lossy().into_owned();
+        listed(Some(cfg), default_policy())
+            .into_iter()
+            .filter(|target| {
+                target.label().contains(&home) || matches!(target, Target::GroupMember { .. })
+            })
+            .collect()
     }
 
     fn sample_user_config() -> UserConfig {
@@ -622,8 +700,11 @@ mod tests {
     #[test]
     fn label_borrows_instead_of_allocating_for_every_target() {
         let cfg = sample_user_config();
-        for target in targets(Some(&cfg), default_policy()) {
-            if matches!(target, Target::History { .. }) {
+        for target in listed(Some(&cfg), default_policy()) {
+            if matches!(
+                target,
+                Target::History { .. } | Target::HomeFiles { .. } | Target::Leftovers { .. }
+            ) {
                 continue;
             }
             assert!(
@@ -734,7 +815,7 @@ mod tests {
 
     #[test]
     fn targets_include_every_directory_in_the_managed_nix_tree() {
-        let items = targets(None, default_policy());
+        let items = listed(None, default_policy());
         for &path in NIX_TREE_PATHS {
             assert!(
                 items.iter().any(|t| matches!(
@@ -742,14 +823,14 @@ mod tests {
                     Target::Directory { path: p, mode, .. }
                         if p.as_ref() == Path::new(path) && *mode == NIX_TREE_MODE
                 )),
-                "targets() is missing an entry for {path} (mode {NIX_TREE_MODE:o})"
+                "the tree is missing an entry for {path} (mode {NIX_TREE_MODE:o})"
             );
         }
     }
 
     #[test]
     fn targets_include_all_build_users() {
-        let items = targets(None, default_policy());
+        let items = listed(None, default_policy());
         let user_count = items
             .iter()
             .filter(|t| matches!(t, Target::User { .. }))
@@ -759,7 +840,7 @@ mod tests {
 
     #[test]
     fn targets_excludes_per_user_entries_when_no_user_is_given() {
-        let items = targets(None, default_policy());
+        let items = listed(None, default_policy());
         assert!(
             !items
                 .iter()
@@ -770,7 +851,7 @@ mod tests {
     #[test]
     fn targets_includes_per_user_entries_when_a_user_is_given() {
         let cfg = sample_user_config();
-        let items = targets(Some(&cfg), default_policy());
+        let items = listed(Some(&cfg), default_policy());
 
         assert!(items.iter().any(|t| matches!(
             t,
@@ -793,7 +874,7 @@ mod tests {
     fn the_declared_nix_conf_and_policy_follow_the_policy() {
         let policy = Policy::new(Some("https://mirror.internal"), Some("m:AAAA")).unwrap();
 
-        let items = targets(None, &policy);
+        let items = listed(None, &policy);
 
         let expected = |wanted: &Path| {
             items.iter().find_map(|target| match target {
@@ -814,23 +895,12 @@ mod tests {
     }
 
     #[test]
-    fn the_target_lists_are_built_at_their_exact_size() {
-        let cfg = sample_user_config();
-        assert_eq!(targets(None, default_policy()).len(), SYSTEM_TARGET_COUNT);
-        assert_eq!(user_targets(&cfg).len(), USER_TARGET_COUNT);
-        assert_eq!(
-            targets(Some(&cfg), default_policy()).len(),
-            SYSTEM_TARGET_COUNT + USER_TARGET_COUNT
-        );
-    }
-
-    #[test]
     fn every_user_gets_the_same_nix_conf() {
         let cfg = sample_user_config();
         let policy = Policy::default();
         let expected: Option<Cow<'_, str>> = Some(Cow::Borrowed(policy.nix_conf()));
 
-        for items in [targets(None, &policy), targets(Some(&cfg), &policy)] {
+        for items in [listed(None, &policy), listed(Some(&cfg), &policy)] {
             assert!(items.iter().any(|t| matches!(
                 t,
                 Target::File { path, expected: actual, .. }
@@ -841,22 +911,32 @@ mod tests {
 
     #[test]
     fn targets_include_the_group_the_nix_conf_trusts() {
-        assert!(targets(None, default_policy()).iter().any(|t| matches!(
+        assert!(listed(None, default_policy()).iter().any(|t| matches!(
             t,
             Target::Group { name, gid } if *name == MIX_USERS_GROUP && *gid == MIX_USERS_GID
         )));
     }
 
     #[test]
-    fn user_targets_returns_exactly_the_sixteen_per_user_entries() {
+    fn a_user_adds_exactly_their_own_checks() {
         let cfg = sample_user_config();
-        assert_eq!(user_targets(&cfg).len(), 16);
+        assert_eq!(user_targets(&cfg).len(), 23);
+        assert_eq!(
+            listed(Some(&cfg), default_policy()).len(),
+            listed(None, default_policy()).len() + 23
+        );
     }
 
     #[test]
     fn leftovers_are_looked_for_beside_everything_mix_writes() {
         let cfg = sample_user_config();
-        let dirs = written_dirs(Some(&cfg.user));
+        let dirs: Vec<std::path::PathBuf> = listed(Some(&cfg), default_policy())
+            .into_iter()
+            .filter_map(|target| match target {
+                Target::Leftovers { dir, .. } => Some(dir.into_owned()),
+                _ => None,
+            })
+            .collect();
 
         for dir in [
             "/etc/nix",
@@ -871,20 +951,22 @@ mod tests {
     }
 
     #[test]
-    fn user_targets_check_the_repository_after_the_files_it_commits() {
+    fn user_targets_check_the_history_after_the_repository_config() {
         let cfg = sample_user_config();
         let targets = user_targets(&cfg);
         let position =
             |wanted: &dyn Fn(&Target<'_>) -> bool| targets.iter().position(wanted).unwrap();
 
-        let repository = position(
+        let history = position(
             &|target| matches!(target, Target::History { user, .. } if **user == cfg.user),
         );
-        let state = position(&|target| matches!(target, Target::SeededFile { .. }));
+        let config = position(
+            &|target| matches!(target, Target::File { path, .. } if path.ends_with(".git/config")),
+        );
 
-        assert!(state < repository);
+        assert!(config < history);
         assert_eq!(
-            targets[repository].label(),
+            targets[history].label(),
             "/home/mix-user/.local/state/mix/.git history"
         );
     }

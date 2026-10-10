@@ -146,8 +146,22 @@ impl World {
     }
 
     fn snapshot_at(&self, repository: &Path, uid: u32) -> Option<Snapshot> {
+        if self.unborn(repository, uid) {
+            return Some(Snapshot::new());
+        }
         let commit = self.head_commit(repository, uid)?;
         self.snapshot_of(repository, &commit, uid)
+    }
+
+    fn unborn(&self, repository: &Path, uid: u32) -> bool {
+        let heads = repository.join("refs/heads");
+        self.is_dir(&repository.join(OBJECTS))
+            && self.is_dir(&repository.join("refs"))
+            && (self.is_dir(&heads) || !self.files.contains_key(&heads))
+            && !self.files.contains_key(&repository.join(BRANCH))
+            && self
+                .readable(&repository.join(REPOSITORY_HEAD), uid)
+                .is_some_and(|head| head.as_ref() == HEAD_CONTENTS)
     }
 
     fn snapshot_of(&self, repository: &Path, commit: &str, uid: u32) -> Option<Snapshot> {
@@ -370,6 +384,7 @@ impl World {
         {
             return Err(conflict(&objects, "intact objects", "a damaged object"));
         }
+        self.make_dir(&repository.join("refs/heads"), owner)?;
         self.write_ref(
             &repository.join(BRANCH),
             format!("{commit}\n").as_bytes(),
@@ -433,10 +448,7 @@ impl World {
         if let Some(found) = self.files.get(&repository) {
             return Err(conflict(&repository, "nothing", found.content_kind()));
         }
-        let created = self
-            .init_repository(user)
-            .and_then(|()| self.sync_repository(user));
-        if let Err(failure) = created {
+        if let Err(failure) = self.init_repository(user) {
             for path in self.subtree(&repository) {
                 self.files.remove(&path);
             }

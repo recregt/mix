@@ -86,8 +86,7 @@ impl Git {
 
     /// Creates the repository and commits the generated config into it.
     pub async fn create(&self, user: &InvokingUser, state_dir: &Path, scope: &Scope) -> Result<()> {
-        self.init(user, state_dir, scope).await?;
-        self.sync(user, state_dir, scope).await.map(|_| ())
+        self.init(user, state_dir, scope).await
     }
 
     /// Whether the commit and tree of `HEAD` and every file in that tree match their object ids.
@@ -102,6 +101,20 @@ impl Git {
         scope: &Scope,
     ) -> Result<bool> {
         let repository = repository.to_string_lossy();
+        let dir = ["--git-dir", &*repository];
+        let head = [&dir[..], &["symbolic-ref", "--quiet", "HEAD"]].concat();
+        let branch = [&dir[..], &["rev-parse", "--verify", "--quiet", BRANCH]].concat();
+        let heads =
+            match tokio::fs::symlink_metadata(Path::new(&*repository).join("refs/heads")).await {
+                Ok(found) => found.is_dir(),
+                Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+            };
+        if heads
+            && self.run_as(user, &head, scope).await.ok().as_deref() == Some(BRANCH)
+            && !self.status_as(user, &branch, scope).await?
+        {
+            return Ok(true);
+        }
         let tree = "HEAD^{tree}";
         let checks: [&[&str]; 2] = [
             &["rev-parse", "--verify", "--quiet", tree],

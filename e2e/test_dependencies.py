@@ -11,7 +11,6 @@ STATE_DIR = f"{HOME}/.local/state/mix"
 PROFILES = f"{HOME}/.local/state/nix/profiles"
 DAEMON_BIN = "/var/lib/mix/bin/mix-daemon"
 JOURNALS = "/var/lib/mix/journal"
-LEFTOVERS = "leftovers of interrupted writes"
 
 
 def _findings(run) -> dict[str, dict]:
@@ -119,7 +118,7 @@ def test_what_an_interrupted_write_left_is_reported_and_removed(container):
 
     found = container.mix("doctor", user=USER)
     assert found.exit_code == 3, found
-    assert _findings(found) == {LEFTOVERS: {"leftovers": {"paths": [leftover]}}}
+    assert _findings(found) == {f"{STATE_DIR} leftovers": {"leftovers": {"paths": [leftover]}}}
 
     assert container.mix("repair", user=USER).succeeded()
     assert not container.path_exists(leftover)
@@ -189,6 +188,6 @@ def test_a_file_in_the_way_of_a_managed_one_is_reported_and_left_alone(container
 
     found = container.mix("doctor", user=USER)
     assert found.exit_code == 3, found
-    assert _findings(found) == {HOME: {"inTheWay": {"paths": [target]}}}
+    assert _findings(found) == {f"{HOME} files in the way": {"inTheWay": {"paths": [target]}}}
     assert container.mix("repair", user=USER).exit_code == 3
     assert container.exec("cat", target, check=True).stdout == "mine\n"

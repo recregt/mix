@@ -13,7 +13,15 @@ use mix_ui::{Labels, around, help, note, note_around, note_parts, phrase, phrase
 use super::Diagnostic;
 
 pub fn healthy(report: &InspectionReport) -> bool {
-    report.finding.is_none()
+    report.finding.is_none() && report.blocked_by.is_empty()
+}
+
+pub fn waiting<'r>(cause: &InspectionReport, reports: &'r [InspectionReport]) -> Vec<&'r str> {
+    reports
+        .iter()
+        .filter(|report| report.blocked_by == cause.target)
+        .map(|report| report.target.as_str())
+        .collect()
 }
 
 pub fn check(report: &InspectionReport) -> Diagnostic {
@@ -215,13 +223,13 @@ pub fn labels(finding: &Finding) -> Labels {
 }
 
 pub fn unhealthy(reports: &[InspectionReport]) -> Diagnostic {
-    let (problems, fixable) = reports.iter().filter(|report| !healthy(report)).fold(
-        (0u64, 0u64),
-        |(problems, fixable), report| {
+    let (problems, fixable) = reports
+        .iter()
+        .filter(|report| report.finding.is_some())
+        .fold((0u64, 0u64), |(problems, fixable), report| {
             let repairable = report.unfixable() == Unfixable::Unspecified;
             (problems + 1, fixable + u64::from(repairable))
-        },
-    );
+        });
     let mut digits = [0u8; 22];
     let summary = match problems {
         1 => phrase!("found 1 problem"),
@@ -254,6 +262,7 @@ mod tests {
             category: Category::Filesystem,
             finding,
             drift: None,
+            blocked_by: None,
         })
     }
 
