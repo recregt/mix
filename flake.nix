@@ -32,6 +32,8 @@
         fileset = lib.fileset.unions [
           ./Cargo.toml
           ./Cargo.lock
+          ./clippy.toml
+          ./deny
           ./.cargo
           ./crates
         ];
@@ -40,21 +42,78 @@
         inherit src;
         strictDeps = true;
         CARGO_PROFILE = "";
+        cargoExtraArgs = "--locked --workspace";
         pname = "mix";
         version = "0.1.0";
       };
-      cargoArtifacts = craneLib.buildDepsOnly (common // { cargoExtraArgs = "--workspace"; });
+      cargoArtifacts = craneLib.buildDepsOnly common;
+      layers = [
+        "core"
+        "cli"
+        "explain"
+        "render"
+        "ui"
+      ];
     in
     {
-      checks.${system}.tests = craneLib.cargoTest (
+      packages.${system}.default = craneLib.buildPackage (
         common
         // {
           inherit cargoArtifacts;
-          cargoTestExtraArgs = "--workspace";
-          CI = "true";
-          INSTA_UPDATE = "no";
-          SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+          cargoExtraArgs = "--locked --package mix-cli --package mix-daemon";
+          doCheck = false;
         }
       );
+
+      checks.${system} = {
+        tests = craneLib.cargoTest (
+          common
+          // {
+            inherit cargoArtifacts;
+            CI = "true";
+            INSTA_UPDATE = "no";
+            SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+          }
+        );
+
+        clippy = craneLib.cargoClippy (
+          common
+          // {
+            inherit cargoArtifacts;
+            cargoClippyExtraArgs = "--all-targets -- -D warnings";
+          }
+        );
+
+        deny = craneLib.cargoDeny (
+          common
+          // {
+            cargoExtraArgs = "";
+            cargoDenyChecks = "bans licenses sources";
+            cargoDenyExtraArgs = "--config deny/workspace.toml";
+          }
+        );
+      }
+      // lib.listToAttrs (
+        map (layer: {
+          name = "deny-${layer}";
+          value = craneLib.cargoDeny (
+            common
+            // {
+              pname = "mix-${layer}";
+              cargoExtraArgs = "";
+              cargoDenyChecks = "bans";
+              cargoDenyExtraArgs = "--log-level error --manifest-path crates/${layer}/Cargo.toml --config deny/${layer}.toml";
+            }
+          );
+        }) layers
+      )
+      // {
+        fmt = craneLib.cargoFmt (
+          common
+          // {
+            cargoExtraArgs = "--all";
+          }
+        );
+      };
     };
 }
