@@ -718,15 +718,6 @@ expression: "run.case(&before, &world)"
         "unknown": []
       },
       {
-        "action": "CHANGE_ACTION_CREATE",
-        "operation": "OPERATION_CREATE_REPOSITORY",
-        "status": "STATUS_SUCCEEDED",
-        "step": "/home/alice/.local/state/mix/.git",
-        "subject": "alice's config history",
-        "undone": false,
-        "unknown": []
-      },
-      {
         "action": "CHANGE_ACTION_UPDATE",
         "operation": "OPERATION_PUT_FILE",
         "status": "STATUS_SUCCEEDED",
@@ -795,6 +786,15 @@ expression: "run.case(&before, &world)"
         "status": "STATUS_SUCCEEDED",
         "step": "/home/alice profile",
         "subject": "alice's profile",
+        "undone": false,
+        "unknown": []
+      },
+      {
+        "action": "CHANGE_ACTION_CREATE",
+        "operation": "OPERATION_CREATE_REPOSITORY",
+        "status": "STATUS_SUCCEEDED",
+        "step": "/home/alice/.local/state/mix/.git",
+        "subject": "alice's config history",
         "undone": false,
         "unknown": []
       },
@@ -1370,27 +1370,6 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_CONFIGURING"
       },
       {
-        "key": "/home/alice/.local/state/mix/.git",
-        "status": "STATUS_SUCCEEDED",
-        "subject": "/home/alice/.local/state/mix/.git",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
-        "key": "/home/alice/.local/state/mix/.git/config",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/home/alice/.local/state/mix/.git/config",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
-        "key": "/home/alice/.local/state/mix/.git history",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/home/alice/.local/state/mix/.git history",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
         "key": "/home/alice/.local/state/mix/.gitignore",
         "status": "STATUS_SUCCEEDED",
         "subject": "/home/alice/.local/state/mix/.gitignore",
@@ -1443,6 +1422,27 @@ expression: "run.case(&before, &world)"
         "key": "/home/alice profile",
         "status": "STATUS_SUCCEEDED",
         "subject": "/home/alice profile",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/alice/.local/state/mix/.git",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "/home/alice/.local/state/mix/.git",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/alice/.local/state/mix/.git/config",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/mix/.git/config",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/alice/.local/state/mix/.git history",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/mix/.git history",
         "undone": false,
         "verb": "VERB_CONFIGURING"
       },
@@ -2460,7 +2460,6 @@ expression: "run.case(&before, &world)"
     "CreateDirs /home/alice/.local",
     "CreateDirs /home/alice/.local/state",
     "CreateDirs /home/alice/.local/state/mix",
-    "CreateRepository alice's config history",
     "PutFile /home/alice/.local/state/mix/.gitignore",
     "PutFile /home/alice/.local/state/mix/flake.lock",
     "PutFile /home/alice/.local/state/mix/flake.nix",
@@ -2469,6 +2468,7 @@ expression: "run.case(&before, &world)"
     "CreateDirs /home/alice/.local/state/nix",
     "CreateDirs /home/alice/.local/state/nix/profiles",
     "ActivateProfile alice's profile",
+    "CreateRepository alice's config history",
     "RecordState alice's package list",
     "Commit changes"
   ]

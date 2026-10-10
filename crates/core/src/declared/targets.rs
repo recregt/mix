@@ -522,29 +522,28 @@ fn user_tree<'a>(
         }
     };
     tree.path(state_path, state);
-    let git = tree.path(
-        repository.clone(),
-        Target::Repository {
-            path: Cow::Owned(repository.clone()),
-            user: user(),
-        },
-    );
     let config = join(&repository, REPOSITORY_CONFIG);
-    tree.path(
-        config.clone(),
-        Target::File {
-            path: Cow::Owned(config),
-            expected: Some(Cow::Borrowed(REPOSITORY_CONFIG_CONTENTS)),
-            owner,
-        },
-    );
-    tree.up(
-        git,
-        Target::History {
-            path: Cow::Owned(repository),
-            user: user(),
-        },
-    );
+    let repo = Target::Repository {
+        path: Cow::Owned(repository.clone()),
+        user: user(),
+    };
+    let config_file = Target::File {
+        path: Cow::Owned(config.clone()),
+        expected: Some(Cow::Borrowed(REPOSITORY_CONFIG_CONTENTS)),
+        owner,
+    };
+    let history = Target::History {
+        path: Cow::Owned(repository.clone()),
+        user: user(),
+    };
+    let mut deferred = Vec::new();
+    if intent.runtime.is_some() {
+        deferred.extend([repo, config_file, history]);
+    } else {
+        let git = tree.path(repository, repo);
+        tree.path(config, config_file);
+        tree.up(git, history);
+    }
     tree.path(
         profiles_dir.clone(),
         Target::Directory {
@@ -590,6 +589,9 @@ fn user_tree<'a>(
             subject,
         },
     );
+    for target in deferred {
+        tree.up(above, target);
+    }
 }
 
 fn precondition(tree: &mut Builder<'_>, path: &'static str) -> Handle {
