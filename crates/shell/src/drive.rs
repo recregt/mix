@@ -683,6 +683,9 @@ impl Performer {
         }
         let mut facts = Vec::with_capacity(queries.len());
         for query in queries {
+            if let Query::Program { source, .. } = query {
+                self.seed_running(source);
+            }
             let fact = match &self.prediction {
                 Some(prediction) if prediction.answers(query) => prediction.world.observe(query),
                 _ => match self.observed(query) {
@@ -693,6 +696,28 @@ impl Performer {
             facts.push(fact);
         }
         Ok(facts)
+    }
+
+    fn seed_running(&mut self, source: &Path) {
+        let Some(prediction) = &mut self.prediction else {
+            return;
+        };
+        if prediction.world.contents(source).is_some() {
+            return;
+        }
+        if let Ok(bytes) = std::fs::read(source) {
+            let found = PathFacts {
+                kind: Kind::File,
+                mode: 0o755,
+                owner: (0, 0),
+                id: None,
+                digest: None,
+                changed: None,
+            };
+            prediction
+                .world
+                .seed_path(source, &found, Some(bytes.into()));
+        }
     }
 
     async fn seed(&mut self, subject: &Subject, scope: &Scope) -> Result<(), Failure> {
@@ -1751,6 +1776,53 @@ mod tests {
             "legacy\n"
         );
         assert!(!undone.is_empty());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn a_prediction_knows_the_running_program_it_would_install() {
+        let root = tempfile::tempdir().unwrap();
+        let me = nix::unistd::Uid::current().as_raw();
+        let mut performer =
+            Performer::predicting(Files::open_trusting(root.path(), "r1", me).unwrap());
+        let scope = Scope::root();
+        performer
+            .perform(
+                &Action::CreateDirs {
+                    path: "/var/lib/mix/bin".into(),
+                    mode: 0o755,
+                    owner: None,
+                },
+                &scope,
+                &mut |_| {},
+                &mut |_: &[Action]| Ok(()),
+            )
+            .await
+            .unwrap();
+
+        let facts = performer
+            .observe(
+                &[Query::Program {
+                    path: "/var/lib/mix/bin/mix-daemon".into(),
+                    source: std::env::current_exe().unwrap(),
+                }],
+                &scope,
+            )
+            .await
+            .unwrap();
+
+        let [Fact::Program(program)] = facts.as_slice() else {
+            panic!("a program is observed as a program");
+        };
+        assert!(!program.same);
+        assert_eq!(
+            program.source.as_deref(),
+            Some(
+                std::fs::read(std::env::current_exe().unwrap())
+                    .unwrap()
+                    .as_slice()
+            )
+        );
     }
 
     #[tokio::test]
