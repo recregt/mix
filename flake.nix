@@ -33,6 +33,7 @@
           ./Cargo.toml
           ./Cargo.lock
           ./clippy.toml
+          ./deny
           ./.cargo
           ./crates
         ];
@@ -46,6 +47,13 @@
         version = "0.1.0";
       };
       cargoArtifacts = craneLib.buildDepsOnly common;
+      layers = [
+        "core"
+        "cli"
+        "explain"
+        "render"
+        "ui"
+      ];
     in
     {
       packages.${system}.default = craneLib.buildPackage (
@@ -76,6 +84,30 @@
           }
         );
 
+        deny = craneLib.cargoDeny (
+          common
+          // {
+            cargoExtraArgs = "";
+            cargoDenyChecks = "bans licenses sources";
+            cargoDenyExtraArgs = "--config deny/workspace.toml";
+          }
+        );
+      }
+      // lib.listToAttrs (
+        map (layer: {
+          name = "deny-${layer}";
+          value = craneLib.cargoDeny (
+            common
+            // {
+              pname = "mix-${layer}";
+              cargoExtraArgs = "";
+              cargoDenyChecks = "bans";
+              cargoDenyExtraArgs = "--log-level error --manifest-path crates/${layer}/Cargo.toml --config deny/${layer}.toml";
+            }
+          );
+        }) layers
+      )
+      // {
         fmt = craneLib.cargoFmt (
           common
           // {

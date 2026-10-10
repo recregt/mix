@@ -27,27 +27,6 @@ jobs:
 
       - run: cargo audit --deny warnings
 
-  deny:
-    name: Cargo Deny
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
-        with:
-          tool: cargo-deny
-
-      - run: cargo deny --config deny/workspace.toml check bans licenses sources
-
-      - name: Every layer depends only on what it may
-        run: |
-          for layer in core cli explain render ui; do
-            cargo deny --log-level error --manifest-path "crates/$layer/Cargo.toml" \
-              --config "deny/$layer.toml" check bans
-          done
-
   zizmor:
     name: Zizmor
     runs-on: ubuntu-latest
