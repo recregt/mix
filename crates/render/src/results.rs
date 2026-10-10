@@ -194,6 +194,15 @@ fn repaired(
         for report in reports {
             match &report.failure {
                 None if report.fixed => {}
+                None if !report.blocked_by.is_empty() => mix_ui::report_to(
+                    out,
+                    Severity::Warning,
+                    &Report::new(&mix_ui::phrase!(
+                        "left {} alone because {} couldn't be repaired",
+                        report.target,
+                        report.blocked_by
+                    )),
+                ),
                 None => mix_ui::report_to(
                     out,
                     Severity::Warning,
@@ -260,10 +269,17 @@ fn audited(out: &dyn Out, reports: &[InspectionReport], level: Detail, elapsed: 
             }
             continue;
         }
-        if !chatty {
+        if !chatty || !report.blocked_by.is_empty() {
             continue;
         }
-        let words = mix_explain::doctor::check(report);
+        let waiting = mix_explain::doctor::waiting(report, reports);
+        let words = match waiting.is_empty() {
+            true => mix_explain::doctor::check(report),
+            false => mix_explain::doctor::check(report).note(mix_ui::note!(
+                "checked once it's fixed: {}",
+                waiting.join(", ")
+            )),
+        };
         let labels = report.finding.as_ref().map(mix_explain::doctor::labels);
         let lines = report
             .drift

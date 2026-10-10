@@ -12,69 +12,43 @@ use mix_events::{Ending, ROOT, Start};
 
 use crate::Context;
 use crate::request::{Concluded, Root};
-use crate::target::Finding;
 
 use mix_core::ops::health::HealthReport;
 
 pub(crate) async fn audit(ctx: &Context, root: &mut Root, _request: &DoctorRequest) -> Concluded {
-    let items = mix_core::declared::targets::targets(ctx.user.as_ref(), &ctx.policy);
+    let mut audit = health::Audit::new(mix_core::declared::targets::tree(
+        ctx.user.as_ref(),
+        &ctx.policy,
+    ));
     let tree = &mut root.tree;
     let plan = tree
         .start(
             ROOT,
-            Start::new("audit", node_started::Kind::Plan(Plan::default()))
-                .planned(items.iter().map(|target| target.label().into_owned())),
+            Start::new("audit", node_started::Kind::Plan(Plan::default())).planned(audit.planned()),
         )
         .expect("the root is open");
     let mut performer = ctx.performer();
-    let mut reports = Vec::with_capacity(items.len());
-    for target in &items {
-        let (finding, drift) = match &mut performer {
-            Ok(performer) => match performer
-                .observe(&health::queries(target), &ctx.scope)
-                .await
-            {
-                Ok(facts) => (
-                    health::classify(target, &facts),
-                    health::drift(target, &facts),
-                ),
-                Err(failure) => (
-                    Some(Finding::Unreadable {
-                        kind: kind_of(&failure),
+    let mut facts = None;
+    loop {
+        match audit.step(facts.take()) {
+            health::Audited::Observe(queries) => {
+                facts = Some(match &mut performer {
+                    Ok(performer) => performer.observe(&queries, &ctx.scope).await,
+                    Err(error) => Err(Failure::Io {
+                        path: "/".into(),
+                        kind: error.kind(),
                     }),
-                    None,
-                ),
-            },
-            Err(error) => (Some(Finding::Unreadable { kind: error.kind() }), None),
-        };
-        let name = target.label().into_owned();
-        if let Ok(node) = tree.start(
-            plan,
-            Start::new(
-                name.clone(),
-                node_started::Kind::Inspection(Inspection {
-                    target: name.clone(),
-                    category: inspection::category(target.category()) as i32,
-                }),
-            ),
-        ) {
-            let _ = tree.finish(
-                node,
-                Ending::succeeded().with_result(node_finished::Result::Inspection(
-                    InspectionResult {
-                        finding: finding.clone().map(inspection::finding),
-                        drift: drift.as_ref().map(inspection::drift),
-                    },
-                )),
-            );
+                });
+            }
+            health::Audited::Reported => {
+                if let Some(report) = audit.last() {
+                    show(tree, plan, report);
+                }
+            }
+            health::Audited::Done => break,
         }
-        reports.push(HealthReport {
-            name,
-            category: target.category(),
-            finding,
-            drift,
-        });
     }
+    let reports = audit.into_reports();
     let result = DoctorResult {
         reports: reports.iter().map(inspection::report).collect(),
     };
@@ -86,10 +60,28 @@ pub(crate) async fn audit(ctx: &Context, root: &mut Root, _request: &DoctorReque
     )
 }
 
-fn kind_of(failure: &Failure) -> std::io::ErrorKind {
-    match failure {
-        Failure::Io { kind, .. } | Failure::SpawnFailed { kind, .. } => *kind,
-        _ => std::io::ErrorKind::Other,
+fn show(tree: &mut mix_events::Tree, plan: mix_events::NodeId, report: &HealthReport) {
+    if let Some(cause) = &report.blocked_by {
+        let _ = tree.blocked(plan, report.name.clone(), cause.clone());
+        return;
+    }
+    if let Ok(node) = tree.start(
+        plan,
+        Start::new(
+            report.name.clone(),
+            node_started::Kind::Inspection(Inspection {
+                target: report.name.clone(),
+                category: inspection::category(report.category) as i32,
+            }),
+        ),
+    ) {
+        let _ = tree.finish(
+            node,
+            Ending::succeeded().with_result(node_finished::Result::Inspection(InspectionResult {
+                finding: report.finding.clone().map(inspection::finding),
+                drift: report.drift.as_ref().map(inspection::drift),
+            })),
+        );
     }
 }
 
@@ -138,11 +130,8 @@ mod tests {
         let (_, reports) = audited(session()).await;
         assert_eq!(
             reports.len(),
-            mix_core::declared::targets::targets(
-                None,
-                &mix_core::declared::policy::Policy::default()
-            )
-            .len()
+            mix_core::declared::targets::tree(None, &mix_core::declared::policy::Policy::default())
+                .len()
         );
     }
 
@@ -154,7 +143,7 @@ mod tests {
 
         assert_eq!(
             reports.len(),
-            mix_core::declared::targets::targets(
+            mix_core::declared::targets::tree(
                 Some(&cfg),
                 &mix_core::declared::policy::Policy::default()
             )
@@ -170,7 +159,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_audit_has_a_node_per_target() {
+    async fn the_audit_inspects_each_check_or_names_what_blocked_it() {
         let (ran, reports) = audited(session().with_user(Some(user_config()))).await;
 
         let inspected = ran
@@ -184,6 +173,27 @@ mod tests {
                 )
             })
             .count();
-        assert_eq!(inspected, reports.len());
+        let blocked: Vec<(&str, &str)> = ran
+            .0
+            .iter()
+            .filter_map(|envelope| match &envelope.event {
+                Some(mix_events::v1::envelope::Event::NotRun(not_run))
+                    if not_run.reason() == mix_events::v1::NotRunReason::Blocked =>
+                {
+                    Some((not_run.key.as_str(), not_run.blocked_by.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(inspected + blocked.len(), reports.len());
+        for (key, by) in blocked {
+            let report = reports.iter().find(|report| report.target == key).unwrap();
+            assert_eq!(report.blocked_by, by);
+            let cause = reports.iter().find(|report| report.target == by).unwrap();
+            assert!(
+                cause.finding.is_some(),
+                "{key} is blocked by a healthy {by}"
+            );
+        }
     }
 }

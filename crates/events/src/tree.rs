@@ -220,7 +220,18 @@ impl Tree {
         reason: NotRunReason,
     ) -> Result<(), Misuse> {
         let key = self.claim(parent, key.into())?;
-        self.emit_not_run(parent, key.into_owned(), reason);
+        self.emit_not_run(parent, key.into_owned(), reason, String::new());
+        Ok(())
+    }
+
+    pub fn blocked(
+        &mut self,
+        parent: NodeId,
+        key: impl Into<Cow<'static, str>>,
+        by: impl Into<String>,
+    ) -> Result<(), Misuse> {
+        let key = self.claim(parent, key.into())?;
+        self.emit_not_run(parent, key.into_owned(), NotRunReason::Blocked, by.into());
         Ok(())
     }
 
@@ -267,7 +278,7 @@ impl Tree {
             parent.children -= 1;
         }
         for key in open.planned.iter().filter(|key| !open.used.contains(*key)) {
-            self.emit_not_run(id, key.to_string(), NotRunReason::NotReached);
+            self.emit_not_run(id, key.to_string(), NotRunReason::NotReached, String::new());
         }
         self.outbox.push(Event::NodeFinished(NodeFinished {
             id,
@@ -363,11 +374,12 @@ impl Tree {
         id
     }
 
-    fn emit_not_run(&self, parent: NodeId, key: String, reason: NotRunReason) {
+    fn emit_not_run(&self, parent: NodeId, key: String, reason: NotRunReason, blocked_by: String) {
         self.outbox.push(Event::NotRun(NotRun {
             parent,
             key,
             reason: reason as i32,
+            blocked_by,
         }));
     }
 }

@@ -322,11 +322,13 @@ fn a_target_repair_could_not_fix_is_a_problem_named_after_it() {
                     mix_events::v1::RepairResult {
                         reports: vec![
                             mix_events::v1::RepairReport {
+                                blocked_by: String::new(),
                                 target: "/etc/nix".into(),
                                 fixed: true,
                                 failure: None,
                             },
                             mix_events::v1::RepairReport {
+                                blocked_by: String::new(),
                                 target: "mix-users".into(),
                                 fixed: false,
                                 failure: Some(Diagnostic {

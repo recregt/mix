@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::declared::identity::{self, InvokingUser};
 use crate::declared::paths::{INDEX_LOCK, NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT};
 use crate::declared::targets::{Target, UnitSource};
+use crate::declared::tree::{Check, Tree};
 use crate::effect::{
     Action, Expect, Fact, Failure, Kind, Owner, PathFacts, ProgramFacts, Query, UserSpec,
 };
@@ -21,6 +22,7 @@ pub struct HealthReport {
     pub category: crate::declared::targets::Category,
     pub finding: Option<Finding>,
     pub drift: Option<Drift>,
+    pub blocked_by: Option<String>,
 }
 
 impl HealthReport {
@@ -57,6 +59,10 @@ pub enum Unfixable {
     /// A user's file where a file mix manages belongs, which repair will not delete.
     #[error("in the way of a file `mix` manages")]
     InTheWay,
+
+    /// A directory mix relies on but does not create, such as a home directory.
+    #[error("missing, and not `mix`'s to create")]
+    Outside,
 }
 
 /// What an inspection measured about an artifact that is not as it should be.
@@ -162,7 +168,9 @@ impl Finding {
 
 pub fn queries(target: &Target<'_>) -> Vec<Query> {
     match target {
-        Target::Parent { path, .. } => vec![Query::Path(path.to_path_buf())],
+        Target::Precondition { path } | Target::Parent { path, .. } => {
+            vec![Query::Path(path.to_path_buf())]
+        }
         Target::Directory { path, owner, .. } => {
             let mut queries = vec![Query::Path(path.to_path_buf())];
             if owner.is_some_and(|(uid, _)| uid != 0) {
@@ -227,15 +235,10 @@ pub fn queries(target: &Target<'_>) -> Vec<Query> {
             },
         ],
         Target::Journals { path } => vec![Query::Journals((*path).into())],
-        Target::Leftovers { user, journals } => {
-            let mut queries = vec![Query::Journals((*journals).into())];
-            queries.extend(
-                crate::declared::targets::written_dirs(user.as_deref())
-                    .into_iter()
-                    .map(Query::Leftovers),
-            );
-            queries
-        }
+        Target::Leftovers { dir, journals } => vec![
+            Query::Journals((*journals).into()),
+            Query::Leftovers(dir.to_path_buf()),
+        ],
         Target::Generations { user, .. } => vec![Query::Profile(InvokingUser::clone(user))],
         Target::HomeFiles { user, .. } => vec![Query::Clobbered(InvokingUser::clone(user))],
     }
@@ -353,7 +356,8 @@ pub fn drift(target: &Target<'_>, facts: &[Fact]) -> Option<Drift> {
                 hunks: hunks(&text(source), &text(installed)),
             })
         }
-        Target::Parent { .. }
+        Target::Precondition { .. }
+        | Target::Parent { .. }
         | Target::Directory { .. }
         | Target::File { expected: None, .. }
         | Target::SeededFile { .. }
@@ -373,6 +377,11 @@ pub fn drift(target: &Target<'_>, facts: &[Fact]) -> Option<Drift> {
 
 pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
     match target {
+        Target::Precondition { .. } => {
+            let found = path_facts(facts, 0);
+            absent(found.kind)
+                .or_else(|| (found.kind != Kind::Directory).then_some(Finding::NotADirectory))
+        }
         Target::Parent { bits, owner, .. } => {
             let found = path_facts(facts, 0);
             if let Some(finding) = absent(found.kind) {
@@ -654,6 +663,7 @@ pub fn fix(
         return Err(reason);
     }
     Ok(match target {
+        Target::Precondition { .. } => return Err(Unfixable::Outside),
         Target::Parent { path, bits, owner } => match finding {
             Finding::Owner { actual, expected } => vec![Action::SetOwner {
                 path: path.to_path_buf(),
@@ -896,10 +906,104 @@ fn replaced(path: &Path, found: &PathFacts, user: &InvokingUser) -> Vec<Action> 
     actions
 }
 
+pub enum Audited {
+    Observe(Vec<Query>),
+    Reported,
+    Done,
+}
+
+pub struct Audit<'a> {
+    checks: Vec<Check<'a>>,
+    causes: Vec<Option<usize>>,
+    reports: Vec<HealthReport>,
+}
+
+fn unreadable(failure: &Failure) -> Finding {
+    Finding::Unreadable {
+        kind: match failure {
+            Failure::Io { kind, .. } | Failure::SpawnFailed { kind, .. } => *kind,
+            _ => std::io::ErrorKind::Other,
+        },
+    }
+}
+
+impl<'a> Audit<'a> {
+    pub fn new(tree: Tree<'a>) -> Self {
+        let checks = tree.into_checks();
+        Self {
+            causes: vec![None; checks.len()],
+            reports: Vec::with_capacity(checks.len()),
+            checks,
+        }
+    }
+
+    pub fn planned(&self) -> impl Iterator<Item = String> + '_ {
+        self.checks.iter().map(|check| check.label().into_owned())
+    }
+
+    pub fn step(&mut self, facts: Option<Result<Vec<Fact>, Failure>>) -> Audited {
+        let at = self.reports.len();
+        let Some(check) = self.checks.get(at) else {
+            return Audited::Done;
+        };
+        let (finding, drift, blocked_by) = match facts {
+            Some(Ok(facts)) => (
+                classify(&check.target, &facts),
+                drift(&check.target, &facts),
+                None,
+            ),
+            Some(Err(failure)) => (Some(unreadable(&failure)), None, None),
+            None => match check.waits_on().find_map(|before| self.causes[before]) {
+                Some(cause) => {
+                    self.causes[at] = Some(cause);
+                    (None, None, Some(self.checks[cause].label().into_owned()))
+                }
+                None => return Audited::Observe(queries(&check.target)),
+            },
+        };
+        if finding.is_some() {
+            self.causes[at] = Some(at);
+        }
+        self.reports.push(HealthReport {
+            name: check.label().into_owned(),
+            category: check.target.category(),
+            finding,
+            drift,
+            blocked_by,
+        });
+        Audited::Reported
+    }
+
+    pub fn last(&self) -> Option<&HealthReport> {
+        self.reports.last()
+    }
+
+    pub fn into_reports(self) -> Vec<HealthReport> {
+        self.reports
+    }
+}
+
+pub fn audit(
+    tree: Tree<'_>,
+    mut observe: impl FnMut(&[Query]) -> Result<Vec<Fact>, Failure>,
+) -> Vec<HealthReport> {
+    let mut audit = Audit::new(tree);
+    let mut facts = None;
+    loop {
+        match audit.step(facts.take()) {
+            Audited::Observe(queries) => facts = Some(observe(&queries)),
+            Audited::Reported => {}
+            Audited::Done => return audit.into_reports(),
+        }
+    }
+}
+
 pub struct TargetStep {
     target: Target<'static>,
     label: String,
     request: String,
+    after: Vec<usize>,
+    within: std::ops::Range<usize>,
 }
 
 impl StepSpec for TargetStep {
@@ -913,6 +1017,14 @@ impl StepSpec for TargetStep {
 
     fn queries(&self) -> Vec<Query> {
         queries(&self.target)
+    }
+
+    fn after(&self) -> &[usize] {
+        &self.after
+    }
+
+    fn within(&self) -> std::ops::Range<usize> {
+        self.within.clone()
     }
 
     fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
@@ -929,7 +1041,9 @@ impl StepSpec for TargetStep {
 pub const RESTART_NIX_DAEMON: &str = "restart-nix-daemon";
 pub const RECORD_REPAIRED: &str = "record-repaired-config";
 
-struct RestartIfStale;
+struct RestartIfStale {
+    after: Vec<usize>,
+}
 
 impl StepSpec for RestartIfStale {
     fn key(&self) -> Cow<'static, str> {
@@ -938,6 +1052,10 @@ impl StepSpec for RestartIfStale {
 
     fn title(&self) -> Title {
         Title::new(Verb::Restarting, "Nix daemon")
+    }
+
+    fn after(&self) -> &[usize] {
+        &self.after
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -959,6 +1077,7 @@ impl StepSpec for RestartIfStale {
 
 struct RecordRepaired {
     user: identity::InvokingUser,
+    after: Vec<usize>,
 }
 
 impl StepSpec for RecordRepaired {
@@ -968,6 +1087,10 @@ impl StepSpec for RecordRepaired {
 
     fn title(&self) -> Title {
         Title::new(Verb::Recording, "repaired configuration")
+    }
+
+    fn after(&self) -> &[usize] {
+        &self.after
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -987,28 +1110,49 @@ impl StepSpec for RecordRepaired {
     }
 }
 
-pub fn repair_steps(targets: Vec<Target<'_>>, request: &str) -> Vec<Box<dyn StepSpec>> {
-    let user = targets.iter().find_map(|target| match target {
-        Target::History { user, .. } => Some(InvokingUser::clone(user)),
-        _ => None,
-    });
-    let mut steps = target_steps(targets, request);
-    steps.push(Box::new(RestartIfStale));
-    if let Some(user) = user {
-        steps.push(Box::new(RecordRepaired { user }));
+pub fn repair_steps(tree: Tree<'_>, request: &str) -> Vec<Box<dyn StepSpec>> {
+    let checks = tree.into_checks();
+    let position = |wanted: &dyn Fn(&Target<'_>) -> bool| {
+        checks.iter().position(|check| wanted(&check.target))
+    };
+    let restart_after: Vec<usize> = [
+        position(&|target| matches!(target, Target::File { path, .. } if path.as_ref() == Path::new(NIX_CONF_DEST))),
+        position(&|target| matches!(target, Target::SystemdUnit { name, .. } if *name == NIX_DAEMON_SERVICE_UNIT)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let history = checks
+        .iter()
+        .enumerate()
+        .find_map(|(index, check)| match &check.target {
+            Target::History { user, .. } => Some((index, InvokingUser::clone(user))),
+            _ => None,
+        });
+    let mut steps = target_steps(checks, request);
+    steps.push(Box::new(RestartIfStale {
+        after: restart_after,
+    }));
+    if let Some((index, user)) = history {
+        steps.push(Box::new(RecordRepaired {
+            user,
+            after: vec![index],
+        }));
     }
     steps
 }
 
-pub fn target_steps(targets: Vec<Target<'_>>, request: &str) -> Vec<Box<dyn StepSpec>> {
-    targets
+pub fn target_steps(checks: Vec<Check<'_>>, request: &str) -> Vec<Box<dyn StepSpec>> {
+    checks
         .into_iter()
-        .map(|target| {
-            let target = target.into_owned();
+        .map(|check| {
+            let check = check.into_owned();
             Box::new(TargetStep {
-                label: target.label().into_owned(),
-                target,
+                label: check.label().into_owned(),
+                target: check.target,
                 request: request.to_string(),
+                after: check.after,
+                within: check.within,
             }) as Box<dyn StepSpec>
         })
         .collect()

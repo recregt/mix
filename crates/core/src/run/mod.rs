@@ -39,6 +39,14 @@ pub trait StepSpec: Send + Sync {
     fn shielded(&self) -> bool {
         false
     }
+
+    fn after(&self) -> &[usize] {
+        &[]
+    }
+
+    fn within(&self) -> std::ops::Range<usize> {
+        0..0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +116,7 @@ pub enum StepOutcome {
     Changed,
     Failed(Failure),
     Cancelled(Cancellation),
+    Blocked(Cow<'static, str>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,6 +186,7 @@ pub struct Runner {
     performed: u64,
     independent: bool,
     after: After,
+    causes: Vec<Option<usize>>,
 }
 
 impl Runner {
@@ -201,6 +211,7 @@ impl Runner {
             performed: 0,
             independent: false,
             after: After::Close,
+            causes: Vec::new(),
         }
     }
 
@@ -224,6 +235,7 @@ impl Runner {
     }
 
     fn fail(&mut self, step: usize, failure: Failure) {
+        self.caused(step, step);
         self.record(step, || StepOutcome::Failed(failure.clone()));
         let failed = Verdict::Failed {
             step: self.steps[step].key(),
@@ -269,6 +281,25 @@ impl Runner {
             Err(failure) => Ending::failed(diagnostic(failure)),
         };
         finish(tree, node, ending);
+    }
+
+    fn caused(&mut self, step: usize, cause: usize) {
+        if self.causes.is_empty() {
+            self.causes = vec![None; self.steps.len()];
+        }
+        self.causes[step] = Some(cause);
+    }
+
+    fn blocker(&self, step: usize) -> Option<usize> {
+        if self.causes.is_empty() {
+            return None;
+        }
+        let spec = &self.steps[step];
+        spec.after()
+            .iter()
+            .copied()
+            .chain(spec.within())
+            .find_map(|dependency| self.causes.get(dependency).copied().flatten())
     }
 
     fn current_node(&self) -> Option<NodeId> {
@@ -332,6 +363,16 @@ impl Runner {
                         self.finish_or_commit();
                     } else if let Some(cause) = self.stop {
                         self.cancel(cause, None);
+                    } else if let Some(cause) = self.blocker(step) {
+                        let by = self.steps[cause].key();
+                        tree.blocked(self.plan, self.steps[step].key(), by.clone())
+                            .expect("each step key is claimed once");
+                        self.caused(step, cause);
+                        self.record(step, || StepOutcome::Blocked(by));
+                        self.phase = Phase::Checking {
+                            step: step + 1,
+                            asked: false,
+                        };
                     } else {
                         self.phase = Phase::Checking { step, asked: true };
                         return Next::Observe(self.steps[step].queries());

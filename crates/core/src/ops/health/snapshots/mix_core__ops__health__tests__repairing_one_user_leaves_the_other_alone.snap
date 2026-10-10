@@ -19,7 +19,7 @@ expression: "run.case(&before, &world)"
         "action": "CHANGE_ACTION_DELETE",
         "operation": "OPERATION_REMOVE_CREATED_TREE",
         "status": "STATUS_SUCCEEDED",
-        "step": "leftovers of interrupted writes",
+        "step": "/home/alice/.local/state/mix leftovers",
         "subject": "/home/alice/.local/state/mix/.home.nix.mix-backup-model-104",
         "undone": false,
         "unknown": []
@@ -34,184 +34,9 @@ expression: "run.case(&before, &world)"
     "status": "STATUS_SUCCEEDED",
     "steps": [
       {
-        "key": "/etc/mix",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/etc/mix",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/etc/nix",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/etc/nix",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/etc/profile.d",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/etc/profile.d",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/var/lib/mix",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/var/lib/mix",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/var/lib/mix/bin",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/var/lib/mix/bin",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/nix",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/nix/store",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix/store",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/nix/var",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix/var",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/nix/var/log",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix/var/log",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/nix/var/log/nix",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix/var/log/nix",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/nix/var/log/nix/drvs",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix/var/log/nix/drvs",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/nix/var/nix",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix/var/nix",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/nix/var/nix/db",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix/var/nix/db",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/nix/var/nix/gcroots",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix/var/nix/gcroots",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/nix/var/nix/gcroots/per-user",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix/var/nix/gcroots/per-user",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/nix/var/nix/profiles",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix/var/nix/profiles",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/nix/var/nix/profiles/per-user",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix/var/nix/profiles/per-user",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/nix/var/nix/temproots",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix/var/nix/temproots",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/nix/var/nix/userpool",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix/var/nix/userpool",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/nix/var/nix/daemon-socket",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix/var/nix/daemon-socket",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/nix/.mix-managed",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix/.mix-managed",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/etc/mix/policy.json",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/etc/mix/policy.json",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/etc/nix/nix.conf",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/etc/nix/nix.conf",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/etc/profile.d/mix-nix.sh",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/etc/profile.d/mix-nix.sh",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
         "key": "nixbld",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "nixbld",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "mix-users",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "mix-users",
         "undone": false,
         "verb": "VERB_REPAIRING"
       },
@@ -440,16 +265,331 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_REPAIRING"
       },
       {
-        "key": "nix-daemon.service",
+        "key": "mix-users",
         "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "nix-daemon.service",
+        "subject": "mix-users",
         "undone": false,
         "verb": "VERB_REPAIRING"
       },
       {
-        "key": "nix-daemon.socket",
+        "key": "alice",
         "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "nix-daemon.socket",
+        "subject": "alice",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix/.mix-managed",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/.mix-managed",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix/store",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/store",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix/var",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix/var/log",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/log",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix/var/log/nix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/log/nix",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix/var/log/nix/drvs",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/log/nix/drvs",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix/var/log/nix leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/log/nix leftovers",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix/var/log leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/log leftovers",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix/var/nix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/nix",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix/var/nix/daemon-socket",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/nix/daemon-socket",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix/var/nix/db",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/nix/db",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix/var/nix/gcroots",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/nix/gcroots",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix/var/nix/gcroots/per-user",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/nix/gcroots/per-user",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix/var/nix/gcroots leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/nix/gcroots leftovers",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix/var/nix/profiles",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/nix/profiles",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "default profile",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "default profile",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix/var/nix/profiles/per-user",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/nix/profiles/per-user",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix/var/nix/profiles leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/nix/profiles leftovers",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix/var/nix/temproots",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/nix/temproots",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix/var/nix/userpool",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/nix/userpool",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix/var/nix leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/nix leftovers",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix/var leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var leftovers",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/nix leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix leftovers",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/var",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/var",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/var/lib",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/var/lib",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/var/lib/mix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/var/lib/mix",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/var/lib/mix/bin",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/var/lib/mix/bin",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/var/lib/mix/bin/mix-daemon",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/var/lib/mix/bin/mix-daemon",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/var/lib/mix/bin leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/var/lib/mix/bin leftovers",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/var/lib/mix/journal",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/var/lib/mix/journal",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/var/lib/mix leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/var/lib/mix leftovers",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/var/lib leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/var/lib leftovers",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/etc",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/etc/mix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc/mix",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/etc/mix/policy.json",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc/mix/policy.json",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/etc/mix leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc/mix leftovers",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/etc/nix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc/nix",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/etc/nix/nix.conf",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc/nix/nix.conf",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/etc/nix leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc/nix leftovers",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/etc/profile.d",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc/profile.d",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/etc/profile.d/mix-nix.sh",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc/profile.d/mix-nix.sh",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/etc/profile.d leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc/profile.d leftovers",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/etc/systemd",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc/systemd",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/etc/systemd/system",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc/systemd/system",
         "undone": false,
         "verb": "VERB_REPAIRING"
       },
@@ -468,23 +608,37 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_REPAIRING"
       },
       {
-        "key": "default profile",
+        "key": "nix-daemon.service",
         "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "default profile",
+        "subject": "nix-daemon.service",
         "undone": false,
         "verb": "VERB_REPAIRING"
       },
       {
-        "key": "/var/lib/mix/bin/mix-daemon",
+        "key": "nix-daemon.socket",
         "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/var/lib/mix/bin/mix-daemon",
+        "subject": "nix-daemon.socket",
         "undone": false,
         "verb": "VERB_REPAIRING"
       },
       {
-        "key": "/var/lib/mix/journal",
+        "key": "/etc/systemd/system leftovers",
         "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/var/lib/mix/journal",
+        "subject": "/etc/systemd/system leftovers",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/etc leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc leftovers",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/home/alice",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice",
         "undone": false,
         "verb": "VERB_REPAIRING"
       },
@@ -503,58 +657,9 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_REPAIRING"
       },
       {
-        "key": "/home/alice/.local/state/nix",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/home/alice/.local/state/nix",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
         "key": "/home/alice/.local/state/mix",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/home/alice/.local/state/mix",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/home/alice/.local/state/nix/profiles",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/home/alice/.local/state/nix/profiles",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/home/alice/.local/state/mix/home.nix",
-        "status": "STATUS_SUCCEEDED",
-        "subject": "/home/alice/.local/state/mix/home.nix",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/home/alice/.local/state/mix/flake.nix",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/home/alice/.local/state/mix/flake.nix",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/home/alice/.local/state/mix/flake.lock",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/home/alice/.local/state/mix/flake.lock",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/home/alice/.local/state/mix/.gitignore",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/home/alice/.local/state/mix/.gitignore",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/home/alice/.local/state/mix/state",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/home/alice/.local/state/mix/state",
         "undone": false,
         "verb": "VERB_REPAIRING"
       },
@@ -580,9 +685,65 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_REPAIRING"
       },
       {
-        "key": "alice",
+        "key": "/home/alice/.local/state/mix/.git leftovers",
         "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "alice",
+        "subject": "/home/alice/.local/state/mix/.git leftovers",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/home/alice/.local/state/mix/.gitignore",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/mix/.gitignore",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/home/alice/.local/state/mix/flake.lock",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/mix/flake.lock",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/home/alice/.local/state/mix/flake.nix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/mix/flake.nix",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/home/alice/.local/state/mix/home.nix",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "/home/alice/.local/state/mix/home.nix",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/home/alice/.local/state/mix/state",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/mix/state",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/home/alice/.local/state/mix leftovers",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "/home/alice/.local/state/mix leftovers",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/home/alice/.local/state/nix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/nix",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/home/alice/.local/state/nix/profiles",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/nix/profiles",
         "undone": false,
         "verb": "VERB_REPAIRING"
       },
@@ -594,16 +755,44 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_REPAIRING"
       },
       {
-        "key": "/home/alice",
+        "key": "/home/alice/.local/state/nix leftovers",
         "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/home/alice",
+        "subject": "/home/alice/.local/state/nix leftovers",
         "undone": false,
         "verb": "VERB_REPAIRING"
       },
       {
-        "key": "leftovers of interrupted writes",
-        "status": "STATUS_SUCCEEDED",
-        "subject": "leftovers of interrupted writes",
+        "key": "/home/alice/.local/state leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state leftovers",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/home/alice/.local leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local leftovers",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/home/alice files in the way",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice files in the way",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/home/alice leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice leftovers",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "/ leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/ leftovers",
         "undone": false,
         "verb": "VERB_REPAIRING"
       },

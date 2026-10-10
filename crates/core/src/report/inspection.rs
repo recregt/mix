@@ -19,6 +19,7 @@ pub fn report(report: &HealthReport) -> InspectionReport {
             .as_ref()
             .and_then(Finding::unfixable)
             .map_or(WireUnfixable::Unspecified, unfixable) as i32,
+        blocked_by: report.blocked_by.clone().unwrap_or_default(),
     }
 }
 
@@ -29,6 +30,7 @@ pub fn unfixable(reason: Unfixable) -> WireUnfixable {
         Unfixable::MissingRuntime => WireUnfixable::MissingRuntime,
         Unfixable::Unrecovered => WireUnfixable::Unrecovered,
         Unfixable::InTheWay => WireUnfixable::InTheWay,
+        Unfixable::Outside => WireUnfixable::Outside,
     }
 }
 

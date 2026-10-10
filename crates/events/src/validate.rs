@@ -61,6 +61,9 @@ pub enum Violation {
     #[error("child {key} of node {parent} was not run for no stated reason")]
     UnspecifiedReason { parent: u64, key: String },
 
+    #[error("child {key} of node {parent} names a blocker exactly when it was not blocked")]
+    BlockerMismatch { parent: u64, key: String },
+
     #[error("node {id} has a cancellation cause exactly when it was not cancelled")]
     CancellationMismatch { id: u64 },
 
@@ -353,6 +356,12 @@ impl Validator {
         let reason = not_run.reason();
         if reason == NotRunReason::Unspecified {
             return Err(Violation::UnspecifiedReason {
+                parent: parent_id,
+                key: not_run.key.clone(),
+            });
+        }
+        if (reason == NotRunReason::Blocked) == not_run.blocked_by.is_empty() {
+            return Err(Violation::BlockerMismatch {
                 parent: parent_id,
                 key: not_run.key.clone(),
             });

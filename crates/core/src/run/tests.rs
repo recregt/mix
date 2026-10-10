@@ -277,6 +277,94 @@ fn an_independent_step_that_fails_is_undone_alone_and_the_others_still_run() {
     assert!(validate(&run.stream).is_ok());
 }
 
+struct Waiting {
+    step: EnsureDir,
+    after: Vec<usize>,
+}
+
+impl StepSpec for Waiting {
+    fn key(&self) -> Cow<'static, str> {
+        self.step.key()
+    }
+
+    fn title(&self) -> crate::run::Title {
+        self.step.title()
+    }
+
+    fn queries(&self) -> Vec<Query> {
+        self.step.queries()
+    }
+
+    fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
+        self.step.actions(facts)
+    }
+
+    fn after(&self) -> &[usize] {
+        &self.after
+    }
+}
+
+#[test]
+fn an_independent_step_after_a_failed_one_is_blocked_and_the_rest_still_run() {
+    let dir = |key, path: &str| EnsureDir {
+        key,
+        path: path.into(),
+        mode: 0o755,
+    };
+    let steps: Vec<Box<dyn StepSpec>> = vec![
+        Box::new(dir("create-nix-dir", "/nix")),
+        Box::new(dir("create-nix-var", "/nix/var")),
+        Box::new(Waiting {
+            step: dir("create-nix-store", "/nix/var/nix"),
+            after: vec![1],
+        }),
+        Box::new(Waiting {
+            step: dir("create-nix-db", "/nix/var/nix/db"),
+            after: vec![2],
+        }),
+        Box::new(dir("create-etc-nix", "/etc/nix")),
+    ];
+    let mut world = World::default();
+
+    let run = drive_runner(
+        &mut world,
+        Runner::new(ROOT, steps).independent(),
+        Script::failing_at(1),
+    );
+
+    let blocked: Vec<(String, StepOutcome)> = run
+        .report()
+        .steps
+        .iter()
+        .filter(|(_, outcome)| matches!(outcome, StepOutcome::Blocked(_)))
+        .map(|(key, outcome)| (key.to_string(), outcome.clone()))
+        .collect();
+    assert_eq!(
+        blocked,
+        [
+            (
+                "create-nix-store".to_string(),
+                StepOutcome::Blocked("create-nix-var".into())
+            ),
+            (
+                "create-nix-db".to_string(),
+                StepOutcome::Blocked("create-nix-var".into())
+            ),
+        ]
+    );
+    assert_eq!(
+        outcome(&run, "bootstrap/plan/create-nix-store"),
+        Some(EventOutcome::NotRun(NotRunReason::Blocked))
+    );
+    assert!(world.files.contains_key(std::path::Path::new("/etc/nix")));
+    assert!(
+        !world
+            .files
+            .contains_key(std::path::Path::new("/nix/var/nix"))
+    );
+    assert!(validate(&run.stream).is_ok());
+}
+
 #[test]
 fn an_independent_run_that_is_stopped_undoes_the_step_in_progress_and_keeps_the_rest() {
     let mut world = World::default();

@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use mix_core::declared::targets::Target;
+use mix_core::declared::tree::Check;
 use mix_core::ops::health;
 use mix_core::run::Runner;
 use mix_core::run::journal::Record;
@@ -58,6 +59,13 @@ fn declared_tree(root: &std::path::Path, n: usize) -> Vec<Target<'static>> {
     items
 }
 
+fn checks(targets: &[Target<'static>]) -> Vec<Check<'static>> {
+    targets
+        .iter()
+        .map(|target| Check::alone(target.clone()))
+        .collect()
+}
+
 fn mode_of(path: &std::path::Path) -> u32 {
     std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(path).unwrap().permissions())
         & 0o7777
@@ -70,7 +78,7 @@ fn performer() -> Performer {
 fn repair(
     rt: &tokio::runtime::Runtime,
     performer: &mut Performer,
-    targets: Vec<Target<'static>>,
+    checks: Vec<Check<'static>>,
 ) -> Runner {
     let outbox = Arc::new(Outbox::new("bench", || {}));
     let mut tree = Tree::new(
@@ -78,7 +86,7 @@ fn repair(
         Arc::new(|| None),
         Start::command("repair", Command::default()),
     );
-    let mut runner = Runner::new(ROOT, health::target_steps(targets, "bench")).independent();
+    let mut runner = Runner::new(ROOT, health::target_steps(checks, "bench")).independent();
     let mut journal: Vec<Record> = Vec::new();
     let scope = mix_exec::Scope::root();
     let stopped: mix_events::Stopped = Arc::new(|| None);
@@ -132,8 +140,8 @@ fn repair_the_declared_targets(bencher: divan::Bencher, n: usize) {
     let mut performer = performer();
 
     bencher
-        .with_inputs(|| targets.clone())
-        .bench_local_values(|targets| repair(&rt, &mut performer, targets));
+        .with_inputs(|| checks(&targets))
+        .bench_local_values(|checks| repair(&rt, &mut performer, checks));
 }
 
 /// A whole `mix repair` run over one file whose contents drifted: observed, classified, replaced
@@ -153,7 +161,7 @@ fn repair_a_file_that_drifted(bencher: divan::Bencher) {
     bencher
         .with_inputs(|| {
             std::fs::write(&path, "drifted\n").unwrap();
-            vec![target.clone()]
+            checks(std::slice::from_ref(&target))
         })
-        .bench_local_values(|targets| repair(&rt, &mut performer, targets));
+        .bench_local_values(|checks| repair(&rt, &mut performer, checks));
 }

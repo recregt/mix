@@ -58,6 +58,7 @@ fn report(name: &str, finding: Finding) -> InspectionReport {
         category: Category::Filesystem,
         finding: Some(finding),
         drift: None,
+        blocked_by: None,
     })
 }
 

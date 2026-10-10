@@ -485,7 +485,10 @@ fn drift(target: &str) -> Option<mix_core::ops::health::Drift> {
     })
 }
 
-fn doctored(findings: &[(&str, Option<mix_core::ops::health::Finding>)]) -> Vec<Envelope> {
+fn doctored(
+    findings: &[(&str, Option<mix_core::ops::health::Finding>)],
+    blocked: &[(&str, &str)],
+) -> Vec<Envelope> {
     let outbox = Arc::new(Outbox::new("01920000-0000-7000-8000-000000000005", || {}));
     let mut tree = Tree::new(
         Arc::clone(&outbox),
@@ -509,8 +512,18 @@ fn doctored(findings: &[(&str, Option<mix_core::ops::health::Finding>)]) -> Vec<
                     category: mix_core::Category::Filesystem,
                     finding: finding.clone(),
                     drift: drift(target),
+                    blocked_by: None,
                 })
             })
+            .chain(blocked.iter().map(|(target, by)| {
+                mix_core::report::inspection::report(&mix_core::ops::health::HealthReport {
+                    name: (*target).into(),
+                    category: mix_core::Category::Filesystem,
+                    finding: None,
+                    drift: None,
+                    blocked_by: Some((*by).into()),
+                })
+            }))
             .collect(),
     };
     let problems = findings.iter().any(|(_, finding)| finding.is_some());
@@ -529,8 +542,8 @@ fn doctored(findings: &[(&str, Option<mix_core::ops::health::Finding>)]) -> Vec<
 fn doctor_reads_at_every_level_as_recorded() {
     use mix_core::ops::health::Finding;
 
-    let healthy = doctored(&[("/nix", None), ("nix-daemon.service", None)]);
-    let problems = doctored(&[
+    let healthy = doctored(&[("/nix", None), ("nix-daemon.service", None)], &[]);
+    let problems = &[
         ("/nix", None),
         ("/etc/nix/nix.conf", Some(Finding::ContentDrift)),
         ("nix-daemon.service", Some(Finding::UnitDrift)),
@@ -542,7 +555,14 @@ fn doctor_reads_at_every_level_as_recorded() {
             }),
         ),
         ("default profile", Some(Finding::RuntimeMissing)),
-    ]);
+    ];
+    let problems = doctored(
+        problems,
+        &[
+            ("/nix/var/nix/profiles/per-user", "/nix/var/nix/profiles"),
+            ("nix-daemon.socket", "default profile"),
+        ],
+    );
     for (name, envelopes) in [("doctor-healthy", healthy), ("doctor-problems", problems)] {
         mix_events::validate(envelopes.iter()).unwrap();
         let (_, captured) = captured(&envelopes);
@@ -557,6 +577,70 @@ fn doctor_reads_at_every_level_as_recorded() {
             );
         }
     }
+}
+
+fn repair_run(reports: Vec<mix_events::v1::RepairReport>) -> Vec<Envelope> {
+    let outbox = Arc::new(Outbox::new("01920000-0000-7000-8000-000000000006", || {}));
+    let mut tree = Tree::new(
+        Arc::clone(&outbox),
+        Arc::new(|| None),
+        Start::command(
+            "repair",
+            Command {
+                mix_version: "0.1.0".into(),
+                schema_minor: mix_events::SCHEMA_MINOR,
+                dry_run: false,
+                request: Some(Request::Repair(mix_events::v1::RepairRequest::default())),
+            },
+        ),
+    );
+    let problems = reports.iter().any(|report| !report.fixed);
+    tree.finish(
+        ROOT,
+        Ending::succeeded()
+            .with_result(node_finished::Result::Repair(
+                mix_events::v1::RepairResult { reports },
+            ))
+            .for_root(problems),
+    )
+    .unwrap();
+    drop(tree);
+    outbox.drain()
+}
+
+#[test]
+fn a_repair_names_what_it_left_alone_and_why() {
+    let envelopes = repair_run(vec![
+        mix_events::v1::RepairReport {
+            target: "/etc/nix/nix.conf".into(),
+            fixed: true,
+            failure: None,
+            blocked_by: String::new(),
+        },
+        mix_events::v1::RepairReport {
+            target: "/home/alice/.local/state/mix".into(),
+            fixed: false,
+            failure: Some(mix_events::v1::Diagnostic {
+                code: mix_events::v1::Code::Io as i32,
+                severity: mix_events::v1::Severity::Error as i32,
+                message: "/home/alice/.local/state/mix: permission denied".into(),
+                ..Default::default()
+            }),
+            blocked_by: String::new(),
+        },
+        mix_events::v1::RepairReport {
+            target: "/home/alice/.local/state/mix/home.nix".into(),
+            fixed: false,
+            failure: None,
+            blocked_by: "/home/alice/.local/state/mix".into(),
+        },
+    ]);
+    mix_events::validate(envelopes.iter()).unwrap();
+    let (_, captured) = captured(&envelopes);
+    golden(
+        "repair-blocked",
+        rendered(&captured, Detail::Step).as_bytes(),
+    );
 }
 
 fn slot(envelope: &Envelope) -> Option<usize> {
