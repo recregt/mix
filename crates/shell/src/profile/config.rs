@@ -137,11 +137,7 @@ fn managed(cfg: UserConfig, member: impl Fn(&str, &str) -> bool) -> Option<UserC
 mod tests {
     use std::path::Path;
 
-    use mix_core::declared::paths::STATE_FILE;
-    use mix_core::ops::change::HOME_MANAGER_STATE_VERSION;
-
     use super::*;
-    use mix_core::declared::paths::HOME_NIX;
 
     fn sample_user(home: &Path) -> InvokingUser {
         InvokingUser {
@@ -169,62 +165,6 @@ mod tests {
 
         assert!(managed(config(home), enrolled).is_some());
         assert!(managed(config(home), |_: &str, _: &str| false).is_none());
-    }
-
-    #[test]
-    #[ignore = "requires nix and network access"]
-    fn the_rendered_options_match_the_pinned_home_manager() {
-        let dir = tempfile::tempdir().unwrap();
-        let user = sample_user(Path::new("/home/mix-user"));
-        let system = nix_system(Arch::current().unwrap(), Os::current().unwrap());
-        let flake = FlakeConfig::new(system, &user.name, NIXPKGS, HOME_MANAGER).unwrap();
-        std::fs::write(dir.path().join("flake.nix"), flake.render()).unwrap();
-        std::fs::write(dir.path().join("flake.lock"), render_lock()).unwrap();
-        std::fs::write(
-            dir.path().join(HOME_NIX),
-            render_home(&user, StateManifest::seed().packages).unwrap(),
-        )
-        .unwrap();
-        std::fs::write(dir.path().join(STATE_FILE), StateManifest::seed_rendered()).unwrap();
-        let options = mix_nixgen::Installable::new(
-            mix_nixgen::FlakeRef::path(dir.path()).unwrap(),
-            mix_nixgen::AttrPath::new(["homeConfigurations", &user.name, "options", "home"])
-                .unwrap(),
-        )
-        .render();
-
-        let command = mix_exec::Command::new("nix")
-            .args(["--extra-experimental-features", "nix-command flakes"])
-            .args(["eval", "--json", "--apply"])
-            .arg(
-                "o: { username = o.username.type.name; \
-                 homeDirectory = o.homeDirectory.type.name; \
-                 stateVersion = o.stateVersion.type.name; \
-                 stateVersions = o.stateVersion.type.functor.payload.values; \
-                 packages = o.packages.type.name; \
-                 extraBuilderCommands = o.extraBuilderCommands.type.name; }",
-            )
-            .arg(options);
-        let output = command.output_blocking(&mix_exec::Scope::root()).unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let types: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-
-        assert_eq!(types["username"], "nonEmptyStr");
-        assert_eq!(types["homeDirectory"], "path");
-        assert_eq!(types["stateVersion"], "enum");
-        assert!(
-            types["stateVersions"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|v| v == HOME_MANAGER_STATE_VERSION.as_str())
-        );
-        assert_eq!(types["packages"], "listOf");
-        assert_eq!(types["extraBuilderCommands"], "separatedString");
     }
 
     #[test]

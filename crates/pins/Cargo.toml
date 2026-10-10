@@ -7,9 +7,5 @@ license = "MPL-2.0"
 
 [dependencies]
 
-[dev-dependencies]
-mix-exec = { path = "../exec" }
-serde_json = { workspace = true }
-
 [lints]
 workspace = true
