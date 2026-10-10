@@ -3,13 +3,18 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::declared::identity::{self, InvokingUser};
-use crate::declared::paths::{INDEX_LOCK, NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT};
+use crate::declared::paths::{
+    INDEX_LOCK, MIX_DAEMON_BIN, MIX_DAEMON_SERVICE_DEST, MIX_DAEMON_SERVICE_UNIT,
+    MIX_DAEMON_SOCKET_DEST, NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT, REPOSITORY_BRANCH, STATE_FILE,
+    mix_state_dir, repository_dir,
+};
 use crate::declared::targets::{Target, UnitSource};
 use crate::declared::tree::{Check, Tree};
 use crate::effect::{
     Action, Expect, Fact, Failure, Kind, Owner, PathFacts, ProgramFacts, Query, UserSpec,
 };
 use crate::ops::bootstrap::stale_restart;
+use crate::ops::change::{old_generations, validate};
 use crate::run::{StepSpec, Title};
 use mix_events::v1::Verb;
 
@@ -63,6 +68,10 @@ pub enum Unfixable {
     /// A directory mix relies on but does not create, such as a home directory.
     #[error("missing, and not `mix`'s to create")]
     Outside,
+
+    /// A unit someone masked, which mix will not unmask.
+    #[error("masked, and `mix` won't unmask it")]
+    Masked,
 }
 
 /// What an inspection measured about an artifact that is not as it should be.
@@ -146,6 +155,12 @@ pub enum Finding {
 
     /// Files in the user's home where the active generation links a managed file.
     InTheWay { paths: Vec<String> },
+
+    /// The active generation was not built from the package list.
+    ProfileStale,
+
+    /// Generations the retention of this run does not keep.
+    OldGenerations { generations: Vec<u64> },
 }
 
 impl Finding {
@@ -239,7 +254,14 @@ pub fn queries(target: &Target<'_>) -> Vec<Query> {
             Query::Journals((*journals).into()),
             Query::Leftovers(dir.to_path_buf()),
         ],
-        Target::Generations { user, .. } => vec![Query::Profile(InvokingUser::clone(user))],
+        Target::Generations { user, .. } | Target::Retention { user, .. } => {
+            vec![Query::Profile(InvokingUser::clone(user))]
+        }
+        Target::Activation { user, .. } => vec![
+            Query::Contents(mix_state_dir(&user.home).join(STATE_FILE)),
+            Query::ActiveList(InvokingUser::clone(user)),
+            Query::Path(repository_dir(&user.home).join(REPOSITORY_BRANCH)),
+        ],
         Target::HomeFiles { user, .. } => vec![Query::Clobbered(InvokingUser::clone(user))],
     }
 }
@@ -371,7 +393,9 @@ pub fn drift(target: &Target<'_>, facts: &[Fact]) -> Option<Drift> {
         | Target::Journals { .. }
         | Target::Leftovers { .. }
         | Target::Generations { .. }
-        | Target::HomeFiles { .. } => None,
+        | Target::HomeFiles { .. }
+        | Target::Activation { .. }
+        | Target::Retention { .. } => None,
     }
 }
 
@@ -586,6 +610,20 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
             }),
             _ => None,
         },
+        Target::Activation { .. } => {
+            let listed = std::str::from_utf8(contents(facts, 0)?).ok()?;
+            let active = contents(facts, 1)
+                .and_then(|active| std::str::from_utf8(active).ok())
+                .and_then(|active| validate(active).ok());
+            (active != validate(listed).ok()).then_some(Finding::ProfileStale)
+        }
+        Target::Retention { collect, .. } => {
+            let Fact::Profile(profile) = &facts[0] else {
+                return None;
+            };
+            let generations = old_generations(profile);
+            (!generations.is_empty() || *collect).then_some(Finding::OldGenerations { generations })
+        }
     }
 }
 
@@ -659,6 +697,17 @@ pub fn fix(
     facts: &[Fact],
     request: &str,
 ) -> Result<Vec<Action>, Unfixable> {
+    if let Target::PathExists {
+        install: Some(runtime),
+        ..
+    } = target
+    {
+        return Ok(vec![Action::InstallRuntime {
+            url: runtime.url.clone(),
+            sha256: runtime.sha256,
+            size: runtime.size,
+        }]);
+    }
     if let Some(reason) = finding.unfixable() {
         return Err(reason);
     }
@@ -783,6 +832,9 @@ pub fn fix(
             must_be_active,
             ..
         } => {
+            if matches!(&facts[2], Fact::Unit(unit) if unit.file_state.starts_with("masked")) {
+                return Err(Unfixable::Masked);
+            }
             let mut actions = Vec::new();
             if finding != Finding::UnitInactive {
                 let wanted = unit_source(src, facts).ok_or(Unfixable::MissingRuntime)?;
@@ -866,6 +918,32 @@ pub fn fix(
                 expect: *expect,
             })
             .collect(),
+        Target::Activation { user, .. } => vec![Action::ActivateProfile {
+            user: InvokingUser::clone(user),
+            source: if path_facts(facts, 2).kind == Kind::File {
+                crate::effect::FlakeSource::Git
+            } else {
+                crate::effect::FlakeSource::Path
+            },
+        }],
+        Target::Retention { user, collect, .. } => {
+            let Finding::OldGenerations { generations } = finding else {
+                return Ok(Vec::new());
+            };
+            let mut actions: Vec<Action> = generations
+                .into_iter()
+                .map(|generation| Action::DeleteGeneration {
+                    user: InvokingUser::clone(user),
+                    generation,
+                })
+                .collect();
+            if *collect {
+                actions.push(Action::CollectGarbage {
+                    user: InvokingUser::clone(user),
+                });
+            }
+            actions
+        }
         Target::Generations { user, .. } => {
             let Fact::Profile(profile) = &facts[0] else {
                 return Ok(Vec::new());
@@ -1002,6 +1080,7 @@ pub struct TargetStep {
     target: Target<'static>,
     label: String,
     request: String,
+    verb: Verb,
     after: Vec<usize>,
     within: std::ops::Range<usize>,
 }
@@ -1012,7 +1091,15 @@ impl StepSpec for TargetStep {
     }
 
     fn title(&self) -> Title {
-        Title::new(Verb::Repairing, self.label.clone())
+        match &self.target {
+            Target::Activation {
+                verb: Some(verb),
+                subject,
+                ..
+            } => Title::new(*verb, subject.clone().into_owned()),
+            Target::Retention { .. } => Title::new(Verb::Removing, "old generations"),
+            _ => Title::new(self.verb, self.label.clone()),
+        }
     }
 
     fn queries(&self) -> Vec<Query> {
@@ -1039,7 +1126,8 @@ impl StepSpec for TargetStep {
 }
 
 pub const RESTART_NIX_DAEMON: &str = "restart-nix-daemon";
-pub const RECORD_REPAIRED: &str = "record-repaired-config";
+pub const DRAIN_MIX_DAEMON: &str = "drain-mix-daemon";
+pub const RECORD: &str = "record";
 
 struct RestartIfStale {
     after: Vec<usize>,
@@ -1075,18 +1163,75 @@ impl StepSpec for RestartIfStale {
     }
 }
 
-struct RecordRepaired {
+struct DrainIfStale {
+    after: Vec<usize>,
+}
+
+const DRAINED_BY: [&str; 3] = [
+    MIX_DAEMON_BIN,
+    MIX_DAEMON_SERVICE_DEST,
+    MIX_DAEMON_SOCKET_DEST,
+];
+
+impl StepSpec for DrainIfStale {
+    fn key(&self) -> Cow<'static, str> {
+        DRAIN_MIX_DAEMON.into()
+    }
+
+    fn title(&self) -> Title {
+        Title::new(Verb::Restarting, "mix daemon")
+    }
+
+    fn after(&self) -> &[usize] {
+        &self.after
+    }
+
+    fn queries(&self) -> Vec<Query> {
+        let mut queries = vec![Query::Unit(MIX_DAEMON_SERVICE_UNIT.to_string())];
+        queries.extend(DRAINED_BY.iter().map(|path| Query::Path((*path).into())));
+        queries
+    }
+
+    fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
+        let Fact::Unit(service) = &facts[0] else {
+            return Ok(Vec::new());
+        };
+        let Some(since) = service
+            .active_since
+            .filter(|_| service.active_state == "active")
+        else {
+            return Ok(Vec::new());
+        };
+        let stale = (1..facts.len()).any(|index| {
+            path_facts(facts, index)
+                .changed
+                .is_some_and(|changed| changed > since)
+        });
+        Ok(stale
+            .then(|| Action::DrainService {
+                unit: MIX_DAEMON_SERVICE_UNIT.to_string(),
+            })
+            .into_iter()
+            .collect())
+    }
+}
+
+struct Record {
     user: identity::InvokingUser,
     after: Vec<usize>,
 }
 
-impl StepSpec for RecordRepaired {
+impl StepSpec for Record {
     fn key(&self) -> Cow<'static, str> {
-        RECORD_REPAIRED.into()
+        RECORD.into()
     }
 
     fn title(&self) -> Title {
-        Title::new(Verb::Recording, "repaired configuration")
+        Title::new(Verb::Recording, "configuration")
+    }
+
+    fn shielded(&self) -> bool {
+        true
     }
 
     fn after(&self) -> &[usize] {
@@ -1111,32 +1256,65 @@ impl StepSpec for RecordRepaired {
 }
 
 pub fn repair_steps(tree: Tree<'_>, request: &str) -> Vec<Box<dyn StepSpec>> {
+    reconcile_steps(Vec::new(), tree, request, Verb::Repairing)
+}
+
+pub fn reconcile_steps(
+    mut steps: Vec<Box<dyn StepSpec>>,
+    tree: Tree<'_>,
+    request: &str,
+    verb: Verb,
+) -> Vec<Box<dyn StepSpec>> {
+    let offset = steps.len();
     let checks = tree.into_checks();
-    let position = |wanted: &dyn Fn(&Target<'_>) -> bool| {
-        checks.iter().position(|check| wanted(&check.target))
+    let at = |wanted: &dyn Fn(&Target<'_>) -> bool| {
+        checks
+            .iter()
+            .position(|check| wanted(&check.target))
+            .map(|index| index + offset)
     };
-    let restart_after: Vec<usize> = [
-        position(&|target| matches!(target, Target::File { path, .. } if path.as_ref() == Path::new(NIX_CONF_DEST))),
-        position(&|target| matches!(target, Target::SystemdUnit { name, .. } if *name == NIX_DAEMON_SERVICE_UNIT)),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
+    let nix_conf = at(
+        &|target| matches!(target, Target::File { path, .. } if path.as_ref() == Path::new(NIX_CONF_DEST)),
+    );
+    let unit = |wanted: &'static str| {
+        at(&move |target| matches!(target, Target::SystemdUnit { name, .. } if *name == wanted))
+    };
+    let nix_service = unit(NIX_DAEMON_SERVICE_UNIT);
+    let mix_service = unit(MIX_DAEMON_SERVICE_UNIT);
+    let program = at(&|target| matches!(target, Target::Program { .. }));
+    let activation = at(&|target| matches!(target, Target::Activation { .. }));
     let history = checks
         .iter()
         .enumerate()
         .find_map(|(index, check)| match &check.target {
-            Target::History { user, .. } => Some((index, InvokingUser::clone(user))),
+            Target::History { user, .. } => Some((index + offset, InvokingUser::clone(user))),
             _ => None,
         });
-    let mut steps = target_steps(checks, request);
-    steps.push(Box::new(RestartIfStale {
-        after: restart_after,
+    steps.extend(checks.into_iter().map(|check| {
+        let check = check.into_owned();
+        Box::new(TargetStep {
+            label: check.label().into_owned(),
+            target: check.target,
+            request: request.to_string(),
+            verb,
+            after: check.after.iter().map(|index| index + offset).collect(),
+            within: check.within.start + offset..check.within.end + offset,
+        }) as Box<dyn StepSpec>
     }));
+    if let Some(service) = nix_service {
+        steps.push(Box::new(RestartIfStale {
+            after: nix_conf.into_iter().chain([service]).collect(),
+        }));
+    }
+    if let Some(service) = mix_service {
+        steps.push(Box::new(DrainIfStale {
+            after: program.into_iter().chain([service]).collect(),
+        }));
+    }
     if let Some((index, user)) = history {
-        steps.push(Box::new(RecordRepaired {
+        steps.push(Box::new(Record {
             user,
-            after: vec![index],
+            after: [index].into_iter().chain(activation).collect(),
         }));
     }
     steps
@@ -1151,6 +1329,7 @@ pub fn target_steps(checks: Vec<Check<'_>>, request: &str) -> Vec<Box<dyn StepSp
                 label: check.label().into_owned(),
                 target: check.target,
                 request: request.to_string(),
+                verb: Verb::Repairing,
                 after: check.after,
                 within: check.within,
             }) as Box<dyn StepSpec>

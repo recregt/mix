@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use mix_core::Result;
 use mix_core::declared::identity::InvokingUser;
-use mix_core::declared::paths::{GIT_DIR, MANAGED_FILES};
+use mix_core::declared::paths::{GIT_DIR, MANAGED_FILES, REPOSITORY_BRANCH as BRANCH};
 use mix_exec::Scope;
 
 use mix_exec::Command;
@@ -22,7 +22,6 @@ const AUTHOR: &[(&str, &str)] = &[
     ("GIT_COMMITTER_EMAIL", "mix@localhost"),
 ];
 const COMMIT_MESSAGE: &str = "mix: sync generated home-manager config";
-const BRANCH: &str = "refs/heads/main";
 
 const PROFILE_GIT: &str = ".nix-profile/bin/git";
 

@@ -10,8 +10,8 @@ expression: "run.case(&before, &world)"
         "action": "CHANGE_ACTION_UPDATE",
         "operation": "OPERATION_PUT_FILE",
         "status": "STATUS_SUCCEEDED",
-        "step": "write-config",
-        "subject": "/home/mix-user/.local/state/mix/state",
+        "step": "/home/mix-user/.local/state/mix/home.nix",
+        "subject": "/home/mix-user/.local/state/mix/home.nix",
         "undone": false,
         "unknown": []
       },
@@ -19,8 +19,8 @@ expression: "run.case(&before, &world)"
         "action": "CHANGE_ACTION_UPDATE",
         "operation": "OPERATION_PUT_FILE",
         "status": "STATUS_SUCCEEDED",
-        "step": "write-config",
-        "subject": "/home/mix-user/.local/state/mix/home.nix",
+        "step": "/home/mix-user/.local/state/mix/state",
+        "subject": "/home/mix-user/.local/state/mix/state",
         "undone": false,
         "unknown": []
       },
@@ -28,7 +28,7 @@ expression: "run.case(&before, &world)"
         "action": "CHANGE_ACTION_UPDATE",
         "operation": "OPERATION_ACTIVATE_PROFILE",
         "status": "STATUS_SUCCEEDED",
-        "step": "activate",
+        "step": "/home/mix-user profile",
         "subject": "mix-user's profile",
         "undone": false,
         "unknown": []
@@ -52,23 +52,135 @@ expression: "run.case(&before, &world)"
     "status": "STATUS_SUCCEEDED",
     "steps": [
       {
-        "key": "write-config",
-        "status": "STATUS_SUCCEEDED",
-        "subject": "package list",
+        "key": "mix-users",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "mix-users",
         "undone": false,
-        "verb": "VERB_WRITING"
+        "verb": "VERB_CONFIGURING"
       },
       {
-        "key": "activate",
+        "key": "mix-user",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "mix-user",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/mix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/mix",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/mix/.git",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/mix/.git",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/mix/.git/config",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/mix/.git/config",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/mix/.git history",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/mix/.git history",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/mix/.gitignore",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/mix/.gitignore",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/mix/flake.lock",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/mix/flake.lock",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/mix/flake.nix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/mix/flake.nix",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/mix/home.nix",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "/home/mix-user/.local/state/mix/home.nix",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/mix/state",
+        "status": "STATUS_SUCCEEDED",
+        "subject": "/home/mix-user/.local/state/mix/state",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/nix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/nix",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/nix/profiles",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/nix/profiles",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user profile",
         "status": "STATUS_SUCCEEDED",
         "subject": "ripgrep",
         "undone": false,
         "verb": "VERB_INSTALLING"
       },
       {
+        "key": "/home/mix-user files in the way",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user files in the way",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
         "key": "record",
         "status": "STATUS_SUCCEEDED",
-        "subject": "change",
+        "subject": "configuration",
         "undone": false,
         "verb": "VERB_RECORDING"
       }
@@ -160,8 +272,8 @@ expression: "run.case(&before, &world)"
     }
   },
   "performed": [
-    "PutFile /home/mix-user/.local/state/mix/state",
     "PutFile /home/mix-user/.local/state/mix/home.nix",
+    "PutFile /home/mix-user/.local/state/mix/state",
     "ActivateProfile mix-user's profile",
     "RecordState mix-user's package list",
     "Commit changes"

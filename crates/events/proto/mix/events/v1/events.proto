@@ -529,7 +529,13 @@ message Finding {
     Paths leftovers = 20;
     Generation generation_dangling = 21;
     Paths in_the_way = 22;
+    google.protobuf.Empty profile_stale = 23;
+    OldGenerations old_generations = 24;
   }
+}
+
+message OldGenerations {
+  repeated uint64 generations = 1;
 }
 
 message Interrupted {
@@ -651,6 +657,7 @@ enum Unfixable {
   UNFIXABLE_UNRECOVERED = 4;
   UNFIXABLE_IN_THE_WAY = 5;
   UNFIXABLE_OUTSIDE = 6;
+  UNFIXABLE_MASKED = 7;
 }
 
 message Diagnostic {

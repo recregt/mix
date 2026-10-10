@@ -230,12 +230,13 @@ async fn put_back(
 
     let mut reports = Vec::new();
     for (key, outcome) in std::mem::take(&mut report.steps) {
-        let restart = key == health::RESTART_NIX_DAEMON;
-        let name = if restart {
-            std::borrow::Cow::Borrowed("Nix daemon")
-        } else {
-            key
+        let restarted = match key.as_ref() {
+            health::RESTART_NIX_DAEMON => Some("Nix daemon"),
+            health::DRAIN_MIX_DAEMON => Some("mix daemon"),
+            _ => None,
         };
+        let restart = restarted.is_some();
+        let name = restarted.map_or(key, std::borrow::Cow::Borrowed);
         match outcome {
             StepOutcome::Changed if restart => {}
             StepOutcome::Changed => reports.push(RepairReport::repaired(name)),

@@ -31,6 +31,7 @@ pub fn unfixable(reason: Unfixable) -> WireUnfixable {
         Unfixable::Unrecovered => WireUnfixable::Unrecovered,
         Unfixable::InTheWay => WireUnfixable::InTheWay,
         Unfixable::Outside => WireUnfixable::Outside,
+        Unfixable::Masked => WireUnfixable::Masked,
     }
 }
 
@@ -99,6 +100,10 @@ pub fn finding(finding: Finding) -> WireFinding {
             Kind::GenerationDangling(Generation { generation })
         }
         Finding::InTheWay { paths } => Kind::InTheWay(Paths { paths }),
+        Finding::ProfileStale => Kind::ProfileStale(Default::default()),
+        Finding::OldGenerations { generations } => {
+            Kind::OldGenerations(mix_events::v1::OldGenerations { generations })
+        }
     };
     WireFinding { kind: Some(kind) }
 }

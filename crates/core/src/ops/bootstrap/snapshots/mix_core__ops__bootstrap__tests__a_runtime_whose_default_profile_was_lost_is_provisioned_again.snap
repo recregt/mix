@@ -10,7 +10,7 @@ expression: "again.case(&before, &world)"
         "action": "CHANGE_ACTION_CREATE",
         "operation": "OPERATION_INSTALL_RUNTIME",
         "status": "STATUS_SUCCEEDED",
-        "step": "fetch-runtime",
+        "step": "default profile",
         "subject": "https://mirror.internal/nix-2.35.2-x86_64-linux.tar.xz",
         "undone": false,
         "unknown": []
@@ -25,67 +25,641 @@ expression: "again.case(&before, &world)"
     "status": "STATUS_SUCCEEDED",
     "steps": [
       {
-        "key": "create-nix-dir",
+        "key": "nixbld",
         "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "Nix directory",
+        "subject": "nixbld",
         "undone": false,
-        "verb": "VERB_CREATING"
+        "verb": "VERB_CONFIGURING"
       },
       {
-        "key": "create-nix-tree",
+        "key": "nixbld1",
         "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "runtime directories",
+        "subject": "nixbld1",
         "undone": false,
-        "verb": "VERB_CREATING"
+        "verb": "VERB_CONFIGURING"
       },
       {
-        "key": "create-users-and-groups",
+        "key": "nixbld2",
         "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "build users and groups",
+        "subject": "nixbld2",
         "undone": false,
-        "verb": "VERB_CREATING"
+        "verb": "VERB_CONFIGURING"
       },
       {
-        "key": "fetch-runtime",
+        "key": "nixbld3",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld3",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld4",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld4",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld5",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld5",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld6",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld6",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld7",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld7",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld8",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld8",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld9",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld9",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld10",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld10",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld11",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld11",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld12",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld12",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld13",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld13",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld14",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld14",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld15",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld15",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld16",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld16",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld17",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld17",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld18",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld18",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld19",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld19",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld20",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld20",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld21",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld21",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld22",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld22",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld23",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld23",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld24",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld24",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld25",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld25",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld26",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld26",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld27",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld27",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld28",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld28",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld29",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld29",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld30",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld30",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld31",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld31",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nixbld32",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nixbld32",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "mix-users",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "mix-users",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "alice",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "alice",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/nix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/nix/.mix-managed",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/.mix-managed",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/nix/store",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/store",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/nix/var",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/nix/var/log",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/log",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/nix/var/log/nix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/log/nix",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/nix/var/log/nix/drvs",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/log/nix/drvs",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/nix/var/nix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/nix",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/nix/var/nix/daemon-socket",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/nix/daemon-socket",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/nix/var/nix/db",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/nix/db",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/nix/var/nix/gcroots",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/nix/gcroots",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/nix/var/nix/gcroots/per-user",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/nix/gcroots/per-user",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/nix/var/nix/profiles",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/nix/var/nix/profiles",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "default profile",
         "status": "STATUS_SUCCEEDED",
-        "subject": "Nix runtime",
-        "undone": false,
-        "verb": "VERB_INSTALLING"
-      },
-      {
-        "key": "write-nix-conf",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "runtime configuration",
-        "undone": false,
-        "verb": "VERB_WRITING"
-      },
-      {
-        "key": "configure-daemon",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "Nix daemon service",
+        "subject": "default profile",
         "undone": false,
         "verb": "VERB_CONFIGURING"
       },
       {
-        "key": "install-mix-daemon",
+        "key": "/nix/var/nix/profiles/per-user",
         "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "mix daemon service",
+        "subject": "/nix/var/nix/profiles/per-user",
         "undone": false,
         "verb": "VERB_CONFIGURING"
       },
       {
-        "key": "write-home-config",
+        "key": "/nix/var/nix/temproots",
         "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "profile configuration",
+        "subject": "/nix/var/nix/temproots",
         "undone": false,
-        "verb": "VERB_WRITING"
+        "verb": "VERB_CONFIGURING"
       },
       {
-        "key": "activate-home",
+        "key": "/nix/var/nix/userpool",
         "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "profile",
+        "subject": "/nix/var/nix/userpool",
         "undone": false,
-        "verb": "VERB_ACTIVATING"
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/var",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/var",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/var/empty",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/var/empty",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/var/lib",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/var/lib",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/var/lib/mix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/var/lib/mix",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/var/lib/mix/bin",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/var/lib/mix/bin",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/var/lib/mix/bin/mix-daemon",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/var/lib/mix/bin/mix-daemon",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/var/lib/mix/journal",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/var/lib/mix/journal",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/etc",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/etc/mix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc/mix",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/etc/mix/policy.json",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc/mix/policy.json",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/etc/nix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc/nix",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/etc/nix/nix.conf",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc/nix/nix.conf",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/etc/profile.d",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc/profile.d",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/etc/profile.d/mix-nix.sh",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc/profile.d/mix-nix.sh",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/etc/systemd",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc/systemd",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/etc/systemd/system",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/etc/systemd/system",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "mix-daemon.service",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "mix-daemon.service",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "mix-daemon.socket",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "mix-daemon.socket",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nix-daemon.service",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nix-daemon.service",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "nix-daemon.socket",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nix-daemon.socket",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/alice",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/alice/.local",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/alice/.local/state",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/alice/.local/state/mix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/mix",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/alice/.local/state/mix/.git",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/mix/.git",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/alice/.local/state/mix/.git/config",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/mix/.git/config",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/alice/.local/state/mix/.git history",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/mix/.git history",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/alice/.local/state/mix/.gitignore",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/mix/.gitignore",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/alice/.local/state/mix/flake.lock",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/mix/flake.lock",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/alice/.local/state/mix/flake.nix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/mix/flake.nix",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/alice/.local/state/mix/home.nix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/mix/home.nix",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/alice/.local/state/mix/state",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/mix/state",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/alice/.local/state/nix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/nix",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/alice/.local/state/nix/profiles",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/nix/profiles",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/alice profile",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice profile",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/alice files in the way",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice files in the way",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "restart-nix-daemon",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "Nix daemon",
+        "undone": false,
+        "verb": "VERB_RESTARTING"
+      },
+      {
+        "key": "drain-mix-daemon",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "mix daemon",
+        "undone": false,
+        "verb": "VERB_RESTARTING"
+      },
+      {
+        "key": "record",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "configuration",
+        "undone": false,
+        "verb": "VERB_RECORDING"
       }
     ],
     "waits": [],

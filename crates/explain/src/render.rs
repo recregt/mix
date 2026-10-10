@@ -52,6 +52,7 @@ pub(crate) fn unfixable(reason: Unfixable) -> Option<Help> {
         }
         Unfixable::InTheWay => help!("move them somewhere else, then run `mix doctor` again"),
         Unfixable::Outside => help!("recreate it, then run `mix repair` again"),
+        Unfixable::Masked => help!("run `systemctl unmask` on it if it should run"),
         Unfixable::Unspecified => return None,
     })
 }
@@ -64,6 +65,7 @@ fn unfixable_reason(reason: Unfixable) -> Option<&'static str> {
         Unfixable::Unrecovered => "an interrupted request couldn't be put back",
         Unfixable::InTheWay => "in the way of a file `mix` manages",
         Unfixable::Outside => "missing, and not `mix`'s to create",
+        Unfixable::Masked => "masked, and `mix` won't unmask it",
         Unfixable::Unspecified => return None,
     })
 }

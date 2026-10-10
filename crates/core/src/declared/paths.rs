@@ -64,6 +64,7 @@ pub const STATE_FILE: &str = "state";
 pub const GIT_DIR: &str = ".git";
 pub const INDEX_LOCK: &str = "index.lock";
 pub const REPOSITORY_HEAD: &str = "HEAD";
+pub const REPOSITORY_BRANCH: &str = "refs/heads/main";
 pub const REPOSITORY_CONFIG: &str = "config";
 pub const REPOSITORY_INDEX: &str = "index";
 pub const REPOSITORY_CONFIG_CONTENTS: &str =

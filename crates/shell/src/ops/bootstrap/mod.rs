@@ -8,8 +8,9 @@ pub mod tarball;
 
 pub use error::{Error, Host, Result};
 
+use mix_core::declared::targets::Runtime;
 use mix_core::effect::{Digest, Failure};
-use mix_core::ops::bootstrap::{Runtime, Settings, steps};
+use mix_core::ops::bootstrap::{Settings, steps};
 use mix_core::report::diagnose::diagnostic;
 use mix_core::run::{Runner, Verdict};
 use mix_events::v1::{BootstrapRequest, BootstrapResult, Code, node_finished};
@@ -113,10 +114,6 @@ async fn prepare(ctx: &Context, force: bool) -> Result<(Settings, Performer)> {
         force,
         runtime: runtime(ctx.mirror())?,
         request: request.clone(),
-        daemon: std::env::current_exe().map_err(|source| mix_core::Error::Io {
-            path: "/proc/self/exe".into(),
-            source,
-        })?,
     };
     let performer = ctx.performer().map_err(|source| mix_core::Error::Io {
         path: "/".into(),

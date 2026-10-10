@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::path::Path;
 
 use crate::declared::identity::{
-    self, MIX_USERS_GID, MIX_USERS_GROUP, NIXBLD_GID, NIXBLD_GROUP, NIXBLD_UID_BASE,
+    self, MIX_USERS_GID, MIX_USERS_GROUP, NIXBLD_GID, NIXBLD_GROUP, NIXBLD_HOME, NIXBLD_UID_BASE,
     NIXBLD_USER_COUNT,
 };
 use crate::declared::identity::{InvokingUser, UserRef};
@@ -21,6 +21,8 @@ use crate::declared::paths::{
 };
 use crate::declared::policy::Policy;
 use crate::declared::tree::{Builder, Handle, Tree};
+use crate::effect::Digest;
+use mix_events::v1::Verb;
 
 pub const MIX_DAEMON_SOCKET: &str = "[Unit]
 Description=mix daemon socket
@@ -66,6 +68,52 @@ WantedBy=multi-user.target
 ";
 
 pub const PROFILE_SNIPPET: &str = "# Managed by mix -- do not edit, changes are overwritten and will trip `mix doctor`.\nif [ -e '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh' ]; then\n    . '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'\nfi\n";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Runtime {
+    pub url: String,
+    pub sha256: Digest,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reach {
+    Machine,
+    User,
+}
+
+#[derive(Debug, Clone)]
+pub struct Intent<'a> {
+    pub policy: &'a Policy,
+    pub user: Option<&'a UserConfig>,
+    pub reach: Reach,
+    pub runtime: Option<&'a Runtime>,
+    pub activating: Option<(Verb, Cow<'a, str>)>,
+    pub retention: Option<bool>,
+    pub tidy: bool,
+}
+
+impl<'a> Intent<'a> {
+    pub fn machine(user: Option<&'a UserConfig>, policy: &'a Policy) -> Self {
+        Self {
+            policy,
+            user,
+            reach: Reach::Machine,
+            runtime: None,
+            activating: None,
+            retention: None,
+            tidy: true,
+        }
+    }
+
+    pub fn user(user: &'a UserConfig, policy: &'a Policy) -> Self {
+        Self {
+            reach: Reach::User,
+            tidy: false,
+            ..Self::machine(Some(user), policy)
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserConfig {
@@ -158,6 +206,7 @@ pub enum Target<'a> {
     PathExists {
         name: &'static str,
         path: &'static str,
+        install: Option<Runtime>,
     },
     Repository {
         path: Cow<'a, Path>,
@@ -187,11 +236,24 @@ pub enum Target<'a> {
         path: Cow<'a, Path>,
         user: UserRef<'a>,
     },
+    Activation {
+        path: Cow<'a, Path>,
+        user: UserRef<'a>,
+        verb: Option<Verb>,
+        subject: Cow<'a, str>,
+    },
+    Retention {
+        path: Cow<'a, Path>,
+        user: UserRef<'a>,
+        collect: bool,
+    },
 }
 
 const HISTORY: &str = " history";
 const LEFTOVERS: &str = " leftovers";
 const IN_THE_WAY: &str = " files in the way";
+const PROFILE: &str = " profile";
+const OLD_GENERATIONS: &str = " old generations";
 
 fn suffixed(path: &Path, suffix: &str) -> Cow<'static, str> {
     let path = text(path);
@@ -246,7 +308,15 @@ impl Target<'_> {
                 dest,
                 must_be_active,
             },
-            Target::PathExists { name, path } => Target::PathExists { name, path },
+            Target::PathExists {
+                name,
+                path,
+                install,
+            } => Target::PathExists {
+                name,
+                path,
+                install,
+            },
             Target::Repository { path, user } => Target::Repository {
                 path: own_path(path),
                 user: user.into_static(),
@@ -269,6 +339,26 @@ impl Target<'_> {
                 path: own_path(path),
                 user: user.into_static(),
             },
+            Target::Activation {
+                path,
+                user,
+                verb,
+                subject,
+            } => Target::Activation {
+                path: own_path(path),
+                user: user.into_static(),
+                verb,
+                subject: Cow::Owned(subject.into_owned()),
+            },
+            Target::Retention {
+                path,
+                user,
+                collect,
+            } => Target::Retention {
+                path: own_path(path),
+                user: user.into_static(),
+                collect,
+            },
         }
     }
 
@@ -287,6 +377,8 @@ impl Target<'_> {
             Target::History { path, .. } => suffixed(path, HISTORY),
             Target::HomeFiles { path, .. } => suffixed(path, IN_THE_WAY),
             Target::Leftovers { dir, .. } => suffixed(dir, LEFTOVERS),
+            Target::Activation { path, .. } => suffixed(path, PROFILE),
+            Target::Retention { path, .. } => suffixed(path, OLD_GENERATIONS),
             Target::Repository { path, .. } | Target::Generations { path, .. } => text(path),
             Target::Program { path, .. } | Target::Journals { path } => Cow::Borrowed(path),
         }
@@ -311,7 +403,9 @@ impl Target<'_> {
             | Target::Leftovers { .. }
             | Target::HomeFiles { .. } => Category::Filesystem,
             Target::Program { .. } => Category::Services,
-            Target::Generations { .. } => Category::Configuration,
+            Target::Generations { .. } | Target::Activation { .. } | Target::Retention { .. } => {
+                Category::Configuration
+            }
         }
     }
 
@@ -343,7 +437,12 @@ fn is_configuration(path: &Path) -> bool {
         .any(|configuration| configuration.as_bytes() == path)
 }
 
-fn user_tree<'a>(tree: &mut Builder<'a>, cfg: &'a UserConfig, members: Handle) {
+fn user_tree<'a>(
+    tree: &mut Builder<'a>,
+    intent: &Intent<'a>,
+    cfg: &'a UserConfig,
+    members: Handle,
+) {
     let home = &cfg.user.home;
     let state_dir = mix_state_dir(home);
     let profiles_dir = nix_profiles_dir(home);
@@ -371,9 +470,10 @@ fn user_tree<'a>(tree: &mut Builder<'a>, cfg: &'a UserConfig, members: Handle) {
             user: user(),
         },
     );
+    let mut states = None;
     for parent in USER_PARENTS {
         let path = join(home, parent);
-        tree.path(
+        let handle = tree.path(
             path.clone(),
             Target::Parent {
                 path: Cow::Owned(path),
@@ -381,6 +481,9 @@ fn user_tree<'a>(tree: &mut Builder<'a>, cfg: &'a UserConfig, members: Handle) {
                 owner,
             },
         );
+        if parent == STATES {
+            states = Some(handle);
+        }
     }
     tree.path(
         state_dir.clone(),
@@ -455,11 +558,41 @@ fn user_tree<'a>(tree: &mut Builder<'a>, cfg: &'a UserConfig, members: Handle) {
             owner,
         },
     );
-    tree.path(
-        generations.clone(),
-        Target::Generations {
-            path: Cow::Owned(generations),
+    let profile = if intent.tidy {
+        tree.path(
+            generations.clone(),
+            Target::Generations {
+                path: Cow::Owned(generations.clone()),
+                user: user(),
+            },
+        )
+    } else {
+        tree.place(generations.clone())
+    };
+    if let Some(collect) = intent.retention {
+        tree.up(
+            profile,
+            Target::Retention {
+                path: Cow::Owned(generations),
+                user: user(),
+                collect,
+            },
+        );
+    }
+    let Some(above) = states else {
+        return;
+    };
+    let (verb, subject) = match &intent.activating {
+        Some((verb, subject)) => (Some(*verb), subject.clone()),
+        None => (None, Cow::Borrowed("")),
+    };
+    tree.up(
+        above,
+        Target::Activation {
+            path: Cow::Borrowed(home.as_path()),
             user: user(),
+            verb,
+            subject,
         },
     );
 }
@@ -484,8 +617,10 @@ fn parent(tree: &mut Builder<'_>, path: &'static str, bits: u32) -> Handle {
     )
 }
 
-const USER_PARENTS: [&str; 3] = [".local", ".local/state", ".local/state/nix"];
+const STATES: &str = ".local/state";
+const USER_PARENTS: [&str; 3] = [".local", STATES, ".local/state/nix"];
 const USER_PARENT_BITS: u32 = 0o700;
+pub const NIXBLD_HOME_MODE: u32 = 0o555;
 
 fn file<'a>(tree: &mut Builder<'a>, path: &'static str, expected: &'a str) -> Handle {
     tree.path(
@@ -510,7 +645,25 @@ fn directory(tree: &mut Builder<'_>, path: &'static str, mode: u32) -> Handle {
 }
 
 pub fn tree<'a>(user_config: Option<&'a UserConfig>, policy: &'a Policy) -> Tree<'a> {
-    let mut tree = Builder::new(Some(JOURNAL_DIR));
+    tree_for(&Intent::machine(user_config, policy))
+}
+
+pub fn tree_for<'a>(intent: &Intent<'a>) -> Tree<'a> {
+    let mut tree = Builder::new(intent.tidy.then_some(JOURNAL_DIR));
+    let policy = intent.policy;
+    if intent.reach == Reach::User {
+        let members = tree.account(
+            None,
+            Target::Group {
+                name: MIX_USERS_GROUP,
+                gid: MIX_USERS_GID,
+            },
+        );
+        if let Some(cfg) = intent.user {
+            user_tree(&mut tree, intent, cfg, members);
+        }
+        return tree.finish();
+    }
     let nixbld = tree.account(
         None,
         Target::Group {
@@ -546,11 +699,13 @@ pub fn tree<'a>(user_config: Option<&'a UserConfig>, policy: &'a Policy) -> Tree
         Target::PathExists {
             name: "default profile",
             path: DEFAULT_PROFILE_NIX_ENV,
+            install: intent.runtime.cloned(),
         },
     );
     for path in ["/var", "/var/lib"] {
         precondition(&mut tree, path);
     }
+    directory(&mut tree, NIXBLD_HOME, NIXBLD_HOME_MODE);
     for (path, bits) in [(MIX_VAR_DIR, 0o700), (MIX_BIN_DIR, 0o700)] {
         parent(&mut tree, path, bits);
     }
@@ -590,7 +745,7 @@ pub fn tree<'a>(user_config: Option<&'a UserConfig>, policy: &'a Policy) -> Tree
             MIX_DAEMON_SERVICE_UNIT,
             UnitSource::Text(MIX_DAEMON_SERVICE),
             MIX_DAEMON_SERVICE_DEST,
-            false,
+            true,
         ),
         (
             MIX_DAEMON_SOCKET_UNIT,
@@ -616,8 +771,8 @@ pub fn tree<'a>(user_config: Option<&'a UserConfig>, policy: &'a Policy) -> Tree
             UnitSource::Text(_) => {}
         }
     }
-    if let Some(cfg) = user_config {
-        user_tree(&mut tree, cfg, members);
+    if let Some(cfg) = intent.user {
+        user_tree(&mut tree, intent, cfg, members);
     }
     tree.finish()
 }
@@ -703,7 +858,11 @@ mod tests {
         for target in listed(Some(&cfg), default_policy()) {
             if matches!(
                 target,
-                Target::History { .. } | Target::HomeFiles { .. } | Target::Leftovers { .. }
+                Target::History { .. }
+                    | Target::HomeFiles { .. }
+                    | Target::Leftovers { .. }
+                    | Target::Activation { .. }
+                    | Target::Retention { .. }
             ) {
                 continue;
             }
@@ -807,6 +966,7 @@ mod tests {
             Target::PathExists {
                 name: "default profile",
                 path: DEFAULT_PROFILE_NIX_ENV,
+                install: None,
             }
             .category(),
             Category::Filesystem
@@ -920,10 +1080,10 @@ mod tests {
     #[test]
     fn a_user_adds_exactly_their_own_checks() {
         let cfg = sample_user_config();
-        assert_eq!(user_targets(&cfg).len(), 23);
+        assert_eq!(user_targets(&cfg).len(), 24);
         assert_eq!(
             listed(Some(&cfg), default_policy()).len(),
-            listed(None, default_policy()).len() + 23
+            listed(None, default_policy()).len() + 24
         );
     }
 

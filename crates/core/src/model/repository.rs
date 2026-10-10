@@ -5,13 +5,12 @@ use std::sync::Arc;
 use super::{Content, Entry, World, conflict, describe};
 use crate::declared::identity::InvokingUser;
 use crate::declared::paths::{
-    INDEX_LOCK, MANAGED_FILES, REPOSITORY_CONFIG, REPOSITORY_CONFIG_CONTENTS, REPOSITORY_HEAD,
-    REPOSITORY_INDEX, mix_state_dir, repository_dir,
+    INDEX_LOCK, MANAGED_FILES, REPOSITORY_BRANCH as BRANCH, REPOSITORY_CONFIG,
+    REPOSITORY_CONFIG_CONTENTS, REPOSITORY_HEAD, REPOSITORY_INDEX, mix_state_dir, repository_dir,
 };
 use crate::effect::{Action, Expect, Failure};
 
 const HEAD_CONTENTS: &[u8] = b"ref: refs/heads/main\n";
-const BRANCH: &str = "refs/heads/main";
 const OBJECTS: &str = "objects";
 
 pub type Snapshot = BTreeMap<String, Arc<[u8]>>;

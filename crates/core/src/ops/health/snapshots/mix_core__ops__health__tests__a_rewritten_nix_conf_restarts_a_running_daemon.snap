@@ -16,15 +16,6 @@ expression: "run.case(&before, &world)"
         "unknown": []
       },
       {
-        "action": "CHANGE_ACTION_DELETE",
-        "operation": "OPERATION_REMOVE_CREATED_TREE",
-        "status": "STATUS_SUCCEEDED",
-        "step": "/etc/nix leftovers",
-        "subject": "/etc/nix/.nix.conf.mix-backup-model-79",
-        "undone": false,
-        "unknown": []
-      },
-      {
         "action": "CHANGE_ACTION_UPDATE",
         "operation": "OPERATION_RESTART_UNIT",
         "status": "STATUS_SUCCEEDED",
@@ -463,6 +454,13 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_REPAIRING"
       },
       {
+        "key": "/var/empty",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/var/empty",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
         "key": "/var/lib",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/var/lib",
@@ -519,6 +517,13 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_REPAIRING"
       },
       {
+        "key": "/var leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/var leftovers",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
         "key": "/etc",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/etc",
@@ -562,7 +567,7 @@ expression: "run.case(&before, &world)"
       },
       {
         "key": "/etc/nix leftovers",
-        "status": "STATUS_SUCCEEDED",
+        "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/etc/nix leftovers",
         "undone": false,
         "verb": "VERB_REPAIRING"
@@ -771,6 +776,13 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_REPAIRING"
       },
       {
+        "key": "/home/alice profile",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice profile",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
         "key": "/home/alice/.local/state leftovers",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/home/alice/.local/state leftovers",
@@ -813,9 +825,16 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_RESTARTING"
       },
       {
-        "key": "record-repaired-config",
+        "key": "drain-mix-daemon",
         "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "repaired configuration",
+        "subject": "mix daemon",
+        "undone": false,
+        "verb": "VERB_RESTARTING"
+      },
+      {
+        "key": "record",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "configuration",
         "undone": false,
         "verb": "VERB_RECORDING"
       }
@@ -839,7 +858,6 @@ expression: "run.case(&before, &world)"
   },
   "performed": [
     "PutFile /etc/nix/nix.conf",
-    "RemoveCreatedTree /etc/nix/.nix.conf.mix-backup-model-79",
     "RestartUnit nix-daemon.service",
     "Commit changes"
   ]

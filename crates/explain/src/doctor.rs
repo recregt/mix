@@ -165,6 +165,23 @@ pub fn check(report: &InspectionReport) -> Diagnostic {
             around!("files in ", " are in the way of files `mix` manages"),
             Some(note!("{}", in_the_way.paths.join(", "))),
         ),
+        Kind::ProfileStale(_) => (
+            around!("", " was not built from the package list"),
+            Some(note!(
+                "the active generation lists other packages than the package list does"
+            )),
+        ),
+        Kind::OldGenerations(old) => (
+            around!("", " are older than the active one"),
+            Some(note!(
+                "{}",
+                old.generations
+                    .iter()
+                    .map(u64::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        ),
         Kind::RepositoryLocked(_) => (
             around!("", " is locked"),
             Some(note!(
@@ -211,7 +228,9 @@ pub fn labels(finding: &Finding) -> Labels {
             | Kind::Interrupted(_)
             | Kind::Leftovers(_)
             | Kind::GenerationDangling(_)
-            | Kind::InTheWay(_),
+            | Kind::InTheWay(_)
+            | Kind::ProfileStale(_)
+            | Kind::OldGenerations(_),
         )
         | None => Labels {
             added: phrase!("not written by `mix`"),
@@ -315,6 +334,10 @@ mod tests {
             Finding::InTheWay {
                 paths: vec!["/home/alice/.bashrc".into()],
             },
+            Finding::ProfileStale,
+            Finding::OldGenerations {
+                generations: vec![1, 2],
+            },
         ];
         for finding in findings {
             match &finding {
@@ -339,7 +362,9 @@ mod tests {
                 | Finding::Interrupted { .. }
                 | Finding::Leftovers { .. }
                 | Finding::GenerationDangling { .. }
-                | Finding::InTheWay { .. } => {}
+                | Finding::InTheWay { .. }
+                | Finding::ProfileStale
+                | Finding::OldGenerations { .. } => {}
             }
             let reports = [report("/nix", Some(finding.clone()))];
             for words in [check(&reports[0]), unhealthy(&reports)] {

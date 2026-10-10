@@ -134,3 +134,26 @@ prop_state_machine! {
         sequential 1..8 => Mix
     );
 }
+
+#[test]
+fn a_failed_remove_over_a_damaged_repository_is_rolled_back() {
+    use mix_conformance::suite::{Command, Spec, Transition, healthy};
+    use proptest_state_machine::StateMachineTest;
+
+    let transitions = vec![
+        Transition::Faulted(Command::Install("hello"), 4, FaultKind::Fail),
+        Transition::Damage(Breakage {
+            path: "/home/alice/.local/state/mix/.git/objects/8d407ffa98fc71f6".into(),
+            damage: Damage::Removed,
+        }),
+        Transition::Faulted(Command::Remove("hello"), 5, FaultKind::Fail),
+    ];
+    Mix::test_sequential(
+        proptest::prelude::ProptestConfig::default(),
+        Spec {
+            owned: std::sync::Arc::clone(&healthy().owned),
+        },
+        transitions,
+        None,
+    );
+}
