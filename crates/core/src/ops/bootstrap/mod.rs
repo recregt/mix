@@ -165,6 +165,7 @@ pub fn steps(settings: &Settings) -> Vec<Box<dyn StepSpec>> {
     };
     let intent = Intent {
         runtime: Some(&settings.runtime),
+        tidy: false,
         ..Intent::machine(settings.user.as_ref(), &settings.policy)
     };
     reconcile_steps(

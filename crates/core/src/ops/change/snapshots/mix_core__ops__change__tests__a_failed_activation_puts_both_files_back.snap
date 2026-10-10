@@ -123,13 +123,6 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_CONFIGURING"
       },
       {
-        "key": "/home/mix-user/.local/state/mix/.git leftovers",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/home/mix-user/.local/state/mix/.git leftovers",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
         "key": "/home/mix-user/.local/state/mix/.gitignore",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/home/mix-user/.local/state/mix/.gitignore",
@@ -165,13 +158,6 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_CONFIGURING"
       },
       {
-        "key": "/home/mix-user/.local/state/mix leftovers",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/home/mix-user/.local/state/mix leftovers",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
         "key": "/home/mix-user/.local/state/nix",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/home/mix-user/.local/state/nix",
@@ -182,20 +168,6 @@ expression: "run.case(&before, &world)"
         "key": "/home/mix-user/.local/state/nix/profiles",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/home/mix-user/.local/state/nix/profiles",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
-        "key": "/home/mix-user/.local/state/nix/profiles/home-manager",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/home/mix-user/.local/state/nix/profiles/home-manager",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
-        "key": "/home/mix-user/.local/state/nix leftovers",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/home/mix-user/.local/state/nix leftovers",
         "undone": false,
         "verb": "VERB_CONFIGURING"
       },

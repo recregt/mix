@@ -90,6 +90,7 @@ pub struct Intent<'a> {
     pub runtime: Option<&'a Runtime>,
     pub activating: Option<(Verb, Cow<'a, str>)>,
     pub retention: Option<bool>,
+    pub tidy: bool,
 }
 
 impl<'a> Intent<'a> {
@@ -101,12 +102,14 @@ impl<'a> Intent<'a> {
             runtime: None,
             activating: None,
             retention: None,
+            tidy: true,
         }
     }
 
     pub fn user(user: &'a UserConfig, policy: &'a Policy) -> Self {
         Self {
             reach: Reach::User,
+            tidy: false,
             ..Self::machine(Some(user), policy)
         }
     }
@@ -555,13 +558,17 @@ fn user_tree<'a>(
             owner,
         },
     );
-    let profile = tree.path(
-        generations.clone(),
-        Target::Generations {
-            path: Cow::Owned(generations.clone()),
-            user: user(),
-        },
-    );
+    let profile = if intent.tidy {
+        tree.path(
+            generations.clone(),
+            Target::Generations {
+                path: Cow::Owned(generations.clone()),
+                user: user(),
+            },
+        )
+    } else {
+        tree.place(generations.clone())
+    };
     if let Some(collect) = intent.retention {
         tree.up(
             profile,
@@ -642,7 +649,7 @@ pub fn tree<'a>(user_config: Option<&'a UserConfig>, policy: &'a Policy) -> Tree
 }
 
 pub fn tree_for<'a>(intent: &Intent<'a>) -> Tree<'a> {
-    let mut tree = Builder::new(Some(JOURNAL_DIR));
+    let mut tree = Builder::new(intent.tidy.then_some(JOURNAL_DIR));
     let policy = intent.policy;
     if intent.reach == Reach::User {
         let members = tree.account(

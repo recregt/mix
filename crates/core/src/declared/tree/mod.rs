@@ -137,6 +137,17 @@ impl<'a> Builder<'a> {
         handle
     }
 
+    pub fn place(&mut self, path: impl Into<PathBuf>) -> Handle {
+        let path = path.into();
+        if let Some(&found) = self.paths.get(&path) {
+            return found;
+        }
+        let handle = Handle(self.drafts.len());
+        self.drafts.push(Draft::new(None, Some(path.clone())));
+        self.paths.insert(path, handle);
+        handle
+    }
+
     pub fn account(&mut self, parent: Option<Handle>, down: Target<'a>) -> Handle {
         let handle = Handle(self.drafts.len());
         let mut draft = Draft::new(Some(down), None);

@@ -321,20 +321,6 @@ expression: "upgraded.case(&before, &world)"
         "verb": "VERB_CONFIGURING"
       },
       {
-        "key": "/nix/var/log/nix leftovers",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix/var/log/nix leftovers",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
-        "key": "/nix/var/log leftovers",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix/var/log leftovers",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
         "key": "/nix/var/nix",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/nix/var/nix",
@@ -370,13 +356,6 @@ expression: "upgraded.case(&before, &world)"
         "verb": "VERB_CONFIGURING"
       },
       {
-        "key": "/nix/var/nix/gcroots leftovers",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix/var/nix/gcroots leftovers",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
         "key": "/nix/var/nix/profiles",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/nix/var/nix/profiles",
@@ -398,13 +377,6 @@ expression: "upgraded.case(&before, &world)"
         "verb": "VERB_CONFIGURING"
       },
       {
-        "key": "/nix/var/nix/profiles leftovers",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix/var/nix/profiles leftovers",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
         "key": "/nix/var/nix/temproots",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/nix/var/nix/temproots",
@@ -415,27 +387,6 @@ expression: "upgraded.case(&before, &world)"
         "key": "/nix/var/nix/userpool",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/nix/var/nix/userpool",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
-        "key": "/nix/var/nix leftovers",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix/var/nix leftovers",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
-        "key": "/nix/var leftovers",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix/var leftovers",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
-        "key": "/nix leftovers",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/nix leftovers",
         "undone": false,
         "verb": "VERB_CONFIGURING"
       },
@@ -482,37 +433,9 @@ expression: "upgraded.case(&before, &world)"
         "verb": "VERB_CONFIGURING"
       },
       {
-        "key": "/var/lib/mix/bin leftovers",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/var/lib/mix/bin leftovers",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
         "key": "/var/lib/mix/journal",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/var/lib/mix/journal",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
-        "key": "/var/lib/mix leftovers",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/var/lib/mix leftovers",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
-        "key": "/var/lib leftovers",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/var/lib leftovers",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
-        "key": "/var leftovers",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/var leftovers",
         "undone": false,
         "verb": "VERB_CONFIGURING"
       },
@@ -538,13 +461,6 @@ expression: "upgraded.case(&before, &world)"
         "verb": "VERB_CONFIGURING"
       },
       {
-        "key": "/etc/mix leftovers",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/etc/mix leftovers",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
         "key": "/etc/nix",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/etc/nix",
@@ -559,13 +475,6 @@ expression: "upgraded.case(&before, &world)"
         "verb": "VERB_CONFIGURING"
       },
       {
-        "key": "/etc/nix leftovers",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/etc/nix leftovers",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
         "key": "/etc/profile.d",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/etc/profile.d",
@@ -576,13 +485,6 @@ expression: "upgraded.case(&before, &world)"
         "key": "/etc/profile.d/mix-nix.sh",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/etc/profile.d/mix-nix.sh",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
-        "key": "/etc/profile.d leftovers",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/etc/profile.d leftovers",
         "undone": false,
         "verb": "VERB_CONFIGURING"
       },
@@ -625,27 +527,6 @@ expression: "upgraded.case(&before, &world)"
         "key": "nix-daemon.socket",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "nix-daemon.socket",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
-        "key": "/etc/systemd/system leftovers",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/etc/systemd/system leftovers",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
-        "key": "/etc leftovers",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/etc leftovers",
-        "undone": false,
-        "verb": "VERB_CONFIGURING"
-      },
-      {
-        "key": "/ leftovers",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/ leftovers",
         "undone": false,
         "verb": "VERB_CONFIGURING"
       },
