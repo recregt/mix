@@ -982,3 +982,53 @@ fn files_without_known_contents_have_no_drift_to_show() {
         .collect();
     assert_eq!(drift(&target, &facts), None);
 }
+
+#[test]
+fn a_directory_that_is_taken_over_and_made_unreadable_is_put_right_by_one_repair() {
+    let alice = user("alice", 1000);
+    let mut world = bootstrapped(std::slice::from_ref(&alice));
+    let directory = Path::new("/etc/profile.d");
+    let entry = world.files.get_mut(directory).unwrap();
+    entry.owner = (4242, 4242);
+    entry.mode = 0;
+
+    let run = repair(&mut world, &alice);
+
+    assert_eq!(
+        run.performed(),
+        [
+            "SetOwner /etc/profile.d",
+            "SetMode /etc/profile.d",
+            "Commit changes"
+        ]
+    );
+    assert_eq!(audit(&world, &alice), []);
+    assert_eq!(world.files[directory].owner, (0, 0));
+}
+
+#[test]
+fn the_history_is_judged_after_the_files_it_records_are_put_right() {
+    use crate::model::testkit::{Breakage, Damage};
+
+    let alice = user("alice", 1000);
+    let mut world = bootstrapped(std::slice::from_ref(&alice));
+    let home_nix = mix_state_dir(Path::new("/home/alice")).join(crate::declared::paths::HOME_NIX);
+    world.with_file(&home_nix, b"older", 0o644, (1000, 1000));
+    world
+        .apply(&Action::RecordState {
+            user: alice.user.clone(),
+        })
+        .unwrap();
+    let declared = World::blob_object(&alice.user, b"home of alice");
+    assert!(
+        Breakage {
+            path: declared,
+            damage: Damage::Swapped,
+        }
+        .apply(&mut world)
+    );
+
+    repair(&mut world, &alice);
+
+    assert_eq!(audit(&world, &alice), []);
+}

@@ -480,7 +480,7 @@ fn user_tree<'a>(
             states = Some(handle);
         }
     }
-    tree.path(
+    let state_node = tree.path(
         state_dir.clone(),
         Target::Directory {
             path: Cow::Owned(state_dir.clone()),
@@ -540,9 +540,9 @@ fn user_tree<'a>(
     if intent.runtime.is_some() {
         deferred.extend([repo, config_file, history]);
     } else {
-        let git = tree.path(repository, repo);
+        tree.path(repository, repo);
         tree.path(config, config_file);
-        tree.up(git, history);
+        tree.up(state_node, history);
     }
     tree.path(
         profiles_dir.clone(),
