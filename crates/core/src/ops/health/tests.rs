@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use insta::assert_json_snapshot;
 use mix_events::ROOT;
 use mix_events::v1::RepairRequest;
 use mix_events::v1::command::Request;
@@ -699,10 +698,23 @@ fn what_an_unrecovered_request_left_belongs_to_it_and_everything_else_is_cleaned
     world.journals = vec![r9()];
 
     let found = audit(&world, &alice);
-    let before = world.clone();
     let run = repair(&mut world, &alice);
 
-    assert_json_snapshot!(run.case(&before, &world));
+    assert_eq!(
+        run.performed(),
+        [
+            format!("RemoveCreatedTree {}", stray.display()),
+            "Commit changes".to_string(),
+        ]
+    );
+    assert!(
+        !world.files.contains_key(&stray),
+        "the stray file is cleaned"
+    );
+    assert!(
+        world.files.contains_key(&its_backup),
+        "what the unrecovered request left is kept for its recovery"
+    );
     assert_eq!(
         found,
         [
@@ -733,11 +745,24 @@ fn a_rewritten_nix_conf_restarts_a_running_daemon() {
         })
         .unwrap();
     world.with_file(NIX_CONF_DEST, b"trusted-users = *\n", 0o644, (0, 0));
-    let before = world.clone();
+    let started = world.units[NIX_DAEMON_SERVICE_UNIT].since;
 
     let run = repair(&mut world, &alice);
 
-    assert_json_snapshot!(run.case(&before, &world));
+    assert_eq!(
+        run.performed(),
+        [
+            "PutFile /etc/nix/nix.conf",
+            "RestartUnit nix-daemon.service",
+            "Commit changes",
+        ],
+        "the daemon is restarted after the configuration it reads is written"
+    );
+    assert_eq!(
+        world.contents(NIX_CONF_DEST),
+        Some(policy().nix_conf().as_bytes())
+    );
+    assert!(world.units[NIX_DAEMON_SERVICE_UNIT].since > started);
 }
 
 #[test]
@@ -758,12 +783,35 @@ fn repairing_one_user_leaves_the_other_alone() {
         0o644,
         (1000, 1000),
     );
-    let before = world.clone();
+    let alice_state = mix_state_dir(Path::new("/home/alice"));
 
     let run = repair(&mut world, &alice);
 
-    assert_json_snapshot!(run.case(&before, &world));
+    assert_eq!(
+        run.performed(),
+        [
+            format!(
+                "PutFile {}",
+                alice_state.join(crate::declared::paths::HOME_NIX).display()
+            ),
+            "Commit changes".to_string(),
+        ]
+    );
+    assert_eq!(
+        world.contents(bob_state.join(crate::declared::paths::HOME_NIX)),
+        Some(&b"changed by bob"[..]),
+        "bob's file is not repaired by alice's run"
+    );
     assert_eq!(audit(&world, &alice), []);
+    let (verifies, recorded) =
+        world.repository_at(&alice_state.join(crate::declared::paths::GIT_DIR));
+    assert!(verifies);
+    let home = crate::declared::paths::HOME_NIX;
+    assert_eq!(
+        recorded.unwrap().get(home).map(AsRef::as_ref),
+        world.contents(alice_state.join(home)),
+        "the repaired file is recorded in alice's history"
+    );
 }
 
 #[test]

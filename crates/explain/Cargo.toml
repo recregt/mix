@@ -10,7 +10,6 @@ mix-events = { path = "../events" }
 mix-ui = { path = "../ui" }
 
 [dev-dependencies]
-insta = { workspace = true }
 divan = { workspace = true }
 mix-core = { path = "../core" }
 mix-nixgen = { path = "../nixgen" }

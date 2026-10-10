@@ -539,7 +539,7 @@ fn doctored(
 }
 
 #[test]
-fn doctor_reads_at_every_level_as_recorded() {
+fn doctor_counts_what_it_shows_and_says_nothing_when_all_is_well() {
     use mix_core::ops::health::Finding;
 
     let healthy = doctored(&[("/nix", None), ("nix-daemon.service", None)], &[]);
@@ -563,20 +563,44 @@ fn doctor_reads_at_every_level_as_recorded() {
             ("nix-daemon.socket", "default profile"),
         ],
     );
-    for (name, envelopes) in [("doctor-healthy", healthy), ("doctor-problems", problems)] {
+    for envelopes in [&healthy, &problems] {
         mix_events::validate(envelopes.iter()).unwrap();
-        let (_, captured) = captured(&envelopes);
-        for (level, suffix) in [
-            (Detail::Outcome, "quiet"),
-            (Detail::Step, "default"),
-            (Detail::Action, "v"),
-        ] {
-            golden(
-                &format!("{name}-{suffix}"),
-                rendered(&captured, level).as_bytes(),
-            );
-        }
     }
+    let healthy = captured(&healthy).1;
+    let problems = captured(&problems).1;
+
+    assert_eq!(rendered(&healthy, Detail::Outcome), "");
+    assert!(rendered(&healthy, Detail::Step).contains("Checked system"));
+
+    let default = rendered(&problems, Detail::Step);
+    for subject in [
+        "/etc/nix/nix.conf",
+        "nix-daemon.service",
+        "/nix/var/nix/profiles",
+        "default profile",
+    ] {
+        assert!(
+            default.contains(subject),
+            "{subject} is not shown:\n{default}"
+        );
+    }
+    let quiet = rendered(&problems, Detail::Outcome);
+    let found: usize = quiet
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("error: found "))
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|count| count.parse().ok())
+        .unwrap_or_else(|| panic!("no count of problems in:\n{quiet}"));
+    let shown = default
+        .lines()
+        .filter(|line| line.starts_with("warning:"))
+        .count();
+    assert_eq!(found, shown, "the summary counts what is shown");
+    assert!(
+        !quiet.contains("warning:"),
+        "quiet shows the summary only:\n{quiet}"
+    );
 }
 
 fn repair_run(reports: Vec<mix_events::v1::RepairReport>) -> Vec<Envelope> {
@@ -637,10 +661,44 @@ fn a_repair_names_what_it_left_alone_and_why() {
     ]);
     mix_events::validate(envelopes.iter()).unwrap();
     let (_, captured) = captured(&envelopes);
-    golden(
-        "repair-blocked",
-        rendered(&captured, Detail::Step).as_bytes(),
+
+    let shown = rendered(&captured, Detail::Step);
+
+    assert!(shown.contains("Repaired /etc/nix/nix.conf"), "{shown}");
+    assert!(
+        shown.contains("couldn't repair /home/alice/.local/state/mix\n"),
+        "{shown}"
     );
+    assert!(
+        shown.contains(
+            "left /home/alice/.local/state/mix/home.nix alone because \
+             /home/alice/.local/state/mix couldn't be repaired"
+        ),
+        "{shown}"
+    );
+    assert!(
+        shown
+            .lines()
+            .last()
+            .is_some_and(|line| line.starts_with("error: some problems couldn't be repaired")),
+        "{shown}"
+    );
+}
+
+#[test]
+fn a_repair_that_fixed_everything_ends_without_an_error() {
+    let envelopes = repair_run(vec![mix_events::v1::RepairReport {
+        target: "/etc/nix/nix.conf".into(),
+        fixed: true,
+        failure: None,
+        blocked_by: String::new(),
+    }]);
+    let (_, captured) = captured(&envelopes);
+
+    let shown = rendered(&captured, Detail::Step);
+
+    assert!(shown.contains("Repaired /etc/nix/nix.conf"), "{shown}");
+    assert!(!shown.contains("error"), "{shown}");
 }
 
 fn slot(envelope: &Envelope) -> Option<usize> {
@@ -717,41 +775,133 @@ fn rendered(captured: &Captured, level: Detail) -> String {
         .collect()
 }
 
-fn golden(name: &str, observed: &[u8]) {
-    insta::assert_snapshot!(
-        name,
-        std::str::from_utf8(observed).expect("what mix prints is UTF-8")
-    );
-}
-
-#[test]
-fn every_kind_of_event_renders_at_every_level_as_recorded() {
-    let mut seen = [false; SLOTS];
-    for (name, envelopes) in [
+fn fixtures() -> [(&'static str, Vec<Envelope>); 3] {
+    [
         ("installed", installed()),
         ("interrupted", interrupted()),
         ("failed", failed()),
-    ] {
-        mix_events::validate(envelopes.iter()).unwrap();
+    ]
+}
+
+const LEVELS: [Detail; 4] = [Detail::Outcome, Detail::Step, Detail::Action, Detail::Trace];
+
+fn at_position(text: &str, needle: &str) -> usize {
+    text.find(needle)
+        .unwrap_or_else(|| panic!("{needle:?} is not in:\n{text}"))
+}
+
+#[test]
+fn every_fixture_is_a_valid_stream_and_every_kind_of_event_is_in_one() {
+    let mut seen = [false; SLOTS];
+    for (name, envelopes) in fixtures() {
+        mix_events::validate(envelopes.iter()).unwrap_or_else(|error| panic!("{name}: {error}"));
         for index in envelopes.iter().filter_map(slot) {
             seen[index] = true;
-        }
-        let (bytes, captured) = captured(&envelopes);
-        golden(&format!("{name}-events"), &bytes);
-        for (level, suffix) in [
-            (Detail::Outcome, "quiet"),
-            (Detail::Step, "default"),
-            (Detail::Action, "v"),
-            (Detail::Trace, "vv"),
-        ] {
-            golden(
-                &format!("{name}-{suffix}"),
-                rendered(&captured, level).as_bytes(),
-            );
         }
     }
     let missing: Vec<usize> = (0..SLOTS).filter(|index| !seen[*index]).collect();
     assert_eq!(missing, Vec::<usize>::new(), "slots no fixture shows");
+}
+
+#[test]
+fn a_capture_reads_back_every_event_and_the_time_it_came_at() {
+    for (name, envelopes) in fixtures() {
+        let (_, read) = captured(&envelopes);
+
+        assert_eq!(read.envelopes, envelopes, "{name}");
+        assert_eq!(
+            read.offsets,
+            (0..envelopes.len() as u64)
+                .map(Duration::from_secs)
+                .collect::<Vec<_>>(),
+            "{name}"
+        );
+        assert_eq!(read.header.format, "mix.capture.v1", "{name}");
+        assert_eq!(read.header.request, envelopes[0].request, "{name}");
+    }
+}
+
+#[test]
+fn a_deeper_level_never_shows_fewer_lines_than_a_shallower_one() {
+    for (name, envelopes) in fixtures() {
+        let (_, read) = captured(&envelopes);
+
+        let counts = LEVELS.map(|level| rendered(&read, level).lines().count());
+
+        assert!(
+            counts.windows(2).all(|pair| pair[0] <= pair[1]),
+            "{name}: {counts:?}"
+        );
+    }
+}
+
+#[test]
+fn a_successful_install_is_silent_when_quiet_and_ends_by_naming_what_it_installed() {
+    let (_, read) = captured(&installed());
+
+    assert_eq!(rendered(&read, Detail::Outcome), "");
+    let shown = rendered(&read, Detail::Step);
+    assert!(
+        shown
+            .lines()
+            .last()
+            .is_some_and(|line| line.contains("Installed hello")),
+        "{shown}"
+    );
+}
+
+#[test]
+fn a_failed_install_says_why_at_every_level_and_names_the_code_only_when_asked_for_detail() {
+    let (_, read) = captured(&failed());
+
+    for level in LEVELS {
+        let shown = rendered(&read, level);
+        assert!(
+            shown.contains("`hello` isn't a package `mix` can find"),
+            "{shown}"
+        );
+    }
+    assert!(!rendered(&read, Detail::Step).contains("[unknown-package]"));
+    assert!(rendered(&read, Detail::Action).contains("error[unknown-package]"));
+}
+
+#[test]
+fn a_failed_install_goes_back_in_the_reverse_of_the_order_it_went_forward() {
+    let (_, read) = captured(&failed());
+
+    let shown = rendered(&read, Detail::Step);
+
+    let order = [
+        "Writing package list",
+        "Installing hello",
+        "Rolling back install of hello",
+        "Rolling back package list",
+        "error:",
+    ];
+    let positions = order.map(|needle| at_position(&shown, needle));
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "{shown}"
+    );
+}
+
+#[test]
+fn an_interrupted_install_says_it_is_putting_things_back_and_ends_as_cancelled() {
+    let (_, read) = captured(&interrupted());
+
+    assert_eq!(rendered(&read, Detail::Outcome), "");
+    let shown = rendered(&read, Detail::Step);
+    let order = [
+        "Writing package list",
+        "note: cancelling and putting the package list back",
+        "Rolling back package list",
+        "Cancelled `mix install`",
+    ];
+    let positions = order.map(|needle| at_position(&shown, needle));
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "{shown}"
+    );
 }
 
 #[test]

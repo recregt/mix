@@ -2,7 +2,6 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use insta::assert_json_snapshot;
 use mix_events::v1::command::Request;
 use mix_events::v1::{Command, NotRunReason, Operation, Status};
 use mix_events::{Outbox, Outcome as EventOutcome, ROOT, Start, Tree, validate};
@@ -198,11 +197,26 @@ fn forward_actions(world: &World) -> usize {
 #[test]
 fn a_fresh_run_does_every_step_and_commits() {
     let mut world = World::default();
-    let before = world.clone();
-
     let run = drive(&mut world, bootstrap_like(), Script::default());
 
-    assert_json_snapshot!(run.case(&before, &world));
+    assert_eq!(run.report().verdict, Verdict::Succeeded);
+    assert_eq!(
+        run.performed(),
+        [
+            "CreateDir /nix",
+            "CreateDir /nix/var",
+            "AddGroup nixbld",
+            "PutFile /nix/.mix-managed",
+            "PutFile /etc/nix.conf",
+            "Commit changes",
+        ]
+    );
+    assert!(world.files.contains_key(std::path::Path::new("/nix/var")));
+    assert_eq!(world.groups["nixbld"].gid, 30_000);
+    assert_eq!(
+        world.contents("/etc/nix.conf"),
+        Some(&b"trusted-users = root\n"[..])
+    );
     assert!(world.pending().is_empty());
 }
 
@@ -264,15 +278,33 @@ fn every_action_and_every_undo_is_a_node_under_what_ran_it() {
 fn an_independent_step_that_fails_is_undone_alone_and_the_others_still_run() {
     let mut world = World::default();
 
-    let before = world.clone();
-
     let run = drive_runner(
         &mut world,
         Runner::new(ROOT, bootstrap_like()).independent(),
         Script::failing_at(1),
     );
 
-    assert_json_snapshot!(run.case(&before, &world));
+    assert!(matches!(run.report().verdict, Verdict::Failed { .. }));
+    let steps = &run.report().steps;
+    let changed: Vec<&str> = steps
+        .iter()
+        .filter(|(_, outcome)| *outcome == StepOutcome::Changed)
+        .map(|(key, _)| key.as_ref())
+        .collect();
+    assert_eq!(
+        changed,
+        [
+            "create-nix-dir",
+            "create-groups",
+            "write-marker",
+            "write-nix-conf"
+        ]
+    );
+    assert!(matches!(steps[1].1, StepOutcome::Failed(_)));
+    assert!(world.files.contains_key(std::path::Path::new("/nix")));
+    assert!(!world.files.contains_key(std::path::Path::new("/nix/var")));
+    assert!(world.groups.contains_key("nixbld"));
+    assert!(world.contents("/etc/nix.conf").is_some());
     assert!(world.pending().is_empty());
     assert!(validate(&run.stream).is_ok());
 }
@@ -369,15 +401,24 @@ fn an_independent_step_after_a_failed_one_is_blocked_and_the_rest_still_run() {
 fn an_independent_run_that_is_stopped_undoes_the_step_in_progress_and_keeps_the_rest() {
     let mut world = World::default();
 
-    let before = world.clone();
-
     let run = drive_runner(
         &mut world,
         Runner::new(ROOT, bootstrap_like()).independent(),
         Script::stopping_after(1),
     );
 
-    assert_json_snapshot!(run.case(&before, &world));
+    assert!(matches!(run.report().verdict, Verdict::Cancelled(_)));
+    assert_eq!(
+        run.performed(),
+        [
+            "CreateDir /nix",
+            "CreateDir /nix/var",
+            "RemoveCreated /nix/var",
+            "Commit changes",
+        ]
+    );
+    assert!(world.files.contains_key(std::path::Path::new("/nix")));
+    assert!(!world.groups.contains_key("nixbld"));
     assert!(world.pending().is_empty());
     assert_eq!(
         outcome(&run, "bootstrap/plan/create-groups"),
@@ -394,7 +435,8 @@ fn a_second_run_finds_everything_satisfied_and_does_nothing() {
 
     let run = drive(&mut world, bootstrap_like(), Script::default());
 
-    assert_json_snapshot!(run.case(&before, &world));
+    assert_eq!(run.report().verdict, Verdict::Succeeded);
+    assert_eq!(run.performed(), Vec::<String>::new());
     assert_eq!(world, before);
 }
 
@@ -462,7 +504,16 @@ fn a_failed_undo_is_reported_the_others_still_run_and_nothing_foreign_is_removed
         },
     );
 
-    assert_json_snapshot!(run.case(&before, &world));
+    assert_eq!(
+        run.performed()[forward_actions(&before)..],
+        [
+            "RemoveCreated /nix/.mix-managed",
+            "DeleteGroup nixbld",
+            "RemoveCreated /nix/var",
+            "RemoveCreated /nix",
+        ],
+        "the undos run in the reverse of the order the actions ran"
+    );
     let failed: Vec<&str> = run
         .report()
         .rollback_failures
@@ -499,7 +550,6 @@ fn a_failed_undo_is_reported_the_others_still_run_and_nothing_foreign_is_removed
 fn a_commit_that_fails_still_succeeds_and_warns() {
     let mut world = World::default();
     world.with_file("/etc/nix.conf", b"legacy", 0o644, (0, 0));
-    let before = world.clone();
 
     let run = drive(
         &mut world,
@@ -514,7 +564,15 @@ fn a_commit_that_fails_still_succeeds_and_warns() {
         },
     );
 
-    assert_json_snapshot!(run.case(&before, &world));
+    assert_eq!(run.report().verdict, Verdict::Succeeded);
+    assert_eq!(
+        world.contents("/etc/nix.conf"),
+        Some(&b"trusted-users = root\n"[..])
+    );
+    let warnings = &run.document()["warnings"];
+    assert_eq!(warnings.as_array().map(Vec::len), Some(1));
+    assert_eq!(warnings[0]["code"], "CODE_PERMISSION_DENIED");
+    assert_eq!(warnings[0]["subject"], "/etc/.nix.conf.mix-backup-1");
     assert_eq!(world.pending().len(), 1);
 }
 
@@ -536,11 +594,15 @@ fn a_shielded_step_finishes_before_a_stop_takes_effect() {
         }),
     ];
 
-    let before = world.clone();
-
     let run = drive(&mut world, steps, Script::stopping_after(0));
 
-    assert_json_snapshot!(run.case(&before, &world));
+    assert!(matches!(run.report().verdict, Verdict::Cancelled(_)));
+    assert_eq!(
+        run.performed(),
+        ["PutFile /etc/first", "RemoveCreated /etc/first"],
+        "the shielded step ran to the end and was undone only afterwards"
+    );
+    assert_eq!(world.contents("/etc/second"), None);
     assert_eq!(
         outcome(&run, "bootstrap/plan/later"),
         Some(EventOutcome::NotRun(NotRunReason::NotReached))

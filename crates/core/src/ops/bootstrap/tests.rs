@@ -1,14 +1,16 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use insta::assert_json_snapshot;
 use mix_events::v1::command::Request;
 use mix_events::v1::{BootstrapRequest, Cancellation, NotRunReason};
 use mix_events::{Outcome as EventOutcome, ROOT, validate};
 
 use super::*;
-use crate::declared::identity::InvokingUser;
-use crate::declared::paths::{DEFAULT_PROFILE_NIX_ENV, MIX_DAEMON_SERVICE_UNIT};
+use crate::declared::identity::{InvokingUser, MIX_USERS_GROUP, NIXBLD_USER_COUNT, user_name};
+use crate::declared::paths::{
+    DEFAULT_PROFILE_NIX_ENV, MIX_DAEMON_BIN, MIX_DAEMON_SERVICE_UNIT, MIX_DAEMON_SOCKET_UNIT,
+    NIX_DAEMON_SOCKET_UNIT,
+};
 use crate::effect::{Digest, Kind};
 use crate::model::World;
 use crate::model::testkit::{Run, Script, difference, drive, requested};
@@ -78,15 +80,164 @@ fn run(world: &mut World, settings: &Settings, script: Script) -> Run {
     )
 }
 
+fn position(run: &Run, wanted: impl Fn(&Action) -> bool) -> Option<usize> {
+    run.performed.iter().position(wanted)
+}
+
+fn first(run: &Run, what: &str, wanted: impl Fn(&Action) -> bool) -> usize {
+    position(run, wanted)
+        .unwrap_or_else(|| panic!("{what} never happened in:\n{:#?}", run.performed()))
+}
+
+fn installs(unit: &str) -> impl Fn(&Action) -> bool + '_ {
+    move |action| matches!(action, Action::InstallUnit { unit: found, .. } if found == unit)
+}
+
+fn starts(unit: &str) -> impl Fn(&Action) -> bool + '_ {
+    move |action| matches!(action, Action::StartUnit { unit: found } if found == unit)
+}
+
+fn puts(path: &str) -> impl Fn(&Action) -> bool + '_ {
+    move |action| matches!(action, Action::PutFile { path: found, .. } if found == Path::new(path))
+}
+
+fn unit_text(run: &Run, unit: &str) -> String {
+    run.performed
+        .iter()
+        .find_map(|action| match action {
+            Action::InstallUnit {
+                unit: found,
+                contents,
+                ..
+            } if found == unit => Some(String::from_utf8(contents.to_vec()).unwrap()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("{unit} was never installed"))
+}
+
+fn named_by(text: &str, setting: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|line| line.strip_prefix(setting))
+        .flat_map(str::split_whitespace)
+        .map(str::to_string)
+        .collect()
+}
+
 #[test]
 fn a_fresh_bootstrap_builds_the_whole_machine() {
     let mut world = machine();
-    let before = world.clone();
 
     let run = run(&mut world, &settings(None, false), Script::default());
 
-    assert_json_snapshot!(run.case(&before, &world));
+    assert_eq!(run.report().verdict, Verdict::Succeeded);
     assert!(world.pending().is_empty());
+    for unit in [
+        NIX_DAEMON_SOCKET_UNIT,
+        MIX_DAEMON_SOCKET_UNIT,
+        MIX_DAEMON_SERVICE_UNIT,
+    ] {
+        let facts = &world.units[unit];
+        assert!(facts.enabled, "{unit} is not enabled");
+        assert!(facts.running.is_some(), "{unit} is not running");
+    }
+    let builders = &world.groups["nixbld"].members;
+    for n in 1..=NIXBLD_USER_COUNT {
+        let name = user_name(n).into_owned();
+        assert!(world.users.contains_key(&name), "{name} was not created");
+        assert!(builders.contains(&name), "{name} is not in the build group");
+    }
+}
+
+#[test]
+fn every_unit_file_is_installed_before_any_unit_is_enabled_or_started() {
+    let run = run(&mut machine(), &settings(None, false), Script::default());
+
+    let last_install = run
+        .performed
+        .iter()
+        .rposition(|action| matches!(action, Action::InstallUnit { .. }))
+        .unwrap();
+    let first_activation = first(&run, "a unit being enabled or started", |action| {
+        matches!(action, Action::EnableUnit { .. } | Action::StartUnit { .. })
+    });
+
+    assert!(last_install < first_activation, "{:#?}", run.performed());
+}
+
+#[test]
+fn a_unit_starts_after_every_unit_it_requires_or_orders_itself_after() {
+    let run = run(&mut machine(), &settings(None, false), Script::default());
+
+    let mut checked = 0;
+    for unit in [MIX_DAEMON_SERVICE_UNIT, MIX_DAEMON_SOCKET_UNIT] {
+        let text = unit_text(&run, unit);
+        let wanted: Vec<String> = ["Requires=", "After="]
+            .iter()
+            .flat_map(|setting| named_by(&text, setting))
+            .collect();
+        for needed in wanted {
+            let Some(needed_at) = position(&run, starts(&needed)) else {
+                continue;
+            };
+            let unit_at = first(&run, unit, starts(unit));
+            assert!(
+                needed_at < unit_at,
+                "{needed} must start before {unit}:\n{:#?}",
+                run.performed()
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked >= 2, "the service names the sockets it depends on");
+}
+
+#[test]
+fn the_daemon_binary_is_in_place_before_the_service_that_runs_it_starts() {
+    let run = run(&mut machine(), &settings(None, false), Script::default());
+
+    let service = unit_text(&run, MIX_DAEMON_SERVICE_UNIT);
+    let program = named_by(&service, "ExecStart=")
+        .into_iter()
+        .next()
+        .expect("the service runs a program");
+
+    assert_eq!(program, MIX_DAEMON_BIN);
+    assert!(
+        first(&run, "the program being put in place", puts(&program))
+            < first(
+                &run,
+                "the service starting",
+                starts(MIX_DAEMON_SERVICE_UNIT)
+            )
+    );
+}
+
+#[test]
+fn the_nix_units_are_installed_after_the_runtime_that_provides_them() {
+    let run = run(&mut machine(), &settings(None, false), Script::default());
+
+    let runtime = first(&run, "the runtime being installed", |action| {
+        matches!(action, Action::InstallRuntime { .. })
+    });
+
+    for unit in [NIX_DAEMON_SERVICE_UNIT, NIX_DAEMON_SOCKET_UNIT] {
+        assert!(runtime < first(&run, unit, installs(unit)), "{unit}");
+    }
+}
+
+#[test]
+fn every_user_can_walk_to_the_daemon_binary_and_run_it() {
+    let mut world = machine();
+    run(&mut world, &settings(None, false), Script::default());
+
+    let others_can_enter = |path: &Path| world.files[path].mode & 0o001 != 0;
+    for directory in Path::new(MIX_DAEMON_BIN).ancestors().skip(1) {
+        if directory == Path::new("/") {
+            continue;
+        }
+        assert!(others_can_enter(directory), "{}", directory.display());
+    }
+    assert!(others_can_enter(Path::new(MIX_DAEMON_BIN)));
 }
 
 #[test]
@@ -98,14 +249,14 @@ fn a_second_bootstrap_changes_nothing() {
 
     let again = run(&mut world, &settings, Script::default());
 
-    assert_json_snapshot!(again.case(&before, &world));
+    assert_eq!(again.report().verdict, Verdict::Succeeded);
+    assert_eq!(again.performed(), Vec::<String>::new());
     assert_eq!(world, before);
 }
 
 #[test]
 fn a_bootstrap_with_a_user_writes_their_files_as_theirs_and_enrols_them() {
     let mut world = machine();
-    let before = world.clone();
 
     let run = run(
         &mut world,
@@ -113,7 +264,48 @@ fn a_bootstrap_with_a_user_writes_their_files_as_theirs_and_enrols_them() {
         Script::default(),
     );
 
-    assert_json_snapshot!(run.case(&before, &world));
+    assert_eq!(run.report().verdict, Verdict::Succeeded);
+    let state = Path::new("/home/alice/.local/state/mix");
+    let theirs: Vec<&Path> = world
+        .files
+        .keys()
+        .filter(|path| path.starts_with(state))
+        .map(PathBuf::as_path)
+        .collect();
+    assert!(theirs.contains(&state.join("home.nix").as_path()));
+    for path in theirs {
+        assert_eq!(world.files[path].owner, (1000, 1000), "{}", path.display());
+    }
+    assert!(
+        world.groups[MIX_USERS_GROUP]
+            .members
+            .contains(&"alice".to_string())
+    );
+}
+
+#[test]
+fn a_users_profile_is_activated_before_their_repository_is_created_and_recorded() {
+    let run = run(
+        &mut machine(),
+        &settings(Some(alice()), false),
+        Script::default(),
+    );
+
+    let activated = first(&run, "the profile being activated", |action| {
+        matches!(action, Action::ActivateProfile { .. })
+    });
+    let created = first(&run, "the repository being created", |action| {
+        matches!(action, Action::CreateRepository { .. })
+    });
+    let recorded = first(&run, "the state being recorded", |action| {
+        matches!(action, Action::RecordState { .. })
+    });
+
+    assert!(
+        activated < created && created < recorded,
+        "{:#?}",
+        run.performed()
+    );
 }
 
 #[test]
@@ -235,8 +427,31 @@ fn forcing_over_an_installation_replaces_it_and_a_failure_brings_it_back() {
 
     let mut replaced = installed.clone();
     let forced = run(&mut replaced, &settings, Script::default());
-    assert_json_snapshot!(forced.case(&installed, &replaced));
+    assert_eq!(forced.report().verdict, Verdict::Succeeded);
     assert!(replaced.pending().is_empty());
+    assert_eq!(
+        replaced.contents(NIX_CONF_DEST),
+        Some(settings.policy.nix_conf().as_bytes()),
+        "forcing puts back the configuration mix writes"
+    );
+    assert_ne!(
+        replaced.contents(NIX_CONF_DEST),
+        installed.contents(NIX_CONF_DEST)
+    );
+    let stopped = first(
+        &forced,
+        "the socket being stopped",
+        |action| matches!(action, Action::StopUnit { unit } if unit == NIX_DAEMON_SOCKET_UNIT),
+    );
+    let moved_aside = first(
+        &forced,
+        "the socket's file being moved aside",
+        |action| matches!(action, Action::SetAside { path, .. } if path == Path::new(NIX_DAEMON_SOCKET_DEST)),
+    );
+    assert!(
+        stopped < moved_aside,
+        "a unit is stopped before its file is moved away"
+    );
 
     for fail_at in [0, changes / 2, changes - 1] {
         let mut world = installed.clone();
@@ -263,7 +478,7 @@ fn a_file_where_nix_belongs_is_refused_and_nothing_is_touched() {
 
     let run = run(&mut world, &settings(None, false), Script::default());
 
-    assert_json_snapshot!(run.case(&before, &world));
+    assert!(matches!(run.report().verdict, Verdict::Failed { .. }));
     assert_eq!(world, before);
     assert_eq!(
         validate(&run.stream)
@@ -319,11 +534,30 @@ fn a_new_daemon_binary_asks_the_running_daemon_to_drain_instead_of_restarting_it
         0o755,
         (0, 0),
     );
-    let before = world.clone();
 
     let upgraded = run(&mut world, &settings(None, false), Script::default());
 
-    assert_json_snapshot!(upgraded.case(&before, &world));
+    assert_eq!(
+        upgraded.performed(),
+        [
+            "PutFile /var/lib/mix/bin/mix-daemon",
+            "DrainService mix-daemon.service",
+            "Commit changes",
+        ]
+    );
+    assert_eq!(
+        world.contents(MIX_DAEMON_BIN),
+        Some(&b"mix-daemon 2"[..]),
+        "the new binary is the one on disk"
+    );
+    assert!(
+        position(&upgraded, |action| matches!(
+            action,
+            Action::RestartUnit { .. } | Action::StopUnit { .. }
+        ))
+        .is_none(),
+        "the running daemon is asked to drain, never stopped"
+    );
 }
 
 #[test]
@@ -355,11 +589,19 @@ fn a_runtime_whose_default_profile_was_lost_is_provisioned_again() {
         })
     ));
 
-    let before = world.clone();
-
     let again = run(&mut world, &settings, Script::default());
 
-    assert_json_snapshot!(again.case(&before, &world));
+    assert!(matches!(
+        again.performed.as_slice(),
+        [Action::InstallRuntime { .. }, Action::Commit]
+    ));
+    assert!(!matches!(
+        world.observe(&Query::Path(profile)),
+        Fact::Path(PathFacts {
+            kind: Kind::Missing,
+            ..
+        })
+    ));
 }
 
 #[test]
