@@ -3,10 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::declared::identity::{self, InvokingUser};
-use crate::declared::paths::{
-    INDEX_LOCK, NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT, REPOSITORY_CONFIG,
-    REPOSITORY_CONFIG_CONTENTS,
-};
+use crate::declared::paths::{INDEX_LOCK, NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT};
 use crate::declared::targets::{Target, UnitSource};
 use crate::effect::{
     Action, Expect, Fact, Failure, Kind, Owner, PathFacts, ProgramFacts, Query, UserSpec,
@@ -181,18 +178,12 @@ pub fn queries(target: &Target<'_>) -> Vec<Query> {
             if owner.is_some_and(|(uid, _)| uid != 0) {
                 queries.push(Query::TreeOwner(path.to_path_buf()));
             }
-            if let Some(parent) = path.parent() {
-                queries.push(Query::Path(parent.to_path_buf()));
-            }
             queries
         }
         Target::SeededFile { path, owner, .. } => {
             let mut queries = vec![Query::Path(path.to_path_buf())];
             if owner.is_some_and(|(uid, _)| uid != 0) {
                 queries.push(Query::TreeOwner(path.to_path_buf()));
-            }
-            if let Some(parent) = path.parent() {
-                queries.push(Query::Path(parent.to_path_buf()));
             }
             queries
         }
@@ -216,23 +207,17 @@ pub fn queries(target: &Target<'_>) -> Vec<Query> {
             queries
         }
         Target::PathExists { path, .. } => vec![Query::Path((*path).into())],
-        Target::RepositoryOwner { path, user } => vec![
+        Target::Repository { path, user } => vec![
             Query::Path(path.to_path_buf()),
             Query::Strangers {
                 path: path.to_path_buf(),
                 owner: (user.uid, user.gid),
             },
         ],
-        Target::Repository { path, user } => vec![
+        Target::History { path, user } => vec![
             Query::Path(path.join(INDEX_LOCK)),
             Query::Path(path.to_path_buf()),
             Query::Repository(InvokingUser::clone(user)),
-            Query::Strangers {
-                path: path.to_path_buf(),
-                owner: (user.uid, user.gid),
-            },
-            Query::TreeOwner(path.to_path_buf()),
-            Query::Contents(path.join(REPOSITORY_CONFIG)),
         ],
         Target::Program { path, source, .. } => vec![
             Query::Path((*path).into()),
@@ -275,11 +260,6 @@ fn unit_source<'f>(src: &UnitSource, facts: &'f [Fact]) -> Option<&'f [u8]> {
         UnitSource::File(_) => contents(facts, 3),
         UnitSource::Text(text) => Some(text.as_bytes()),
     }
-}
-
-fn orphaned(facts: &[Fact]) -> bool {
-    facts.len() > 1
-        && matches!(facts.last(), Some(Fact::Path(parent)) if parent.kind != Kind::Directory)
 }
 
 fn absent(kind: Kind) -> Option<Finding> {
@@ -381,8 +361,8 @@ pub fn drift(target: &Target<'_>, facts: &[Fact]) -> Option<Drift> {
         | Target::GroupMember { .. }
         | Target::User { .. }
         | Target::PathExists { .. }
-        | Target::RepositoryOwner { .. }
         | Target::Repository { .. }
+        | Target::History { .. }
         | Target::Program { .. }
         | Target::Journals { .. }
         | Target::Leftovers { .. }
@@ -434,9 +414,6 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
             expected, owner, ..
         } => {
             let found = path_facts(facts, 0);
-            if orphaned(facts) {
-                return None;
-            }
             match expected {
                 Some(expected) => {
                     if let Some(finding) = absent(found.kind) {
@@ -462,9 +439,6 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
         }
         Target::SeededFile { owner, .. } => {
             let found = path_facts(facts, 0);
-            if orphaned(facts) {
-                return None;
-            }
             absent(found.kind).or_else(|| owner_drift(found.owner, *owner))
         }
         Target::Group { gid, .. } => match &facts[0] {
@@ -522,9 +496,13 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
         Target::PathExists { .. } => {
             (path_facts(facts, 0).kind == Kind::Missing).then_some(Finding::RuntimeMissing)
         }
-        Target::RepositoryOwner { user, .. } => {
-            if path_facts(facts, 0).kind != Kind::Directory {
-                return None;
+        Target::Repository { user, .. } => {
+            let repository = path_facts(facts, 0);
+            if let Some(finding) = absent(repository.kind) {
+                return Some(finding);
+            }
+            if repository.kind != Kind::Directory {
+                return Some(Finding::RepositoryBroken);
             }
             match &facts[1] {
                 Fact::Stranger(Some((_, actual))) => Some(Finding::Owner {
@@ -534,17 +512,7 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
                 _ => None,
             }
         }
-        Target::Repository { .. } => {
-            let repository = path_facts(facts, 1);
-            if let Some(finding) = absent(repository.kind) {
-                return Some(finding);
-            }
-            if repository.kind != Kind::Directory {
-                return Some(Finding::RepositoryBroken);
-            }
-            if contents(facts, 5) != Some(REPOSITORY_CONFIG_CONTENTS.as_bytes()) {
-                return None;
-            }
+        Target::History { .. } => {
             if !matches!(facts[2], Fact::Repository { intact: true, .. }) {
                 return Some(Finding::RepositoryBroken);
             }
@@ -828,27 +796,9 @@ pub fn fix(
             actions
         }
         Target::PathExists { .. } => return Err(Unfixable::MissingRuntime),
-        Target::RepositoryOwner { path, .. } => {
-            let Finding::Owner { expected, .. } = finding else {
-                return Ok(Vec::new());
-            };
-            let found = path_facts(facts, 0);
-            found
-                .id
-                .map(|expect| Action::ReclaimTree {
-                    path: path.to_path_buf(),
-                    expect,
-                    owner: expected,
-                    mode: found.mode,
-                })
-                .into_iter()
-                .collect()
-        }
         Target::Repository { path, user } => {
-            let aside =
-                |path, found: &PathFacts| found.id.map(|expect| Action::SetAside { path, expect });
+            let found = path_facts(facts, 0);
             if let Finding::Owner { expected, .. } = finding {
-                let found = path_facts(facts, 1);
                 return Ok(found
                     .id
                     .map(|expect| Action::ReclaimTree {
@@ -860,18 +810,15 @@ pub fn fix(
                     .into_iter()
                     .collect());
             }
+            replaced(path, found, user)
+        }
+        Target::History { path, user } => {
             if finding == Finding::RepositoryLocked {
                 return Ok(aside(path.join(INDEX_LOCK), path_facts(facts, 0))
                     .into_iter()
                     .collect());
             }
-            let mut actions: Vec<Action> = aside(path.to_path_buf(), path_facts(facts, 1))
-                .into_iter()
-                .collect();
-            actions.push(Action::CreateRepository {
-                user: InvokingUser::clone(user),
-            });
-            actions
+            replaced(path, path_facts(facts, 1), user)
         }
         Target::Program { path, mode, .. } => {
             let found = path_facts(facts, 0);
@@ -937,6 +884,18 @@ pub fn fix(
     })
 }
 
+fn aside(path: std::path::PathBuf, found: &PathFacts) -> Option<Action> {
+    found.id.map(|expect| Action::SetAside { path, expect })
+}
+
+fn replaced(path: &Path, found: &PathFacts, user: &InvokingUser) -> Vec<Action> {
+    let mut actions: Vec<Action> = aside(path.to_path_buf(), found).into_iter().collect();
+    actions.push(Action::CreateRepository {
+        user: InvokingUser::clone(user),
+    });
+    actions
+}
+
 pub struct TargetStep {
     target: Target<'static>,
     label: String,
@@ -998,7 +957,9 @@ impl StepSpec for RestartIfStale {
     }
 }
 
-struct RecordRepaired(identity::InvokingUser);
+struct RecordRepaired {
+    user: identity::InvokingUser,
+}
 
 impl StepSpec for RecordRepaired {
     fn key(&self) -> Cow<'static, str> {
@@ -1010,7 +971,7 @@ impl StepSpec for RecordRepaired {
     }
 
     fn queries(&self) -> Vec<Query> {
-        vec![Query::Repository(self.0.clone())]
+        vec![Query::Repository(self.user.clone())]
     }
 
     fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
@@ -1019,7 +980,7 @@ impl StepSpec for RecordRepaired {
                 intact: true,
                 recorded: false,
             } => vec![Action::RecordState {
-                user: self.0.clone(),
+                user: self.user.clone(),
             }],
             _ => Vec::new(),
         })
@@ -1028,13 +989,13 @@ impl StepSpec for RecordRepaired {
 
 pub fn repair_steps(targets: Vec<Target<'_>>, request: &str) -> Vec<Box<dyn StepSpec>> {
     let user = targets.iter().find_map(|target| match target {
-        Target::Repository { user, .. } => Some(InvokingUser::clone(user)),
+        Target::History { user, .. } => Some(InvokingUser::clone(user)),
         _ => None,
     });
     let mut steps = target_steps(targets, request);
     steps.push(Box::new(RestartIfStale));
     if let Some(user) = user {
-        steps.push(Box::new(RecordRepaired(user)));
+        steps.push(Box::new(RecordRepaired { user }));
     }
     steps
 }

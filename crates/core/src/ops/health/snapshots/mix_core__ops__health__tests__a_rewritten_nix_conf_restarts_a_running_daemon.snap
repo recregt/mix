@@ -568,6 +568,13 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_REPAIRING"
       },
       {
+        "key": "/home/alice/.local/state/mix/.git",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice/.local/state/mix/.git",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
         "key": "/home/alice/.local/state/mix/.git/config",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/home/alice/.local/state/mix/.git/config",
@@ -575,16 +582,9 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_REPAIRING"
       },
       {
-        "key": "/home/alice/.local/state/mix/.git ownership",
+        "key": "/home/alice/.local/state/mix/.git history",
         "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/home/alice/.local/state/mix/.git ownership",
-        "undone": false,
-        "verb": "VERB_REPAIRING"
-      },
-      {
-        "key": "/home/alice/.local/state/mix/.git",
-        "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "/home/alice/.local/state/mix/.git",
+        "subject": "/home/alice/.local/state/mix/.git history",
         "undone": false,
         "verb": "VERB_REPAIRING"
       },

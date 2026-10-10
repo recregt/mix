@@ -163,8 +163,6 @@ fn repair(world: &mut World, config: &UserConfig) -> Run {
 
 type Drift = fn(&mut World);
 
-const ALICE_REPOSITORY: &str = "/home/alice/.local/state/mix/.git";
-const ALICE_OWNERSHIP: &str = "/home/alice/.local/state/mix/.git ownership";
 const ALICE_GENERATIONS: &str = "/home/alice/.local/state/nix/profiles/home-manager";
 
 fn remove_tree(world: &mut World, top: &Path) {
@@ -221,7 +219,10 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
                         expected: (1000, 1000),
                     },
                 ),
-                (ALICE_REPOSITORY, Finding::RepositoryBroken),
+                (
+                    "/home/alice/.local/state/mix/.git history",
+                    Finding::RepositoryBroken,
+                ),
             ],
         ),
         (
@@ -383,7 +384,17 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
             },
             vec![
                 ("/home/alice/.local/state/mix", Finding::Missing),
-                (ALICE_REPOSITORY, Finding::Missing),
+                ("/home/alice/.local/state/mix/home.nix", Finding::Missing),
+                ("/home/alice/.local/state/mix/flake.nix", Finding::Missing),
+                ("/home/alice/.local/state/mix/flake.lock", Finding::Missing),
+                ("/home/alice/.local/state/mix/.gitignore", Finding::Missing),
+                ("/home/alice/.local/state/mix/state", Finding::Missing),
+                ("/home/alice/.local/state/mix/.git", Finding::Missing),
+                ("/home/alice/.local/state/mix/.git/config", Finding::Missing),
+                (
+                    "/home/alice/.local/state/mix/.git history",
+                    Finding::RepositoryBroken,
+                ),
             ],
         ),
         (
@@ -391,7 +402,14 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
             |world: &mut World| {
                 remove_tree(world, &repository_dir(Path::new("/home/alice")));
             },
-            vec![(ALICE_REPOSITORY, Finding::Missing)],
+            vec![
+                ("/home/alice/.local/state/mix/.git", Finding::Missing),
+                ("/home/alice/.local/state/mix/.git/config", Finding::Missing),
+                (
+                    "/home/alice/.local/state/mix/.git history",
+                    Finding::RepositoryBroken,
+                ),
+            ],
         ),
         (
             "a repository whose history does not verify",
@@ -400,7 +418,10 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
                     repository_dir(Path::new("/home/alice")).join(crate::model::REPOSITORY_HEAD);
                 world.files.remove(&head);
             },
-            vec![(ALICE_REPOSITORY, Finding::RepositoryBroken)],
+            vec![(
+                "/home/alice/.local/state/mix/.git history",
+                Finding::RepositoryBroken,
+            )],
         ),
         (
             "a file where the repository belongs",
@@ -409,7 +430,17 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
                 remove_tree(world, &repository);
                 world.with_file(&repository, b"gitdir: /elsewhere\n", 0o644, (1000, 1000));
             },
-            vec![(ALICE_REPOSITORY, Finding::RepositoryBroken)],
+            vec![
+                (
+                    "/home/alice/.local/state/mix/.git",
+                    Finding::RepositoryBroken,
+                ),
+                ("/home/alice/.local/state/mix/.git/config", Finding::Missing),
+                (
+                    "/home/alice/.local/state/mix/.git history",
+                    Finding::RepositoryBroken,
+                ),
+            ],
         ),
         (
             "an index lock no mix command holds",
@@ -417,7 +448,10 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
                 let lock = repository_dir(Path::new("/home/alice")).join(INDEX_LOCK);
                 world.with_file(lock, b"", 0o644, (1000, 1000));
             },
-            vec![(ALICE_REPOSITORY, Finding::RepositoryLocked)],
+            vec![(
+                "/home/alice/.local/state/mix/.git history",
+                Finding::RepositoryLocked,
+            )],
         ),
         (
             "an altered daemon binary",
@@ -499,7 +533,7 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
                 world.files.get_mut(&head).unwrap().owner = (0, 0);
             },
             vec![(
-                ALICE_OWNERSHIP,
+                "/home/alice/.local/state/mix/.git",
                 Finding::Owner {
                     actual: (0, 0),
                     expected: (1000, 1000),

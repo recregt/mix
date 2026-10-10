@@ -155,11 +155,11 @@ pub enum Target<'a> {
         name: &'static str,
         path: &'static str,
     },
-    RepositoryOwner {
+    Repository {
         path: Cow<'a, Path>,
         user: UserRef<'a>,
     },
-    Repository {
+    History {
         path: Cow<'a, Path>,
         user: UserRef<'a>,
     },
@@ -187,7 +187,7 @@ pub enum Target<'a> {
 
 /// Name of the target that collects what interrupted writes left behind.
 pub const LEFTOVERS: &str = "leftovers of interrupted writes";
-const OWNERSHIP: &str = " ownership";
+const HISTORY: &str = " history";
 
 impl Target<'_> {
     pub fn into_owned(self) -> Target<'static> {
@@ -232,11 +232,11 @@ impl Target<'_> {
                 must_be_active,
             },
             Target::PathExists { name, path } => Target::PathExists { name, path },
-            Target::RepositoryOwner { path, user } => Target::RepositoryOwner {
+            Target::Repository { path, user } => Target::Repository {
                 path: own_path(path),
                 user: user.into_static(),
             },
-            Target::Repository { path, user } => Target::Repository {
+            Target::History { path, user } => Target::History {
                 path: own_path(path),
                 user: user.into_static(),
             },
@@ -267,11 +267,11 @@ impl Target<'_> {
             Target::User { n, .. } => identity::user_name(*n),
             Target::SystemdUnit { name, .. } => Cow::Borrowed(name),
             Target::PathExists { name, .. } => Cow::Borrowed(name),
-            Target::RepositoryOwner { path, .. } => {
+            Target::History { path, .. } => {
                 let path = text(path);
-                let mut label = String::with_capacity(path.len() + OWNERSHIP.len());
+                let mut label = String::with_capacity(path.len() + HISTORY.len());
                 label.push_str(&path);
-                label.push_str(OWNERSHIP);
+                label.push_str(HISTORY);
                 Cow::Owned(label)
             }
             Target::Repository { path, .. }
@@ -293,8 +293,8 @@ impl Target<'_> {
             }
             Target::SystemdUnit { .. } => Category::Services,
             Target::PathExists { .. }
-            | Target::RepositoryOwner { .. }
             | Target::Repository { .. }
+            | Target::History { .. }
             | Target::Journals { .. }
             | Target::Leftovers { .. }
             | Target::HomeFiles { .. } => Category::Filesystem,
@@ -361,16 +361,16 @@ fn push_user_targets<'a>(items: &mut Vec<Target<'a>>, cfg: &'a UserConfig) {
     });
     items.extend(files);
     items.push(state);
+    items.push(Target::Repository {
+        path: Cow::Owned(repository.clone()),
+        user: UserRef::Borrowed(&cfg.user),
+    });
     items.push(Target::File {
         path: Cow::Owned(join(&repository, REPOSITORY_CONFIG)),
         expected: Some(Cow::Borrowed(REPOSITORY_CONFIG_CONTENTS)),
         owner,
     });
-    items.push(Target::RepositoryOwner {
-        path: Cow::Owned(repository.clone()),
-        user: UserRef::Borrowed(&cfg.user),
-    });
-    items.push(Target::Repository {
+    items.push(Target::History {
         path: Cow::Owned(repository),
         user: UserRef::Borrowed(&cfg.user),
     });
@@ -414,11 +414,11 @@ pub fn written_dirs(user: Option<&InvokingUser>) -> Vec<PathBuf> {
             | Target::SeededFile { path, .. } => add(path),
             Target::SystemdUnit { dest, .. } => add(Path::new(dest)),
             Target::Program { path, .. } => add(Path::new(path)),
-            Target::RepositoryOwner { .. } => {}
             Target::Repository { path, .. } => {
                 add(path);
                 add(&path.join(INDEX_LOCK));
             }
+            Target::History { .. } => {}
             Target::Group { .. }
             | Target::GroupMember { .. }
             | Target::User { .. }
@@ -623,7 +623,7 @@ mod tests {
     fn label_borrows_instead_of_allocating_for_every_target() {
         let cfg = sample_user_config();
         for target in targets(Some(&cfg), default_policy()) {
-            if matches!(target, Target::RepositoryOwner { .. }) {
+            if matches!(target, Target::History { .. }) {
                 continue;
             }
             assert!(
@@ -878,14 +878,14 @@ mod tests {
             |wanted: &dyn Fn(&Target<'_>) -> bool| targets.iter().position(wanted).unwrap();
 
         let repository = position(
-            &|target| matches!(target, Target::Repository { user, .. } if **user == cfg.user),
+            &|target| matches!(target, Target::History { user, .. } if **user == cfg.user),
         );
         let state = position(&|target| matches!(target, Target::SeededFile { .. }));
 
         assert!(state < repository);
         assert_eq!(
             targets[repository].label(),
-            "/home/mix-user/.local/state/mix/.git"
+            "/home/mix-user/.local/state/mix/.git history"
         );
     }
 

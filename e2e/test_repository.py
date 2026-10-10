@@ -22,7 +22,7 @@ def test_a_damaged_repository_is_found_and_replaced_so_installs_work_again(
 
     found = container.mix("doctor", user=USER)
     assert found.exit_code == 3, found
-    assert _findings(found) == {REPOSITORY: {"repositoryBroken": {}}}
+    assert _findings(found) == {f"{REPOSITORY} history": {"repositoryBroken": {}}}
 
     repaired = container.mix("repair", user=USER)
     assert repaired.succeeded(), repaired
