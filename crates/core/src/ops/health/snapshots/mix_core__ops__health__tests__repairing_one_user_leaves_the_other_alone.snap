@@ -14,15 +14,6 @@ expression: "run.case(&before, &world)"
         "subject": "/home/alice/.local/state/mix/home.nix",
         "undone": false,
         "unknown": []
-      },
-      {
-        "action": "CHANGE_ACTION_DELETE",
-        "operation": "OPERATION_REMOVE_CREATED_TREE",
-        "status": "STATUS_SUCCEEDED",
-        "step": "/home/alice/.local/state/mix leftovers",
-        "subject": "/home/alice/.local/state/mix/.home.nix.mix-backup-model-104",
-        "undone": false,
-        "unknown": []
       }
     ],
     "command": "repair",
@@ -728,7 +719,7 @@ expression: "run.case(&before, &world)"
       },
       {
         "key": "/home/alice/.local/state/mix leftovers",
-        "status": "STATUS_SUCCEEDED",
+        "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/home/alice/.local/state/mix leftovers",
         "undone": false,
         "verb": "VERB_REPAIRING"
@@ -850,7 +841,6 @@ expression: "run.case(&before, &world)"
   },
   "performed": [
     "PutFile /home/alice/.local/state/mix/home.nix",
-    "RemoveCreatedTree /home/alice/.local/state/mix/.home.nix.mix-backup-model-104",
     "Commit changes"
   ]
 }

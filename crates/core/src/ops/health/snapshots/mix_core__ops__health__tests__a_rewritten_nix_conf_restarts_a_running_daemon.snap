@@ -16,15 +16,6 @@ expression: "run.case(&before, &world)"
         "unknown": []
       },
       {
-        "action": "CHANGE_ACTION_DELETE",
-        "operation": "OPERATION_REMOVE_CREATED_TREE",
-        "status": "STATUS_SUCCEEDED",
-        "step": "/etc/nix leftovers",
-        "subject": "/etc/nix/.nix.conf.mix-backup-model-79",
-        "undone": false,
-        "unknown": []
-      },
-      {
         "action": "CHANGE_ACTION_UPDATE",
         "operation": "OPERATION_RESTART_UNIT",
         "status": "STATUS_SUCCEEDED",
@@ -562,7 +553,7 @@ expression: "run.case(&before, &world)"
       },
       {
         "key": "/etc/nix leftovers",
-        "status": "STATUS_SUCCEEDED",
+        "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/etc/nix leftovers",
         "undone": false,
         "verb": "VERB_REPAIRING"
@@ -839,7 +830,6 @@ expression: "run.case(&before, &world)"
   },
   "performed": [
     "PutFile /etc/nix/nix.conf",
-    "RemoveCreatedTree /etc/nix/.nix.conf.mix-backup-model-79",
     "RestartUnit nix-daemon.service",
     "Commit changes"
   ]

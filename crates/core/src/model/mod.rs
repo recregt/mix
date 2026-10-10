@@ -1259,6 +1259,10 @@ impl World {
                             && path
                                 .file_name()
                                 .is_some_and(|name| is_leftover(&name.to_string_lossy()))
+                            && !self
+                                .pending
+                                .get(&self.acting_for)
+                                .is_some_and(|own| own.contains(path))
                     })
                     .map(|(path, entry)| (path.clone(), entry.id))
                     .collect(),

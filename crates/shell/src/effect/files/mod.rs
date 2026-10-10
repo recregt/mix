@@ -1218,6 +1218,7 @@ impl Files {
         let mut found: Vec<(PathBuf, FileId)> = entries(&fd)
             .into_iter()
             .filter(|name| is_leftover(&name.to_string_lossy()))
+            .filter(|name| !self.pending.contains(&dir.join(name)))
             .filter_map(|name| {
                 let stat = sys::statx(&fd, &name, AtFlags::SYMLINK_NOFOLLOW, WANTED).ok()?;
                 Some((dir.join(&name), id(&stat)))
