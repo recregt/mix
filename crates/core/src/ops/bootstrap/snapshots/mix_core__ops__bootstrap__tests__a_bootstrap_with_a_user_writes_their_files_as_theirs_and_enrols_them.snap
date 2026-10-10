@@ -1889,14 +1889,14 @@ expression: "run.case(&before, &world)"
       "/var/lib/mix": {
         "added": {
           "directory": true,
-          "mode": "0700",
+          "mode": "0755",
           "owner": "0:0"
         }
       },
       "/var/lib/mix/bin": {
         "added": {
           "directory": true,
-          "mode": "0700",
+          "mode": "0755",
           "owner": "0:0"
         }
       },

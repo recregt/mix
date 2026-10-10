@@ -17,7 +17,7 @@ use crate::declared::paths::{
 };
 use crate::declared::paths::{
     GIT_DIR, HOME_MANAGER_PROFILE_NAME, JOURNAL_DIR, MIX_DAEMON_BIN, MIX_DAEMON_BIN_MODE,
-    REPOSITORY_CONFIG, REPOSITORY_CONFIG_CONTENTS, RUNNING_PROGRAM,
+    MIX_VAR_DIR_MODE, REPOSITORY_CONFIG, REPOSITORY_CONFIG_CONTENTS, RUNNING_PROGRAM,
 };
 use crate::declared::policy::Policy;
 use crate::declared::tree::{Builder, Handle, Tree};
@@ -703,8 +703,8 @@ pub fn tree_for<'a>(intent: &Intent<'a>) -> Tree<'a> {
         precondition(&mut tree, path);
     }
     directory(&mut tree, NIXBLD_HOME, NIXBLD_HOME_MODE);
-    for (path, bits) in [(MIX_VAR_DIR, 0o700), (MIX_BIN_DIR, 0o700)] {
-        parent(&mut tree, path, bits);
+    for path in [MIX_VAR_DIR, MIX_BIN_DIR] {
+        parent(&mut tree, path, MIX_VAR_DIR_MODE);
     }
     let program = tree.path(
         MIX_DAEMON_BIN,
