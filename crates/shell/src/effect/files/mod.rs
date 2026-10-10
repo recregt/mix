@@ -7,7 +7,8 @@ use std::path::{Component, Path, PathBuf};
 
 use mix_core::declared::paths::is_leftover;
 use mix_core::effect::{
-    Action, Expect, Fact, Failure, FileId, Kind, Outcome, Owner, PathFacts, Performed, Query,
+    Action, Expect, Fact, Failure, FileId, Ground, Kind, Node, Outcome, Owner, PathFacts,
+    Performed, Query, Spot, Verdict, precondition,
 };
 use rustix::fs::{
     self as sys, AtFlags, FileType, Gid, Mode, OFlags, RenameFlags, ResolveFlags, Statx,
@@ -33,6 +34,7 @@ pub struct Files {
     pending: Vec<PathBuf>,
     next: u64,
     seen: std::sync::Mutex<Seen>,
+    placed: Vec<Place>,
 }
 
 #[derive(Default)]
@@ -42,16 +44,18 @@ struct Seen {
     name: OsString,
 }
 
-struct Pinned {
+pub struct Pinned {
     _node: OwnedFd,
     dev: u64,
     ino: u64,
+    id: FileId,
 }
 
-struct Place {
+pub struct Place {
     path: PathBuf,
     dir: OwnedFd,
     name: OsString,
+    held: Option<Pinned>,
 }
 
 fn io(path: &Path, errno: Errno) -> Failure {
@@ -111,6 +115,55 @@ fn done(undo: Vec<Action>) -> Outcome {
     Ok(Performed { undo })
 }
 
+fn running() -> Owner {
+    (
+        nix::unistd::geteuid().as_raw(),
+        nix::unistd::getegid().as_raw(),
+    )
+}
+
+impl Ground for Files {
+    type Handle = Place;
+
+    fn spot(&self, path: &Path) -> (Spot, Option<Self::Handle>) {
+        let place = match self.place(path) {
+            Ok(place) => place,
+            Err(failure) => return (Spot::Blocked(failure), None),
+        };
+        let node = match sys::openat(
+            &place.dir,
+            &place.name,
+            OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(node) => node,
+            Err(Errno::NOENT) => return (Spot::Missing, Some(place)),
+            Err(errno) => return (Spot::Blocked(io(&place.path, errno)), None),
+        };
+        let stat = match statx_fd(&node) {
+            Ok(stat) => stat,
+            Err(errno) => return (Spot::Blocked(io(&place.path, errno)), None),
+        };
+        let spot = Spot::Present(Node {
+            kind: kind(&stat),
+            id: id(&stat),
+            mode: mode(&stat),
+            owner: owner_of(&stat),
+        });
+        let held = Some(Pinned {
+            _node: node,
+            dev: id(&stat).dev,
+            ino: stat.stx_ino,
+            id: id(&stat),
+        });
+        (spot, Some(Place { held, ..place }))
+    }
+
+    fn running(&self, _: &Path) -> Owner {
+        running()
+    }
+}
+
 impl Files {
     pub fn open(root: &Path, request: impl Into<String>) -> std::io::Result<Self> {
         Self::open_trusting(root, request, 0)
@@ -133,6 +186,7 @@ impl Files {
             pending: Vec::new(),
             next: 0,
             seen: std::sync::Mutex::new(Seen::default()),
+            placed: Vec::new(),
         })
     }
 
@@ -156,8 +210,15 @@ impl Files {
         self.place_with(path, ResolveFlags::NO_SYMLINKS | ResolveFlags::BENEATH)
     }
 
-    fn place_of(&self, path: &Path) -> Result<Option<Place>, Failure> {
-        match self.place(path) {
+    fn take(&mut self, path: &Path) -> Result<Place, Failure> {
+        match self.placed.iter().position(|place| place.path == path) {
+            Some(at) => Ok(self.placed.swap_remove(at)),
+            None => self.place(path),
+        }
+    }
+
+    fn place_of(&mut self, path: &Path) -> Result<Option<Place>, Failure> {
+        match self.take(path) {
             Ok(place) => Ok(Some(place)),
             Err(Failure::Io {
                 kind: std::io::ErrorKind::NotFound,
@@ -167,7 +228,7 @@ impl Files {
         }
     }
 
-    fn place_holding(&self, path: &Path, expect: FileId) -> Result<Place, Failure> {
+    fn place_holding(&mut self, path: &Path, expect: FileId) -> Result<Place, Failure> {
         self.place_of(path)?
             .ok_or_else(|| conflict(path, format!("{expect:?}"), "nothing"))
     }
@@ -208,6 +269,7 @@ impl Files {
             path: path.to_path_buf(),
             dir,
             name: name.into_owned(),
+            held: None,
         })
     }
 
@@ -393,6 +455,7 @@ impl Files {
             path: path.to_path_buf(),
             dir,
             name: name.to_os_string(),
+            held: None,
         })
     }
 
@@ -484,7 +547,18 @@ impl Files {
         }
     }
 
-    fn pin(place: &Place, name: &OsStr, expect: FileId) -> Result<Option<Pinned>, Failure> {
+    fn pin(place: &mut Place, expect: FileId) -> Result<Option<Pinned>, Failure> {
+        let name = &place.name;
+        if let Some(held) = place.held.take() {
+            if held.id != expect {
+                return Err(conflict(
+                    &place.path,
+                    format!("{expect:?}"),
+                    format!("{:?}", held.id),
+                ));
+            }
+            return Ok(Some(held));
+        }
         let node = match sys::openat(
             &place.dir,
             name,
@@ -507,11 +581,12 @@ impl Files {
             _node: node,
             dev: id(&stat).dev,
             ino: stat.stx_ino,
+            id: id(&stat),
         }))
     }
 
-    fn pinned(place: &Place, name: &OsStr, expect: FileId) -> Result<Pinned, Failure> {
-        Self::pin(place, name, expect)?
+    fn pinned(place: &mut Place, expect: FileId) -> Result<Pinned, Failure> {
+        Self::pin(place, expect)?
             .ok_or_else(|| conflict(&place.path, format!("{expect:?}"), "nothing"))
     }
 
@@ -536,10 +611,42 @@ impl Files {
 
     pub fn perform(&mut self, action: &Action, prepared: &mut Prepared<'_>) -> Option<Outcome> {
         self.forget();
-        Some(match action {
-            Action::CreateDirs { path, mode, owner } => {
-                self.create_dirs(path, *mode, *owner, prepared)
+        if !matches!(
+            action,
+            Action::CreateDirs { .. }
+                | Action::CreateDir { .. }
+                | Action::PutFile { .. }
+                | Action::SetMode { .. }
+                | Action::SetOwner { .. }
+                | Action::SetAside { .. }
+                | Action::RemoveCreated { .. }
+                | Action::RemoveCreatedTree { .. }
+                | Action::Restore { .. }
+                | Action::ReclaimTree { .. }
+                | Action::CopyTree { .. }
+                | Action::Commit
+        ) {
+            return None;
+        }
+        let mut placed = std::mem::take(&mut self.placed);
+        let checked = precondition(action, self, &mut placed);
+        self.placed = placed;
+        let verdict = match checked {
+            Ok(Verdict::Done) => {
+                self.placed.clear();
+                return Some(done(Vec::new()));
             }
+            Ok(verdict) => verdict,
+            Err(failure) => {
+                self.placed.clear();
+                return Some(Err(failure));
+            }
+        };
+        let outcome = match action {
+            Action::CreateDirs { path, mode, owner } => match verdict {
+                Verdict::Below(top) => self.create_dirs(&top, path, *mode, *owner, prepared),
+                _ => Err(conflict(path, "a top to create", "none")),
+            },
             Action::CreateDir { path, mode, owner } => {
                 self.create_dir(path, *mode, *owner, prepared)
             }
@@ -561,48 +668,25 @@ impl Files {
             Action::RemoveCreatedTree { path, expect } => self.remove_created_tree(path, *expect),
             Action::Restore { path, from, expect } => self.restore(path, from, *expect),
             Action::ReclaimTree {
-                path,
-                expect,
-                owner,
-                mode,
-            } => self.reclaim(path, *expect, *owner, *mode, prepared),
-            Action::CopyTree {
-                from,
-                to,
-                owner,
-                mode,
-            } => self.copy(from, to, *owner, *mode, prepared),
+                path, expect, mode, ..
+            } => self.reclaim(path, *expect, *mode, prepared),
+            Action::CopyTree { from, to, mode, .. } => self.copy(from, to, *mode, prepared),
             Action::Commit => self.commit(),
             _ => return None,
-        })
+        };
+        self.placed.clear();
+        Some(outcome)
     }
 
     fn create_dirs(
         &mut self,
+        top: &Path,
         path: &Path,
         mode: u32,
         owner: Option<Owner>,
         prepared: &mut Prepared<'_>,
     ) -> Outcome {
-        match self.path_facts(path).kind {
-            Kind::Missing => {}
-            Kind::Directory => return done(Vec::new()),
-            Kind::Unreadable(kind) => {
-                return Err(Failure::Io {
-                    path: path.to_path_buf(),
-                    kind,
-                });
-            }
-            _ => return Err(conflict(path, "a directory", "something else")),
-        }
-        let mut top = path;
-        while let Some(parent) = top.parent()
-            && parent != top
-            && self.path_facts(parent).kind == Kind::Missing
-        {
-            top = parent;
-        }
-        let place = self.place(top)?;
+        let place = self.take(top)?;
         let staged = self.sibling(&place, "new");
         let built = build_chain(&place.dir, &staged, top, path, mode, owner);
         let discard = |files: &Self| {
@@ -643,10 +727,7 @@ impl Files {
         owner: Option<Owner>,
         prepared: &mut Prepared<'_>,
     ) -> Outcome {
-        let place = self.place(path)?;
-        if Self::stat(&place, &place.name)?.is_some() {
-            return Err(conflict(path, "nothing", "something already there"));
-        }
+        let place = self.take(path)?;
         let staged = self.sibling(&place, "new");
         sys::mkdirat(&place.dir, &staged, Mode::from_raw_mode(0o700))
             .map_err(|errno| io(path, errno))?;
@@ -690,7 +771,7 @@ impl Files {
         expect: Expect,
         prepared: &mut Prepared<'_>,
     ) -> Outcome {
-        let place = self.place(path)?;
+        let mut place = self.take(path)?;
         match expect {
             Expect::Absent => {
                 let (new, id) = self.write_new(&place, "new", contents, mode, owner)?;
@@ -714,7 +795,7 @@ impl Files {
                 done(undo)
             }
             Expect::Present(old) => {
-                let pinned = Self::pinned(&place, &place.name, old)?;
+                let pinned = Self::pinned(&mut place, old)?;
                 let (backup, id) = self.write_new(&place, "backup", contents, mode, owner)?;
                 let undo = vec![Action::Restore {
                     path: path.to_path_buf(),
@@ -753,7 +834,7 @@ impl Files {
         expect: u32,
         prepared: &mut Prepared<'_>,
     ) -> Outcome {
-        let place = self.place(path)?;
+        let place = self.take(path)?;
         let node = Self::open_node(&place, &place.name)?;
         let stat = statx_fd(&node).map_err(|errno| io(path, errno))?;
         if self::mode(&stat) != expect {
@@ -780,7 +861,7 @@ impl Files {
         expect: Owner,
         prepared: &mut Prepared<'_>,
     ) -> Outcome {
-        let place = self.place(path)?;
+        let place = self.take(path)?;
         let node = Self::open_node(&place, &place.name)?;
         let stat = statx_fd(&node).map_err(|errno| io(path, errno))?;
         if owner_of(&stat) != expect {
@@ -802,8 +883,8 @@ impl Files {
     }
 
     fn set_aside(&mut self, path: &Path, expect: FileId, prepared: &mut Prepared<'_>) -> Outcome {
-        let place = self.place_holding(path, expect)?;
-        let pinned = Self::pinned(&place, &place.name, expect)?;
+        let mut place = self.place_holding(path, expect)?;
+        let pinned = Self::pinned(&mut place, expect)?;
         let aside = self.sibling(&place, "aside");
         let undo = vec![Action::Restore {
             path: path.to_path_buf(),
@@ -827,10 +908,10 @@ impl Files {
     }
 
     fn remove_created(&mut self, path: &Path, expect: FileId) -> Outcome {
-        let Some(place) = self.place_of(path)? else {
+        let Some(mut place) = self.place_of(path)? else {
             return done(Vec::new());
         };
-        let Some(pinned) = Self::pin(&place, &place.name, expect)? else {
+        let Some(pinned) = Self::pin(&mut place, expect)? else {
             return done(Vec::new());
         };
         let doomed = self.sibling(&place, "remove");
@@ -875,10 +956,10 @@ impl Files {
     }
 
     fn remove_created_tree(&mut self, path: &Path, expect: FileId) -> Outcome {
-        let Some(place) = self.place_of(path)? else {
+        let Some(mut place) = self.place_of(path)? else {
             return done(Vec::new());
         };
-        let Some(pinned) = Self::pin(&place, &place.name, expect)? else {
+        let Some(pinned) = Self::pin(&mut place, expect)? else {
             return done(Vec::new());
         };
         let doomed = self.sibling(&place, "remove");
@@ -928,30 +1009,9 @@ impl Files {
         done(Vec::new())
     }
 
-    fn copy(
-        &mut self,
-        from: &Path,
-        to: &Path,
-        owner: Owner,
-        mode: u32,
-        prepared: &mut Prepared<'_>,
-    ) -> Outcome {
-        let running = (
-            nix::unistd::geteuid().as_raw(),
-            nix::unistd::getegid().as_raw(),
-        );
-        if running != owner {
-            return Err(conflict(
-                to,
-                format!("a copy made as {owner:?}"),
-                format!("a process running as {running:?}"),
-            ));
-        }
-        let source = self.place(from)?;
-        let place = self.place(to)?;
-        if Self::stat(&place, &place.name)?.is_some() {
-            return Err(conflict(to, "nothing", "something already there"));
-        }
+    fn copy(&mut self, from: &Path, to: &Path, mode: u32, prepared: &mut Prepared<'_>) -> Outcome {
+        let source = self.take(from)?;
+        let place = self.take(to)?;
         let staged = self.sibling(&place, "new");
         let discard = |files: &Self| {
             let _ = files.remove_tree(&place, &staged);
@@ -986,14 +1046,7 @@ impl Files {
     }
 
     fn restore(&mut self, path: &Path, from: &Path, expect: Expect) -> Outcome {
-        let place = self.place(path)?;
-        if from.parent() != path.parent() {
-            return Err(conflict(
-                from,
-                "a sibling of the restored path",
-                "another directory",
-            ));
-        }
+        let mut place = self.take(path)?;
         let from_name = from
             .file_name()
             .ok_or_else(|| conflict(from, "a file name", "none"))?
@@ -1009,7 +1062,7 @@ impl Files {
                 )?;
             }
             Expect::Present(current) => {
-                let pinned = Self::pinned(&place, &place.name, current)?;
+                let pinned = Self::pinned(&mut place, current)?;
                 Self::rename(&place, &from_name, &place.name, RenameFlags::EXCHANGE).map_err(
                     |errno| match errno {
                         Errno::NOENT
@@ -1037,23 +1090,11 @@ impl Files {
         &mut self,
         path: &Path,
         expect: FileId,
-        owner: Owner,
         mode: u32,
         prepared: &mut Prepared<'_>,
     ) -> Outcome {
-        let running = (
-            nix::unistd::geteuid().as_raw(),
-            nix::unistd::getegid().as_raw(),
-        );
-        if running != owner {
-            return Err(conflict(
-                path,
-                format!("a copy made as {owner:?}"),
-                format!("a process running as {running:?}"),
-            ));
-        }
-        let place = self.place_holding(path, expect)?;
-        let pinned = Self::pinned(&place, &place.name, expect)?;
+        let mut place = self.place_holding(path, expect)?;
+        let pinned = Self::pinned(&mut place, expect)?;
         let staged = self.sibling(&place, "reclaim");
         let discard = |files: &Self| {
             let _ = files.remove_tree(&place, &staged);
@@ -1115,7 +1156,7 @@ impl Files {
     fn commit(&mut self) -> Outcome {
         let mut first = None;
         let mut kept = Vec::new();
-        let running = nix::unistd::geteuid().as_raw();
+        let running = running().0;
         for pending in std::mem::take(&mut self.pending) {
             let removed = self.place(&pending).and_then(|place| {
                 match Self::stat(&place, &place.name)? {

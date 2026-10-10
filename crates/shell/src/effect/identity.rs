@@ -1,5 +1,6 @@
 use mix_core::effect::{
-    Action, Fact, Failure, GroupFacts, Outcome, Owner, Performed, Query, UserFacts, UserSpec,
+    Accounted, Accounts, Action, Fact, Failure, GroupFacts, Outcome, Performed, Query, UserFacts,
+    account_precondition,
 };
 use mix_exec::Scope;
 
@@ -33,18 +34,47 @@ fn user(name: &str) -> Option<UserFacts> {
     })
 }
 
-fn user_by_uid(uid: u32) -> Option<String> {
-    nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid))
-        .ok()
-        .flatten()
-        .map(|user| user.name)
+struct System;
+
+impl Accounts for System {
+    fn group(&self, name: &str) -> Option<GroupFacts> {
+        group(name)
+    }
+
+    fn user(&self, name: &str) -> Option<UserFacts> {
+        user(name)
+    }
+
+    fn group_with_gid(&self, gid: u32) -> Option<String> {
+        nix::unistd::Group::from_gid(nix::unistd::Gid::from_raw(gid))
+            .ok()
+            .flatten()
+            .map(|group| group.name)
+    }
+
+    fn user_with_uid(&self, uid: u32) -> Option<String> {
+        nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid))
+            .ok()
+            .flatten()
+            .map(|user| user.name)
+    }
+
+    fn primary_of(&self, gid: u32) -> Option<String> {
+        primary_of(gid)
+    }
+
+    fn groups_of(&self, user: &str) -> Vec<String> {
+        supplementary_groups(user)
+    }
 }
 
-fn gid_exists(gid: u32) -> bool {
-    nix::unistd::Group::from_gid(nix::unistd::Gid::from_raw(gid))
-        .ok()
-        .flatten()
-        .is_some()
+fn primary_of(gid: u32) -> Option<String> {
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    passwd.lines().find_map(|line| {
+        let mut fields = line.split(':');
+        let name = fields.next()?;
+        (fields.nth(2)?.parse() == Ok(gid)).then(|| name.to_string())
+    })
 }
 
 fn conflict(subject: &str, expected: impl Into<String>, found: impl Into<String>) -> Failure {
@@ -157,177 +187,6 @@ fn subject(action: &Action) -> String {
     }
 }
 
-pub fn already(action: &Action) -> bool {
-    let members = |name: &str| group(name).map(|group| group.members).unwrap_or_default();
-    match action {
-        Action::AddGroup { name, gid } | Action::SetGroupGid { name, gid, .. } => {
-            group(name).is_some_and(|found| found.gid == *gid)
-        }
-        Action::DeleteGroup { name, .. } => group(name).is_none(),
-        Action::AddUser(spec) => {
-            user(&spec.name).is_some_and(|found| (found.uid, found.gid) == (spec.uid, spec.gid))
-        }
-        Action::SetUserIds { name, ids, .. } => {
-            user(name).is_some_and(|found| (found.uid, found.gid) == *ids)
-        }
-        Action::DeleteUser { name, .. } => user(name).is_none(),
-        Action::AddMember { group: name, user } => members(name).contains(user),
-        Action::RemoveMember { group: name, user } => !members(name).contains(user),
-        _ => false,
-    }
-}
-
-fn precondition(action: &Action) -> Result<Vec<Action>, Failure> {
-    let expect_group = |name: &str, gid: u32| match group(name) {
-        Some(found) if found.gid == gid => Ok(found),
-        Some(found) => Err(conflict(
-            name,
-            format!("gid {gid}"),
-            format!("gid {}", found.gid),
-        )),
-        None => Err(conflict(name, format!("gid {gid}"), "no group")),
-    };
-    let expect_user = |name: &str, ids: Owner| match user(name) {
-        Some(found) if (found.uid, found.gid) == ids => Ok(found),
-        Some(found) => Err(conflict(
-            name,
-            format!("ids {ids:?}"),
-            format!("ids {:?}", (found.uid, found.gid)),
-        )),
-        None => Err(conflict(name, format!("ids {ids:?}"), "no user")),
-    };
-    let members = |name: &str| group(name).map(|group| group.members).unwrap_or_default();
-    Ok(match action {
-        Action::AddGroup { name, gid } => {
-            if let Some(found) = group(name) {
-                return Err(conflict(name, "no group", format!("gid {}", found.gid)));
-            }
-            vec![Action::DeleteGroup {
-                name: name.clone(),
-                expect: *gid,
-            }]
-        }
-        Action::SetGroupGid { name, gid, expect } => {
-            expect_group(name, *expect)?;
-            vec![Action::SetGroupGid {
-                name: name.clone(),
-                gid: *expect,
-                expect: *gid,
-            }]
-        }
-        Action::DeleteGroup { name, expect } => {
-            let found = expect_group(name, *expect)?;
-            let mut undo = vec![Action::AddGroup {
-                name: name.clone(),
-                gid: *expect,
-            }];
-            undo.extend(found.members.into_iter().map(|user| Action::AddMember {
-                group: name.clone(),
-                user,
-            }));
-            undo
-        }
-        Action::AddUser(spec) => {
-            if let Some(found) = user(&spec.name) {
-                return Err(conflict(
-                    &spec.name,
-                    "no user",
-                    format!("uid {}", found.uid),
-                ));
-            }
-            if let Some(holder) = user_by_uid(spec.uid) {
-                return Err(conflict(
-                    &spec.name,
-                    format!("uid {} free", spec.uid),
-                    format!("uid {} held by {holder}", spec.uid),
-                ));
-            }
-            let missing = std::iter::once(spec.gid.to_string())
-                .filter(|_| !gid_exists(spec.gid))
-                .chain(
-                    spec.groups
-                        .iter()
-                        .filter(|name| group(name).is_none())
-                        .cloned(),
-                )
-                .next();
-            if let Some(missing) = missing {
-                return Err(conflict(&spec.name, format!("group {missing}"), "no group"));
-            }
-            vec![Action::DeleteUser {
-                name: spec.name.clone(),
-                expect: (spec.uid, spec.gid),
-                comment: spec.comment.clone(),
-            }]
-        }
-        Action::SetUserIds { name, ids, expect } => {
-            expect_user(name, *expect)?;
-            vec![Action::SetUserIds {
-                name: name.clone(),
-                ids: *expect,
-                expect: *ids,
-            }]
-        }
-        Action::DeleteUser {
-            name,
-            expect,
-            comment,
-        } => {
-            let found = expect_user(name, *expect)?;
-            if found.comment != *comment {
-                return Err(conflict(
-                    name,
-                    format!("comment {comment:?}"),
-                    format!("comment {:?}", found.comment),
-                ));
-            }
-            let groups = supplementary_groups(name);
-            vec![Action::AddUser(UserSpec {
-                name: name.clone(),
-                uid: found.uid,
-                gid: found.gid,
-                home: found.home,
-                shell: found.shell,
-                comment: found.comment,
-                groups,
-            })]
-        }
-        Action::AddMember {
-            group: name,
-            user: member,
-        } => {
-            let Some(found) = group(name) else {
-                return Err(conflict(name, "a group", "no group"));
-            };
-            if found.members.contains(member) {
-                return Err(conflict(
-                    name,
-                    format!("{member} absent"),
-                    format!("{member} present"),
-                ));
-            }
-            vec![Action::RemoveMember {
-                group: name.clone(),
-                user: member.clone(),
-            }]
-        }
-        Action::RemoveMember { group: name, user } => {
-            if !members(name).contains(user) {
-                return Err(conflict(
-                    name,
-                    format!("{user} present"),
-                    format!("{user} absent"),
-                ));
-            }
-            vec![Action::AddMember {
-                group: name.clone(),
-                user: user.clone(),
-            }]
-        }
-        _ => Vec::new(),
-    })
-}
-
 fn supplementary_groups(user: &str) -> Vec<String> {
     let Ok(contents) = std::fs::read_to_string("/etc/group") else {
         return Vec::new();
@@ -376,10 +235,10 @@ pub async fn perform(
     let (tool, args) = command(action)?;
     Some(
         async {
-            if already(action) {
-                return Ok(Performed { undo: Vec::new() });
-            }
-            let undo = precondition(action)?;
+            let undo = match account_precondition(action, &System)? {
+                Accounted::Done => return Ok(Performed { undo: Vec::new() }),
+                Accounted::Go(undo) => undo,
+            };
             prepared(&undo)?;
             if let Action::DeleteUser { name, .. } = action {
                 stop_processes(name, scope).await?;
@@ -408,6 +267,7 @@ pub async fn perform(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mix_core::effect::UserSpec;
 
     #[test]
     fn a_build_user_is_added_with_every_detail_on_the_command_line() {

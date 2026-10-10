@@ -45,6 +45,16 @@ fn alice() -> UserConfig {
 fn machine() -> World {
     let mut world = World::default();
     world.with_dir("/home/alice", 0o700, (1000, 1000));
+    world.users.insert(
+        "alice".into(),
+        crate::effect::UserFacts {
+            uid: 1000,
+            gid: 1000,
+            home: "/home/alice".into(),
+            shell: "/bin/sh".into(),
+            comment: String::new(),
+        },
+    );
     world.with_file("/usr/local/bin/mix-daemon", b"mix-daemon", 0o755, (0, 0));
     world
 }
