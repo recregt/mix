@@ -4,17 +4,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mix_core::declared::paths::is_leftover;
-use mix_core::effect::{Action, Expect, Fact, FileId, Owner, PathFacts, Query};
+use mix_core::effect::{Action, Expect, Fact, FileId, Outcome, Owner, PathFacts, Query};
 use mix_core::model::World;
 use mix_core::model::testkit::{Breakage, Damage};
 use mix_core::run::journal::rollback_order;
-use mix_shell::drive::Performer;
 use mix_shell::effect::files::Files;
 use proptest::prelude::*;
 use proptest::sample::select;
 use proptest_state_machine::{ReferenceStateMachine, StateMachineTest};
 
-use super::{class, comparable, observe, perform, runtime};
+use super::{class, comparable};
 
 pub const REQUEST: &str = "contract";
 
@@ -229,6 +228,19 @@ fn concrete(op: &Op, facts: &mut dyn FnMut(&Path) -> PathFacts, siblings: &[Path
     }
 }
 
+fn named(outcome: &Outcome, paths: &[PathBuf]) -> String {
+    let class = class(outcome);
+    let Some(subject) = class.strip_prefix("conflict at ") else {
+        return class;
+    };
+    normalized(paths)
+        .into_iter()
+        .find(|(_, concrete)| concrete.as_os_str() == subject)
+        .map_or(class.clone(), |(shown, _)| {
+            format!("conflict at {}", shown.display())
+        })
+}
+
 fn counter(name: &str) -> Option<(&str, u64)> {
     let (prefix, n) = name.rsplit_once('-')?;
     Some((prefix, n.parse().ok()?))
@@ -314,6 +326,7 @@ pub fn bare() -> World {
     let mut world = World::default();
     world.files.retain(|path, _| path == Path::new("/"));
     world.acting_for = REQUEST.to_string();
+    world.runs_as = Some((0, 0));
     world
 }
 
@@ -370,6 +383,11 @@ impl ReferenceStateMachine for FileTree {
             .files
             .keys()
             .filter(|path| *path != Path::new("/"))
+            .filter(|path| {
+                !path
+                    .iter()
+                    .any(|name| name.to_str().is_some_and(is_leftover))
+            })
             .cloned()
             .collect();
         let path = if existing.is_empty() {
@@ -462,15 +480,14 @@ impl ReferenceStateMachine for FileTree {
         if let Ok(performed) = &outcome {
             state.undo.push(performed.undo.clone());
         }
-        state.outcome = Some(class(&outcome));
+        state.outcome = Some(named(&outcome, &paths));
         state
     }
 }
 
 pub struct Real {
-    runtime: tokio::runtime::Runtime,
     dir: tempfile::TempDir,
-    performer: Performer,
+    files: Files,
     undo: Vec<Vec<Action>>,
 }
 
@@ -501,7 +518,19 @@ impl Real {
     }
 
     fn ask(&mut self, query: &Query) -> Fact {
-        observe(&self.runtime, &mut self.performer, query)
+        self.files
+            .observe(query)
+            .expect("the file layer answers every path query")
+    }
+
+    fn run(&mut self, action: &Action) -> Outcome {
+        let mut prepared = |_: &[Action]| Ok(());
+        let outcome = self
+            .files
+            .perform(action, &mut prepared)
+            .expect("the file layer performs every file action");
+        super::remember(&outcome);
+        outcome
     }
 
     fn seen(&mut self) -> Seen {
@@ -510,27 +539,27 @@ impl Real {
     }
 
     fn act(&mut self, op: &Op) -> String {
-        let siblings = siblings(&self.paths());
+        let paths = self.paths();
+        let siblings = siblings(&paths);
         let action = {
-            let runtime = &self.runtime;
-            let performer = &mut self.performer;
+            let files = &self.files;
             concrete(
                 op,
                 &mut |path| {
-                    path_facts(observe(
-                        runtime,
-                        performer,
-                        &Query::Path(path.to_path_buf()),
-                    ))
+                    path_facts(
+                        files
+                            .observe(&Query::Path(path.to_path_buf()))
+                            .expect("the file layer answers every path query"),
+                    )
                 },
                 &siblings,
             )
         };
-        let outcome = perform(&self.runtime, &mut self.performer, &action);
+        let outcome = self.run(&action);
         if let Ok(performed) = &outcome {
             self.undo.push(performed.undo.clone());
         }
-        class(&outcome)
+        named(&outcome, &paths)
     }
 
     #[expect(
@@ -641,12 +670,10 @@ impl StateMachineTest for FileTree {
 
     fn init_test(_: &Reference) -> Real {
         let dir = scratch();
-        let performer =
-            Performer::new(Files::open(dir.path(), REQUEST).expect("the scratch root opens"));
+        let files = Files::open(dir.path(), REQUEST).expect("the scratch root opens");
         Real {
-            runtime: runtime(),
             dir,
-            performer,
+            files,
             undo: Vec::new(),
         }
     }
@@ -658,8 +685,10 @@ impl StateMachineTest for FileTree {
         };
         let predicted = state.outcome.as_deref().unwrap_or_default();
         assert_eq!(
-            predicted, outcome,
-            "{op:?}: the model and the disk disagree"
+            predicted,
+            outcome,
+            "{op:?}: the model and the disk disagree; the disk said {}",
+            super::failed()
         );
         same(&state.world, &mut real, &format!("{op:?}"));
         real
@@ -672,10 +701,12 @@ impl StateMachineTest for FileTree {
         let mut clean = !state.broken;
         for (on_model, on_disk) in model.iter().zip(&disk) {
             let predicted = class(&state.world.apply(on_model));
-            let outcome = class(&perform(&real.runtime, &mut real.performer, on_disk));
+            let outcome = class(&real.run(on_disk));
             assert_eq!(
-                predicted, outcome,
-                "undoing with {on_disk:?}: the model and the disk disagree"
+                predicted,
+                outcome,
+                "undoing with {on_disk:?}: the model and the disk disagree; the disk said {}",
+                super::failed()
             );
             clean &= outcome == "done";
             same(

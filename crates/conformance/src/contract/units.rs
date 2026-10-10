@@ -218,7 +218,7 @@ impl StateMachineTest for Units {
         let mut real = Real {
             runtime: runtime(),
             performer: Performer::new(
-                Files::open(Path::new("/"), super::files::REQUEST).expect("the root opens"),
+                Files::open(Path::new("/"), super::request()).expect("the root opens"),
             ),
             undo: Vec::new(),
         };
@@ -240,7 +240,8 @@ impl StateMachineTest for Units {
         assert_eq!(
             state.outcome.as_deref().unwrap_or_default(),
             class(&outcome),
-            "{action:?}: the model and the machine disagree"
+            "{action:?}: the model and the machine disagree; the machine said {}",
+            super::failed()
         );
         same(&state.world, &mut real, &format!("{action:?}"));
         real
@@ -255,8 +256,10 @@ impl StateMachineTest for Units {
                 let predicted = class(&state.world.apply(on_model));
                 let outcome = real.act(on_machine);
                 assert_eq!(
-                    predicted, outcome,
-                    "undoing with {on_machine:?}: the model and the machine disagree"
+                    predicted,
+                    outcome,
+                    "undoing with {on_machine:?}: the model and the machine disagree; the machine said {}",
+                    super::failed()
                 );
                 same(
                     &state.world,

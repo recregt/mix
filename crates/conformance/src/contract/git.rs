@@ -58,6 +58,23 @@ pub enum Op {
     Damage(Target, Kind),
 }
 
+pub fn known() -> Vec<Vec<Op>> {
+    vec![vec![
+        Op::Write {
+            file: FLAKE_NIX,
+            contents: 0,
+        },
+        Op::Record,
+        Op::Write {
+            file: FLAKE_NIX,
+            contents: 1,
+        },
+        Op::Record,
+        Op::Damage(Target::Commit, Kind::Missing),
+        Op::Record,
+    ]]
+}
+
 fn user() -> InvokingUser {
     InvokingUser {
         uid: ROOT.0,
@@ -188,7 +205,12 @@ impl ReferenceStateMachine for Git {
 
     fn init_state() -> BoxedStrategy<Reference> {
         let mut world = World::default();
-        world.with_dir(state_dir(), 0o755, ROOT);
+        let state = state_dir();
+        for dir in state.ancestors().collect::<Vec<_>>().into_iter().rev() {
+            if !world.files.contains_key(dir) {
+                world.with_dir(dir, 0o755, ROOT);
+            }
+        }
         Just(Reference {
             world,
             commits: Vec::new(),
@@ -329,6 +351,33 @@ fn stdout(args: &[&str]) -> Option<String> {
         .status
         .success()
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn inspect() -> String {
+    let repository = repository();
+    let repository = repository.to_string_lossy();
+    [
+        &["rev-parse", "HEAD"][..],
+        &["cat-file", "-t", "HEAD"],
+        &["fsck", "--connectivity-only", "--no-dangling"],
+        &["ls-files", "--stage"],
+        &["config", "--list", "--local"],
+    ]
+    .iter()
+    .map(|args| {
+        let output = command(&[&["--git-dir", &repository][..], args].concat())
+            .output_blocking(&mix_exec::Scope::root())
+            .expect("the pinned git runs");
+        format!(
+            "git {}: {:?} {}{}",
+            args.join(" "),
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout).trim(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("\n")
 }
 
 fn loose(id: &str) -> PathBuf {
@@ -530,7 +579,13 @@ fn same(state: &Reference, real: &mut Real, after: &str) {
     let query = Query::Repository(user());
     let expected = state.world.observe(&query);
     let found = observe(&real.runtime, &mut real.performer, &query);
-    assert_eq!(expected, found, "{query:?} after {after}");
+    assert_eq!(
+        expected,
+        found,
+        "{query:?} after {after}; the machine said {}; git:\n{}",
+        super::failed(),
+        inspect()
+    );
     if matches!(found, Fact::Repository { intact: true, .. }) {
         assert_eq!(
             model_tracked(&state.world),
@@ -565,7 +620,7 @@ impl StateMachineTest for Git {
         let mut real = Real {
             runtime: runtime(),
             performer: Performer::new(
-                Files::open(Path::new("/"), super::files::REQUEST).expect("the root opens"),
+                Files::open(Path::new("/"), super::request()).expect("the root opens"),
             ),
             commits: Vec::new(),
         };
@@ -626,7 +681,8 @@ impl StateMachineTest for Git {
         assert_eq!(
             state.outcome.as_deref().unwrap_or_default(),
             outcome,
-            "{op:?}: the model and git disagree"
+            "{op:?}: the model and git disagree; git:\n{}",
+            inspect()
         );
         same(state, &mut real, &format!("{op:?}"));
         real
