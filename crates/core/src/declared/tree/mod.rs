@@ -189,48 +189,14 @@ impl<'a> Builder<'a> {
                 continue;
             }
             let mut children = std::mem::take(&mut self.drafts[index].children);
-            self.sort_children(&mut children);
+            children.sort_by(|left, right| {
+                self.drafts[left.0]
+                    .path
+                    .cmp(&self.drafts[right.0].path)
+                    .then(left.cmp(right))
+            });
             self.drafts[index].children = children;
         }
-    }
-
-    fn sort_children(&self, children: &mut Vec<Handle>) {
-        children.sort_by(|left, right| {
-            self.drafts[left.0]
-                .path
-                .cmp(&self.drafts[right.0].path)
-                .then(left.cmp(right))
-        });
-        if children
-            .iter()
-            .all(|child| self.drafts[child.0].refers.is_empty())
-        {
-            return;
-        }
-        let mut seen = vec![false; self.drafts.len()];
-        let mut ordered = Vec::with_capacity(children.len());
-        for &child in children.iter() {
-            self.place_after_referred(child, children, &mut seen, &mut ordered);
-        }
-        *children = ordered;
-    }
-
-    fn place_after_referred(
-        &self,
-        child: Handle,
-        siblings: &[Handle],
-        seen: &mut [bool],
-        ordered: &mut Vec<Handle>,
-    ) {
-        if std::mem::replace(&mut seen[child.0], true) {
-            return;
-        }
-        for &referred in &self.drafts[child.0].refers {
-            if siblings.contains(&referred) {
-                self.place_after_referred(referred, siblings, seen, ordered);
-            }
-        }
-        ordered.push(child);
     }
 
     fn mark_leftovers(&mut self) {

@@ -94,13 +94,7 @@ fn the_nix_daemon_units_come_after_what_they_need() {
     }
     let program = index_of(checks, "/var/lib/mix/bin/mix-daemon");
     let service = index_of(checks, "mix-daemon.service");
-    let socket = index_of(checks, "mix-daemon.socket");
-    let nix_socket = index_of(checks, "nix-daemon.socket");
-    let nix_service = index_of(checks, "nix-daemon.service");
     assert!(program < service && checks[service].after.contains(&program));
-    assert!(socket < service && checks[service].after.contains(&socket));
-    assert!(nix_socket < service && checks[service].after.contains(&nix_socket));
-    assert!(nix_socket < nix_service && checks[nix_service].after.contains(&nix_socket));
 }
 
 #[test]

@@ -229,6 +229,7 @@ pub fn queries(target: &Target<'_>) -> Vec<Query> {
             }
             queries
         }
+        Target::UnitActive { name } => vec![Query::Unit((*name).to_string())],
         Target::PathExists { path, .. } => vec![Query::Path((*path).into())],
         Target::Repository { path, user } => vec![
             Query::Path(path.to_path_buf()),
@@ -379,6 +380,7 @@ pub fn drift(target: &Target<'_>, facts: &[Fact]) -> Option<Drift> {
             })
         }
         Target::Precondition { .. }
+        | Target::UnitActive { .. }
         | Target::Parent { .. }
         | Target::Directory { .. }
         | Target::File { expected: None, .. }
@@ -501,11 +503,7 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
             }
             _ => None,
         },
-        Target::SystemdUnit {
-            src,
-            must_be_active,
-            ..
-        } => {
+        Target::SystemdUnit { src, .. } => {
             let installed = contents(facts, 0);
             let Some(installed) = installed else {
                 if unit_source(src, facts).is_none() {
@@ -517,14 +515,16 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
                     _ => Some(Finding::UnitDrift),
                 };
             };
-            if unit_source(src, facts).is_some_and(|source| source != installed) {
-                return Some(Finding::UnitDrift);
-            }
+            unit_source(src, facts)
+                .is_some_and(|source| source != installed)
+                .then_some(Finding::UnitDrift)
+        }
+        Target::UnitActive { .. } => {
             let active = matches!(
-                &facts[2],
+                &facts[0],
                 Fact::Unit(unit) if unit.active_state == "active" || unit.active_state == "reloading"
             );
-            (*must_be_active && !active).then_some(Finding::UnitInactive)
+            (!active).then_some(Finding::UnitInactive)
         }
         Target::PathExists { .. } => {
             (path_facts(facts, 0).kind == Kind::Missing).then_some(Finding::RuntimeMissing)
@@ -826,36 +826,34 @@ pub fn fix(
                 groups: vec![identity::NIXBLD_GROUP.to_string()],
             })],
         },
-        Target::SystemdUnit {
-            name,
-            src,
-            must_be_active,
-            ..
-        } => {
+        Target::SystemdUnit { name, src, .. } => {
             if matches!(&facts[2], Fact::Unit(unit) if unit.file_state.starts_with("masked")) {
                 return Err(Unfixable::Masked);
             }
-            let mut actions = Vec::new();
-            if finding != Finding::UnitInactive {
-                let wanted = unit_source(src, facts).ok_or(Unfixable::MissingRuntime)?;
-                actions.push(Action::InstallUnit {
+            let wanted = unit_source(src, facts).ok_or(Unfixable::MissingRuntime)?;
+            vec![
+                Action::InstallUnit {
                     unit: (*name).to_string(),
                     contents: Arc::from(wanted),
                     expect: path_facts(facts, 1)
                         .id
                         .map_or(Expect::Absent, Expect::Present),
-                });
-                actions.push(Action::DaemonReload);
+                },
+                Action::DaemonReload,
+            ]
+        }
+        Target::UnitActive { name } => {
+            if matches!(&facts[0], Fact::Unit(unit) if unit.file_state.starts_with("masked")) {
+                return Err(Unfixable::Masked);
             }
-            if *must_be_active || finding == Finding::UnitInactive {
-                actions.push(Action::EnableUnit {
+            vec![
+                Action::EnableUnit {
                     unit: (*name).to_string(),
-                });
-                actions.push(Action::StartUnit {
+                },
+                Action::StartUnit {
                     unit: (*name).to_string(),
-                });
-            }
-            actions
+                },
+            ]
         }
         Target::PathExists { .. } => return Err(Unfixable::MissingRuntime),
         Target::Repository { path, user } => {

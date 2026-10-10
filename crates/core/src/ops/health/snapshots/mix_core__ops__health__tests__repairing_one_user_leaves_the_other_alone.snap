@@ -599,9 +599,23 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_REPAIRING"
       },
       {
+        "key": "mix-daemon.service",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "mix-daemon.service",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
         "key": "mix-daemon.socket",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "mix-daemon.socket",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "nix-daemon.service",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "nix-daemon.service",
         "undone": false,
         "verb": "VERB_REPAIRING"
       },
@@ -613,16 +627,23 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_REPAIRING"
       },
       {
-        "key": "mix-daemon.service",
+        "key": "nix-daemon.socket activation",
         "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "mix-daemon.service",
+        "subject": "nix-daemon.socket activation",
         "undone": false,
         "verb": "VERB_REPAIRING"
       },
       {
-        "key": "nix-daemon.service",
+        "key": "mix-daemon.socket activation",
         "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "nix-daemon.service",
+        "subject": "mix-daemon.socket activation",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
+        "key": "mix-daemon.service activation",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "mix-daemon.service activation",
         "undone": false,
         "verb": "VERB_REPAIRING"
       },

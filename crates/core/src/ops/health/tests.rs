@@ -347,7 +347,7 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
                     })
                     .unwrap();
             },
-            vec![(NIX_DAEMON_SOCKET_UNIT, Finding::UnitInactive)],
+            vec![("nix-daemon.socket activation", Finding::UnitInactive)],
         ),
         (
             "a state directory opened to others",
@@ -662,32 +662,16 @@ fn a_missing_home_is_one_finding_and_repair_leaves_everything_in_it_alone() {
 
 #[test]
 fn a_masked_socket_is_left_alone_and_reported() {
-    let socket = Target::SystemdUnit {
+    let socket = Target::UnitActive {
         name: NIX_DAEMON_SOCKET_UNIT,
-        src: UnitSource::File(crate::declared::paths::NIX_DAEMON_SOCKET_SRC),
-        dest: NIX_DAEMON_SOCKET_DEST,
-        must_be_active: true,
     };
-    let installed = Fact::Contents(Some(Arc::from(&b"[Socket]"[..])));
-    let facts = [
-        installed.clone(),
-        Fact::Path(PathFacts {
-            kind: Kind::File,
-            mode: 0o644,
-            owner: (0, 0),
-            id: None,
-            digest: None,
-            changed: None,
-        }),
-        Fact::Unit(crate::effect::UnitFacts {
-            load_state: "masked".into(),
-            active_state: "inactive".into(),
-            file_state: "masked".into(),
-            needs_reload: false,
-            active_since: None,
-        }),
-        installed,
-    ];
+    let facts = [Fact::Unit(crate::effect::UnitFacts {
+        load_state: "masked".into(),
+        active_state: "inactive".into(),
+        file_state: "masked".into(),
+        needs_reload: false,
+        active_since: None,
+    })];
 
     let finding = classify(&socket, &facts).expect("a masked socket is not running");
     assert_eq!(
