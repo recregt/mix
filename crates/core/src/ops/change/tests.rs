@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use insta::assert_json_snapshot;
 use mix_events::ROOT;
 use mix_events::v1::command::Request;
 use mix_events::v1::{CleanRequest, InstallRequest, RemoveRequest};
@@ -450,7 +449,6 @@ fn id_of(world: &World, path: PathBuf) -> crate::effect::FileId {
 #[test]
 fn an_install_writes_the_list_activates_it_and_records_it() {
     let mut world = bootstrapped();
-    let before = world.clone();
     let expected = vec![
         Expect::Present(id_of(&world, home_nix_path())),
         Expect::Present(id_of(&world, state_path())),
@@ -465,7 +463,25 @@ fn an_install_writes_the_list_activates_it_and_records_it() {
         &Script::default(),
     );
 
-    assert_json_snapshot!(run.case(&before, &world));
+    assert_eq!(run.report().verdict, Verdict::Succeeded);
+    assert_eq!(
+        run.performed(),
+        [
+            format!("PutFile {}", home_nix_path().display()),
+            format!("PutFile {}", state_path().display()),
+            "ActivateProfile mix-user's profile".to_string(),
+            "RecordState mix-user's package list".to_string(),
+            "Commit changes".to_string(),
+        ],
+        "the list is written, then activated, then recorded"
+    );
+    assert_eq!(
+        world.contents(state_path()),
+        Some(manifest(&["git", "ripgrep"]).render().as_bytes())
+    );
+    let home = String::from_utf8(world.contents(home_nix_path()).unwrap().to_vec()).unwrap();
+    assert!(home.contains("pkgs.ripgrep"), "{home}");
+    assert_eq!(active(&world), Some(2));
     let expects: Vec<Expect> = run
         .performed
         .iter()
@@ -494,7 +510,24 @@ fn a_failed_activation_puts_both_files_back() {
 
     let run = run(&mut world, install_request(&requested), &change, &script);
 
-    assert_json_snapshot!(run.case(&before, &world));
+    assert!(matches!(run.report().verdict, Verdict::Failed { .. }));
+    assert_eq!(
+        run.performed()[3..],
+        [
+            format!("Restore {}", state_path().display()),
+            format!("Restore {}", home_nix_path().display()),
+        ],
+        "the files go back in the reverse of the order they were written"
+    );
+    for path in [state_path(), home_nix_path()] {
+        assert_eq!(
+            world.contents(&path),
+            before.contents(&path),
+            "{}",
+            path.display()
+        );
+    }
+    assert_eq!(active(&world), active(&before));
 }
 
 #[test]
@@ -513,7 +546,16 @@ fn a_list_restored_from_the_profile_is_written_without_activating() {
         &Script::default(),
     );
 
-    assert_json_snapshot!(run.case(&before, &world));
+    assert_eq!(run.report().verdict, Verdict::Succeeded);
+    assert_eq!(
+        run.performed(),
+        [
+            format!("PutFile {}", state_path().display()),
+            "Commit changes".to_string()
+        ]
+    );
+    assert_eq!(world.contents(state_path()), Some(generation.as_bytes()));
+    assert_eq!(active(&world), active(&before), "nothing was activated");
 }
 
 #[test]
@@ -710,7 +752,6 @@ fn an_install_over_a_broken_list_restores_it_and_adds_the_package() {
     let mut world = bootstrapped();
     let generation = manifest(&["git", "fd"]).render();
     world.with_file(state_path(), b"{broken", 0o644, (1000, 1000));
-    let before = world.clone();
     let requested = names(&["ripgrep"]);
     let change = install(&requested, settle(Some("{broken"), Some(&generation))).unwrap();
 
@@ -722,7 +763,19 @@ fn an_install_over_a_broken_list_restores_it_and_adds_the_package() {
     );
 
     assert_eq!(change.source, Source::Generation);
-    assert_json_snapshot!(run.case(&before, &world));
+    assert_eq!(run.report().verdict, Verdict::Succeeded);
+    assert_eq!(
+        world.contents(state_path()),
+        Some(manifest(&["fd", "git", "ripgrep"]).render().as_bytes()),
+        "the list the profile remembers, plus the new package"
+    );
+    let home = String::from_utf8(world.contents(home_nix_path()).unwrap().to_vec()).unwrap();
+    assert!(
+        ["pkgs.fd", "pkgs.git", "pkgs.ripgrep"]
+            .iter()
+            .all(|name| home.contains(name)),
+        "{home}"
+    );
 }
 
 #[test]
@@ -730,7 +783,6 @@ fn a_remove_over_a_broken_list_restores_it_and_drops_the_package() {
     let mut world = bootstrapped();
     let generation = manifest(&["git", "fd"]).render();
     world.with_file(state_path(), b"{broken", 0o644, (1000, 1000));
-    let before = world.clone();
     let requested = names(&["fd"]);
     let change = remove(&requested, settle(Some("{broken"), Some(&generation))).unwrap();
 
@@ -742,7 +794,12 @@ fn a_remove_over_a_broken_list_restores_it_and_drops_the_package() {
     );
 
     assert_eq!(change.source, Source::Generation);
-    assert_json_snapshot!(run.case(&before, &world));
+    assert_eq!(run.report().verdict, Verdict::Succeeded);
+    assert_eq!(
+        world.contents(state_path()),
+        Some(manifest(&["git"]).render().as_bytes()),
+        "the list the profile remembers, without the removed package"
+    );
 }
 
 #[test]
@@ -908,11 +965,13 @@ fn changes_keep_every_generation_until_a_clean() {
     for package in ["fd", "jq", "bat"] {
         command(&mut world, Verb::Install, &names(&[package]));
     }
-    let before = world.clone();
 
     let run = clean(&mut world, false);
 
-    assert_json_snapshot!(run.case(&before, &world));
+    assert_eq!(run.report().verdict, Verdict::Succeeded);
+    let profile = world.profile(&user()).unwrap();
+    assert_eq!(profile.generations, [4]);
+    assert_eq!(profile.active, Some(4), "the active generation is kept");
 }
 
 #[test]
@@ -930,11 +989,14 @@ fn a_clean_with_nothing_old_changes_nothing() {
 #[test]
 fn a_clean_with_all_also_collects_the_store() {
     let mut world = bootstrapped();
-    let before = world.clone();
 
     let run = clean(&mut world, true);
 
-    assert_json_snapshot!(run.case(&before, &world));
+    assert_eq!(run.report().verdict, Verdict::Succeeded);
+    assert_eq!(
+        run.performed(),
+        ["CollectGarbage unused store paths", "Commit changes"]
+    );
 }
 
 #[test]

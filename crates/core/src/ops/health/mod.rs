@@ -714,16 +714,27 @@ pub fn fix(
     Ok(match target {
         Target::Precondition { .. } => return Err(Unfixable::Outside),
         Target::Parent { path, bits, owner } => match finding {
-            Finding::Owner { actual, expected } => vec![Action::SetOwner {
-                path: path.to_path_buf(),
-                owner: expected,
-                expect: actual,
-            }],
-            Finding::Mode { actual, expected } => vec![Action::SetMode {
-                path: path.to_path_buf(),
-                mode: expected,
-                expect: actual,
-            }],
+            Finding::Owner { .. } | Finding::Mode { .. } => {
+                let found = path_facts(facts, 0);
+                let mut actions = Vec::new();
+                if let Some(expected) = *owner
+                    && found.owner != expected
+                {
+                    actions.push(Action::SetOwner {
+                        path: path.to_path_buf(),
+                        owner: expected,
+                        expect: found.owner,
+                    });
+                }
+                if found.mode & bits != *bits {
+                    actions.push(Action::SetMode {
+                        path: path.to_path_buf(),
+                        mode: found.mode | bits,
+                        expect: found.mode,
+                    });
+                }
+                actions
+            }
             _ => vec![Action::CreateDirs {
                 path: path.to_path_buf(),
                 mode: *bits,

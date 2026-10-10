@@ -19,7 +19,6 @@ generativity = "1.2.1"
 testkit = []
 
 [dev-dependencies]
-insta = { workspace = true }
 mix-render = { path = "../render" }
 proptest = { workspace = true }
 divan = { workspace = true }

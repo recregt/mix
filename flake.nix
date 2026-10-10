@@ -34,7 +34,6 @@
           ./Cargo.lock
           ./clippy.toml
           ./deny
-          ./.cargo
           ./crates
         ];
       };
@@ -66,22 +65,12 @@
       );
 
       checks.${system} = {
-        insta = craneLib.mkCargoDerivation (
+        tests = craneLib.cargoNextest (
           common
           // {
             inherit cargoArtifacts;
-            pname = "mix-insta";
-            nativeBuildInputs = [ pkgs.cargo-insta ];
-            buildPhaseCargoCommand = ''
-              if find crates -path '*/snapshots/*' -name '*-[0-9]*.snap' | grep .; then
-                echo "these snapshots were numbered by insta; name each one" >&2
-                exit 1
-              fi
-              cargo insta test --workspace --check --unreferenced=reject
-            '';
-            installPhaseCommand = "mkdir -p $out";
+            cargoNextestExtraArgs = "--run-ignored all";
             CI = "true";
-            INSTA_UPDATE = "no";
             SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
           }
         );

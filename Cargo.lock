@@ -1102,19 +1102,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "insta"
-version = "1.49.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b67d3d2e287e4b86c10b3f3b641033d1f89b74bdb39d05f34952e2b9a6fe21cd"
-dependencies = [
- "console",
- "once_cell",
- "serde",
- "similar 2.7.0",
- "tempfile",
-]
-
-[[package]]
 name = "ipnet"
 version = "2.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1402,7 +1389,6 @@ version = "0.1.0"
 dependencies = [
  "codspeed-divan-compat",
  "generativity",
- "insta",
  "mix-events",
  "mix-nixgen",
  "mix-nixlog",
@@ -1420,7 +1406,6 @@ name = "mix-daemon"
 version = "0.1.0"
 dependencies = [
  "futures-util",
- "insta",
  "mix-core",
  "mix-events",
  "mix-exec",
@@ -1466,7 +1451,6 @@ name = "mix-explain"
 version = "0.1.0"
 dependencies = [
  "codspeed-divan-compat",
- "insta",
  "mix-core",
  "mix-events",
  "mix-nixgen",
@@ -1479,7 +1463,6 @@ name = "mix-nixgen"
 version = "0.1.0"
 dependencies = [
  "codspeed-divan-compat",
- "insta",
  "mix-exec",
  "mix-nixgen",
  "mix-pins",
@@ -1505,7 +1488,6 @@ version = "0.1.0"
 name = "mix-render"
 version = "0.1.0"
 dependencies = [
- "insta",
  "mix-core",
  "mix-events",
  "mix-explain",
