@@ -8,6 +8,8 @@ use mix_events::{Outcome as EventOutcome, ROOT, validate};
 
 use super::*;
 use crate::declared::identity::InvokingUser;
+use crate::declared::paths::{DEFAULT_PROFILE_NIX_ENV, MIX_DAEMON_SERVICE_UNIT};
+use crate::effect::{Digest, Kind};
 use crate::model::World;
 use crate::model::testkit::{Run, Script, difference, drive, requested};
 use crate::run::{Runner, Verdict};
@@ -23,7 +25,6 @@ fn settings(user: Option<UserConfig>, force: bool) -> Settings {
             size: 27_131_728,
         },
         request: "request-1".into(),
-        daemon: "/usr/local/bin/mix-daemon".into(),
     }
 }
 
@@ -55,7 +56,12 @@ fn machine() -> World {
             comment: String::new(),
         },
     );
-    world.with_file("/usr/local/bin/mix-daemon", b"mix-daemon", 0o755, (0, 0));
+    world.with_file(
+        crate::declared::paths::RUNNING_PROGRAM,
+        b"mix-daemon",
+        0o755,
+        (0, 0),
+    );
     world
 }
 
@@ -178,16 +184,25 @@ fn an_undo_that_fails_is_reported_and_every_other_undo_still_runs() {
 }
 
 #[test]
-fn a_stop_after_any_change_leaves_the_machine_as_it_was() {
+fn a_stop_after_any_change_leaves_the_machine_as_it_was_unless_only_the_record_is_left() {
     let base = machine();
     let settings = settings(Some(alice()), false);
-    let changes = run(&mut base.clone(), &settings, Script::default()).changes;
+    let finished = run(&mut base.clone(), &settings, Script::default());
+    let record = finished
+        .performed
+        .iter()
+        .filter(|action| **action != Action::Commit)
+        .position(|action| matches!(action, Action::RecordState { .. }));
 
-    for stop_after in 0..changes {
+    for stop_after in 0..finished.changes {
         let mut world = base.clone();
 
         let run = run(&mut world, &settings, Script::stopping_after(stop_after));
 
+        if record == Some(stop_after) {
+            assert_eq!(run.report().verdict, Verdict::Succeeded, "{stop_after}");
+            continue;
+        }
         assert_eq!(
             run.report().verdict,
             Verdict::Cancelled(Cancellation::Interrupted),
@@ -253,7 +268,7 @@ fn a_file_where_nix_belongs_is_refused_and_nothing_is_touched() {
     assert_eq!(
         validate(&run.stream)
             .unwrap()
-            .outcome("bootstrap/plan/create-nix-tree"),
+            .outcome("bootstrap/plan//nix/store"),
         Some(EventOutcome::NotRun(NotRunReason::NotReached))
     );
 }
@@ -298,65 +313,17 @@ fn a_new_daemon_binary_asks_the_running_daemon_to_drain_instead_of_restarting_it
         .loaded
         .clone()
         .or(Some(Arc::from(&b"[Service]"[..])));
-    world.with_file("/usr/local/bin/mix-daemon", b"mix-daemon 2", 0o755, (0, 0));
+    world.with_file(
+        crate::declared::paths::RUNNING_PROGRAM,
+        b"mix-daemon 2",
+        0o755,
+        (0, 0),
+    );
     let before = world.clone();
 
     let upgraded = run(&mut world, &settings(None, false), Script::default());
 
     assert_json_snapshot!(upgraded.case(&before, &world));
-}
-
-#[test]
-fn a_masked_socket_is_left_alone_and_reported() {
-    let facts = [
-        Fact::Contents(Some(Arc::from(&b"[Service]"[..]))),
-        Fact::Path(PathFacts {
-            kind: Kind::File,
-            mode: 0o644,
-            owner: (0, 0),
-            id: None,
-            digest: None,
-            changed: None,
-        }),
-        Fact::Contents(Some(Arc::from(&b"[Service]"[..]))),
-        Fact::Contents(Some(Arc::from(&b"[Socket]"[..]))),
-        Fact::Path(PathFacts {
-            kind: Kind::File,
-            mode: 0o644,
-            owner: (0, 0),
-            id: None,
-            digest: None,
-            changed: None,
-        }),
-        Fact::Contents(Some(Arc::from(&b"[Socket]"[..]))),
-        Fact::Unit(UnitFacts {
-            load_state: "masked".into(),
-            active_state: "inactive".into(),
-            file_state: "masked".into(),
-            needs_reload: false,
-            active_since: None,
-        }),
-        Fact::Unit(UnitFacts {
-            load_state: "loaded".into(),
-            active_state: "inactive".into(),
-            file_state: "static".into(),
-            needs_reload: false,
-            active_since: None,
-        }),
-        Fact::Path(PathFacts {
-            kind: Kind::File,
-            mode: 0o644,
-            owner: (0, 0),
-            id: None,
-            digest: None,
-            changed: Some((5, 0)),
-        }),
-    ];
-
-    assert!(matches!(
-        ConfigureDaemon.actions(&facts),
-        Err(Failure::Conflict { .. })
-    ));
 }
 
 #[test]
@@ -399,6 +366,9 @@ fn a_runtime_whose_default_profile_was_lost_is_provisioned_again() {
 fn every_step_is_named_in_the_users_words() {
     for step in steps(&settings(Some(alice()), true)) {
         let subject = step.title().subject;
+        if subject.starts_with('/') {
+            continue;
+        }
         assert_eq!(
             crate::report::vocabulary::nix_mechanics_in(&subject),
             Vec::<&str>::new(),

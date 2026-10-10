@@ -104,7 +104,7 @@ def test_ctrl_c_through_the_worker_rolls_back_and_says_so(container, mock_nix_se
 
     assert run.status == "STATUS_CANCELLED", run
     assert run.cancellation == "CANCELLATION_INTERRUPTED", run
-    assert {"create-users-and-groups", "create-nix-dir"} <= set(run.rolled_back()), run
+    assert {"nixbld", "/nix"} <= set(run.rolled_back()), run
     assert not container.path_exists(MIX_MANAGED_MARKER)
     assert container.exec("getent", "group", "nixbld").returncode != 0
 

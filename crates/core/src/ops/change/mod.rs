@@ -1,14 +1,15 @@
 use std::borrow::Cow;
-use std::path::PathBuf;
 
 use mix_nixgen::{CopyIntoGeneration, FileName, HomeModule, InvalidInput, StateVersion};
 
 use crate::declared::identity::InvokingUser;
-use crate::declared::paths::{GENERATION_INPUTS, HOME_NIX, STATE_FILE, mix_state_dir};
+use crate::declared::paths::GENERATION_INPUTS;
+use crate::declared::policy::Policy;
 use crate::declared::state::{REQUIRED_PACKAGES, StateManifest};
-use crate::effect::{Action, Fact, Failure, ProfileFacts, Query};
-use crate::ops::bootstrap::{FILE_MODE, Facts, ensure_file};
-use crate::run::{StepSpec, Title};
+use crate::declared::targets::{Intent, UserConfig, tree_for};
+use crate::effect::ProfileFacts;
+use crate::ops::health::reconcile_steps;
+use crate::run::StepSpec;
 use mix_events::v1::Verb;
 
 pub const STATE_VERSION: u32 = 1;
@@ -205,108 +206,6 @@ pub fn render(user: &InvokingUser, manifest: &StateManifest) -> Result<Rendered,
     Ok(Rendered { state, home_nix })
 }
 
-struct WriteConfig {
-    user: InvokingUser,
-    rendered: Rendered,
-}
-
-impl WriteConfig {
-    fn files(&self) -> [(PathBuf, &str); 2] {
-        let state = mix_state_dir(&self.user.home);
-        [
-            (state.join(STATE_FILE), &self.rendered.state),
-            (state.join(HOME_NIX), &self.rendered.home_nix),
-        ]
-    }
-}
-
-impl StepSpec for WriteConfig {
-    fn key(&self) -> Cow<'static, str> {
-        "write-config".into()
-    }
-
-    fn title(&self) -> Title {
-        Title::new(Verb::Writing, "package list")
-    }
-
-    fn queries(&self) -> Vec<Query> {
-        self.files()
-            .into_iter()
-            .flat_map(|(path, _)| [Query::Path(path.clone()), Query::Contents(path)])
-            .collect()
-    }
-
-    fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
-        let facts = Facts(facts);
-        let owner = Some((self.user.uid, self.user.gid));
-        let mut actions = Vec::new();
-        for (index, (path, wanted)) in self.files().into_iter().enumerate() {
-            actions.extend(ensure_file(
-                &path,
-                facts.path(2 * index),
-                facts.contents(2 * index + 1),
-                wanted.as_bytes(),
-                FILE_MODE,
-                owner,
-            )?);
-        }
-        Ok(actions)
-    }
-}
-
-struct Activate {
-    user: InvokingUser,
-    verb: Verb,
-    packages: Vec<String>,
-}
-
-impl StepSpec for Activate {
-    fn key(&self) -> Cow<'static, str> {
-        "activate".into()
-    }
-
-    fn title(&self) -> Title {
-        Title::new(self.verb, subject(&self.packages))
-    }
-
-    fn queries(&self) -> Vec<Query> {
-        Vec::new()
-    }
-
-    fn actions(&self, _: &[Fact]) -> Result<Vec<Action>, Failure> {
-        Ok(vec![Action::ActivateProfile {
-            user: self.user.clone(),
-            source: crate::effect::FlakeSource::Git,
-        }])
-    }
-}
-
-struct Record(InvokingUser);
-
-impl StepSpec for Record {
-    fn key(&self) -> Cow<'static, str> {
-        "record".into()
-    }
-
-    fn title(&self) -> Title {
-        Title::new(Verb::Recording, "change")
-    }
-
-    fn shielded(&self) -> bool {
-        true
-    }
-
-    fn queries(&self) -> Vec<Query> {
-        Vec::new()
-    }
-
-    fn actions(&self, _: &[Fact]) -> Result<Vec<Action>, Failure> {
-        Ok(vec![Action::RecordState {
-            user: self.0.clone(),
-        }])
-    }
-}
-
 pub fn old_generations(profile: &ProfileFacts) -> Vec<u64> {
     profile
         .generations
@@ -314,65 +213,6 @@ pub fn old_generations(profile: &ProfileFacts) -> Vec<u64> {
         .copied()
         .filter(|generation| Some(*generation) != profile.active)
         .collect()
-}
-
-struct Prune(InvokingUser);
-
-impl StepSpec for Prune {
-    fn key(&self) -> Cow<'static, str> {
-        "prune".into()
-    }
-
-    fn title(&self) -> Title {
-        Title::new(Verb::Removing, "old generations")
-    }
-
-    fn queries(&self) -> Vec<Query> {
-        vec![Query::Profile(self.0.clone())]
-    }
-
-    fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
-        let [Fact::Profile(profile)] = facts else {
-            unreachable!("a profile query was answered with {facts:?}");
-        };
-        Ok(old_generations(profile)
-            .into_iter()
-            .map(|generation| Action::DeleteGeneration {
-                user: self.0.clone(),
-                generation,
-            })
-            .collect())
-    }
-}
-
-struct Collect(InvokingUser);
-
-impl StepSpec for Collect {
-    fn key(&self) -> Cow<'static, str> {
-        "collect".into()
-    }
-
-    fn title(&self) -> Title {
-        Title::new(Verb::Removing, "unused store paths")
-    }
-
-    fn queries(&self) -> Vec<Query> {
-        Vec::new()
-    }
-
-    fn actions(&self, _: &[Fact]) -> Result<Vec<Action>, Failure> {
-        Ok(vec![Action::CollectGarbage {
-            user: self.0.clone(),
-        }])
-    }
-}
-
-pub fn clean_steps(user: &InvokingUser, all: bool) -> Vec<Box<dyn StepSpec>> {
-    let mut steps: Vec<Box<dyn StepSpec>> = vec![Box::new(Prune(user.clone()))];
-    if all {
-        steps.push(Box::new(Collect(user.clone())));
-    }
-    steps
 }
 
 pub fn subject(packages: &[String]) -> String {
@@ -383,26 +223,44 @@ pub fn subject(packages: &[String]) -> String {
 }
 
 pub fn steps(
-    user: &InvokingUser,
+    cfg: &UserConfig,
+    policy: &Policy,
     change: &Change,
     verb: Verb,
+    request: &str,
 ) -> Result<Vec<Box<dyn StepSpec>>, Unrenderable> {
     if change.changed.is_empty() && change.source == Source::File {
         return Ok(Vec::new());
     }
-    let mut steps: Vec<Box<dyn StepSpec>> = vec![Box::new(WriteConfig {
-        user: user.clone(),
-        rendered: render(user, &change.manifest)?,
-    })];
-    if !change.changed.is_empty() {
-        steps.push(Box::new(Activate {
-            user: user.clone(),
-            verb,
-            packages: change.changed.clone(),
-        }));
-        steps.push(Box::new(Record(user.clone())));
-    }
-    Ok(steps)
+    let rendered = render(&cfg.user, &change.manifest)?;
+    let intended = UserConfig {
+        home: rendered.home_nix,
+        restored_state: Some(rendered.state),
+        ..cfg.clone()
+    };
+    let intent = Intent {
+        activating: Some((verb, Cow::Owned(subject(&change.changed)))),
+        ..Intent::user(&intended, policy)
+    };
+    Ok(reconcile_steps(
+        Vec::new(),
+        tree_for(&intent),
+        request,
+        Verb::Configuring,
+    ))
+}
+
+pub fn clean_steps(
+    cfg: &UserConfig,
+    policy: &Policy,
+    all: bool,
+    request: &str,
+) -> Vec<Box<dyn StepSpec>> {
+    let intent = Intent {
+        retention: Some(all),
+        ..Intent::user(cfg, policy)
+    };
+    reconcile_steps(Vec::new(), tree_for(&intent), request, Verb::Configuring)
 }
 
 #[cfg(test)]

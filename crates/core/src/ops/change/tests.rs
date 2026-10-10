@@ -6,12 +6,15 @@ use mix_events::v1::command::Request;
 use mix_events::v1::{CleanRequest, InstallRequest, RemoveRequest};
 
 use super::*;
+use crate::declared::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
 use crate::declared::policy::Policy;
+use crate::declared::targets::Runtime;
 use crate::declared::targets::UserConfig;
+use crate::effect::{Action, Fact, Failure, Query};
 use crate::effect::{Digest, Expect};
 use crate::model::World;
 use crate::model::testkit::{Run, Script, drive, recover, requested};
-use crate::ops::bootstrap::{Runtime, Settings};
+use crate::ops::bootstrap::Settings;
 use crate::run::{Runner, Verdict};
 
 fn manifest(packages: &[&str]) -> StateManifest {
@@ -364,13 +367,25 @@ fn remove_request(packages: &[String]) -> Request {
 }
 
 fn run(world: &mut World, request: Request, change: &Change, script: &Script) -> Run {
-    let steps = steps(&user(), change, mix_events::v1::Verb::Installing).unwrap();
+    let steps = steps(
+        &config(),
+        &Policy::new(None, None).unwrap(),
+        change,
+        mix_events::v1::Verb::Installing,
+        "request",
+    )
+    .unwrap();
     drive(world, Runner::new(ROOT, steps), requested(request), script)
 }
 
 fn bootstrapped() -> World {
     let mut world = World::default();
-    world.with_file("/usr/local/bin/mix-daemon", b"mix-daemon", 0o755, (0, 0));
+    world.with_file(
+        crate::declared::paths::RUNNING_PROGRAM,
+        b"mix-daemon",
+        0o755,
+        (0, 0),
+    );
     let config = config();
     world.with_dir(&config.user.home, 0o700, (config.user.uid, config.user.gid));
     world.users.insert(
@@ -393,7 +408,6 @@ fn bootstrapped() -> World {
             size: 1,
         },
         request: "bootstrap".into(),
-        daemon: "/usr/local/bin/mix-daemon".into(),
     };
     let run = drive(
         &mut world,
@@ -438,8 +452,8 @@ fn an_install_writes_the_list_activates_it_and_records_it() {
     let mut world = bootstrapped();
     let before = world.clone();
     let expected = vec![
-        Expect::Present(id_of(&world, state_path())),
         Expect::Present(id_of(&world, home_nix_path())),
+        Expect::Present(id_of(&world, state_path())),
     ];
     let requested = names(&["ripgrep"]);
     let change = install(&requested, settled_in(&world)).unwrap();
@@ -508,9 +522,15 @@ fn nothing_to_change_makes_no_plan() {
     let change = install(&requested, current(manifest(&["git"]), Source::File)).unwrap();
 
     assert!(
-        steps(&user(), &change, mix_events::v1::Verb::Installing)
-            .unwrap()
-            .is_empty()
+        steps(
+            &config(),
+            &Policy::new(None, None).unwrap(),
+            &change,
+            mix_events::v1::Verb::Installing,
+            "request"
+        )
+        .unwrap()
+        .is_empty()
     );
 }
 
@@ -673,9 +693,15 @@ fn removing_a_package_that_is_not_installed_makes_no_plan() {
 
     assert_eq!(change.skipped, names(&["ripgrep"]));
     assert!(
-        steps(&user(), &change, mix_events::v1::Verb::Removing)
-            .unwrap()
-            .is_empty()
+        steps(
+            &config(),
+            &Policy::new(None, None).unwrap(),
+            &change,
+            mix_events::v1::Verb::Removing,
+            "request"
+        )
+        .unwrap()
+        .is_empty()
     );
 }
 
@@ -725,7 +751,13 @@ fn an_invalid_package_name_is_refused_before_any_action() {
     let change = install(&requested, current(manifest(&["git"]), Source::File)).unwrap();
 
     assert!(matches!(
-        steps(&user(), &change, mix_events::v1::Verb::Installing),
+        steps(
+            &config(),
+            &Policy::new(None, None).unwrap(),
+            &change,
+            mix_events::v1::Verb::Installing,
+            "request"
+        ),
         Err(Unrenderable::Package(_))
     ));
 }
@@ -855,9 +887,16 @@ fn a_list_written_in_another_order_returns_to_the_generation_already_built() {
 }
 
 fn clean(world: &mut World, all: bool) -> Run {
+    let current = UserConfig {
+        home: render_home(&user(), listed(world)).unwrap(),
+        ..config()
+    };
     drive(
         world,
-        Runner::new(ROOT, clean_steps(&user(), all)),
+        Runner::new(
+            ROOT,
+            clean_steps(&current, &Policy::new(None, None).unwrap(), all, "request"),
+        ),
         requested(Request::Clean(CleanRequest { all })),
         &Script::default(),
     )
@@ -874,6 +913,18 @@ fn changes_keep_every_generation_until_a_clean() {
     let run = clean(&mut world, false);
 
     assert_json_snapshot!(run.case(&before, &world));
+}
+
+#[test]
+fn a_clean_with_nothing_old_changes_nothing() {
+    let mut world = bootstrapped();
+    let before = world.clone();
+
+    let run = clean(&mut world, false);
+
+    assert_eq!(run.report().verdict, Verdict::Succeeded);
+    assert_eq!(run.changes, 0);
+    assert_eq!(world, before);
 }
 
 #[test]

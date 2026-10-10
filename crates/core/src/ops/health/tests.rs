@@ -12,11 +12,12 @@ use crate::declared::paths::{
     POLICY_FILE, STATE_FILE, mix_state_dir, repository_dir,
 };
 use crate::declared::policy::Policy;
+use crate::declared::targets::Runtime;
 use crate::declared::targets::{UserConfig, tree};
 use crate::effect::Digest;
 use crate::model::World;
 use crate::model::testkit::{Run, Script, drive, requested};
-use crate::ops::bootstrap::{Runtime, Settings, steps};
+use crate::ops::bootstrap::{Settings, steps};
 use crate::report::inspection;
 use crate::run::{Runner, StepOutcome};
 
@@ -95,7 +96,6 @@ fn user(name: &str, uid: u32) -> UserConfig {
 
 fn bootstrapped(users: &[UserConfig]) -> World {
     let mut world = World::default();
-    world.with_file("/usr/local/bin/mix-daemon", b"mix-daemon", 0o755, (0, 0));
     world.with_file(
         crate::declared::paths::RUNNING_PROGRAM,
         b"mix-daemon",
@@ -124,7 +124,6 @@ fn bootstrapped(users: &[UserConfig]) -> World {
                 size: 1,
             },
             request: "bootstrap".into(),
-            daemon: "/usr/local/bin/mix-daemon".into(),
         };
         let run = drive(
             &mut world,
@@ -661,6 +660,42 @@ fn a_missing_home_is_one_finding_and_repair_leaves_everything_in_it_alone() {
     assert!(!world.files.contains_key(Path::new("/home/alice")));
 }
 
+#[test]
+fn a_masked_socket_is_left_alone_and_reported() {
+    let socket = Target::SystemdUnit {
+        name: NIX_DAEMON_SOCKET_UNIT,
+        src: UnitSource::File(crate::declared::paths::NIX_DAEMON_SOCKET_SRC),
+        dest: NIX_DAEMON_SOCKET_DEST,
+        must_be_active: true,
+    };
+    let installed = Fact::Contents(Some(Arc::from(&b"[Socket]"[..])));
+    let facts = [
+        installed.clone(),
+        Fact::Path(PathFacts {
+            kind: Kind::File,
+            mode: 0o644,
+            owner: (0, 0),
+            id: None,
+            digest: None,
+            changed: None,
+        }),
+        Fact::Unit(crate::effect::UnitFacts {
+            load_state: "masked".into(),
+            active_state: "inactive".into(),
+            file_state: "masked".into(),
+            needs_reload: false,
+            active_since: None,
+        }),
+        installed,
+    ];
+
+    let finding = classify(&socket, &facts).expect("a masked socket is not running");
+    assert_eq!(
+        fix(&socket, finding, &facts, "request"),
+        Err(Unfixable::Masked)
+    );
+}
+
 fn r9() -> crate::effect::Abandoned {
     crate::effect::Abandoned {
         request: "r9".into(),
@@ -793,6 +828,10 @@ fn every_finding_and_category_reach_the_event_stream_as_their_own_kind() {
         Finding::InTheWay {
             paths: vec!["/home/alice/.bashrc".into()],
         },
+        Finding::ProfileStale,
+        Finding::OldGenerations {
+            generations: vec![1, 2],
+        },
     ];
     let mut kinds = std::collections::HashSet::new();
     for finding in findings {
@@ -818,7 +857,9 @@ fn every_finding_and_category_reach_the_event_stream_as_their_own_kind() {
             | Finding::Interrupted { .. }
             | Finding::Leftovers { .. }
             | Finding::GenerationDangling { .. }
-            | Finding::InTheWay { .. } => finding.clone(),
+            | Finding::InTheWay { .. }
+            | Finding::ProfileStale
+            | Finding::OldGenerations { .. } => finding.clone(),
         };
         let kind = inspection::finding(listed)
             .kind

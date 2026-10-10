@@ -461,6 +461,13 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_REPAIRING"
       },
       {
+        "key": "/var/empty",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/var/empty",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
         "key": "/var/lib",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/var/lib",
@@ -755,6 +762,13 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_REPAIRING"
       },
       {
+        "key": "/home/alice profile",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/alice profile",
+        "undone": false,
+        "verb": "VERB_REPAIRING"
+      },
+      {
         "key": "/home/alice/.local/state leftovers",
         "status": "STATUS_ALREADY_SATISFIED",
         "subject": "/home/alice/.local/state leftovers",
@@ -790,9 +804,16 @@ expression: "run.case(&before, &world)"
         "verb": "VERB_RESTARTING"
       },
       {
-        "key": "record-repaired-config",
+        "key": "drain-mix-daemon",
         "status": "STATUS_ALREADY_SATISFIED",
-        "subject": "repaired configuration",
+        "subject": "mix daemon",
+        "undone": false,
+        "verb": "VERB_RESTARTING"
+      },
+      {
+        "key": "record",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "configuration",
         "undone": false,
         "verb": "VERB_RECORDING"
       }

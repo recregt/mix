@@ -162,10 +162,11 @@ pub fn status_words(status: Status) -> String {
 mod tests {
     use insta::assert_json_snapshot;
     use mix_core::declared::policy::Policy;
+    use mix_core::declared::targets::Runtime;
     use mix_core::effect::Digest;
     use mix_core::model::World;
     use mix_core::model::testkit::{Script, drive, requested};
-    use mix_core::ops::bootstrap::{Runtime, Settings, steps};
+    use mix_core::ops::bootstrap::{Settings, steps};
     use mix_core::run::Runner;
     use mix_events::v1::Command;
     use mix_events::v1::command::Request;
@@ -175,7 +176,12 @@ mod tests {
 
     fn bootstrap(start: Start, script: &Script) -> Vec<String> {
         let mut world = World::default();
-        world.with_file("/usr/local/bin/mix-daemon", b"mix-daemon", 0o755, (0, 0));
+        world.with_file(
+            mix_core::declared::paths::RUNNING_PROGRAM,
+            b"mix-daemon",
+            0o755,
+            (0, 0),
+        );
         let settings = Settings {
             policy: Policy::new(None, None).unwrap(),
             user: None,
@@ -186,7 +192,6 @@ mod tests {
                 size: 1,
             },
             request: "request".into(),
-            daemon: "/usr/local/bin/mix-daemon".into(),
         };
         let run = drive(
             &mut world,

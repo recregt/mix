@@ -142,10 +142,12 @@ pub async fn run(
     verb: Verb,
     change: &Change,
 ) -> Concluded {
-    let steps = match mix_core::ops::change::steps(&cfg.user, change, verb.doing()) {
-        Ok(steps) => steps,
-        Err(error) => return root.refuse(Error::from(error)),
-    };
+    let steps =
+        match mix_core::ops::change::steps(cfg, &ctx.policy, change, verb.doing(), &ctx.request.id)
+        {
+            Ok(steps) => steps,
+            Err(error) => return root.refuse(Error::from(error)),
+        };
     perform(ctx, root, performer, steps, || verb.result(change)).await
 }
 

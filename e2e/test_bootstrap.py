@@ -24,7 +24,7 @@ def test_bootstrap_auto_escalates_for_a_sudo_user(container, mock_nix_server, mi
     )
 
     assert run.succeeded(), run
-    assert "write-home-config" in run.steps()
+    assert "/home/ciuser/.local/state/mix" in run.steps()
     assert container.path_exists("/nix/var/nix/profiles/default/bin/nix-env")
 
     state_dir = "/home/ciuser/.local/state/mix"

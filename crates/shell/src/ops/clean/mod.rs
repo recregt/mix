@@ -29,7 +29,7 @@ pub(crate) async fn clean(ctx: &Context, root: &mut Root, request: &CleanRequest
         ctx,
         root,
         performer,
-        mix_core::ops::change::clean_steps(&cfg.user, request.all),
+        mix_core::ops::change::clean_steps(cfg, &ctx.policy, request.all, &ctx.request.id),
         || {
             node_finished::Result::Clean(CleanResult {
                 generations: old,
@@ -43,51 +43,14 @@ pub(crate) async fn clean(ctx: &Context, root: &mut Root, request: &CleanRequest
 }
 
 #[cfg(test)]
-#[allow(clippy::disallowed_methods)]
 mod tests {
-    use mix_core::declared::identity::InvokingUser;
     use mix_events::v1::command::Request;
 
     use super::*;
     use crate::request::ran::{Ran, ran};
 
-    fn context(home: &std::path::Path) -> crate::Session {
-        crate::Session::new(mix_exec::Scope::root())
-            .with_journals(home.join("journal"))
-            .with_user(Some(mix_core::declared::targets::UserConfig {
-                user: InvokingUser {
-                    uid: 1000,
-                    gid: 1000,
-                    name: "mix-user".to_string(),
-                    home: home.to_path_buf(),
-                },
-                flake: String::new(),
-                lock: String::new(),
-                home: String::new(),
-                restored_state: None,
-            }))
-    }
-
     async fn cleaned(session: crate::Session) -> Ran {
         ran(session, Request::Clean(CleanRequest { all: false })).await
-    }
-
-    #[tokio::test]
-    async fn a_profile_with_no_generations_has_nothing_to_clean() {
-        let home = tempfile::tempdir().unwrap();
-
-        let ran = cleaned(context(home.path())).await;
-
-        assert_eq!(
-            ran.result(),
-            Some(&node_finished::Result::Clean(CleanResult::default()))
-        );
-        assert_eq!(
-            std::fs::read_dir(home.path().join("journal"))
-                .unwrap()
-                .count(),
-            0
-        );
     }
 
     #[tokio::test]

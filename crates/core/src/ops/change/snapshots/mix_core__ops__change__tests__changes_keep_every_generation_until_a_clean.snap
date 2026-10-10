@@ -10,7 +10,7 @@ expression: "run.case(&before, &world)"
         "action": "CHANGE_ACTION_DELETE",
         "operation": "OPERATION_DELETE_GENERATION",
         "status": "STATUS_SUCCEEDED",
-        "step": "prune",
+        "step": "/home/mix-user/.local/state/nix/profiles/home-manager old generations",
         "subject": "generation 1 of mix-user's profile",
         "undone": false,
         "unknown": []
@@ -19,7 +19,7 @@ expression: "run.case(&before, &world)"
         "action": "CHANGE_ACTION_DELETE",
         "operation": "OPERATION_DELETE_GENERATION",
         "status": "STATUS_SUCCEEDED",
-        "step": "prune",
+        "step": "/home/mix-user/.local/state/nix/profiles/home-manager old generations",
         "subject": "generation 2 of mix-user's profile",
         "undone": false,
         "unknown": []
@@ -28,7 +28,7 @@ expression: "run.case(&before, &world)"
         "action": "CHANGE_ACTION_DELETE",
         "operation": "OPERATION_DELETE_GENERATION",
         "status": "STATUS_SUCCEEDED",
-        "step": "prune",
+        "step": "/home/mix-user/.local/state/nix/profiles/home-manager old generations",
         "subject": "generation 3 of mix-user's profile",
         "undone": false,
         "unknown": []
@@ -43,11 +43,193 @@ expression: "run.case(&before, &world)"
     "status": "STATUS_SUCCEEDED",
     "steps": [
       {
-        "key": "prune",
+        "key": "mix-users",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "mix-users",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "mix-user",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "mix-user",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/mix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/mix",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/mix/.git",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/mix/.git",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/mix/.git/config",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/mix/.git/config",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/mix/.git history",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/mix/.git history",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/mix/.git leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/mix/.git leftovers",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/mix/.gitignore",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/mix/.gitignore",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/mix/flake.lock",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/mix/flake.lock",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/mix/flake.nix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/mix/flake.nix",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/mix/home.nix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/mix/home.nix",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/mix/state",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/mix/state",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/mix leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/mix leftovers",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/nix",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/nix",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/nix/profiles",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/nix/profiles",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/nix/profiles/home-manager",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/nix/profiles/home-manager",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/nix/profiles/home-manager old generations",
         "status": "STATUS_SUCCEEDED",
         "subject": "old generations",
         "undone": false,
         "verb": "VERB_REMOVING"
+      },
+      {
+        "key": "/home/mix-user/.local/state/nix leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state/nix leftovers",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user profile",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user profile",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local/state leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local/state leftovers",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user/.local leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user/.local leftovers",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user files in the way",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user files in the way",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "/home/mix-user leftovers",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "/home/mix-user leftovers",
+        "undone": false,
+        "verb": "VERB_CONFIGURING"
+      },
+      {
+        "key": "record",
+        "status": "STATUS_ALREADY_SATISFIED",
+        "subject": "configuration",
+        "undone": false,
+        "verb": "VERB_RECORDING"
       }
     ],
     "waits": [],
