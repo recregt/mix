@@ -153,12 +153,13 @@
             }) layers
           );
         };
+      perSystem = nixpkgs.lib.genAttrs systems outputsFor;
     in
     {
-      packages = nixpkgs.lib.genAttrs systems (system: {
-        default = (outputsFor system).packages.default;
-      });
+      packages = nixpkgs.lib.mapAttrs (_: outputs: {
+        default = outputs.packages.default;
+      }) perSystem;
 
-      checks = nixpkgs.lib.genAttrs systems (system: (outputsFor system).checks);
+      checks = nixpkgs.lib.mapAttrs (_: outputs: outputs.checks) perSystem;
     };
 }
