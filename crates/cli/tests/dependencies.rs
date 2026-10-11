@@ -1,5 +1,6 @@
 const ALLOWED: &[&str] = &[
     "clap",
+    "mimalloc",
     "mix-events",
     "mix-render",
     "mix-rpc",
