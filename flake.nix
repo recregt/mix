@@ -56,6 +56,7 @@
             version = "0.1.0";
           };
           cargoArtifacts = craneLib.buildDepsOnly common;
+          releaseArtifacts = craneLib.buildDepsOnly (common // { CARGO_PROFILE = "release"; });
           layers = [
             "core"
             "cli"
@@ -68,7 +69,8 @@
           packages.default = craneLib.buildPackage (
             common
             // {
-              inherit cargoArtifacts;
+              CARGO_PROFILE = "release";
+              cargoArtifacts = releaseArtifacts;
               cargoExtraArgs = "--locked --package mix-cli --package mix-daemon";
               doCheck = false;
             }
