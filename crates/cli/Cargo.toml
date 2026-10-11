@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.6.6", features = ["derive", "env"] }
+mimalloc = "0.1.52"
 mix-events = { path = "../events" }
 mix-render = { path = "../render" }
 mix-rpc = { path = "../rpc" }
@@ -27,3 +28,4 @@ tempfile = { workspace = true }
 
 [lints]
 workspace = true
+

@@ -468,4 +468,18 @@ mod tests {
         assert!(!is_sentences("No final stop"));
         assert!(!is_sentences("Two parts; joined."));
     }
+
+    #[test]
+    fn the_macros_refuse_text_that_breaks_the_style() {
+        assert!(is_phrase("`{command}` can't be run as root"));
+        assert!(!is_phrase("Something went wrong"));
+        assert!(!is_phrase("something went wrong."));
+        assert!(!is_phrase("it stopped; everything was put back"));
+        assert!(!is_sentence("systemd is not running."));
+        assert!(!starts_parts("Found "));
+        assert!(!starts_with_imperative("`mix repair` records it"));
+        assert!(!starts_with_imperative("`"));
+        assert!(starts_with_imperative("run `mix repair` to record it"));
+        assert!(starts_with_imperative("run `mix repair` at line "));
+    }
 }

@@ -18,101 +18,152 @@
       ...
     }:
     let
-      system = "x86_64-linux";
-      pkgs = import nixpkgs {
-        inherit system;
-        overlays = [ (import rust-overlay) ];
-      };
-      inherit (pkgs) lib;
-      craneLib = (crane.mkLib pkgs).overrideToolchain (
-        p: p.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml
-      );
-      src = lib.fileset.toSource {
-        root = ./.;
-        fileset = lib.fileset.unions [
-          ./Cargo.toml
-          ./Cargo.lock
-          ./clippy.toml
-          ./deny
-          ./crates
-        ];
-      };
-      common = {
-        inherit src;
-        strictDeps = true;
-        CARGO_PROFILE = "";
-        cargoExtraArgs = "--locked --workspace";
-        pname = "mix";
-        version = "0.1.0";
-      };
-      cargoArtifacts = craneLib.buildDepsOnly common;
-      layers = [
-        "core"
-        "cli"
-        "explain"
-        "render"
-        "ui"
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
       ];
-    in
-    {
-      packages.${system}.default = craneLib.buildPackage (
-        common
-        // {
-          inherit cargoArtifacts;
-          cargoExtraArgs = "--locked --package mix-cli --package mix-daemon";
-          doCheck = false;
-        }
-      );
-
-      checks.${system} = {
-        tests = craneLib.cargoNextest (
-          common
-          // {
-            inherit cargoArtifacts;
-            cargoNextestExtraArgs = "--run-ignored all";
-            CI = "true";
-            SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
-          }
-        );
-
-        clippy = craneLib.cargoClippy (
-          common
-          // {
-            inherit cargoArtifacts;
-            cargoClippyExtraArgs = "--all-targets -- -D warnings";
-          }
-        );
-
-        deny = craneLib.cargoDeny (
-          common
-          // {
-            cargoExtraArgs = "";
-            cargoDenyChecks = "bans licenses sources";
-            cargoDenyExtraArgs = "--config deny/workspace.toml";
-          }
-        );
-      }
-      // lib.listToAttrs (
-        map (layer: {
-          name = "deny-${layer}";
-          value = craneLib.cargoDeny (
+      outputsFor =
+        system:
+        let
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ (import rust-overlay) ];
+          };
+          inherit (pkgs) lib;
+          craneLib = (crane.mkLib pkgs.pkgsStatic).overrideToolchain (
+            p: p.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml
+          );
+          src = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              ./Cargo.toml
+              ./Cargo.lock
+              ./clippy.toml
+              ./deny
+              ./crates
+            ];
+          };
+          common = {
+            inherit src;
+            strictDeps = true;
+            nativeBuildInputs = [ pkgs.mold ];
+            CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS = "-C link-arg=-fuse-ld=mold";
+            CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS = "-C link-arg=-fuse-ld=mold";
+            CARGO_PROFILE = "release";
+            cargoExtraArgs = "--locked --workspace";
+            pname = "mix";
+            version = "0.1.0";
+          };
+          cargoArtifacts = craneLib.buildDepsOnly common;
+          distArtifacts = craneLib.buildDepsOnly (common // { CARGO_PROFILE = "dist"; });
+          layers = [
+            "core"
+            "cli"
+            "explain"
+            "render"
+            "ui"
+          ];
+        in
+        {
+          packages.default = craneLib.buildPackage (
             common
             // {
-              pname = "mix-${layer}";
-              cargoExtraArgs = "";
-              cargoDenyChecks = "bans";
-              cargoDenyExtraArgs = "--log-level error --manifest-path crates/${layer}/Cargo.toml --config deny/${layer}.toml";
+              CARGO_PROFILE = "dist";
+              cargoArtifacts = distArtifacts;
+              preBuild = ''
+                export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="$CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS --remap-path-prefix=$NIX_BUILD_TOP=/build"
+              '';
+              cargoExtraArgs = "--locked --package mix-cli --package mix-daemon";
+              doCheck = false;
             }
           );
-        }) layers
-      )
-      // {
-        fmt = craneLib.cargoFmt (
-          common
-          // {
-            cargoExtraArgs = "--all";
+
+          checks = {
+            tests = craneLib.cargoNextest (
+              common
+              // {
+                inherit cargoArtifacts;
+                cargoNextestExtraArgs = "--run-ignored all";
+                CI = "true";
+                SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+              }
+            );
+
+            clippy = craneLib.cargoClippy (
+              common
+              // {
+                inherit cargoArtifacts;
+                cargoClippyExtraArgs = "--all-targets -- -D warnings";
+              }
+            );
+
+            doc = craneLib.cargoDoc (
+              common
+              // {
+                inherit cargoArtifacts;
+                cargoDocExtraArgs = "--no-deps --document-private-items";
+                RUSTDOCFLAGS = "-D warnings";
+              }
+            );
+
+            ruff =
+              pkgs.runCommand "mix-ruff"
+                {
+                  nativeBuildInputs = [ pkgs.ruff ];
+                  root = lib.fileset.toSource {
+                    root = ./.;
+                    fileset = lib.fileset.unions [
+                      ./e2e
+                      ./ruff.toml
+                    ];
+                  };
+                  RUFF_NO_CACHE = "true";
+                }
+                ''
+                  cd $root
+                  ruff check .
+                  ruff format --check .
+                  touch $out
+                '';
+
+            deny = craneLib.cargoDeny (
+              common
+              // {
+                cargoExtraArgs = "";
+                cargoDenyChecks = "bans licenses sources";
+                cargoDenyExtraArgs = "--config deny/workspace.toml";
+              }
+            );
+
+            fmt = craneLib.cargoFmt (
+              common
+              // {
+                cargoExtraArgs = "--all";
+              }
+            );
           }
-        );
-      };
+          // lib.listToAttrs (
+            map (layer: {
+              name = "deny-${layer}";
+              value = craneLib.cargoDeny (
+                common
+                // {
+                  pname = "mix-${layer}";
+                  cargoExtraArgs = "";
+                  cargoDenyChecks = "bans";
+                  cargoDenyExtraArgs = "--log-level error --manifest-path crates/${layer}/Cargo.toml --config deny/${layer}.toml";
+                }
+              );
+            }) layers
+          );
+        };
+      perSystem = nixpkgs.lib.genAttrs systems outputsFor;
+    in
+    {
+      packages = nixpkgs.lib.mapAttrs (_: outputs: {
+        default = outputs.packages.default;
+      }) perSystem;
+
+      checks = nixpkgs.lib.mapAttrs (_: outputs: outputs.checks) perSystem;
     };
 }
