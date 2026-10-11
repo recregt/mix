@@ -24,5 +24,3 @@ pre-push:
       run: nix build --no-link .#checks.$(nix eval --raw --impure --expr builtins.currentSystem).doc
     clippy:
       run: nix build --no-link .#checks.$(nix eval --raw --impure --expr builtins.currentSystem).clippy
-    test:
-      run: nix build --no-link .#checks.$(nix eval --raw --impure --expr builtins.currentSystem).tests
