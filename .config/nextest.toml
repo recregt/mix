@@ -1,6 +1,0 @@
-[test-groups]
-trybuild = { max-threads = 1 }
-
-[[profile.default.overrides]]
-filter = "test(a_report_is_read_only_through_the_plan_that_closed) | test(text_that_breaks_the_style_does_not_build)"
-test-group = "trybuild"

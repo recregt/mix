@@ -39,7 +39,6 @@
               ./Cargo.toml
               ./Cargo.lock
               ./clippy.toml
-              ./.config
               ./deny
               ./crates
             ];
