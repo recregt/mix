@@ -14,7 +14,6 @@ annotate-snippets = "0.12.16"
 
 [dev-dependencies]
 divan = { workspace = true }
-trybuild = "=1.0.122"
 
 [[bench]]
 name = "activity"

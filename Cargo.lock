@@ -1584,7 +1584,6 @@ dependencies = [
  "console",
  "indicatif",
  "mix-events",
- "trybuild",
 ]
 
 [[package]]
