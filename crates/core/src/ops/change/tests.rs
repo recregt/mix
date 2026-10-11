@@ -12,15 +12,12 @@ use crate::declared::targets::UserConfig;
 use crate::effect::{Action, Fact, Failure, Query};
 use crate::effect::{Digest, Expect};
 use crate::model::World;
-use crate::model::testkit::{Run, Script, drive, recover, requested};
+use crate::model::testkit::{Run, Script, drive, listed_with, recover, requested, required_with};
 use crate::ops::bootstrap::Settings;
 use crate::run::{Runner, Verdict};
 
-fn manifest(packages: &[&str]) -> StateManifest {
-    StateManifest {
-        version: STATE_VERSION,
-        packages: packages.iter().map(|p| p.to_string()).collect(),
-    }
+fn compact(manifest: &StateManifest) -> String {
+    serde_json::to_string(manifest).unwrap()
 }
 
 fn current(manifest: StateManifest, source: Source) -> Settled {
@@ -50,7 +47,7 @@ fn the_seed_is_valid() {
 
 #[test]
 fn a_list_mix_rendered_is_valid() {
-    let list = manifest(&["git", "ripgrep", "node-sass"]);
+    let list = required_with(&["ripgrep", "node-sass"]);
     assert_eq!(validate(&list.render()), Ok(list));
 }
 
@@ -85,61 +82,67 @@ fn a_name_nix_cannot_read_is_invalid() {
 }
 
 #[test]
-fn a_list_without_git_is_invalid() {
-    assert_eq!(
-        validate(r#"{"version":1,"packages":["ripgrep"]}"#),
-        Err(Invalid::Missing("git"))
-    );
+fn a_list_without_a_required_package_is_invalid() {
+    for required in REQUIRED_PACKAGES {
+        let packages = required_with(&["ripgrep"]).without(&[required]).packages;
+        let raw = StateManifest {
+            version: STATE_VERSION,
+            packages,
+        }
+        .render();
+
+        assert_eq!(validate(&raw), Err(Invalid::Missing(required)));
+    }
 }
 
 #[test]
 fn a_valid_file_with_no_copy_in_the_profile_is_kept() {
-    let file = manifest(&["git", "hello"]).render();
+    let file = required_with(&["hello"]).render();
 
     assert_eq!(
         settle(Some(&file), None),
-        current(manifest(&["git", "hello"]), Source::File)
+        current(required_with(&["hello"]), Source::File)
     );
 }
 
 #[test]
 fn a_valid_file_matching_the_profile_is_kept() {
-    let list = manifest(&["git", "hello"]).render();
+    let list = required_with(&["hello"]).render();
 
     assert_eq!(
         settle(Some(&list), Some(&list)),
-        current(manifest(&["git", "hello"]), Source::File)
+        current(required_with(&["hello"]), Source::File)
     );
 }
 
 #[test]
 fn a_file_the_profile_never_switched_to_gives_way_to_the_profile() {
-    let file = manifest(&["git", "hello"]).render();
-    let generation = manifest(&["git"]).render();
+    let file = required_with(&["hello"]).render();
+    let generation = required_with(&[]).render();
 
     assert_eq!(
         settle(Some(&file), Some(&generation)),
-        current(manifest(&["git"]), Source::Generation)
+        current(required_with(&[]), Source::Generation)
     );
 }
 
 #[test]
 fn a_broken_file_is_restored_from_the_profile() {
-    let generation = manifest(&["git", "hello"]).render();
+    let generation = required_with(&["hello"]).render();
 
     assert_eq!(
         settle(Some("{broken"), Some(&generation)),
-        current(manifest(&["git", "hello"]), Source::Generation)
+        current(required_with(&["hello"]), Source::Generation)
     );
 }
 
 #[test]
 fn a_missing_file_is_restored_from_the_profile() {
-    let generation = manifest(&["git", "hello"]).render();
+    let generation = required_with(&["hello"]).render();
 
     assert_eq!(
         settle(None, Some(&generation)),
-        current(manifest(&["git", "hello"]), Source::Generation)
+        current(required_with(&["hello"]), Source::Generation)
     );
 }
 
@@ -165,17 +168,17 @@ fn a_broken_copy_in_the_profile_is_never_restored() {
 
 #[test]
 fn a_valid_file_is_kept_over_a_broken_copy_in_the_profile() {
-    let file = manifest(&["git", "hello"]).render();
+    let file = required_with(&["hello"]).render();
 
     assert_eq!(
         settle(Some(&file), Some("{broken")),
-        current(manifest(&["git", "hello"]), Source::File)
+        current(required_with(&["hello"]), Source::File)
     );
 }
 
 #[test]
 fn a_list_from_a_newer_mix_is_left_alone() {
-    let generation = manifest(&["git"]).render();
+    let generation = required_with(&[]).render();
 
     assert_eq!(
         settle(
@@ -188,26 +191,26 @@ fn a_list_from_a_newer_mix_is_left_alone() {
 
 #[test]
 fn a_same_list_written_differently_still_matches_the_profile() {
-    let generation = manifest(&["git", "hello"]).render();
+    let generation = required_with(&["hello"]).render();
 
     assert_eq!(
         settle(
-            Some(r#"{"version":1,"packages":["git","hello"]}"#),
+            Some(&compact(&required_with(&["hello"]))),
             Some(&generation)
         ),
-        current(manifest(&["git", "hello"]), Source::File)
+        current(required_with(&["hello"]), Source::File)
     );
 }
 
 #[test]
 fn an_install_appends_what_is_missing_and_skips_what_is_there() {
-    let request = names(&["git", "ripgrep"]);
+    let request = listed_with(&["ripgrep"]);
 
-    let change = install(&request, current(manifest(&["git"]), Source::File)).unwrap();
+    let change = install(&request, current(required_with(&[]), Source::File)).unwrap();
 
     assert_eq!(change.changed, names(&["ripgrep"]));
-    assert_eq!(change.skipped, names(&["git"]));
-    assert_eq!(change.manifest, manifest(&["git", "ripgrep"]));
+    assert_eq!(change.skipped, listed_with(&[]));
+    assert_eq!(change.manifest, required_with(&["ripgrep"]));
     assert_eq!(change.source, Source::File);
 }
 
@@ -215,11 +218,11 @@ fn an_install_appends_what_is_missing_and_skips_what_is_there() {
 fn a_repeated_package_is_counted_once() {
     let request = names(&["git", "git", "fd", "fd"]);
 
-    let change = install(&request, current(manifest(&["git"]), Source::File)).unwrap();
+    let change = install(&request, current(required_with(&[]), Source::File)).unwrap();
 
     assert_eq!(change.changed, names(&["fd"]));
     assert_eq!(change.skipped, names(&["git"]));
-    assert_eq!(change.manifest, manifest(&["fd", "git"]));
+    assert_eq!(change.manifest, required_with(&["fd"]));
 }
 
 #[test]
@@ -227,7 +230,7 @@ fn an_install_keeps_the_list_version() {
     let request = names(&["fd"]);
     let settled = StateManifest {
         version: 7,
-        packages: names(&["git"]),
+        packages: listed_with(&[]),
     };
 
     let change = install(&request, current(settled, Source::File)).unwrap();
@@ -241,23 +244,23 @@ fn a_remove_drops_what_is_there_and_skips_what_is_not() {
 
     let change = remove(
         &request,
-        current(manifest(&["git", "ripgrep"]), Source::Generation),
+        current(required_with(&["ripgrep"]), Source::Generation),
     )
     .unwrap();
 
     assert_eq!(change.changed, names(&["ripgrep"]));
     assert_eq!(change.skipped, names(&["fd"]));
-    assert_eq!(change.manifest, manifest(&["git"]));
+    assert_eq!(change.manifest, required_with(&[]));
     assert_eq!(change.source, Source::Generation);
 }
 
 #[test]
 fn a_protected_package_is_refused_before_the_list_is_read() {
-    let request = names(&["git", "ripgrep"]);
+    let request = listed_with(&["ripgrep"]);
 
     assert_eq!(
         remove(&request, Settled::Newer(9)),
-        Err(Refusal::Protected(names(&["git"])))
+        Err(Refusal::Protected(listed_with(&[])))
     );
 }
 
@@ -272,19 +275,19 @@ fn a_list_from_a_newer_mix_is_never_changed() {
 fn nothing_changes_when_every_package_is_already_there() {
     let request = names(&["git"]);
 
-    let change = install(&request, current(manifest(&["git"]), Source::File)).unwrap();
+    let change = install(&request, current(required_with(&[]), Source::File)).unwrap();
 
     assert!(change.changed.is_empty());
-    assert_eq!(change.manifest, manifest(&["git"]));
+    assert_eq!(change.manifest, required_with(&[]));
 }
 
 #[test]
 fn rendering_writes_every_package_into_the_list_and_home_nix() {
-    let rendered = render(&user(), &manifest(&["git", "ripgrep"])).unwrap();
+    let rendered = render(&user(), &required_with(&["ripgrep"])).unwrap();
 
     assert_eq!(
         StateManifest::parse(&rendered.state).unwrap().packages,
-        names(&["git", "ripgrep"])
+        listed_with(&["ripgrep"])
     );
     assert!(rendered.home_nix.contains("ripgrep"));
     assert!(rendered.home_nix.contains("git"));
@@ -292,7 +295,7 @@ fn rendering_writes_every_package_into_the_list_and_home_nix() {
 
 #[test]
 fn rendering_copies_every_input_into_the_generation() {
-    let rendered = render(&user(), &manifest(&["git"])).unwrap();
+    let rendered = render(&user(), &required_with(&[])).unwrap();
 
     assert!(rendered.home_nix.contains(
         "extraBuilderCommands = \"cp ${./state} $out/mix-state\n\
@@ -306,7 +309,7 @@ fn rendering_copies_every_input_into_the_generation() {
 fn rendering_refuses_a_format_it_does_not_write() {
     let list = StateManifest {
         version: 7,
-        packages: names(&["git"]),
+        packages: listed_with(&[]),
     };
 
     assert!(matches!(
@@ -316,17 +319,21 @@ fn rendering_refuses_a_format_it_does_not_write() {
 }
 
 #[test]
-fn rendering_refuses_a_list_without_git() {
-    assert!(matches!(
-        render(&user(), &manifest(&[])),
-        Err(Unrenderable::State(Invalid::Missing("git")))
-    ));
+fn rendering_refuses_a_list_without_a_required_package() {
+    for required in REQUIRED_PACKAGES {
+        let list = required_with(&[]).without(&[required]);
+
+        assert!(matches!(
+            render(&user(), &list),
+            Err(Unrenderable::State(Invalid::Missing(missing))) if missing == *required
+        ));
+    }
 }
 
 #[test]
 fn rendering_rejects_an_invalid_package_name() {
     assert!(matches!(
-        render(&user(), &manifest(&["git", "not a valid ident"])),
+        render(&user(), &required_with(&["not a valid ident"])),
         Err(Unrenderable::Package(_))
     ));
 }
@@ -477,7 +484,7 @@ fn an_install_writes_the_list_activates_it_and_records_it() {
     );
     assert_eq!(
         world.contents(state_path()),
-        Some(manifest(&["git", "ripgrep"]).render().as_bytes())
+        Some(required_with(&["ripgrep"]).render().as_bytes())
     );
     let home = String::from_utf8(world.contents(home_nix_path()).unwrap().to_vec()).unwrap();
     assert!(home.contains("pkgs.ripgrep"), "{home}");
@@ -535,7 +542,7 @@ fn a_list_restored_from_the_profile_is_written_without_activating() {
     let mut world = bootstrapped();
     world.with_file(state_path(), b"{broken", 0o644, (1000, 1000));
     let before = world.clone();
-    let generation = manifest(&["git"]).render();
+    let generation = required_with(&[]).render();
     let requested = names(&["git"]);
     let change = install(&requested, settle(Some("{broken"), Some(&generation))).unwrap();
 
@@ -561,7 +568,7 @@ fn a_list_restored_from_the_profile_is_written_without_activating() {
 #[test]
 fn nothing_to_change_makes_no_plan() {
     let requested = names(&["git"]);
-    let change = install(&requested, current(manifest(&["git"]), Source::File)).unwrap();
+    let change = install(&requested, current(required_with(&[]), Source::File)).unwrap();
 
     assert!(
         steps(
@@ -639,14 +646,14 @@ fn scenarios() -> Vec<Scenario> {
             base: bootstrapped(),
             verb: Verb::Install,
             requested: names(&["ripgrep", "fd"]),
-            wanted: names(&["fd", "git", "ripgrep"]),
+            wanted: listed_with(&["fd", "ripgrep"]),
         },
         Scenario {
             name: "remove",
             base: installed,
             verb: Verb::Remove,
             requested: names(&["ripgrep"]),
-            wanted: names(&["fd", "git"]),
+            wanted: listed_with(&["fd"]),
         },
     ]
 }
@@ -731,7 +738,7 @@ fn a_finished_change_leaves_the_list_equal_to_the_profile() {
 #[test]
 fn removing_a_package_that_is_not_installed_makes_no_plan() {
     let requested = names(&["ripgrep"]);
-    let change = remove(&requested, current(manifest(&["git"]), Source::File)).unwrap();
+    let change = remove(&requested, current(required_with(&[]), Source::File)).unwrap();
 
     assert_eq!(change.skipped, names(&["ripgrep"]));
     assert!(
@@ -750,7 +757,7 @@ fn removing_a_package_that_is_not_installed_makes_no_plan() {
 #[test]
 fn an_install_over_a_broken_list_restores_it_and_adds_the_package() {
     let mut world = bootstrapped();
-    let generation = manifest(&["git", "fd"]).render();
+    let generation = required_with(&["fd"]).render();
     world.with_file(state_path(), b"{broken", 0o644, (1000, 1000));
     let requested = names(&["ripgrep"]);
     let change = install(&requested, settle(Some("{broken"), Some(&generation))).unwrap();
@@ -766,7 +773,7 @@ fn an_install_over_a_broken_list_restores_it_and_adds_the_package() {
     assert_eq!(run.report().verdict, Verdict::Succeeded);
     assert_eq!(
         world.contents(state_path()),
-        Some(manifest(&["fd", "git", "ripgrep"]).render().as_bytes()),
+        Some(required_with(&["fd", "ripgrep"]).render().as_bytes()),
         "the list the profile remembers, plus the new package"
     );
     let home = String::from_utf8(world.contents(home_nix_path()).unwrap().to_vec()).unwrap();
@@ -781,7 +788,7 @@ fn an_install_over_a_broken_list_restores_it_and_adds_the_package() {
 #[test]
 fn a_remove_over_a_broken_list_restores_it_and_drops_the_package() {
     let mut world = bootstrapped();
-    let generation = manifest(&["git", "fd"]).render();
+    let generation = required_with(&["fd"]).render();
     world.with_file(state_path(), b"{broken", 0o644, (1000, 1000));
     let requested = names(&["fd"]);
     let change = remove(&requested, settle(Some("{broken"), Some(&generation))).unwrap();
@@ -797,7 +804,7 @@ fn a_remove_over_a_broken_list_restores_it_and_drops_the_package() {
     assert_eq!(run.report().verdict, Verdict::Succeeded);
     assert_eq!(
         world.contents(state_path()),
-        Some(manifest(&["git"]).render().as_bytes()),
+        Some(required_with(&[]).render().as_bytes()),
         "the list the profile remembers, without the removed package"
     );
 }
@@ -805,7 +812,7 @@ fn a_remove_over_a_broken_list_restores_it_and_drops_the_package() {
 #[test]
 fn an_invalid_package_name_is_refused_before_any_action() {
     let requested = names(&["not a valid ident"]);
-    let change = install(&requested, current(manifest(&["git"]), Source::File)).unwrap();
+    let change = install(&requested, current(required_with(&[]), Source::File)).unwrap();
 
     assert!(matches!(
         steps(
@@ -850,7 +857,7 @@ fn an_interrupt_at_any_change_puts_the_change_back_unless_only_the_record_is_lef
         let report = stopped.report();
         if record_left {
             assert_eq!(report.verdict, Verdict::Succeeded, "stop at {stop}");
-            assert_eq!(listed(&world), names(&["git", "ripgrep"]));
+            assert_eq!(listed(&world), listed_with(&["ripgrep"]));
         } else {
             assert!(
                 matches!(report.verdict, Verdict::Cancelled(_)),
@@ -882,7 +889,7 @@ proptest::proptest! {
         position in proptest::prelude::any::<proptest::sample::Index>(),
         byte in proptest::prelude::any::<u8>(),
     ) {
-        let mut list = vec!["git".to_string()];
+        let mut list = listed_with(&[]);
         list.extend(packages);
         let rendered = StateManifest { version: STATE_VERSION, packages: list }.render();
         let mut bytes = rendered.into_bytes();
@@ -892,7 +899,7 @@ proptest::proptest! {
             && let Ok(parsed) = validate(&raw)
         {
             proptest::prop_assert!(parsed.packages.iter().all(|p| mix_nixgen::is_identifier(p)));
-            proptest::prop_assert!(parsed.packages.iter().any(|p| p == "git"));
+            proptest::prop_assert!(REQUIRED_PACKAGES.iter().all(|r| parsed.packages.iter().any(|p| p == r)));
         }
     }
 
@@ -901,7 +908,7 @@ proptest::proptest! {
         installed in proptest::collection::vec("[a-z][a-z0-9-]{0,8}", 0..5),
         requested in proptest::collection::vec("[a-z][a-z0-9-]{0,8}", 1..5),
     ) {
-        let mut before = vec!["git".to_string()];
+        let mut before = listed_with(&[]);
         for package in installed {
             if !before.contains(&package) {
                 before.push(package);

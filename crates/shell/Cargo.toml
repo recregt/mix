@@ -38,6 +38,7 @@ mix-pins = { path = "../pins" }
 sha2 = "0.11.0"
 
 [dev-dependencies]
+mix-core = { path = "../core", features = ["testkit"] }
 mix-testchild = { path = "../testchild" }
 divan = { workspace = true }
 mockito = "=1.7.2"

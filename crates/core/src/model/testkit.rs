@@ -8,6 +8,7 @@ use mix_events::v1::{Cancellation, Command, Envelope};
 use mix_events::{Ending, Outbox, ROOT, Start, Tree};
 use serde_json::{Value, json};
 
+use crate::declared::state::StateManifest;
 use crate::effect::{Action, Failure, Owner, Query};
 use crate::model::{Content, Entry, Unit, World};
 use crate::report::diagnose::diagnostic;
@@ -247,6 +248,18 @@ pub fn recover(world: &mut World, journal: &[Record]) {
             world.apply(&Action::Commit).expect("the commit finishes");
         }
     }
+}
+
+pub fn required_with(extra: &[&str]) -> StateManifest {
+    let mut manifest = StateManifest::seed();
+    manifest
+        .packages
+        .extend(extra.iter().map(|p| p.to_string()));
+    manifest.sorted()
+}
+
+pub fn listed_with(extra: &[&str]) -> Vec<String> {
+    required_with(extra).packages
 }
 
 pub fn requested(request: Request) -> Start {
