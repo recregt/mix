@@ -70,6 +70,9 @@
             // {
               CARGO_PROFILE = "dist";
               cargoArtifacts = distArtifacts;
+              preBuild = ''
+                export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="$CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS --remap-path-prefix=$NIX_BUILD_TOP=/build"
+              '';
               cargoExtraArgs = "--locked --package mix-cli --package mix-daemon";
               doCheck = false;
             }
