@@ -50,13 +50,12 @@
             nativeBuildInputs = [ pkgs.mold ];
             CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS = "-C link-arg=-fuse-ld=mold";
             CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS = "-C link-arg=-fuse-ld=mold";
-            CARGO_PROFILE = "";
+            CARGO_PROFILE = "release";
             cargoExtraArgs = "--locked --workspace";
             pname = "mix";
             version = "0.1.0";
           };
           cargoArtifacts = craneLib.buildDepsOnly common;
-          releaseArtifacts = craneLib.buildDepsOnly (common // { CARGO_PROFILE = "release"; });
           layers = [
             "core"
             "cli"
@@ -69,8 +68,7 @@
           packages.default = craneLib.buildPackage (
             common
             // {
-              CARGO_PROFILE = "release";
-              cargoArtifacts = releaseArtifacts;
+              inherit cargoArtifacts;
               cargoExtraArgs = "--locked --package mix-cli --package mix-daemon";
               doCheck = false;
             }
