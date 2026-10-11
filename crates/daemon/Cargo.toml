@@ -13,6 +13,7 @@ path = "src/main.rs"
 embed-tarball = ["mix-shell/embed-tarball"]
 
 [dependencies]
+mimalloc = "0.1.52"
 mix-core = { path = "../core" }
 mix-events = { path = "../events" }
 mix-exec = { path = "../exec" }
