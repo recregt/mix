@@ -49,12 +49,15 @@ message Command {
     DoctorRequest doctor = 14;
     CleanRequest clean = 15;
     ExplainRequest explain = 16;
+    ListRequest list = 17;
   }
 }
 
 message ExplainRequest {
   optional Code code = 1;
 }
+
+message ListRequest {}
 
 message BootstrapRequest {
   bool force = 1;
@@ -432,11 +435,39 @@ message NodeFinished {
     ProcessResult process = 16;
     CleanResult clean = 17;
     ExplainResult explain = 18;
+    ListResult list = 19;
   }
 }
 
 message ExplainResult {
   repeated Code codes = 1;
+}
+
+message ListResult {
+  optional string generation = 1;
+  repeated InstalledPackage packages = 2;
+}
+
+message InstalledPackage {
+  string name = 1;
+  optional string pname = 2;
+  optional string version = 3;
+  optional string description = 4;
+  optional string homepage = 5;
+  repeated string licenses = 6;
+  optional string main_program = 7;
+  optional string changelog = 8;
+  repeated PackageOutput outputs = 9;
+}
+
+message PackageOutput {
+  string output = 1;
+  string store_path = 2;
+  uint64 nar_size = 3;
+  string nar_hash = 4;
+  optional string deriver = 5;
+  bool built_locally = 6;
+  repeated string signers = 7;
 }
 
 message ProcessResult {

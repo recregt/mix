@@ -22,7 +22,7 @@ use crate::effect::git;
 use crate::effect::mirror;
 use crate::profile::Result;
 
-fn nix_options(mirror: Option<&str>) -> Vec<String> {
+pub(crate) fn nix_options(mirror: Option<&str>) -> Vec<String> {
     let Some(base) = mirror::filter_mirror(mirror) else {
         return Vec::new();
     };

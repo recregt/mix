@@ -102,6 +102,10 @@ fn in_the_way(managed: &Path, home: &Path, ours: &[&Path], found: &mut Vec<PathB
     }
 }
 
+pub fn active_generation(user: &InvokingUser) -> Option<PathBuf> {
+    std::fs::canonicalize(profile_link(user)).ok()
+}
+
 fn current(user: &InvokingUser) -> Option<u64> {
     let target = std::fs::read_link(profile_link(user)).ok()?;
     generation_of(target.file_name()?.to_str()?)

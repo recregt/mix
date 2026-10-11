@@ -4,7 +4,7 @@
 //! the user's state directory. Standing one up is `mix bootstrap`, changing one is
 //! `mix install` or `mix remove`, and each of them does it through here.
 
-mod activation;
+pub(crate) mod activation;
 pub mod change;
 pub mod config;
 pub mod state;

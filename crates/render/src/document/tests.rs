@@ -280,6 +280,55 @@ fn a_successful_run_still_states_its_exit_and_that_it_was_no_dry_run() {
 }
 
 #[test]
+fn a_list_is_written_with_its_packages_outputs_and_64_bit_sizes_as_strings() {
+    let document = document_of(false, |tree| {
+        let result = mix_events::v1::ListResult {
+            generation: Some("/nix/store/aaa-home-manager-generation".into()),
+            packages: vec![mix_events::v1::InstalledPackage {
+                name: "curl".into(),
+                version: Some("8.22.0".into()),
+                changelog: Some("https://curl.se/ch/8.22.0.html".into()),
+                outputs: vec![mix_events::v1::PackageOutput {
+                    output: "bin".into(),
+                    store_path: "/nix/store/bbb-curl-8.22.0-bin".into(),
+                    nar_size: 383_552,
+                    built_locally: true,
+                    signers: vec!["cache.nixos.org-1".into()],
+                    ..mix_events::v1::PackageOutput::default()
+                }],
+                ..mix_events::v1::InstalledPackage::default()
+            }],
+        };
+        tree.finish(
+            ROOT,
+            Ending::succeeded()
+                .with_result(node_finished::Result::List(result))
+                .for_root(false),
+        )
+        .unwrap();
+    });
+
+    let json = serde_json::to_value(&document).unwrap();
+
+    assert_eq!(
+        json["list"]["generation"],
+        "/nix/store/aaa-home-manager-generation"
+    );
+    let curl = &json["list"]["packages"][0];
+    assert_eq!(curl["name"], "curl");
+    assert_eq!(curl["version"], "8.22.0");
+    assert_eq!(curl["changelog"], "https://curl.se/ch/8.22.0.html");
+    assert!(curl.get("pname").is_none(), "{curl}");
+    assert_eq!(
+        curl["outputs"][0]["storePath"],
+        "/nix/store/bbb-curl-8.22.0-bin"
+    );
+    assert_eq!(curl["outputs"][0]["narSize"], "383552");
+    assert_eq!(curl["outputs"][0]["builtLocally"], true);
+    assert_eq!(curl["outputs"][0]["signers"][0], "cache.nixos.org-1");
+}
+
+#[test]
 fn a_command_line_mix_cannot_read_is_a_usage_document() {
     let document = usage("r1".into(), "unrecognized subcommand 'instal'");
 

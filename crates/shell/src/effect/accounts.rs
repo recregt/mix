@@ -56,6 +56,18 @@ pub fn user_in_group(name: &str, user: &InvokingUser) -> bool {
         .is_some_and(|group| group.gid.as_raw() == user.gid || group.mem.contains(&user.name))
 }
 
+pub fn group_members(name: &str) -> Vec<InvokingUser> {
+    let Some(group) = nix::unistd::Group::from_name(name).ok().flatten() else {
+        return Vec::new();
+    };
+    group
+        .mem
+        .iter()
+        .filter_map(|member| nix::unistd::User::from_name(member).ok().flatten())
+        .filter_map(|user| user_by_uid(user.uid.as_raw()))
+        .collect()
+}
+
 pub fn group_has_member(name: &str, user: &str) -> bool {
     let Some(group) = nix::unistd::Group::from_name(name).ok().flatten() else {
         return false;

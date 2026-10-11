@@ -6,8 +6,8 @@ use mix_events::Detail;
 use mix_events::v1::command::Request;
 use mix_events::v1::node_finished::Result;
 use mix_events::v1::{
-    CleanResult, Code, ExplainRequest, ExplainResult, InspectionReport, NodeFinished, RepairReport,
-    Status as Ended,
+    CleanResult, Code, ExplainRequest, ExplainResult, InspectionReport, ListResult, NodeFinished,
+    RepairReport, Status as Ended,
 };
 use mix_ui::{Out, Report, Severity, Status};
 
@@ -97,8 +97,48 @@ pub(super) fn finished(
             }
         }
         Result::Explain(explain) => mix_ui::data(&explained(explain, request)),
+        Result::List(list) => {
+            if !list.packages.is_empty() {
+                mix_ui::data(&listed(list));
+            }
+        }
         Result::Inspection(_) | Result::Process(_) => {}
     }
+}
+
+fn listed(list: &ListResult) -> String {
+    let rows: Vec<[String; 4]> = list
+        .packages
+        .iter()
+        .map(|package| {
+            let installed: u64 = package.outputs.iter().map(|output| output.nar_size).sum();
+            [
+                package.name.clone(),
+                package.version.clone().unwrap_or_else(|| "-".to_string()),
+                if package.outputs.is_empty() {
+                    "-".to_string()
+                } else {
+                    size(installed)
+                },
+                package.description.clone().unwrap_or_default(),
+            ]
+        })
+        .collect();
+    let width = |column: usize| {
+        rows.iter()
+            .map(|row| row[column].chars().count())
+            .max()
+            .unwrap_or(0)
+    };
+    let (names, versions, sizes) = (width(0), width(1), width(2));
+    rows.iter()
+        .map(|[name, version, size, description]| {
+            format!("{name:<names$}  {version:<versions$}  {size:>sizes$}  {description}")
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn explained(explain: &ExplainResult, request: Option<&Request>) -> String {
@@ -118,7 +158,8 @@ fn explained(explain: &ExplainResult, request: Option<&Request>) -> String {
             | Request::Remove(_)
             | Request::Clean(_)
             | Request::Repair(_)
-            | Request::Doctor(_),
+            | Request::Doctor(_)
+            | Request::List(_),
         )
         | None => mix_explain::codes::list_text(codes),
     }
@@ -330,5 +371,63 @@ mod tests {
             "3 generations, 1.2GiB freed"
         );
         assert_eq!(size(512), "512B");
+    }
+
+    fn package(
+        name: &str,
+        version: Option<&str>,
+        sizes: &[u64],
+        description: &str,
+    ) -> mix_events::v1::InstalledPackage {
+        mix_events::v1::InstalledPackage {
+            name: name.to_string(),
+            version: version.map(str::to_string),
+            description: (!description.is_empty()).then(|| description.to_string()),
+            outputs: sizes
+                .iter()
+                .map(|nar_size| mix_events::v1::PackageOutput {
+                    nar_size: *nar_size,
+                    ..mix_events::v1::PackageOutput::default()
+                })
+                .collect(),
+            ..mix_events::v1::InstalledPackage::default()
+        }
+    }
+
+    #[test]
+    fn a_list_aligns_name_version_and_size_and_ends_each_row_with_the_description() {
+        let list = ListResult {
+            generation: None,
+            packages: vec![
+                package(
+                    "git",
+                    Some("2.55.0"),
+                    &[58_271_776],
+                    "Distributed version control",
+                ),
+                package(
+                    "curl",
+                    Some("8.22.0"),
+                    &[383_552, 84_072],
+                    "Transfers files",
+                ),
+            ],
+        };
+
+        assert_eq!(
+            listed(&list),
+            "git   2.55.0   55.6MiB  Distributed version control\n\
+             curl  8.22.0  456.7KiB  Transfers files"
+        );
+    }
+
+    #[test]
+    fn a_package_that_could_not_be_resolved_shows_dashes_and_no_trailing_space() {
+        let list = ListResult {
+            generation: None,
+            packages: vec![package("mystery", None, &[], "")],
+        };
+
+        assert_eq!(listed(&list), "mystery  -  -");
     }
 }

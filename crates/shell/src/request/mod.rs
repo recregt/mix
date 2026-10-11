@@ -1,5 +1,6 @@
 pub mod context;
 mod delivery;
+pub mod installed;
 pub mod lock;
 pub mod sink;
 
@@ -17,6 +18,7 @@ use mix_exec::Scope;
 
 use crate::drive::stopped_by;
 use crate::request::context::Context;
+use crate::request::installed::Installed;
 use crate::request::lock::{Blocked, Holder, Locks};
 use crate::request::sink::{Render, Shared};
 use delivery::open;
@@ -42,6 +44,7 @@ pub struct Session {
     pub scope: Scope,
     pub render: Shared,
     pub locks: Option<Arc<Locks>>,
+    pub installed: Arc<Installed>,
     pub caller: Caller,
     pub policy: Option<Policy>,
     pub journals: PathBuf,
@@ -55,6 +58,7 @@ impl Session {
             scope,
             render: crate::request::sink::shared(crate::request::sink::Quiet),
             locks: None,
+            installed: Arc::new(Installed::nix()),
             caller: Caller::Fixed(None),
             policy: None,
             journals: PathBuf::from(crate::effect::journal::JOURNAL_DIR),
@@ -85,6 +89,11 @@ impl Session {
 
     pub fn with_locks(mut self, locks: Arc<Locks>) -> Self {
         self.locks = Some(locks);
+        self
+    }
+
+    pub fn with_installed(mut self, installed: Arc<Installed>) -> Self {
+        self.installed = installed;
         self
     }
 
@@ -249,6 +258,7 @@ async fn host(
         journals: session.journals.clone(),
         dry_run,
         host: session.host.clone(),
+        installed: Arc::clone(&session.installed),
         faults: session.faults.clone(),
     };
     let _released = Released(&ctx);
@@ -259,7 +269,35 @@ async fn host(
         .finish(ROOT, concluded.ending.for_root(concluded.problems_remain));
     drop(root);
     drop(held);
+    if !dry_run
+        && changes_the_profile(request)
+        && let Some(cfg) = ctx.user.as_ref()
+    {
+        ctx.installed.warm(
+            cfg.user.clone(),
+            ctx.policy.mirror().map(|mirror| mirror.url().to_string()),
+        );
+    }
     delivery.finish().await;
+}
+
+fn changes_the_profile(request: &command::Request) -> bool {
+    match request {
+        command::Request::Bootstrap(_)
+        | command::Request::Install(_)
+        | command::Request::Remove(_)
+        | command::Request::Clean(_)
+        | command::Request::Repair(_) => true,
+        command::Request::Doctor(_) | command::Request::Explain(_) | command::Request::List(_) => {
+            false
+        }
+    }
+}
+
+pub fn stored_mirror() -> Option<String> {
+    stored_policy()
+        .mirror()
+        .map(|mirror| mirror.url().to_string())
 }
 
 #[allow(clippy::disallowed_methods)]
@@ -400,6 +438,12 @@ pub async fn run(session: &Session, command: Command) {
         command::Request::Explain(explain) => {
             host(session, &request, dry_run, None, async |ctx, root| {
                 crate::ops::explain::explain(ctx, root, explain).await
+            })
+            .await
+        }
+        command::Request::List(list) => {
+            host(session, &request, dry_run, None, async |ctx, root| {
+                crate::ops::list::list(ctx, root, list).await
             })
             .await
         }

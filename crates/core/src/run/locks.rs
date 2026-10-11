@@ -11,7 +11,7 @@ pub enum Need {
 pub fn locks_for(request: &Request, dry_run: bool) -> Need {
     if dry_run {
         return match request {
-            Request::Explain(_) => Need::Nothing,
+            Request::Explain(_) | Request::List(_) => Need::Nothing,
             Request::Bootstrap(_)
             | Request::Repair(_)
             | Request::Clean(_)
@@ -26,13 +26,15 @@ pub fn locks_for(request: &Request, dry_run: bool) -> Need {
         Request::Install(_) | Request::Remove(_) | Request::Doctor(_) | Request::Clean(_) => {
             Need::SharedForUser
         }
-        Request::Explain(_) => Need::Nothing,
+        Request::Explain(_) | Request::List(_) => Need::Nothing,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use mix_events::v1::{CleanRequest, ExplainRequest, InstallRequest, RepairRequest};
+    use mix_events::v1::{
+        CleanRequest, ExplainRequest, InstallRequest, ListRequest, RepairRequest,
+    };
 
     use super::*;
 
@@ -68,6 +70,14 @@ mod tests {
     fn a_request_that_reads_no_state_waits_for_no_one() {
         assert_eq!(
             locks_for(&Request::Explain(ExplainRequest::default()), false),
+            Need::Nothing
+        );
+        assert_eq!(
+            locks_for(&Request::List(ListRequest {}), false),
+            Need::Nothing
+        );
+        assert_eq!(
+            locks_for(&Request::List(ListRequest {}), true),
             Need::Nothing
         );
     }

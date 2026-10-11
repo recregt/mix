@@ -81,6 +81,8 @@ pub async fn serve() -> ExitCode {
     }
     let mut waiting = host.locks.waiting();
     crate::notify::status(&serving(0, 0));
+    host.installed
+        .warm_enrolled(mix_shell::request::stored_mirror());
     let mut connections = tokio::task::JoinSet::new();
     let ended = loop {
         tokio::select! {

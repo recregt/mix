@@ -6,6 +6,7 @@ pub mod generations;
 pub(crate) mod git;
 pub mod home;
 pub mod identity;
+pub(crate) mod installed;
 pub mod journal;
 pub(crate) mod mirror;
 pub(crate) mod profile_lock;

@@ -123,6 +123,7 @@ pub struct Context {
     pub journals: std::path::PathBuf,
     pub dry_run: bool,
     pub host: Host,
+    pub installed: Arc<crate::request::installed::Installed>,
     pub faults: Option<Arc<crate::drive::Faults>>,
 }
 
