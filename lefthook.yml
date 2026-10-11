@@ -9,24 +9,20 @@ pre-commit:
   commands:
     fmt:
       glob: "*.rs"
-      run: cargo fmt --all -- --check
+      run: nix build --no-link .#checks.$(nix eval --raw --impure --expr builtins.currentSystem).fmt
     dependencies:
       glob: "{Cargo.toml,Cargo.lock,**/Cargo.toml}"
-      run: for layer in core cli explain render ui; do cargo deny --log-level error --manifest-path "crates/$layer/Cargo.toml" --config "deny/$layer.toml" check bans || exit 1; done
+      run: S=$(nix eval --raw --impure --expr builtins.currentSystem) && nix build --no-link .#checks.$S.deny .#checks.$S.deny-core .#checks.$S.deny-cli .#checks.$S.deny-explain .#checks.$S.deny-render .#checks.$S.deny-ui
     ruff:
       glob: "*.py"
-      run: >-
-        uv run --project e2e --locked --only-group dev ruff check {staged_files} &&
-        uv run --project e2e --locked --only-group dev ruff format --check {staged_files}
+      run: nix build --no-link .#checks.$(nix eval --raw --impure --expr builtins.currentSystem).ruff
 
 pre-push:
   parallel: true
   commands:
     doc:
-      run: cargo doc --workspace --no-deps --document-private-items --locked
-      env:
-        RUSTDOCFLAGS: -D warnings
+      run: nix build --no-link .#checks.$(nix eval --raw --impure --expr builtins.currentSystem).doc
     clippy:
-      run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      run: nix build --no-link .#checks.$(nix eval --raw --impure --expr builtins.currentSystem).clippy
     test:
-      run: cargo test --workspace --locked
+      run: nix build --no-link .#checks.$(nix eval --raw --impure --expr builtins.currentSystem).tests

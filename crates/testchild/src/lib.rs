@@ -3,7 +3,7 @@
     reason = "the child is a program of its own, and stdout and stderr are what it says"
 )]
 
-use std::ffi::{CStr, c_char, c_int};
+use std::ffi::{c_char, c_int};
 use std::io::{BufRead, Write};
 use std::os::fd::BorrowedFd;
 use std::path::PathBuf;
@@ -37,23 +37,16 @@ pub fn args<'s>(steps: impl IntoIterator<Item = &'s str>) -> Vec<String> {
         .collect()
 }
 
-#[expect(
-    clippy::missing_safety_doc,
-    reason = "glibc calls it before main with the arguments it was started with"
-)]
-pub unsafe extern "C" fn serve(argc: c_int, argv: *const *const c_char, _: *const *const c_char) {
-    let count = usize::try_from(argc).unwrap_or(0);
-    if count < 2 || argv.is_null() {
+pub extern "C" fn serve(_: c_int, _: *const *const c_char, _: *const *const c_char) {
+    let Ok(raw) = std::fs::read("/proc/self/cmdline") else {
         return;
-    }
-    let args: Vec<String> = (0..count)
-        .map(|index| {
-            unsafe { CStr::from_ptr(*argv.add(index)) }
-                .to_string_lossy()
-                .into_owned()
-        })
+    };
+    let raw = raw.strip_suffix(&[0]).unwrap_or(&raw);
+    let args: Vec<String> = raw
+        .split(|byte| *byte == 0)
+        .map(|arg| String::from_utf8_lossy(arg).into_owned())
         .collect();
-    if args[1] != FLAG {
+    if args.len() < 2 || args[1] != FLAG {
         return;
     }
     std::process::exit(run(&args[2..]));
