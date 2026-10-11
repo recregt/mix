@@ -25,6 +25,10 @@ divan = { workspace = true }
 trybuild = "=1.0.122"
 
 [[bench]]
+name = "list"
+harness = false
+
+[[bench]]
 name = "runner"
 harness = false
 

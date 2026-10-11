@@ -110,6 +110,9 @@ pub enum Command {
         dry_run: bool,
     },
 
+    /// List the packages you have installed
+    List,
+
     /// Check the health of the system
     Doctor,
 
@@ -243,7 +246,7 @@ impl Args {
             | Command::Remove { dry_run, .. }
             | Command::Clean { dry_run, .. }
             | Command::Repair { dry_run } => dry_run,
-            Command::Doctor | Command::Explain { .. } => false,
+            Command::Doctor | Command::Explain { .. } | Command::List => false,
         }
     }
 }

@@ -19,6 +19,7 @@ pub fn key_of(request: Option<&Request>) -> &'static str {
         Some(Request::Doctor(_)) => "doctor",
         Some(Request::Clean(_)) => "clean",
         Some(Request::Explain(_)) => "explain",
+        Some(Request::List(_)) => "list",
         None => "command",
     }
 }

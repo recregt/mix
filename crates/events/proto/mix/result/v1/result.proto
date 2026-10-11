@@ -20,6 +20,7 @@ message Result {
     mix.events.v1.DoctorResult doctor = 14;
     mix.events.v1.CleanResult clean = 15;
     mix.events.v1.ExplainResult explain = 16;
+    mix.events.v1.ListResult list = 17;
   }
   repeated Change changes = 20;
   repeated Problem problems = 21;

@@ -14,6 +14,7 @@ pub fn name(request: &Request) -> &'static str {
         Request::Repair(_) => "mix repair",
         Request::Doctor(_) => "mix doctor",
         Request::Explain(_) => "mix explain",
+        Request::List(_) => "mix list",
     }
 }
 
@@ -26,6 +27,7 @@ pub fn action(request: &Request) -> Box<dyn Display + '_> {
         Request::Repair(_) => Box::new("finish the repair"),
         Request::Doctor(_) => Box::new("finish the health check"),
         Request::Explain(_) => Box::new("explain the code"),
+        Request::List(_) => Box::new("list your packages"),
     }
 }
 
@@ -37,7 +39,7 @@ pub fn stopping(request: &Request) -> Option<Note> {
         }
         Request::Clean(_) => Some(note!("stopping after the current removal")),
         Request::Repair(_) => Some(note!("stopping after the current repair")),
-        Request::Doctor(_) | Request::Explain(_) => None,
+        Request::Doctor(_) | Request::Explain(_) | Request::List(_) => None,
     }
 }
 

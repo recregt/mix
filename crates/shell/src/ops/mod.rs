@@ -3,6 +3,7 @@ pub mod clean;
 pub mod doctor;
 pub mod explain;
 pub mod install;
+pub mod list;
 pub mod remove;
 pub mod repair;
 

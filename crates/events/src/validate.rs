@@ -135,7 +135,8 @@ impl Shape {
             | node_finished::Result::Repair(_)
             | node_finished::Result::Doctor(_)
             | node_finished::Result::Clean(_)
-            | node_finished::Result::Explain(_) => self == Shape::Command,
+            | node_finished::Result::Explain(_)
+            | node_finished::Result::List(_) => self == Shape::Command,
         }
     }
 }

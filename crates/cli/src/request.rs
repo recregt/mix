@@ -3,7 +3,7 @@ use mix_events::mirror::Mirror;
 use mix_events::v1::command::Request;
 use mix_events::v1::{
     BootstrapRequest, CleanRequest, Code, DoctorRequest, ExplainRequest, InstallRequest,
-    RemoveRequest, RepairRequest,
+    ListRequest, RemoveRequest, RepairRequest,
 };
 
 use crate::args::Command;
@@ -61,6 +61,7 @@ pub fn from_args(command: &Command, environment: &Environment) -> Request {
         Command::Explain { code, .. } => Request::Explain(ExplainRequest {
             code: code.map(|code| code as i32),
         }),
+        Command::List => Request::List(ListRequest {}),
     }
 }
 
@@ -72,7 +73,8 @@ pub fn route(request: &Request) -> Route {
         | Request::Clean(_)
         | Request::Repair(_)
         | Request::Doctor(_)
-        | Request::Explain(_) => Route::Socket,
+        | Request::Explain(_)
+        | Request::List(_) => Route::Socket,
     }
 }
 
@@ -88,7 +90,8 @@ pub fn refused(request: &Request) -> Option<Fault> {
         | Request::Clean(_)
         | Request::Repair(_)
         | Request::Doctor(_)
-        | Request::Explain(_) => None,
+        | Request::Explain(_)
+        | Request::List(_) => None,
     }
 }
 
@@ -175,6 +178,7 @@ mod tests {
                 code: None,
                 list: true,
             },
+            Command::List,
         ] {
             assert_eq!(
                 route(&from_args(&command, &Environment::default())),
@@ -263,6 +267,7 @@ mod tests {
                 },
                 Request::Explain(ExplainRequest { code: None }),
             ),
+            (Command::List, Request::List(ListRequest {})),
         ] {
             assert_eq!(from_args(&command, &Environment::default()), request);
         }

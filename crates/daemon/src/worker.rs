@@ -48,6 +48,7 @@ pub enum Gate {
 pub struct Host {
     pub gate: Gate,
     pub locks: Arc<Locks>,
+    pub installed: Arc<mix_shell::request::installed::Installed>,
 }
 
 impl Host {
@@ -59,6 +60,7 @@ impl Host {
         Self {
             gate,
             locks: Arc::new(Locks::new(lock)),
+            installed: Arc::new(mix_shell::request::installed::Installed::nix()),
         }
     }
 
@@ -73,6 +75,7 @@ impl Host {
         mix_shell::Session::new(mix_exec::Scope::root())
             .with_render(Forward(events.clone(), Arc::clone(ending), steps))
             .with_locks(Arc::clone(&self.locks))
+            .with_installed(Arc::clone(&self.installed))
             .with_caller(mix_shell::Caller::Account {
                 peer_is_root: caller.uid == 0,
                 account,

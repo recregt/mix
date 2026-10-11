@@ -1,4 +1,5 @@
 mod escape;
+mod facts;
 mod flake;
 #[cfg(test)]
 mod flake_write;
@@ -15,6 +16,7 @@ pub mod lock;
 pub mod parse;
 
 pub use escape::NulByte;
+pub use facts::package_facts;
 pub use flake::{FlakeConfig, Rev, System};
 pub(crate) use header::GENERATED_HEADER;
 pub use home::{CopyIntoGeneration, HomeModule, InvalidInput, StateVersion};
