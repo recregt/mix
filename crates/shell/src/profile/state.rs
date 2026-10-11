@@ -52,6 +52,7 @@ pub fn read(path: &Path) -> Option<String> {
 #[allow(clippy::disallowed_methods)]
 mod tests {
     use mix_core::declared::state::StateManifest;
+    use mix_core::model::testkit::required_with;
 
     use super::*;
     use mix_core::declared::paths::STATE_FILE;
@@ -62,13 +63,6 @@ mod tests {
             gid: 1000,
             name: "mix-user".into(),
             home: home.to_path_buf(),
-        }
-    }
-
-    fn manifest(packages: &[&str]) -> StateManifest {
-        StateManifest {
-            version: STATE_VERSION,
-            packages: packages.iter().map(|p| p.to_string()).collect(),
         }
     }
 
@@ -90,8 +84,8 @@ mod tests {
     #[test]
     fn the_list_is_read_from_the_state_file_and_the_active_generation() {
         let home = tempfile::tempdir().unwrap();
-        write_file(home.path(), &manifest(&["git", "hello"]).render());
-        write_generation(home.path(), &manifest(&["git"]).render());
+        write_file(home.path(), &required_with(&["hello"]).render());
+        write_generation(home.path(), &required_with(&[]).render());
 
         assert_eq!(
             settle(
@@ -100,7 +94,7 @@ mod tests {
                 &crate::request::Locked::for_tests(),
             ),
             Settled::Current {
-                manifest: manifest(&["git"]),
+                manifest: required_with(&[]),
                 source: Source::Generation,
             }
         );

@@ -53,7 +53,6 @@ pub(crate) async fn remove(ctx: &Context, root: &mut Root, request: &RemoveReque
 mod tests {
     use mix_core::declared::identity::InvokingUser;
     use mix_core::declared::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
-    use mix_core::declared::state::StateManifest;
     use mix_events::v1::command::Request;
     use mix_events::v1::diagnostic::Detail;
     use mix_events::v1::{Code, RemoveResult, node_finished};
@@ -64,10 +63,7 @@ mod tests {
     fn home_with(packages: &[&str]) -> tempfile::TempDir {
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(mix_state_dir(home.path())).unwrap();
-        let manifest = StateManifest {
-            version: 1,
-            packages: packages.iter().map(|p| p.to_string()).collect(),
-        };
+        let manifest = mix_core::model::testkit::required_with(packages);
         std::fs::write(
             mix_state_dir(home.path()).join(STATE_FILE),
             manifest.render(),
@@ -128,7 +124,7 @@ mod tests {
 
     #[tokio::test]
     async fn remove_skips_a_package_that_is_not_installed() {
-        let home = home_with(&["git", "ripgrep"]);
+        let home = home_with(&["ripgrep"]);
 
         let ran = remove_from(home.path(), &["fd"]).await;
 
@@ -138,7 +134,7 @@ mod tests {
 
     #[tokio::test]
     async fn remove_touches_nothing_when_no_package_is_installed() {
-        let home = home_with(&["git", "ripgrep"]);
+        let home = home_with(&["ripgrep"]);
         let state_before = state_of(home.path());
 
         remove_from(home.path(), &["fd", "bat"]).await;
@@ -149,7 +145,7 @@ mod tests {
 
     #[tokio::test]
     async fn remove_reports_a_repeated_package_once() {
-        let home = home_with(&["git"]);
+        let home = home_with(&[]);
 
         let ran = remove_from(home.path(), &["fd", "fd"]).await;
 
@@ -159,7 +155,7 @@ mod tests {
 
     #[tokio::test]
     async fn remove_refuses_a_package_mix_relies_on() {
-        let home = home_with(&["git", "ripgrep"]);
+        let home = home_with(&["ripgrep"]);
         let state_before = state_of(home.path());
 
         let ran = remove_from(home.path(), &["git"]).await;
@@ -171,7 +167,7 @@ mod tests {
 
     #[tokio::test]
     async fn remove_refuses_the_whole_request_when_one_package_is_protected() {
-        let home = home_with(&["git", "ripgrep"]);
+        let home = home_with(&["ripgrep"]);
         let state_before = state_of(home.path());
 
         let ran = remove_from(home.path(), &["ripgrep", "git"]).await;

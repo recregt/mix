@@ -98,10 +98,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn seed_is_versioned_and_starts_with_git() {
-        let seed = StateManifest::seed();
-        assert_eq!(seed.version, 1);
-        assert_eq!(seed.packages, vec!["git".to_string()]);
+    fn seed_is_versioned() {
+        assert_eq!(StateManifest::seed().version, 1);
     }
 
     #[test]
