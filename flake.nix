@@ -47,6 +47,9 @@
           common = {
             inherit src;
             strictDeps = true;
+            nativeBuildInputs = [ pkgs.mold ];
+            CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS = "-C link-arg=-fuse-ld=mold";
+            CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS = "-C link-arg=-fuse-ld=mold";
             CARGO_PROFILE = "";
             cargoExtraArgs = "--locked --workspace";
             pname = "mix";
