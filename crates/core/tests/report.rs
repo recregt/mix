@@ -4,7 +4,8 @@ use mix_core::run::{Next, Runner, Verdict, make_guard};
 use mix_events::v1::Command;
 use mix_events::{Outbox, ROOT, Start, Tree};
 
-fn main() {
+#[test]
+fn an_empty_plan_reports_success() {
     let mut tree = Tree::new(
         Arc::new(Outbox::new("request", || {})),
         Arc::new(|| None),
