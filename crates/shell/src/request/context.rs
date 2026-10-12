@@ -198,7 +198,7 @@ impl Context {
 
     pub(crate) fn interrupted(&self, dir: &Path) -> bool {
         match &self.host {
-            Host::Machine => !crate::effect::journal::unfinished(dir).is_empty(),
+            Host::Machine => !crate::effect::journal::abandoned(dir).is_empty(),
             Host::Model(world) => {
                 let world = world.lock().unwrap_or_else(PoisonError::into_inner);
                 world

@@ -230,6 +230,22 @@ async fn only_a_journal_no_running_request_holds_is_an_interrupted_request() {
 }
 
 #[tokio::test]
+async fn a_journal_its_request_has_not_locked_yet_is_neither_interrupted_nor_removed() {
+    let root = machine();
+    let journals = tempfile::tempdir().unwrap();
+    let starting = journals.path().join("r1.ndjson");
+    std::fs::write(&starting, "").unwrap();
+
+    assert!(abandoned(journals.path()).is_empty());
+    let mut next = Performer::new(Files::open(root.path(), "r2").unwrap());
+    let recovered = recover_all(journals.path(), &mut next, &Scope::root()).await;
+
+    assert_eq!(recovered.requests, 0);
+    assert!(recovered.failures.is_empty());
+    assert_eq!(unfinished(journals.path()), [starting]);
+}
+
+#[tokio::test]
 async fn a_journal_recovery_could_not_put_back_is_kept_for_the_next_try() {
     let root = machine();
     let journals = tempfile::tempdir().unwrap();
