@@ -13,11 +13,11 @@ pub struct Pins<T> {
     pub nixpkgs: T,
 }
 
-impl<T: Copy> Pins<T> {
-    pub fn of(&self, pin: Pin) -> T {
+impl<T> Pins<T> {
+    pub fn of(&self, pin: Pin) -> &T {
         match pin {
-            Pin::HomeManager => self.home_manager,
-            Pin::Nixpkgs => self.nixpkgs,
+            Pin::HomeManager => &self.home_manager,
+            Pin::Nixpkgs => &self.nixpkgs,
         }
     }
 }
@@ -27,6 +27,7 @@ pub struct Input {
     pub name: &'static str,
     pub owner: &'static str,
     pub repo: &'static str,
+    pub branch: &'static str,
     pub follows: Option<&'static str>,
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) key: Key,
@@ -39,6 +40,7 @@ const fn input(
     name: &'static str,
     owner: &'static str,
     repo: &'static str,
+    branch: &'static str,
     follows: Option<&'static str>,
 ) -> Input {
     Input {
@@ -46,6 +48,7 @@ const fn input(
         name,
         owner,
         repo,
+        branch,
         follows,
         key: Key::new_static(name),
         ident: Ident::new_static(name),
@@ -58,9 +61,17 @@ pub static INPUTS: [Input; 2] = [
         "home-manager",
         "nix-community",
         "home-manager",
+        "master",
         Some("nixpkgs"),
     ),
-    input(Pin::Nixpkgs, "nixpkgs", "NixOS", "nixpkgs", None),
+    input(
+        Pin::Nixpkgs,
+        "nixpkgs",
+        "NixOS",
+        "nixpkgs",
+        "nixos-unstable",
+        None,
+    ),
 ];
 
 const ROOT: &str = "root";

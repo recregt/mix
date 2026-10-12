@@ -1,19 +1,34 @@
+use std::borrow::Cow;
+
 use crate::flake::Rev;
 use crate::inputs::{INPUTS, Pins};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NarHash(&'static str);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NarHash(Cow<'static, str>);
 
 impl NarHash {
     pub const fn new_static(s: &'static str) -> Self {
         assert!(is_nar_hash(s.as_bytes()), "not a sha256 SRI nar hash");
-        Self(s)
+        Self(Cow::Borrowed(s))
     }
 
-    pub fn as_str(self) -> &'static str {
-        self.0
+    pub fn parse(s: impl Into<String>) -> Result<Self, InvalidNarHash> {
+        let s = s.into();
+        if is_nar_hash(s.as_bytes()) {
+            Ok(Self(Cow::Owned(s)))
+        } else {
+            Err(InvalidNarHash(s))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("`{0}` is not a sha256 SRI nar hash")]
+pub struct InvalidNarHash(String);
 
 const PREFIX: &[u8] = b"sha256-";
 const BASE64_LEN: usize = 44;
@@ -39,7 +54,7 @@ const fn is_nar_hash(bytes: &[u8]) -> bool {
     bytes[bytes.len() - 1] == b'='
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LockedInput {
     pub rev: Rev,
     pub nar_hash: NarHash,
@@ -89,6 +104,21 @@ mod tests {
         assert!(is_nar_hash(
             b"sha256-GnotcvKtbTMnoVx6G4E7ZdUX6487Dky74dqq3pU7iRk="
         ));
+    }
+
+    #[test]
+    fn a_parsed_hash_is_the_one_it_was_parsed_from() {
+        const HASH: &str = "sha256-GnotcvKtbTMnoVx6G4E7ZdUX6487Dky74dqq3pU7iRk=";
+        let parsed = NarHash::parse(HASH).unwrap();
+        assert_eq!(parsed, NarHash::new_static(HASH));
+        assert_eq!(parsed.as_str(), HASH);
+    }
+
+    #[test]
+    fn parsing_refuses_what_is_not_a_hash() {
+        assert!(NarHash::parse("").is_err());
+        assert!(NarHash::parse("sha256-GnotcvKtbTMnoVx6G4E7ZdUX6487Dky74dqq3pU7iRk").is_err());
+        assert!(NarHash::parse("sha512-GnotcvKtbTMnoVx6G4E7ZdUX6487Dky74dqq3pU7iRk=").is_err());
     }
 
     #[test]

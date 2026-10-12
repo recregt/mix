@@ -17,7 +17,7 @@ pub mod parse;
 
 pub use escape::NulByte;
 pub use facts::package_facts;
-pub use flake::{FlakeConfig, Rev, System};
+pub use flake::{FlakeConfig, InvalidRev, Rev, System};
 pub(crate) use header::GENERATED_HEADER;
 pub use home::{CopyIntoGeneration, HomeModule, InvalidInput, StateVersion};
 pub use ident::{FileName, Ident, InvalidIdent, is_identifier};

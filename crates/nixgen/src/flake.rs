@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::ast::Key;
 use crate::escape::NulByte;
 use crate::print;
@@ -34,19 +36,32 @@ impl System {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Rev(&'static str);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rev(Cow<'static, str>);
 
 impl Rev {
     pub const fn new_static(s: &'static str) -> Self {
         assert!(is_rev(s.as_bytes()), "not a 40 character git revision");
-        Self(s)
+        Self(Cow::Borrowed(s))
     }
 
-    pub fn as_str(self) -> &'static str {
-        self.0
+    pub fn parse(s: impl Into<String>) -> Result<Self, InvalidRev> {
+        let s = s.into();
+        if is_rev(s.as_bytes()) {
+            Ok(Self(Cow::Owned(s)))
+        } else {
+            Err(InvalidRev(s))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("`{0}` is not a 40 character git revision")]
+pub struct InvalidRev(String);
 
 const fn is_rev(bytes: &[u8]) -> bool {
     if bytes.len() != 40 {
@@ -217,6 +232,34 @@ mod tests {
         assert!(
             FlakeConfig::new(System::X86_64Linux, "mi\0x", NIXPKGS_PIN, HOME_MANAGER_PIN).is_err()
         );
+    }
+
+    #[test]
+    fn a_parsed_revision_is_the_one_it_was_parsed_from() {
+        let parsed = Rev::parse(NIXPKGS_REV).unwrap();
+        assert_eq!(parsed, NIXPKGS_PIN);
+        assert_eq!(parsed.as_str(), NIXPKGS_REV);
+    }
+
+    #[test]
+    fn a_parsed_revision_renders_like_a_static_one() {
+        let parsed = FlakeConfig::new(
+            System::X86_64Linux,
+            "mix",
+            Rev::parse(NIXPKGS_REV).unwrap(),
+            Rev::parse(HOME_MANAGER_REV).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed.render(), render("mix"));
+    }
+
+    #[test]
+    fn a_revision_is_forty_lowercase_hex_digits() {
+        assert!(Rev::parse("").is_err());
+        assert!(Rev::parse(&NIXPKGS_REV[1..]).is_err());
+        assert!(Rev::parse(format!("{NIXPKGS_REV}0")).is_err());
+        assert!(Rev::parse(NIXPKGS_REV.to_uppercase()).is_err());
+        assert!(Rev::parse(format!("g{}", &NIXPKGS_REV[1..])).is_err());
     }
 
     #[test]
