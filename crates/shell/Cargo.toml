@@ -12,7 +12,7 @@ embed-tarball = []
 machine-tests = []
 
 [dependencies]
-uuid = { version = "1.26.1", features = ["v7"] }
+uuid = { workspace = true }
 mix-core = { path = "../core" }
 mix-events = { path = "../events" }
 mix-exec = { path = "../exec" }

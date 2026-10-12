@@ -12,13 +12,13 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.6.6", features = ["derive", "env"] }
-mimalloc = "0.1.52"
+mimalloc = { workspace = true }
 mix-events = { path = "../events" }
 mix-render = { path = "../render" }
 mix-rpc = { path = "../rpc" }
 nix = { workspace = true, features = ["signal"] }
 tokio = { workspace = true, features = ["signal"] }
-uuid = { version = "1.26.1", features = ["v7"] }
+uuid = { workspace = true }
 
 [dev-dependencies]
 mix-core = { path = "../core" }

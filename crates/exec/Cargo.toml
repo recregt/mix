@@ -9,7 +9,7 @@ license = "MPL-2.0"
 nix = { workspace = true, features = ["signal", "process"] }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-tokio-util = { version = "0.7", default-features = false }
+tokio-util = { workspace = true }
 
 [dev-dependencies]
 mix-testchild = { path = "../testchild" }

@@ -10,16 +10,16 @@ mix-events = { path = "../events" }
 mix-exec = { path = "../exec" }
 futures-util = { workspace = true }
 hyper-util = { version = "0.1.21", features = ["tokio"] }
-prost = "0.14.4"
+prost = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["net"] }
-tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
+tokio-util = { workspace = true, features = ["rt"] }
 tonic = "0.14.6"
 tonic-prost = "0.14.6"
 tower = { version = "0.5.3", features = ["util"] }
 
 [build-dependencies]
-protox = "0.10.0"
+protox = { workspace = true }
 tonic-prost-build = "0.14.6"
 
 [dev-dependencies]

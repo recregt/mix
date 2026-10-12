@@ -7,7 +7,7 @@ license = "MPL-2.0"
 publish = false
 
 [dependencies]
-mimalloc = "0.1.52"
+mimalloc = { workspace = true }
 mix-core = { path = "../core", features = ["testkit"] }
 mix-events = { path = "../events" }
 mix-exec = { path = "../exec" }
