@@ -29,6 +29,7 @@ pub(super) fn finished(
     node: &NodeFinished,
     request: Option<&Request>,
     level: Detail,
+    data: bool,
     elapsed: Duration,
 ) {
     let Some(result) = &node.result else {
@@ -96,9 +97,13 @@ pub(super) fn finished(
                 );
             }
         }
-        Result::Explain(explain) => mix_ui::data(&explained(explain, request)),
+        Result::Explain(explain) => {
+            if data {
+                mix_ui::data(&explained(explain, request));
+            }
+        }
         Result::List(list) => {
-            if !list.packages.is_empty() {
+            if data && !list.packages.is_empty() {
                 mix_ui::data(&listed(list));
             }
         }
