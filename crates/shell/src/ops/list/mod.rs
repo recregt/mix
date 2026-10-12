@@ -31,7 +31,7 @@ pub(crate) async fn list(ctx: &Context, root: &mut Root, _request: &ListRequest)
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -93,8 +93,9 @@ mod tests {
                 name: "mix-user".to_string(),
                 home: home.to_path_buf(),
             },
+            pins: mix_nixgen::lock::EMBEDDED,
             flake: "flake-content".to_string(),
-            lock: "lock-content".to_string(),
+            lock: mix_nixgen::lock::render(mix_nixgen::lock::EMBEDDED),
             home: "home-content".to_string(),
             restored_state: None,
         }
@@ -108,12 +109,17 @@ mod tests {
         std::os::unix::fs::symlink(generation, profiles.join(HOME_MANAGER_PROFILE_NAME)).unwrap();
     }
 
+    fn store(home: &Path) -> PathBuf {
+        std::fs::create_dir_all(home.join("store")).unwrap();
+        std::fs::canonicalize(home.join("store")).unwrap()
+    }
+
     fn session(home: &Path, source: &Arc<Fixed>) -> crate::Session {
         crate::Session::new(mix_exec::Scope::root())
             .with_user(Some(user_config(home)))
-            .with_installed(Arc::new(Installed::with_source(
-                Arc::clone(source) as Arc<dyn Source>
-            )))
+            .with_installed(Arc::new(
+                Installed::with_source(Arc::clone(source) as Arc<dyn Source>).in_store(store(home)),
+            ))
     }
 
     async fn listed(session: crate::Session) -> Ran {
@@ -177,9 +183,10 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         activate(home.path());
         let source = Fixed::of(&["git"]);
-        let installed = Arc::new(Installed::with_source(
-            Arc::clone(&source) as Arc<dyn Source>
-        ));
+        let installed = Arc::new(
+            Installed::with_source(Arc::clone(&source) as Arc<dyn Source>)
+                .in_store(store(home.path())),
+        );
         let again = || {
             crate::Session::new(mix_exec::Scope::root())
                 .with_user(Some(user_config(home.path())))

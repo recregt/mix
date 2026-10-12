@@ -4,7 +4,9 @@ use std::sync::{Arc, OnceLock};
 use mix_core::model::World;
 use mix_core::model::testkit::{Breakage, Damage, owned};
 use mix_events::v1::command::Request;
-use mix_events::v1::{CleanRequest, DoctorRequest, InstallRequest, RemoveRequest, RepairRequest};
+use mix_events::v1::{
+    CleanRequest, DoctorRequest, InstallRequest, RemoveRequest, RepairRequest, UpdateRequest,
+};
 use mix_shell::drive::Fault;
 use proptest::prelude::*;
 use proptest::sample::select;
@@ -21,6 +23,7 @@ pub enum Command {
     Remove(&'static str),
     Clean(bool),
     Repair,
+    Update,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +38,7 @@ pub enum Transition {
     Run(Command),
     Damage(Breakage),
     Faulted(Command, usize, FaultKind),
+    Advance,
 }
 
 impl FaultKind {
@@ -62,11 +66,15 @@ impl Command {
             ),
             Command::Clean(all) => (Request::Clean(CleanRequest { all }), false),
             Command::Repair => (repair(), true),
+            Command::Update => (update(), false),
         }
     }
 
     fn atomic(self) -> bool {
-        matches!(self, Command::Install(_) | Command::Remove(_))
+        matches!(
+            self,
+            Command::Install(_) | Command::Remove(_) | Command::Update
+        )
     }
 }
 
@@ -86,6 +94,10 @@ pub fn doctor() -> Request {
 
 pub fn repair() -> Request {
     Request::Repair(RepairRequest {})
+}
+
+pub fn update() -> Request {
+    Request::Update(UpdateRequest {})
 }
 
 pub fn succeeded(document: &Value) -> bool {
@@ -285,6 +297,16 @@ async fn ran(model: &Model, command: Command) -> Vec<String> {
     {
         found.push("the list differs from the active generation".to_string());
     }
+    if command.atomic()
+        && succeeded(&done)
+        && !changes(&done).is_empty()
+        && world.contents(
+            mix_core::declared::paths::mix_state_dir(&model.user().home)
+                .join(mix_core::declared::paths::FLAKE_LOCK),
+        ) != world.active_lock(model.user())
+    {
+        found.push("the lock differs from the active generation".to_string());
+    }
     if command == Command::Repair {
         let checked = model.run(doctor(), false, false).await;
         let left = fixable(&checked);
@@ -330,6 +352,7 @@ fn command() -> impl Strategy<Value = Command> {
         select(&PACKAGES[..]).prop_map(Command::Remove),
         any::<bool>().prop_map(Command::Clean),
         Just(Command::Repair),
+        Just(Command::Update),
     ]
 }
 
@@ -357,6 +380,7 @@ impl ReferenceStateMachine for Mix {
             1 => damage,
             1 => (command(), 0..12usize, fault)
                 .prop_map(|(command, at, kind)| Transition::Faulted(command, at, kind)),
+            1 => Just(Transition::Advance),
         ]
         .boxed()
     }
@@ -397,6 +421,10 @@ impl StateMachineTest for Mix {
                 }
                 Transition::Faulted(command, at, kind) => {
                     faulted(model, *command, *at, *kind).await
+                }
+                Transition::Advance => {
+                    model.upstream().advance();
+                    Vec::new()
                 }
             }
         });

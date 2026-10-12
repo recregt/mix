@@ -86,8 +86,9 @@ fn user(name: &str, uid: u32) -> UserConfig {
             name: name.into(),
             home: PathBuf::from("/home").join(name),
         },
+        pins: mix_nixgen::lock::EMBEDDED,
         flake: format!("flake of {name}"),
-        lock: "lock".into(),
+        lock: mix_nixgen::lock::render(mix_nixgen::lock::EMBEDDED),
         home: format!("home of {name}"),
         restored_state: None,
     }

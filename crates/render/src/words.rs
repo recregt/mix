@@ -15,6 +15,7 @@ pub fn name(request: &Request) -> &'static str {
         Request::Doctor(_) => "mix doctor",
         Request::Explain(_) => "mix explain",
         Request::List(_) => "mix list",
+        Request::Update(_) => "mix update",
     }
 }
 
@@ -28,6 +29,7 @@ pub fn action(request: &Request) -> Box<dyn Display + '_> {
         Request::Doctor(_) => Box::new("finish the health check"),
         Request::Explain(_) => Box::new("explain the code"),
         Request::List(_) => Box::new("list your packages"),
+        Request::Update(_) => Box::new("update your packages"),
     }
 }
 
@@ -37,6 +39,7 @@ pub fn stopping(request: &Request) -> Option<Note> {
         Request::Install(_) | Request::Remove(_) => {
             Some(note!("cancelling and putting the package list back"))
         }
+        Request::Update(_) => Some(note!("cancelling and putting your configuration back")),
         Request::Clean(_) => Some(note!("stopping after the current removal")),
         Request::Repair(_) => Some(note!("stopping after the current repair")),
         Request::Doctor(_) | Request::Explain(_) | Request::List(_) => None,

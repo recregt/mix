@@ -6,8 +6,8 @@ use mix_events::Detail;
 use mix_events::v1::command::Request;
 use mix_events::v1::node_finished::Result;
 use mix_events::v1::{
-    CleanResult, Code, ExplainRequest, ExplainResult, InspectionReport, ListResult, NodeFinished,
-    RepairReport, Status as Ended,
+    CleanResult, Code, ExplainRequest, ExplainResult, InputOutcome, InspectionReport, ListResult,
+    LockedRevision, NodeFinished, RepairReport, Status as Ended, UpdateResult,
 };
 use mix_ui::{Out, Report, Severity, Status};
 
@@ -29,6 +29,7 @@ pub(super) fn finished(
     node: &NodeFinished,
     request: Option<&Request>,
     level: Detail,
+    data: bool,
     elapsed: Duration,
 ) {
     let Some(result) = &node.result else {
@@ -96,14 +97,94 @@ pub(super) fn finished(
                 );
             }
         }
-        Result::Explain(explain) => mix_ui::data(&explained(explain, request)),
+        Result::Explain(explain) => {
+            if data {
+                mix_ui::data(&explained(explain, request));
+            }
+        }
         Result::List(list) => {
-            if !list.packages.is_empty() {
+            if data && !list.packages.is_empty() {
                 mix_ui::data(&listed(list));
+            }
+        }
+        Result::Update(update) => {
+            if chatty {
+                updated(out, update, elapsed);
             }
         }
         Result::Inspection(_) | Result::Process(_) => {}
     }
+}
+
+fn updated(out: &dyn Out, update: &UpdateResult, elapsed: Duration) {
+    let names = |outcome: InputOutcome| -> Vec<&str> {
+        update
+            .inputs
+            .iter()
+            .filter(|input| input.outcome() == outcome)
+            .map(|input| input.name.as_str())
+            .collect()
+    };
+    let current = names(InputOutcome::Current);
+    if !current.is_empty() {
+        mix_ui::status_to(
+            out,
+            Status::Ignored,
+            &format!("{} (already up to date)", current.join(", ")),
+        );
+    }
+    for input in update
+        .inputs
+        .iter()
+        .filter(|input| input.outcome() == InputOutcome::Kept)
+    {
+        mix_ui::status_to(
+            out,
+            Status::Ignored,
+            &format!("{} (newer than {})", input.name, input.branch),
+        );
+    }
+    let moved: Vec<String> = update
+        .inputs
+        .iter()
+        .filter(|input| input.outcome() == InputOutcome::Updated)
+        .map(|input| {
+            format!(
+                "{} {} to {}",
+                input.name,
+                short(input.from.as_ref()),
+                short(input.to.as_ref())
+            )
+        })
+        .collect();
+    if !moved.is_empty() {
+        mix_ui::status_to(
+            out,
+            Status::Updated,
+            &format!("{} in {}", moved.join(", "), took(elapsed)),
+        );
+    }
+    for package in &update.packages {
+        mix_ui::status_to(
+            out,
+            Status::Updated,
+            &format!(
+                "{} {} to {}",
+                package.name,
+                version(package.from_version.as_deref()),
+                version(package.to_version.as_deref())
+            ),
+        );
+    }
+}
+
+fn short(revision: Option<&LockedRevision>) -> &str {
+    let rev = revision.map_or("", |revision| revision.rev.as_str());
+    rev.get(..7).unwrap_or(rev)
+}
+
+fn version(version: Option<&str>) -> &str {
+    version.unwrap_or("unversioned")
 }
 
 fn listed(list: &ListResult) -> String {
@@ -159,7 +240,8 @@ fn explained(explain: &ExplainResult, request: Option<&Request>) -> String {
             | Request::Clean(_)
             | Request::Repair(_)
             | Request::Doctor(_)
-            | Request::List(_),
+            | Request::List(_)
+            | Request::Update(_),
         )
         | None => mix_explain::codes::list_text(codes),
     }

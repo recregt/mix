@@ -353,8 +353,9 @@ fn a_subject_counts_a_long_list_of_packages() {
 fn config() -> UserConfig {
     UserConfig {
         user: user(),
+        pins: mix_nixgen::lock::EMBEDDED,
         flake: "flake".into(),
-        lock: "lock".into(),
+        lock: mix_nixgen::lock::render(mix_nixgen::lock::EMBEDDED),
         home: render_home(&user(), StateManifest::seed().packages).unwrap(),
         restored_state: None,
     }

@@ -151,7 +151,8 @@ pub(crate) async fn bootstrap(
     let journals = ctx.journals.as_path();
     crate::ops::recover_interrupted(ctx, tree, &mut performer, true).await;
     if let Some(user) = ctx.user.as_ref().map(|cfg| cfg.user.clone()) {
-        settings.user = observed_user_config(user, &mut performer, scope)
+        let mirrored = ctx.mirror().is_some();
+        settings.user = observed_user_config(user, &mut performer, scope, mirrored)
             .await
             .or(settings.user);
     }

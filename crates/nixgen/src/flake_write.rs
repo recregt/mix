@@ -59,7 +59,7 @@ pub(crate) fn write_flake<'k>(
                                     s.verbatim(SLASH);
                                     s.verbatim(Verbatim::new_static(input.repo));
                                     s.verbatim(SLASH);
-                                    s.verbatim(revs.of(input.pin));
+                                    s.verbatim(*revs.of(input.pin));
                                 })
                             });
                         })

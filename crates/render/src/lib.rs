@@ -98,7 +98,9 @@ impl View {
 
     fn sinks_to(&self, display: Arc<dyn mix_ui::Display>) -> Sinks {
         Sinks {
-            human: Human::new(display).level(self.level()),
+            human: Human::new(display)
+                .level(self.level())
+                .data(!self.json.on()),
             document: self
                 .json
                 .on()
@@ -229,6 +231,18 @@ mod tests {
 
     fn refused() -> Fault {
         Fault::failed(Code::RootNotAllowed, "root", None)
+    }
+
+    #[test]
+    fn stdout_carries_data_only_when_it_is_not_carrying_the_document() {
+        let (json, _) = into();
+        let human = View {
+            json: Json::Off,
+            ..json
+        };
+        let (json, _) = into();
+        assert!(!json.sinks_to(Arc::new(mix_ui::Silent)).human.prints_data());
+        assert!(human.sinks_to(Arc::new(mix_ui::Silent)).human.prints_data());
     }
 
     #[test]

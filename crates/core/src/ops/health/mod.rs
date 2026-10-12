@@ -262,6 +262,7 @@ pub fn queries(target: &Target<'_>) -> Vec<Query> {
             Query::Contents(mix_state_dir(&user.home).join(STATE_FILE)),
             Query::ActiveList(InvokingUser::clone(user)),
             Query::Path(repository_dir(&user.home).join(REPOSITORY_BRANCH)),
+            Query::ActiveLock(InvokingUser::clone(user)),
         ],
         Target::HomeFiles { user, .. } => vec![Query::Clobbered(InvokingUser::clone(user))],
     }
@@ -610,12 +611,19 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
             }),
             _ => None,
         },
-        Target::Activation { .. } => {
+        Target::Activation { pins, .. } => {
             let listed = std::str::from_utf8(contents(facts, 0)?).ok()?;
             let active = contents(facts, 1)
                 .and_then(|active| std::str::from_utf8(active).ok())
                 .and_then(|active| validate(active).ok());
-            (active != validate(listed).ok()).then_some(Finding::ProfileStale)
+            let built_with_other_pins = active.is_some()
+                && contents(facts, 3)
+                    .and_then(|built| std::str::from_utf8(built).ok())
+                    .and_then(crate::declared::pins::read)
+                    .as_ref()
+                    != Some(&**pins);
+            (active != validate(listed).ok() || built_with_other_pins)
+                .then_some(Finding::ProfileStale)
         }
         Target::Retention { collect, .. } => {
             let Fact::Profile(profile) = &facts[0] else {

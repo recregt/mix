@@ -4,7 +4,14 @@ import os
 import pytest
 
 from support.container import NIX_BINARY
-from support.mirror import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS, bootstrap_root
+from support.mirror import (
+    ALLOW_NETWORK_ENV,
+    HOME_MANAGER_REV,
+    INSTALL_TEST_PACKAGE,
+    MIRROR_TEST_USERS,
+    NIXPKGS_REV,
+    bootstrap_root,
+)
 from support.paths import REPO_ROOT
 
 USER = MIRROR_TEST_USERS[0]
@@ -29,8 +36,7 @@ def _nix(container, *args):
     return container.exec(NIX_BINARY, *args)
 
 
-def _fixture(name: str, observed: str) -> str:
-    path = FIXTURES / name
+def _fixture(path, observed: str) -> str:
     if UPDATE:
         path.write_text(observed)
     return path.read_text()
@@ -65,7 +71,7 @@ def test_a_build_starting_is_logged_the_way_mix_reads_it(container, mock_nix_ser
     starts = _build_starts(result.stderr)
     assert [record["fields"][0] for record in starts] == [drv_path]
 
-    (expected,) = _build_starts(_fixture("build-log.txt", result.stderr))
+    (expected,) = _build_starts(_fixture(FIXTURES / "build-log.txt", result.stderr))
     assert sorted(starts[0]) == sorted(expected)
     assert [type(field) for field in starts[0]["fields"]] == [
         type(field) for field in expected["fields"]
@@ -102,7 +108,7 @@ def test_a_missing_package_is_reported_the_way_mix_reads_it(container, mock_nix_
     assert result.returncode != 0
     (message,) = _error_messages(result.stderr)
     assert "ripgrep2" in message
-    (expected,) = _error_messages(_fixture("missing-log.txt", result.stderr))
+    (expected,) = _error_messages(_fixture(FIXTURES / "missing-log.txt", result.stderr))
     assert message == expected
 
 
@@ -116,3 +122,28 @@ def test_nix_never_rewrites_the_lock(container, mock_nix_server, mirror_cache):
 
     assert run.succeeded(), run
     assert container.exec("cat", lock, check=True).stdout == rendered
+
+
+PREFETCHED = REPO_ROOT / "crates/shell/fixtures/nix"
+
+
+@pytest.mark.bootstrapped
+@pytest.mark.parametrize(
+    ("reference", "fixture"),
+    [
+        (f"github:NixOS/nixpkgs/{NIXPKGS_REV}", "prefetch-nixpkgs.json"),
+        (f"github:nix-community/home-manager/{HOME_MANAGER_REV}", "prefetch-home-manager.json"),
+    ],
+)
+def test_a_prefetched_input_is_printed_the_way_mix_reads_it(
+    container, mock_nix_server, mirror_cache, reference, fixture
+):
+    if os.environ.get(ALLOW_NETWORK_ENV, "").strip().lower() not in ("1", "true", "yes"):
+        pytest.skip(f"prefetching from GitHub needs the network: set {ALLOW_NETWORK_ENV}=1")
+
+    result = container.exec(
+        NIX_BINARY, "flake", "prefetch", "--json", reference, user=USER, check=True
+    )
+
+    expected = _fixture(PREFETCHED / fixture, result.stdout.strip() + "\n")
+    assert json.loads(result.stdout) == json.loads(expected)

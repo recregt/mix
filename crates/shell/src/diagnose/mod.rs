@@ -160,6 +160,7 @@ impl Diagnose for ChangeError {
             ChangeError::NotRoot => Code::RootNotAllowed,
             ChangeError::NotBootstrapped => Code::NotBootstrapped,
             ChangeError::Unrecovered => Code::CleanupIncomplete,
+            ChangeError::Mirrored => Code::UpdateUnavailable,
         })
     }
 
@@ -192,6 +193,7 @@ impl Diagnose for ChangeError {
             ChangeError::Unrecovered => {
                 Fault::failed(Code::CleanupIncomplete, self.to_string(), None)
             }
+            ChangeError::Mirrored => Fault::failed(Code::UpdateUnavailable, self.to_string(), None),
         }
     }
 }

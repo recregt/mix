@@ -3,6 +3,7 @@ mod delivery;
 pub mod installed;
 pub mod lock;
 pub mod sink;
+pub mod upstream;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,6 +22,7 @@ use crate::request::context::Context;
 use crate::request::installed::Installed;
 use crate::request::lock::{Blocked, Holder, Locks};
 use crate::request::sink::{Render, Shared};
+use crate::request::upstream::Upstream;
 use delivery::open;
 
 pub struct Locked(());
@@ -37,7 +39,7 @@ pub enum Caller {
         peer_is_root: bool,
         account: Option<InvokingUser>,
     },
-    Fixed(Option<UserConfig>),
+    Fixed(Option<Box<UserConfig>>),
 }
 
 pub struct Session {
@@ -45,6 +47,7 @@ pub struct Session {
     pub render: Shared,
     pub locks: Option<Arc<Locks>>,
     pub installed: Arc<Installed>,
+    pub upstream: Arc<dyn Upstream>,
     pub caller: Caller,
     pub policy: Option<Policy>,
     pub journals: PathBuf,
@@ -59,6 +62,7 @@ impl Session {
             render: crate::request::sink::shared(crate::request::sink::Quiet),
             locks: None,
             installed: Arc::new(Installed::nix()),
+            upstream: Arc::new(crate::request::upstream::Nix),
             caller: Caller::Fixed(None),
             policy: None,
             journals: PathBuf::from(crate::effect::journal::JOURNAL_DIR),
@@ -97,13 +101,18 @@ impl Session {
         self
     }
 
+    pub fn with_upstream(mut self, upstream: Arc<dyn Upstream>) -> Self {
+        self.upstream = upstream;
+        self
+    }
+
     pub fn with_caller(mut self, caller: Caller) -> Self {
         self.caller = caller;
         self
     }
 
     pub fn with_user(self, user: Option<UserConfig>) -> Self {
-        self.with_caller(Caller::Fixed(user))
+        self.with_caller(Caller::Fixed(user.map(Box::new)))
     }
 
     pub fn with_policy(mut self, policy: Policy) -> Self {
@@ -133,18 +142,20 @@ impl Session {
         )
     }
 
-    fn user(&self, enrolling: bool, locked: &Locked) -> (Option<UserConfig>, bool) {
+    fn user(&self, enrolling: bool, mirrored: bool, locked: &Locked) -> (Option<UserConfig>, bool) {
         match &self.caller {
-            Caller::Fixed(config) => (config.clone(), false),
+            Caller::Fixed(config) => (config.as_deref().cloned(), false),
             Caller::Account {
                 peer_is_root,
                 account,
             } => {
                 let config = account.clone().and_then(|account| {
                     if enrolling {
-                        crate::profile::user_config_for(account, &self.host, locked)
+                        crate::profile::user_config_for(account, &self.host, mirrored, locked)
                     } else {
-                        crate::profile::existing_user_config_for(account, &self.host, locked)
+                        crate::profile::existing_user_config_for(
+                            account, &self.host, mirrored, locked,
+                        )
                     }
                 });
                 (config, *peer_is_root)
@@ -244,21 +255,23 @@ async fn host(
         }
     };
     let locked = Locked(());
-    let (user, caller_is_root) = session.user(enrolling, &locked);
+    let policy = policy
+        .or_else(|| session.policy.clone())
+        .unwrap_or_else(stored_policy);
+    let (user, caller_is_root) = session.user(enrolling, policy.mirror().is_some(), &locked);
     let ctx = Context {
         request: opened,
         user,
         caller_is_root,
         scope: session.scope.clone(),
-        policy: policy
-            .or_else(|| session.policy.clone())
-            .unwrap_or_else(stored_policy),
+        policy,
         render: Arc::clone(&session.render),
         locked,
         journals: session.journals.clone(),
         dry_run,
         host: session.host.clone(),
         installed: Arc::clone(&session.installed),
+        upstream: Arc::clone(&session.upstream),
         faults: session.faults.clone(),
     };
     let _released = Released(&ctx);
@@ -287,6 +300,7 @@ fn changes_the_profile(request: &command::Request) -> bool {
         | command::Request::Install(_)
         | command::Request::Remove(_)
         | command::Request::Clean(_)
+        | command::Request::Update(_)
         | command::Request::Repair(_) => true,
         command::Request::Doctor(_) | command::Request::Explain(_) | command::Request::List(_) => {
             false
@@ -417,6 +431,12 @@ pub async fn run(session: &Session, command: Command) {
             })
             .await
         }
+        command::Request::Update(update) => {
+            host(session, &request, dry_run, None, async |ctx, root| {
+                crate::ops::update::update(ctx, root, update).await
+            })
+            .await
+        }
         command::Request::Clean(clean) => {
             host(session, &request, dry_run, None, async |ctx, root| {
                 crate::ops::clean::clean(ctx, root, clean).await
@@ -498,9 +518,13 @@ pub(crate) mod ran {
     }
 
     pub(crate) async fn ran(session: Session, request: command::Request) -> Ran {
+        ran_command(session, mix_events::command(request)).await
+    }
+
+    pub(crate) async fn ran_command(session: Session, command: Command) -> Ran {
         let recorded: Arc<Mutex<Vec<Envelope>>> = Arc::default();
         let session = session.with_render(Recorded(Arc::clone(&recorded)));
-        run(&session, mix_events::command(request)).await;
+        run(&session, command).await;
         let envelopes = std::mem::take(&mut *recorded.lock().unwrap());
         mix_events::validate(envelopes.iter()).expect("every request streams a valid tree");
         Ran(envelopes)

@@ -8,10 +8,12 @@ use mix_core::declared::paths::{
 use mix_core::declared::state::StateManifest;
 use mix_core::effect::FlakeSource;
 use mix_core::ops::list::{Described, Stored, join};
+use mix_core::ops::update::Versions;
 use mix_core::{Error, Result};
 use mix_events::v1::InstalledPackage;
 use mix_exec::Scope;
-use mix_nixgen::{AttrPath, Installable};
+use mix_nixgen::lock::LockedInput;
+use mix_nixgen::{AttrPath, INPUTS, Installable, Pins};
 use serde::Deserialize;
 
 use crate::effect::exec::run_as;
@@ -102,10 +104,12 @@ fn unreadable(command: &str, error: impl std::fmt::Display) -> Error {
 
 fn requested(generation: &Path) -> Result<Vec<String>> {
     let path = generation.join(GENERATION_STATE_FILE);
-    let text = std::fs::read_to_string(&path).map_err(|source| Error::Io {
-        path: path.clone(),
-        source,
-    })?;
+    let text = crate::effect::generations::store_input(generation, GENERATION_STATE_FILE)
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .ok_or_else(|| Error::Io {
+            path: path.clone(),
+            source: std::io::Error::from(std::io::ErrorKind::NotFound),
+        })?;
     StateManifest::parse(&text)
         .map(|manifest| manifest.packages)
         .map_err(|error| Error::Io {
@@ -118,6 +122,7 @@ async fn described(
     user: &InvokingUser,
     mirror: Option<&str>,
     names: &[String],
+    pins: Option<&Pins<LockedInput>>,
     scope: &Scope,
 ) -> Result<Vec<Described>> {
     let installable = Installable::new(
@@ -136,10 +141,49 @@ async fn described(
         apply,
         "--no-write-lock-file".to_string(),
     ];
+    if let Some(pins) = pins {
+        args.extend(overrides(pins));
+    }
     args.extend(activation::nix_options(mirror));
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let answer = run_as(user, DEFAULT_PROFILE_NIX, &args, scope).await?;
     parse_facts(&answer).map_err(|error| unreadable("nix eval", error))
+}
+
+fn overrides(pins: &Pins<LockedInput>) -> Vec<String> {
+    INPUTS
+        .iter()
+        .flat_map(|input| {
+            let pin = pins.of(input.pin);
+            [
+                "--override-input".to_string(),
+                input.name.to_string(),
+                format!(
+                    "github:{}/{}/{}?narHash={}",
+                    input.owner,
+                    input.repo,
+                    pin.rev.as_str(),
+                    crate::effect::mirror::query_value(pin.nar_hash.as_str())
+                ),
+            ]
+        })
+        .collect()
+}
+
+pub async fn versions_at(
+    user: &InvokingUser,
+    names: &[String],
+    pins: &Pins<LockedInput>,
+    scope: &Scope,
+) -> Result<Versions> {
+    if names.is_empty() {
+        return Ok(Versions::new());
+    }
+    Ok(described(user, None, names, Some(pins), scope)
+        .await?
+        .into_iter()
+        .map(|described| (described.name, described.version))
+        .collect())
 }
 
 async fn stored(user: &InvokingUser, home_path: &Path, scope: &Scope) -> Result<Vec<Stored>> {
@@ -175,7 +219,7 @@ pub async fn gather(
     let home_path =
         std::fs::canonicalize(&link).map_err(|source| Error::Io { path: link, source })?;
     let (described, stored) = tokio::join!(
-        described(user, mirror, &names, scope),
+        described(user, mirror, &names, None, scope),
         stored(user, &home_path, scope)
     );
     Ok(join(&names, &described?, &stored?))

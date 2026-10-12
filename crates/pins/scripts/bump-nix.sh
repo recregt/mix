@@ -9,29 +9,43 @@ else
     targets=("$@")
 fi
 
-nixpkgs_rev="${NIXPKGS_REV:-}"
-if [ -z "$nixpkgs_rev" ]; then
-    echo "resolving latest nixos-unstable" >&2
-    nixpkgs_rev="$(git ls-remote https://github.com/NixOS/nixpkgs.git refs/heads/nixos-unstable | cut -f1)"
-fi
-
-home_manager_rev="${HOME_MANAGER_REV:-}"
-if [ -z "$home_manager_rev" ]; then
-    echo "resolving latest home-manager master" >&2
-    home_manager_rev="$(git ls-remote https://github.com/nix-community/home-manager.git refs/heads/master | cut -f1)"
-fi
+inputs=(
+    "NIXPKGS NixOS nixpkgs nixos-unstable"
+    "HOME_MANAGER nix-community home-manager master"
+)
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pins_file="$script_dir/../src/lib.rs"
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
+answered() {
+    nix --extra-experimental-features nix-command eval --raw --impure --expr "toString (builtins.fromJSON (builtins.readFile $1)).$2"
+}
+
 echo "pub const NIX_VERSION: &str = \"$version\";" > "$tmp_dir/pins.rs"
 echo "" >> "$tmp_dir/pins.rs"
-echo "pub const NIXPKGS_REV: &str = \"$nixpkgs_rev\";" >> "$tmp_dir/pins.rs"
-echo "pub const HOME_MANAGER_REV: &str = \"$home_manager_rev\";" >> "$tmp_dir/pins.rs"
-echo "" >> "$tmp_dir/pins.rs"
+
+for input in "${inputs[@]}"; do
+    read -r name owner repo branch <<< "$input"
+    override="${name}_REV"
+    reference="github:$owner/$repo/${!override:-$branch}"
+    echo "resolving $reference" >&2
+    answer="$tmp_dir/$name.json"
+    nix --extra-experimental-features 'nix-command flakes' \
+        flake prefetch --refresh --json "$reference" > "$answer"
+    cat >> "$tmp_dir/pins.rs" <<EOF
+pub const ${name}_OWNER: &str = "$owner";
+pub const ${name}_REPO: &str = "$repo";
+pub const ${name}_BRANCH: &str = "$branch";
+pub const ${name}_REV: &str = "$(answered "$answer" locked.rev)";
+pub const ${name}_NAR_HASH: &str = "$(answered "$answer" hash)";
+pub const ${name}_LAST_MODIFIED: u64 = $(answered "$answer" locked.lastModified);
+EOF
+done
+
 cat >> "$tmp_dir/pins.rs" <<'EOF'
+
 pub struct TarballPin {
     pub target: &'static str,
     pub url: &'static str,

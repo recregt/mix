@@ -14,7 +14,7 @@ use proptest::test_runner::{
 };
 use proptest_state_machine::{ReferenceStateMachine, StateMachineTest};
 
-const SUITES: [&str; 4] = ["files", "accounts", "units", "git"];
+const SUITES: [&str; 5] = ["files", "accounts", "units", "git", "nix"];
 
 fn config(seeds: Option<&str>, suite: &str) -> Config {
     let path: Option<&'static str> =
@@ -88,9 +88,13 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let mut chosen = Vec::new();
     let mut seeds = None;
+    let mut user = None;
+    let mut mirror = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--seeds" => seeds = args.next(),
+            "--user" => user = args.next(),
+            "--mirror" => mirror = args.next(),
             "--git" => {
                 if let Some(git) = args.next() {
                     let _ = GIT.set(git.into());
@@ -99,7 +103,7 @@ fn main() -> ExitCode {
             name if SUITES.contains(&name) => chosen.push(arg),
             other => {
                 report(&format!(
-                    "unknown argument {other:?}; expected {SUITES:?}, --seeds DIR or --git PATH"
+                    "unknown argument {other:?}; expected {SUITES:?}, --seeds DIR, --git PATH, --user NAME or --mirror URL"
                 ));
                 return ExitCode::from(2);
             }
@@ -110,6 +114,10 @@ fn main() -> ExitCode {
     }
     if chosen.iter().any(|name| name == "git") && GIT.get().is_none() {
         report("the git suite checks the pinned git, so it needs --git PATH");
+        return ExitCode::from(2);
+    }
+    if chosen.iter().any(|name| name == "nix") && user.is_none() {
+        report("the nix suite reads a bootstrapped user's profile, so it needs --user NAME");
         return ExitCode::from(2);
     }
     if !nix::unistd::Uid::effective().is_root() {
@@ -123,6 +131,14 @@ fn main() -> ExitCode {
             "accounts" => suite::<Accounts>(seeds.as_deref(), name, Vec::new()),
             "units" => suite::<Units>(seeds.as_deref(), name, Vec::new()),
             "git" => suite::<Git>(seeds.as_deref(), name, known()),
+            "nix" => mix_conformance::contract::nix::user(user.as_deref().unwrap_or_default())
+                .and_then(|user| {
+                    mix_conformance::contract::nix::versions_agree_with_the_listing(
+                        &mix_conformance::contract::runtime(),
+                        &user,
+                        mirror.as_deref(),
+                    )
+                }),
             _ => unreachable!("only known suites are chosen"),
         };
         match result {

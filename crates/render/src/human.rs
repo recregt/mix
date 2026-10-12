@@ -71,6 +71,7 @@ pub struct Human {
     out: Arc<Logging>,
     recorded: Option<Duration>,
     level: Detail,
+    data: bool,
     started: Instant,
     stop_noticed: bool,
     request: Option<Request>,
@@ -89,6 +90,7 @@ impl Human {
             out: Arc::new(Logging::new(Arc::new(mix_ui::Spaced::new(mix_ui::Stderr)))),
             recorded: None,
             level: Detail::Step,
+            data: true,
             started: Instant::now(),
             stop_noticed: false,
             request: None,
@@ -106,6 +108,11 @@ impl Human {
         self
     }
 
+    pub fn data(mut self, data: bool) -> Self {
+        self.data = data;
+        self
+    }
+
     pub fn to(mut self, out: Arc<dyn Out>) -> Self {
         self.out = Arc::new(Logging::new(Arc::new(mix_ui::Spaced::new(out))));
         self
@@ -114,6 +121,11 @@ impl Human {
     #[cfg(test)]
     pub(crate) fn at(&mut self, offset: Duration) {
         self.recorded = Some(offset);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prints_data(&self) -> bool {
+        self.data
     }
 
     fn shows(&self, detail: Detail) -> bool {
@@ -233,6 +245,7 @@ impl Human {
                         &node,
                         self.request.as_ref(),
                         self.level,
+                        self.data,
                         elapsed,
                     );
                 }

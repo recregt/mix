@@ -737,6 +737,81 @@ fn slot(envelope: &Envelope) -> Option<usize> {
 
 const SLOTS: usize = 25;
 
+fn input_update(
+    name: &str,
+    outcome: mix_events::v1::InputOutcome,
+    from: &str,
+    to: &str,
+) -> mix_events::v1::InputUpdate {
+    let revision = |rev: &str| mix_events::v1::LockedRevision {
+        rev: rev.into(),
+        ..mix_events::v1::LockedRevision::default()
+    };
+    mix_events::v1::InputUpdate {
+        name: name.into(),
+        branch: "nixos-unstable".into(),
+        outcome: outcome as i32,
+        from: Some(revision(from)),
+        to: Some(revision(to)),
+        ..mix_events::v1::InputUpdate::default()
+    }
+}
+
+fn updated() -> Vec<Envelope> {
+    let outbox = Arc::new(Outbox::new("01920000-0000-7000-8000-000000000004", || {}));
+    let mut tree = Tree::new(
+        Arc::clone(&outbox),
+        Arc::new(|| None),
+        Start::command(
+            "update",
+            Command {
+                mix_version: "0.1.0".into(),
+                schema_minor: mix_events::SCHEMA_MINOR,
+                dry_run: false,
+                request: Some(Request::Update(mix_events::v1::UpdateRequest {})),
+            },
+        ),
+    );
+    tree.finish(
+        ROOT,
+        Ending::succeeded()
+            .with_result(node_finished::Result::Update(
+                mix_events::v1::UpdateResult {
+                    inputs: vec![
+                        input_update(
+                            "home-manager",
+                            mix_events::v1::InputOutcome::Current,
+                            "efa3ccb4c3cc90d832eab232976379058fa75aa3",
+                            "efa3ccb4c3cc90d832eab232976379058fa75aa3",
+                        ),
+                        input_update(
+                            "nixpkgs",
+                            mix_events::v1::InputOutcome::Updated,
+                            "efe6f071ede9d21c37462d2d6682d5e670099684",
+                            "6510408d147d8c5e6d76043e899e9251756f6a75",
+                        ),
+                        input_update(
+                            "nur",
+                            mix_events::v1::InputOutcome::Kept,
+                            "1111111111111111111111111111111111111111",
+                            "1111111111111111111111111111111111111111",
+                        ),
+                    ],
+                    packages: vec![mix_events::v1::PackageUpdate {
+                        name: "qemu".into(),
+                        from_version: Some("11.1.0".into()),
+                        to_version: Some("11.1.1".into()),
+                    }],
+                    generation: Some(7),
+                },
+            ))
+            .for_root(false),
+    )
+    .unwrap();
+    drop(tree);
+    outbox.drain()
+}
+
 fn captured(envelopes: &[Envelope]) -> (Vec<u8>, Captured) {
     let mut capture = Capture::start(
         Vec::new(),
@@ -848,6 +923,27 @@ fn a_successful_install_is_silent_when_quiet_and_ends_by_naming_what_it_installe
             .is_some_and(|line| line.contains("Installed hello")),
         "{shown}"
     );
+}
+
+#[test]
+fn an_update_names_the_inputs_that_moved_and_the_ones_that_did_not() {
+    let (_, read) = captured(&updated());
+
+    assert_eq!(rendered(&read, Detail::Outcome), "");
+    let shown = rendered(&read, Detail::Step);
+    assert!(
+        shown.contains("Ignored home-manager (already up to date)"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("Updated nixpkgs efe6f07 to 6510408"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("Ignored nur (newer than nixos-unstable)"),
+        "{shown}"
+    );
+    assert!(shown.contains("Updated qemu 11.1.0 to 11.1.1"), "{shown}");
 }
 
 #[test]

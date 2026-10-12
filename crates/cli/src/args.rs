@@ -99,6 +99,13 @@ pub enum Command {
         dry_run: bool,
     },
 
+    /// Update your packages to the newest versions
+    Update {
+        /// Show what would change without changing it
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+    },
+
     /// Remove old generations of your profile
     Clean {
         /// Also remove store paths nothing uses any more
@@ -245,6 +252,7 @@ impl Args {
             | Command::Install { dry_run, .. }
             | Command::Remove { dry_run, .. }
             | Command::Clean { dry_run, .. }
+            | Command::Update { dry_run }
             | Command::Repair { dry_run } => dry_run,
             Command::Doctor | Command::Explain { .. } | Command::List => false,
         }
@@ -317,6 +325,8 @@ mod tests {
             (&["mix", "install", "-n", "hello"][..], true),
             (&["mix", "remove", "--dry-run", "hello"], true),
             (&["mix", "clean", "-n"], true),
+            (&["mix", "update", "-n"], true),
+            (&["mix", "update"], false),
             (&["mix", "repair", "-n"], true),
             (&["mix", "bootstrap", "-n"], true),
             (&["mix", "install", "hello"], false),
@@ -379,6 +389,18 @@ mod tests {
             (&["mix", "doctor"], true, false),
         ] {
             assert_eq!(parse(args).draws_progress(ci), drawn, "{args:?}, CI {ci}");
+        }
+    }
+
+    #[test]
+    fn update_takes_the_flags_every_command_takes() {
+        for args in [
+            &["mix", "update", "--json", "-n"][..],
+            &["mix", "--json", "update", "--dry-run"],
+        ] {
+            let parsed = parse(args);
+            assert!(parsed.json, "{args:?}");
+            assert!(parsed.dry_run(), "{args:?}");
         }
     }
 

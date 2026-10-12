@@ -76,11 +76,12 @@ pub const GITIGNORE_CONTENTS: &str = "# Managed by mix -- do not edit, changes a
 pub const MANAGED_FILES: [&str; 5] = [GITIGNORE, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, STATE_FILE];
 
 pub const GENERATION_STATE_FILE: &str = "mix-state";
+pub const GENERATION_LOCK_FILE: &str = "mix-flake.lock";
 
 pub const GENERATION_INPUTS: [(&str, &str); 4] = [
     (STATE_FILE, GENERATION_STATE_FILE),
     (FLAKE_NIX, "mix-flake.nix"),
-    (FLAKE_LOCK, "mix-flake.lock"),
+    (FLAKE_LOCK, GENERATION_LOCK_FILE),
     (HOME_NIX, "mix-home.nix"),
 ];
 
@@ -126,6 +127,12 @@ pub fn active_list_path(home: &std::path::Path) -> std::path::PathBuf {
     nix_profiles_dir(home)
         .join(HOME_MANAGER_PROFILE_NAME)
         .join(GENERATION_STATE_FILE)
+}
+
+pub fn active_lock_path(home: &std::path::Path) -> std::path::PathBuf {
+    nix_profiles_dir(home)
+        .join(HOME_MANAGER_PROFILE_NAME)
+        .join(GENERATION_LOCK_FILE)
 }
 
 pub fn nix_profiles_dir(home: &std::path::Path) -> std::path::PathBuf {

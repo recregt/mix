@@ -38,8 +38,9 @@ fn alice() -> UserConfig {
             name: "alice".into(),
             home: "/home/alice".into(),
         },
+        pins: mix_nixgen::lock::EMBEDDED,
         flake: "flake".into(),
-        lock: "lock".into(),
+        lock: mix_nixgen::lock::render(mix_nixgen::lock::EMBEDDED),
         home: "home".into(),
         restored_state: None,
     }

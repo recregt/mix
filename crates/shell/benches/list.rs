@@ -61,7 +61,8 @@ fn answer_a_list_from_memory(bencher: divan::Bencher, packages: usize) {
         home: home.path().to_path_buf(),
     };
     let installed =
-        Installed::with_source(Arc::new(Recorded((0..packages).map(package).collect())));
+        Installed::with_source(Arc::new(Recorded((0..packages).map(package).collect())))
+            .in_store(std::fs::canonicalize(home.path()).unwrap());
     let scope = Scope::root();
     installed
         .listing(&user, None, &scope)

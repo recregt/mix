@@ -23,6 +23,8 @@ use crate::declared::policy::Policy;
 use crate::declared::tree::{Builder, Handle, Tree};
 use crate::effect::Digest;
 use mix_events::v1::Verb;
+use mix_nixgen::Pins;
+use mix_nixgen::lock::LockedInput;
 
 pub const MIX_DAEMON_SOCKET: &str = "[Unit]
 Description=mix daemon socket
@@ -118,6 +120,7 @@ impl<'a> Intent<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserConfig {
     pub user: InvokingUser,
+    pub pins: Pins<LockedInput>,
     pub flake: String,
     pub lock: String,
     pub home: String,
@@ -243,6 +246,7 @@ pub enum Target<'a> {
         user: UserRef<'a>,
         verb: Option<Verb>,
         subject: Cow<'a, str>,
+        pins: Box<Pins<LockedInput>>,
     },
     Retention {
         path: Cow<'a, Path>,
@@ -338,11 +342,13 @@ impl Target<'_> {
                 user,
                 verb,
                 subject,
+                pins,
             } => Target::Activation {
                 path: own_path(path),
                 user: user.into_static(),
                 verb,
                 subject: Cow::Owned(subject.into_owned()),
+                pins,
             },
             Target::Retention {
                 path,
@@ -587,6 +593,7 @@ fn user_tree<'a>(
             user: user(),
             verb,
             subject,
+            pins: Box::new(cfg.pins.clone()),
         },
     );
     for target in deferred {
@@ -805,8 +812,9 @@ mod tests {
                 name: "mix-user".to_string(),
                 home: PathBuf::from("/home/mix-user"),
             },
+            pins: mix_nixgen::lock::EMBEDDED,
             flake: "flake-content".to_string(),
-            lock: "lock-content".to_string(),
+            lock: mix_nixgen::lock::render(mix_nixgen::lock::EMBEDDED),
             home: "home-content".to_string(),
             restored_state: None,
         }

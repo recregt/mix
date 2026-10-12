@@ -4,7 +4,8 @@ use std::sync::Arc;
 use mix_core::ActivityReporter;
 use mix_core::declared::identity::InvokingUser;
 use mix_core::declared::paths::{
-    DEFAULT_PROFILE_NIX_ENV, DEFAULT_PROFILE_NIX_STORE, HOME_MANAGER_PROFILE_NAME, nix_profiles_dir,
+    DEFAULT_PROFILE_NIX_ENV, DEFAULT_PROFILE_NIX_STORE, HOME_MANAGER_PROFILE_NAME, NIX_STORE,
+    nix_profiles_dir,
 };
 use mix_core::effect::{Action, Fact, Failure, Outcome, Performed, ProfileFacts, Query};
 use mix_exec::Scope;
@@ -62,7 +63,11 @@ const HOME_FILES: &str = "home-files";
 /// Paths in the user's home where the active generation links a file and something else is:
 /// a file, a directory, or a link into anything but that generation's files.
 fn clobbered(user: &InvokingUser) -> Vec<PathBuf> {
-    let Ok(generation) = std::fs::canonicalize(profile_link(user)) else {
+    clobbered_in(user, Path::new(NIX_STORE))
+}
+
+fn clobbered_in(user: &InvokingUser, store: &Path) -> Vec<PathBuf> {
+    let Some(generation) = store_generation(&profile_link(user), store) else {
         return Vec::new();
     };
     let managed = generation.join(HOME_FILES);
@@ -102,8 +107,38 @@ fn in_the_way(managed: &Path, home: &Path, ours: &[&Path], found: &mut Vec<PathB
     }
 }
 
+pub fn store_generation(link: &Path, store: &Path) -> Option<PathBuf> {
+    let generation = std::fs::canonicalize(link).ok()?;
+    (generation.parent() == Some(store)).then_some(generation)
+}
+
+pub fn store_input(generation: &Path, file: &str) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    use std::os::fd::OwnedFd;
+    let nofollow =
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC;
+    let dir = rustix::fs::open(
+        generation,
+        nofollow | rustix::fs::OFlags::DIRECTORY,
+        rustix::fs::Mode::empty(),
+    )
+    .ok()?;
+    let found: OwnedFd =
+        rustix::fs::openat(&dir, file, nofollow, rustix::fs::Mode::empty()).ok()?;
+    if !rustix::fs::FileType::from_raw_mode(rustix::fs::fstat(&found).ok()?.st_mode).is_file() {
+        return None;
+    }
+    let mut contents = Vec::new();
+    std::fs::File::from(found).read_to_end(&mut contents).ok()?;
+    Some(contents)
+}
+
 pub fn active_generation(user: &InvokingUser) -> Option<PathBuf> {
-    std::fs::canonicalize(profile_link(user)).ok()
+    store_generation(&profile_link(user), Path::new(NIX_STORE))
+}
+
+pub fn active_input(user: &InvokingUser, file: &str) -> Option<Vec<u8>> {
+    store_input(&active_generation(user)?, file)
 }
 
 fn current(user: &InvokingUser) -> Option<u64> {
@@ -407,6 +442,49 @@ async fn activate(
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_generation_is_read_only_from_a_regular_file_directly_in_the_store() {
+        let root = tempfile::tempdir().unwrap();
+        let store = std::fs::canonicalize(root.path()).unwrap().join("store");
+        let generation = store.join("aaa-home-manager-generation");
+        std::fs::create_dir_all(&generation).unwrap();
+        std::fs::write(generation.join("mix-state"), "listed").unwrap();
+        std::fs::write(root.path().join("secret"), "private").unwrap();
+        std::os::unix::fs::symlink(
+            root.path().join("secret"),
+            generation.join("mix-flake.lock"),
+        )
+        .unwrap();
+        let link = root.path().join("profile");
+        std::os::unix::fs::symlink(&generation, &link).unwrap();
+
+        let found = store_generation(&link, &store).unwrap();
+
+        assert_eq!(found, generation);
+        assert_eq!(store_input(&found, "mix-state"), Some(b"listed".to_vec()));
+        assert_eq!(store_input(&found, "mix-flake.lock"), None);
+        assert_eq!(store_input(&found, "missing"), None);
+    }
+
+    #[test]
+    fn a_profile_that_leads_outside_the_store_is_not_a_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let store = std::fs::canonicalize(root.path()).unwrap().join("store");
+        let elsewhere = root.path().join("elsewhere");
+        let nested = store.join("aaa-generation").join("inner");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::create_dir_all(&nested).unwrap();
+        for (name, target) in [("outside", &elsewhere), ("nested", &nested)] {
+            let link = root.path().join(name);
+            std::os::unix::fs::symlink(target, &link).unwrap();
+            assert_eq!(store_generation(&link, &store), None, "{name}");
+        }
+        assert_eq!(
+            store_generation(&root.path().join("dangling"), &store),
+            None
+        );
+    }
+
     fn user_in(home: &Path) -> InvokingUser {
         InvokingUser {
             uid: nix::unistd::Uid::current().as_raw(),
@@ -460,9 +538,9 @@ mod tests {
             .unwrap();
         std::fs::create_dir_all(home.path().join(".config/app/settings")).unwrap();
 
-        let Some(Fact::Clobbered(found)) = observe(&Query::Clobbered(user)) else {
-            panic!("the home is observed");
-        };
+        assert_eq!(clobbered(&user), Vec::<PathBuf>::new());
+        let store = std::fs::canonicalize(home.path().join("store")).unwrap();
+        let found = clobbered_in(&user, &store);
 
         assert_eq!(
             found,

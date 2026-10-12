@@ -223,6 +223,11 @@ pub fn explanation(code: Code) -> Explanation {
                 "use a different version or package"
             ]
         ),
+        Code::UpdateUnavailable => explained!(
+            "`mix` cannot update from here.",
+            "This machine fetches from a mirror, which holds exactly the versions that your copy of `mix` was released with. Newer versions are not on it.",
+            ["update `mix` to get newer packages"]
+        ),
         Code::NotBootstrapped => explained!(
             "`mix` has not been set up for your user on this machine.",
             "Each user needs their own setup before `mix` can manage their packages.",

@@ -26,7 +26,7 @@ pub fn home_manager_override(base: &str) -> String {
     )
 }
 
-fn query_value(sri: &str) -> String {
+pub(crate) fn query_value(sri: &str) -> String {
     sri.replace('+', "%2B")
         .replace('/', "%2F")
         .replace('=', "%3D")

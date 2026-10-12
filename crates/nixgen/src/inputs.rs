@@ -7,17 +7,30 @@ pub enum Pin {
     Nixpkgs,
 }
 
+impl Pin {
+    const fn index(self) -> usize {
+        match self {
+            Pin::HomeManager => 0,
+            Pin::Nixpkgs => 1,
+        }
+    }
+
+    pub fn input(self) -> &'static Input {
+        &INPUTS[self.index()]
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pins<T> {
     pub home_manager: T,
     pub nixpkgs: T,
 }
 
-impl<T: Copy> Pins<T> {
-    pub fn of(&self, pin: Pin) -> T {
+impl<T> Pins<T> {
+    pub fn of(&self, pin: Pin) -> &T {
         match pin {
-            Pin::HomeManager => self.home_manager,
-            Pin::Nixpkgs => self.nixpkgs,
+            Pin::HomeManager => &self.home_manager,
+            Pin::Nixpkgs => &self.nixpkgs,
         }
     }
 }
@@ -27,6 +40,7 @@ pub struct Input {
     pub name: &'static str,
     pub owner: &'static str,
     pub repo: &'static str,
+    pub branch: &'static str,
     pub follows: Option<&'static str>,
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) key: Key,
@@ -39,6 +53,7 @@ const fn input(
     name: &'static str,
     owner: &'static str,
     repo: &'static str,
+    branch: &'static str,
     follows: Option<&'static str>,
 ) -> Input {
     Input {
@@ -46,6 +61,7 @@ const fn input(
         name,
         owner,
         repo,
+        branch,
         follows,
         key: Key::new_static(name),
         ident: Ident::new_static(name),
@@ -56,11 +72,19 @@ pub static INPUTS: [Input; 2] = [
     input(
         Pin::HomeManager,
         "home-manager",
-        "nix-community",
-        "home-manager",
+        mix_pins::HOME_MANAGER_OWNER,
+        mix_pins::HOME_MANAGER_REPO,
+        mix_pins::HOME_MANAGER_BRANCH,
         Some("nixpkgs"),
     ),
-    input(Pin::Nixpkgs, "nixpkgs", "NixOS", "nixpkgs", None),
+    input(
+        Pin::Nixpkgs,
+        "nixpkgs",
+        mix_pins::NIXPKGS_OWNER,
+        mix_pins::NIXPKGS_REPO,
+        mix_pins::NIXPKGS_BRANCH,
+        None,
+    ),
 ];
 
 const ROOT: &str = "root";
@@ -95,6 +119,10 @@ const fn declared(name: &str) -> bool {
 const _: () = {
     let mut i = 0;
     while i < INPUTS.len() {
+        assert!(
+            INPUTS[i].pin.index() == i,
+            "an input is not at the index of its pin"
+        );
         assert!(
             before(INPUTS[i].name, ROOT),
             "an input name sorts after the lock's root node"

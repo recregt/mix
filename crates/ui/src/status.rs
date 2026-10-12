@@ -13,6 +13,7 @@ pub enum Status {
     Creating,
     Removing,
     Installing,
+    Updating,
     Writing,
     Configuring,
     Activating,
@@ -44,6 +45,7 @@ pub enum Status {
     Exited,
     Installed,
     Removed,
+    Updated,
     Ignored,
     Repaired,
     Checked,
@@ -63,6 +65,7 @@ impl Status {
             Status::Creating => verb!("Creating"),
             Status::Removing => verb!("Removing"),
             Status::Installing => verb!("Installing"),
+            Status::Updating => verb!("Updating"),
             Status::Writing => verb!("Writing"),
             Status::Configuring => verb!("Configuring"),
             Status::Activating => verb!("Activating"),
@@ -94,6 +97,7 @@ impl Status {
             Status::Exited => verb!("Exited"),
             Status::Installed => verb!("Installed"),
             Status::Removed => verb!("Removed"),
+            Status::Updated => verb!("Updated"),
             Status::Ignored => verb!("Ignored"),
             Status::Repaired => verb!("Repaired"),
             Status::Checked => verb!("Checked"),
@@ -108,6 +112,7 @@ impl Status {
             Status::Creating
             | Status::Removing
             | Status::Installing
+            | Status::Updating
             | Status::Writing
             | Status::Configuring
             | Status::Activating
@@ -137,6 +142,7 @@ impl Status {
             | Status::Journaled
             | Status::Installed
             | Status::Removed
+            | Status::Updated
             | Status::Ignored
             | Status::Repaired
             | Status::Checked

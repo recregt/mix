@@ -50,6 +50,7 @@ message Command {
     CleanRequest clean = 15;
     ExplainRequest explain = 16;
     ListRequest list = 17;
+    UpdateRequest update = 18;
   }
 }
 
@@ -58,6 +59,8 @@ message ExplainRequest {
 }
 
 message ListRequest {}
+
+message UpdateRequest {}
 
 message BootstrapRequest {
   bool force = 1;
@@ -102,6 +105,7 @@ enum Verb {
   VERB_RESTARTING = 8;
   VERB_REPAIRING = 9;
   VERB_RECOVERING = 10;
+  VERB_UPDATING = 11;
 }
 
 message Rollback {
@@ -436,6 +440,7 @@ message NodeFinished {
     CleanResult clean = 17;
     ExplainResult explain = 18;
     ListResult list = 19;
+    UpdateResult update = 20;
   }
 }
 
@@ -489,6 +494,41 @@ message RemoveResult {
   repeated string removed = 1;
   repeated string skipped = 2;
   bool restored = 3;
+}
+
+enum InputOutcome {
+  INPUT_OUTCOME_UNSPECIFIED = 0;
+  INPUT_OUTCOME_UPDATED = 1;
+  INPUT_OUTCOME_CURRENT = 2;
+  INPUT_OUTCOME_KEPT = 3;
+}
+
+message LockedRevision {
+  string rev = 1;
+  string nar_hash = 2;
+  google.protobuf.Timestamp last_modified = 3;
+}
+
+message InputUpdate {
+  string name = 1;
+  string owner = 2;
+  string repo = 3;
+  string branch = 4;
+  InputOutcome outcome = 5;
+  LockedRevision from = 6;
+  LockedRevision to = 7;
+}
+
+message PackageUpdate {
+  string name = 1;
+  optional string from_version = 2;
+  optional string to_version = 3;
+}
+
+message UpdateResult {
+  repeated InputUpdate inputs = 1;
+  repeated PackageUpdate packages = 2;
+  optional uint64 generation = 3;
 }
 
 message CleanResult {
@@ -665,6 +705,7 @@ enum Code {
   CODE_GIT_RECORD_FAILED = 47;
   CODE_UNKNOWN_PACKAGE = 48;
   CODE_BUILD_FAILED = 49;
+  CODE_UPDATE_UNAVAILABLE = 50;
   CODE_UNREPAIRABLE = 60;
   CODE_PRIVILEGES_UNAVAILABLE = 70;
   CODE_WORKER_ENDED = 71;
