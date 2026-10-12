@@ -126,6 +126,31 @@
                   touch $out
                 '';
 
+            machete = pkgs.runCommand "mix-machete" { nativeBuildInputs = [ pkgs.cargo-machete ]; } ''
+              cd ${src}
+              cargo-machete
+              touch $out
+            '';
+
+            buf-lint =
+              pkgs.runCommand "mix-buf-lint"
+                {
+                  nativeBuildInputs = [ pkgs.buf ];
+                  protos = lib.fileset.toSource {
+                    root = ./crates;
+                    fileset = lib.fileset.unions [
+                      ./crates/events/proto
+                      ./crates/rpc/proto
+                    ];
+                  };
+                }
+                ''
+                  export HOME=$TMPDIR
+                  buf lint $protos/events/proto
+                  buf lint $protos/rpc/proto
+                  touch $out
+                '';
+
             deny = craneLib.cargoDeny (
               common
               // {
