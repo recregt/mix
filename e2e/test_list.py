@@ -33,7 +33,9 @@ def test_list_names_what_was_installed_and_none_of_home_managers_own_packages(
     assert output["storePath"].endswith(f"-git-{git['version']}")
     assert int(output["narSize"]) > 0
     assert output["narHash"].startswith("sha256-")
-    assert run.result("list")["generation"].endswith("-home-manager-generation")
+    active = run.result("list")["active"]
+    assert active["storePath"].endswith("-home-manager-generation")
+    assert int(active["number"]) > 0
 
 
 @pytest.mark.bootstrapped
@@ -47,7 +49,9 @@ def test_list_follows_an_install_and_a_remove(container, mock_nix_server, mirror
 
     assert after.succeeded(), after
     assert _names(after) == sorted(["git", INSTALL_TEST_PACKAGE]), after.document
-    assert after.result("list")["generation"] != before.result("list")["generation"]
+    moved, was = after.result("list")["active"], before.result("list")["active"]
+    assert int(moved["number"]) > int(was["number"])
+    assert moved["storePath"] != was["storePath"]
     added = next(package for package in _packages(after) if package["name"] == INSTALL_TEST_PACKAGE)
     assert added["version"]
     assert added["outputs"][0]["storePath"].endswith(f"-{INSTALL_TEST_PACKAGE}-{added['version']}")

@@ -116,7 +116,7 @@ async fn an_update_moves_the_pins_rebuilds_the_profile_and_names_what_changed() 
     assert!(model.snapshot() == before, "a dry run changed the model");
     assert_eq!(outcomes(&planned), all("INPUT_OUTCOME_UPDATED"));
     assert_eq!(packages(&planned), moved);
-    assert!(planned["update"].get("generation").is_none(), "{planned:#}");
+    assert!(planned["update"].get("active").is_none(), "{planned:#}");
 
     let done = model.run(update(), false, false).await;
     assert!(succeeded(&done), "{done:#}");
@@ -134,7 +134,7 @@ async fn an_update_moves_the_pins_rebuilds_the_profile_and_names_what_changed() 
         .profile(model.user())
         .and_then(|profile| profile.active)
         .expect("an active generation");
-    assert_eq!(done["update"]["generation"], active.to_string());
+    assert_eq!(done["update"]["active"]["number"], active.to_string());
     assert_eq!(pinned(&model), Some(newest.clone()));
     assert!(text(&model, FLAKE).contains(newest.nixpkgs.rev.as_str()));
     assert_eq!(
@@ -159,7 +159,7 @@ async fn an_update_to_the_pins_already_held_changes_nothing() {
     assert!(succeeded(&again), "{again:#}");
     assert_eq!(outcomes(&again), all("INPUT_OUTCOME_CURRENT"));
     assert!(packages(&again).is_empty(), "{again:#}");
-    assert!(again["update"].get("generation").is_none(), "{again:#}");
+    assert!(again["update"].get("active").is_none(), "{again:#}");
     assert!(again["changes"].as_array().is_none_or(Vec::is_empty));
     assert!(model.snapshot() == settled);
 }

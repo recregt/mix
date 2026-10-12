@@ -9,11 +9,12 @@ use mix_core::model::World;
 use mix_core::ops::update::Versions;
 use mix_events::Render;
 use mix_events::v1::command::Request;
-use mix_events::v1::{Command, Envelope};
+use mix_events::v1::{Command, Envelope, InstalledPackage};
 use mix_nixgen::lock::{EMBEDDED, LockedInput, NarHash};
 use mix_nixgen::{Pins, Rev};
 use mix_shell::drive::Faults;
 use mix_shell::request::context::Host;
+use mix_shell::request::installed::{Ask, Gathering, Installed, Source};
 use mix_shell::request::lock::Locks;
 use mix_shell::request::upstream::{Evaluated, Newest, Upstream};
 use mix_shell::{Caller, Session};
@@ -105,7 +106,8 @@ impl Channel {
     }
 
     pub fn version(pins: &Pins<LockedInput>) -> String {
-        pins.nixpkgs.rev.as_str()[..7].to_string()
+        let rev = pins.nixpkgs.rev.as_str();
+        rev[rev.len() - 7..].to_string()
     }
 }
 
@@ -131,6 +133,25 @@ impl Upstream for Channel {
     }
 }
 
+pub struct Catalog;
+
+impl Source for Catalog {
+    fn gather<'a>(&'a self, ask: Ask<'a>) -> Gathering<'a> {
+        let version = ask.generation.pins().map(|pins| Channel::version(&pins));
+        Box::pin(async move {
+            Ok(ask
+                .names
+                .iter()
+                .map(|name| InstalledPackage {
+                    name: name.clone(),
+                    version: version.clone(),
+                    ..InstalledPackage::default()
+                })
+                .collect())
+        })
+    }
+}
+
 pub struct Model {
     pub world: Arc<Mutex<World>>,
     dir: tempfile::TempDir,
@@ -138,19 +159,23 @@ pub struct Model {
     user: InvokingUser,
     policy: Policy,
     upstream: Arc<Channel>,
+    installed: Arc<Installed>,
 }
 
 impl Model {
     pub fn on(world: World, user: InvokingUser, policy: Policy) -> Self {
         let dir = tempfile::tempdir().expect("a temporary directory for the model's locks");
         let locks = Arc::new(Locks::new(dir.path().join("lock")));
+        let world = Arc::new(Mutex::new(world));
+        let installed = Arc::new(Installed::with_source(Arc::new(Catalog)));
         Self {
-            world: Arc::new(Mutex::new(world)),
+            world,
             dir,
             locks,
             user,
             policy,
             upstream: Arc::new(Channel::at(1)),
+            installed,
         }
     }
 
@@ -236,7 +261,9 @@ impl Model {
         if let Some(faults) = &faults {
             session = session.with_faults(Arc::clone(faults));
         }
-        session = session.with_upstream(Arc::clone(&self.upstream) as Arc<dyn Upstream>);
+        session = session
+            .with_upstream(Arc::clone(&self.upstream) as Arc<dyn Upstream>)
+            .with_installed(Arc::clone(&self.installed));
         let ran = mix_shell::request::run(
             &session,
             Command {

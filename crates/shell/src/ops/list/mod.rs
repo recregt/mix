@@ -1,27 +1,45 @@
-use mix_events::Ending;
-use mix_events::v1::{ListRequest, ListResult, node_finished};
+use mix_events::v1::{Code, Diagnostic, ListRequest, ListResult, node_finished};
+use mix_events::{Ending, ROOT};
 
 use crate::Context;
 use crate::profile::change;
+use crate::request::installed::Error;
 use crate::request::{Concluded, Root};
 
 pub(crate) async fn list(ctx: &Context, root: &mut Root, _request: &ListRequest) -> Concluded {
-    let Some(cfg) = ctx.user.as_ref() else {
-        return root.refuse(change::Error::NotBootstrapped);
+    let cfg = match change::profile_user(ctx) {
+        Ok(cfg) => cfg,
+        Err(error) => return root.refuse(error),
     };
-    let mirror = ctx.policy.mirror().map(|mirror| mirror.url().to_string());
     let listing = match ctx
         .installed
-        .listing(&cfg.user, mirror.as_deref(), &ctx.scope)
+        .listing(&ctx.host, &cfg.user, ctx.mirror(), &ctx.scope)
         .await
     {
         Ok(listing) => listing,
-        Err(error) => return root.refuse(error),
+        Err(Error::Profile(error)) => return root.refuse(error),
+        Err(Error::Stopped) => {
+            return root.refuse(change::Error::Core(mix_core::Error::Cancelled {
+                command: "mix list".to_string(),
+            }));
+        }
     };
+    if ctx.interrupted(&ctx.journals) {
+        let _ = root.tree.warn(
+            ROOT,
+            Diagnostic {
+                code: Code::InterruptedRequest as i32,
+                message:
+                    "an interrupted request has not been put back, so what is listed may change"
+                        .to_string(),
+                ..Diagnostic::default()
+            },
+        );
+    }
     let result = match listing {
         Some(listed) => ListResult {
-            generation: Some(listed.generation.display().to_string()),
             packages: listed.packages.to_vec(),
+            active: Some((&listed.generation).into()),
         },
         None => ListResult::default(),
     };
@@ -31,40 +49,33 @@ pub(crate) async fn list(ctx: &Context, root: &mut Root, _request: &ListRequest)
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod tests {
-    use std::path::{Path, PathBuf};
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     use mix_core::declared::identity::InvokingUser;
-    use mix_core::declared::paths::{HOME_MANAGER_PROFILE_NAME, nix_profiles_dir};
+    use mix_core::declared::paths::{GENERATION_INPUTS, STATE_FILE};
+    use mix_core::declared::state::StateManifest;
+    use mix_core::model::World;
     use mix_events::v1::command::Request;
     use mix_events::v1::{Code, InstalledPackage};
 
     use super::*;
+    use crate::request::context::Host;
     use crate::request::installed::{Ask, Gathering, Installed, Source};
     use crate::request::ran::{Ran, ran};
 
     struct Fixed {
-        packages: Vec<InstalledPackage>,
         asked: AtomicUsize,
-        mirror: std::sync::Mutex<Option<Option<String>>>,
+        mirror: Mutex<Option<Option<String>>>,
         failure: bool,
     }
 
     impl Fixed {
-        fn of(names: &[&str]) -> Arc<Self> {
+        fn new(failure: bool) -> Arc<Self> {
             Arc::new(Self {
-                packages: names
-                    .iter()
-                    .map(|name| InstalledPackage {
-                        name: name.to_string(),
-                        version: Some("1.0".to_string()),
-                        ..InstalledPackage::default()
-                    })
-                    .collect(),
                 asked: AtomicUsize::new(0),
-                mirror: std::sync::Mutex::new(None),
-                failure: false,
+                mirror: Mutex::new(None),
+                failure,
             })
         }
     }
@@ -80,19 +91,31 @@ mod tests {
                         detail: "it failed".to_string(),
                     });
                 }
-                Ok(self.packages.clone())
+                Ok(ask
+                    .names
+                    .iter()
+                    .map(|name| InstalledPackage {
+                        name: name.clone(),
+                        version: Some("1.0".to_string()),
+                        ..InstalledPackage::default()
+                    })
+                    .collect())
             })
         }
     }
 
-    fn user_config(home: &Path) -> mix_core::declared::targets::UserConfig {
+    fn user() -> InvokingUser {
+        InvokingUser {
+            uid: 1000,
+            gid: 1000,
+            name: "mix-user".to_string(),
+            home: "/home/mix-user".into(),
+        }
+    }
+
+    fn user_config() -> mix_core::declared::targets::UserConfig {
         mix_core::declared::targets::UserConfig {
-            user: InvokingUser {
-                uid: 1000,
-                gid: 1000,
-                name: "mix-user".to_string(),
-                home: home.to_path_buf(),
-            },
+            user: user(),
             pins: mix_nixgen::lock::EMBEDDED,
             flake: "flake-content".to_string(),
             lock: mix_nixgen::lock::render(mix_nixgen::lock::EMBEDDED),
@@ -101,25 +124,32 @@ mod tests {
         }
     }
 
-    fn activate(home: &Path) {
-        let generation = home.join("store/generation");
-        std::fs::create_dir_all(&generation).unwrap();
-        let profiles = nix_profiles_dir(home);
-        std::fs::create_dir_all(&profiles).unwrap();
-        std::os::unix::fs::symlink(generation, profiles.join(HOME_MANAGER_PROFILE_NAME)).unwrap();
+    fn world_with(extra: &[&str]) -> Arc<Mutex<World>> {
+        let mut manifest = StateManifest::seed();
+        manifest
+            .packages
+            .extend(extra.iter().map(|name| name.to_string()));
+        let mut inputs: Vec<Option<Arc<[u8]>>> = vec![None; GENERATION_INPUTS.len()];
+        let index = GENERATION_INPUTS
+            .iter()
+            .position(|(source, _)| *source == STATE_FILE)
+            .unwrap();
+        inputs[index] = Some(Arc::from(manifest.render().as_bytes()));
+        let mut world = World::default();
+        let profile = world.profiles.entry(user().uid).or_default();
+        profile.generations.push(7);
+        profile.built.insert(7, inputs);
+        profile.active = Some(7);
+        Arc::new(Mutex::new(world))
     }
 
-    fn store(home: &Path) -> PathBuf {
-        std::fs::create_dir_all(home.join("store")).unwrap();
-        std::fs::canonicalize(home.join("store")).unwrap()
-    }
-
-    fn session(home: &Path, source: &Arc<Fixed>) -> crate::Session {
+    fn session(world: &Arc<Mutex<World>>, source: &Arc<Fixed>) -> crate::Session {
         crate::Session::new(mix_exec::Scope::root())
-            .with_user(Some(user_config(home)))
-            .with_installed(Arc::new(
-                Installed::with_source(Arc::clone(source) as Arc<dyn Source>).in_store(store(home)),
-            ))
+            .with_host(Host::Model(Arc::clone(world)))
+            .with_user(Some(user_config()))
+            .with_installed(Arc::new(Installed::with_source(
+                Arc::clone(source) as Arc<dyn Source>
+            )))
     }
 
     async fn listed(session: crate::Session) -> Ran {
@@ -141,38 +171,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn root_cannot_list_a_profile() {
+        let session =
+            crate::Session::new(mix_exec::Scope::root()).with_caller(crate::Caller::Account {
+                peer_is_root: true,
+                account: None,
+            });
+
+        let ran = listed(session).await;
+
+        assert_eq!(ran.code(), Some(Code::RootNotAllowed));
+    }
+
+    #[tokio::test]
     async fn list_names_what_the_active_generation_holds() {
-        let home = tempfile::tempdir().unwrap();
-        activate(home.path());
-        let source = Fixed::of(&["git", "ripgrep"]);
+        let world = world_with(&["hello", "ripgrep"]);
+        let source = Fixed::new(false);
 
-        let ran = listed(session(home.path(), &source)).await;
+        let ran = listed(session(&world, &source)).await;
 
+        assert!(ran.warnings().is_empty());
         let list = answer(&ran);
-        assert_eq!(
-            list.packages
-                .iter()
-                .map(|package| package.name.as_str())
-                .collect::<Vec<_>>(),
-            ["git", "ripgrep"]
-        );
-        assert_eq!(
-            list.generation.as_deref(),
-            Some(
-                std::fs::canonicalize(home.path().join("store/generation"))
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-            )
-        );
+        let names: Vec<&str> = list
+            .packages
+            .iter()
+            .map(|package| package.name.as_str())
+            .collect();
+        assert!(names.contains(&"git"));
+        assert!(names.contains(&"hello"));
+        assert!(names.contains(&"ripgrep"));
+        assert_eq!(names.len(), StateManifest::seed().packages.len() + 2);
+        let active = list.active.as_ref().expect("an active generation");
+        assert_eq!(active.number, 7);
+        assert!(active.store_path.starts_with("/nix/store/"));
+    }
+
+    #[tokio::test]
+    async fn a_list_warns_while_an_interrupted_request_waits_to_be_put_back() {
+        let world = world_with(&["hello"]);
+        world
+            .lock()
+            .unwrap()
+            .logs
+            .insert("interrupted".to_string(), Vec::new());
+        let source = Fixed::new(false);
+
+        let ran = listed(session(&world, &source)).await;
+
+        assert!(answer(&ran).packages.iter().any(|p| p.name == "hello"));
+        assert_eq!(ran.warnings(), [Code::InterruptedRequest]);
+    }
+
+    #[tokio::test]
+    async fn a_request_still_running_is_not_taken_for_an_interrupted_one() {
+        let world = world_with(&["hello"]);
+        {
+            let mut held = world.lock().unwrap();
+            held.logs.insert("running".to_string(), Vec::new());
+            held.held.insert("running".to_string());
+        }
+        let source = Fixed::new(false);
+
+        let ran = listed(session(&world, &source)).await;
+
+        assert!(ran.warnings().is_empty());
     }
 
     #[tokio::test]
     async fn list_with_no_generation_answers_an_empty_list_without_asking_nix() {
-        let home = tempfile::tempdir().unwrap();
-        let source = Fixed::of(&["git"]);
+        let world = Arc::new(Mutex::new(World::default()));
+        let source = Fixed::new(false);
 
-        let ran = listed(session(home.path(), &source)).await;
+        let ran = listed(session(&world, &source)).await;
 
         assert_eq!(answer(&ran), &ListResult::default());
         assert_eq!(source.asked.load(Ordering::SeqCst), 0);
@@ -180,53 +250,70 @@ mod tests {
 
     #[tokio::test]
     async fn the_second_list_of_a_generation_asks_nix_nothing() {
-        let home = tempfile::tempdir().unwrap();
-        activate(home.path());
-        let source = Fixed::of(&["git"]);
-        let installed = Arc::new(
-            Installed::with_source(Arc::clone(&source) as Arc<dyn Source>)
-                .in_store(store(home.path())),
-        );
+        let world = world_with(&["hello"]);
+        let source = Fixed::new(false);
+        let installed = Arc::new(Installed::with_source(
+            Arc::clone(&source) as Arc<dyn Source>
+        ));
         let again = || {
             crate::Session::new(mix_exec::Scope::root())
-                .with_user(Some(user_config(home.path())))
+                .with_host(Host::Model(Arc::clone(&world)))
+                .with_user(Some(user_config()))
                 .with_installed(Arc::clone(&installed))
         };
 
         listed(again()).await;
         let second = listed(again()).await;
 
-        assert_eq!(answer(&second).packages.len(), 1);
+        assert!(answer(&second).packages.iter().any(|p| p.name == "hello"));
         assert_eq!(source.asked.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
     async fn a_failed_gather_ends_the_request_with_the_command_that_failed() {
-        let home = tempfile::tempdir().unwrap();
-        activate(home.path());
-        let source = Arc::new(Fixed {
-            failure: true,
-            ..Arc::try_unwrap(Fixed::of(&[])).ok().unwrap()
-        });
+        let world = world_with(&[]);
+        let source = Fixed::new(true);
 
-        let ran = listed(session(home.path(), &source)).await;
+        let ran = listed(session(&world, &source)).await;
 
         assert_eq!(ran.code(), Some(Code::CommandFailed));
     }
 
     #[tokio::test]
     async fn list_hands_the_policy_mirror_to_the_gather() {
-        let home = tempfile::tempdir().unwrap();
-        activate(home.path());
-        let source = Fixed::of(&[]);
+        let world = world_with(&[]);
+        let source = Fixed::new(false);
         let policy =
             mix_core::declared::policy::Policy::new(Some("http://mirror.internal"), None).unwrap();
 
-        listed(session(home.path(), &source).with_policy(policy)).await;
+        listed(session(&world, &source).with_policy(policy)).await;
 
         assert_eq!(
             source.mirror.lock().unwrap().clone(),
             Some(Some("http://mirror.internal".to_string()))
         );
+    }
+
+    #[tokio::test]
+    async fn a_package_list_from_a_newer_mix_asks_for_an_update_instead_of_listing() {
+        let world = world_with(&[]);
+        let mut manifest = StateManifest::seed();
+        manifest.version += 1;
+        {
+            let mut held = world.lock().unwrap();
+            let profile = held.profiles.get_mut(&user().uid).unwrap();
+            let inputs = profile.built.get_mut(&7).unwrap();
+            let index = GENERATION_INPUTS
+                .iter()
+                .position(|(source, _)| *source == STATE_FILE)
+                .unwrap();
+            inputs[index] = Some(Arc::from(manifest.render().as_bytes()));
+        }
+        let source = Fixed::new(false);
+
+        let ran = listed(session(&world, &source)).await;
+
+        assert_eq!(ran.code(), Some(Code::NewerState));
+        assert_eq!(source.asked.load(Ordering::SeqCst), 0);
     }
 }

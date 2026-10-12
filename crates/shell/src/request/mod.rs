@@ -287,8 +287,9 @@ async fn host(
         && let Some(cfg) = ctx.user.as_ref()
     {
         ctx.installed.warm(
+            ctx.host.clone(),
             cfg.user.clone(),
-            ctx.policy.mirror().map(|mirror| mirror.url().to_string()),
+            ctx.mirror().map(str::to_string),
         );
     }
     delivery.finish().await;
@@ -514,6 +515,16 @@ pub(crate) mod ran {
                 .diagnostic
                 .as_ref()
                 .map(|diagnostic| diagnostic.code())
+        }
+
+        pub(crate) fn warnings(&self) -> Vec<Code> {
+            self.0
+                .iter()
+                .filter_map(|envelope| match &envelope.event {
+                    Some(envelope::Event::Diagnostic(diagnostic)) => Some(diagnostic.code()),
+                    _ => None,
+                })
+                .collect()
         }
     }
 

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use mix_core::declared::identity::InvokingUser;
@@ -15,7 +15,7 @@ use mix_exec::Scope;
 
 use crate::drive::Performer;
 use crate::effect::files::Files;
-use crate::effect::generations::active_input;
+use crate::effect::generations::{Active, active_input};
 use crate::request::Locked;
 
 #[derive(Clone, Default)]
@@ -66,6 +66,33 @@ impl Host {
                 .map(Self::text),
             Host::Model(world) => Self::world(world).active_list(user).map(Self::text),
         }
+    }
+
+    pub fn active_generation(&self, user: &InvokingUser) -> Option<Active> {
+        match self {
+            Host::Machine => crate::effect::generations::active(user),
+            Host::Model(world) => {
+                let world = Self::world(world);
+                let profile = world.profile(user)?;
+                let number = profile.active?;
+                if profile.dangling.contains(&number) {
+                    return None;
+                }
+                Some(Active {
+                    number,
+                    path: Self::stored(profile.built.get(&number)),
+                    list: world.active_list(user).map(Self::text),
+                    lock: world.active_lock(user).map(Self::text),
+                })
+            }
+        }
+    }
+
+    fn stored(built: Option<&Vec<Option<Arc<[u8]>>>>) -> PathBuf {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        built.hash(&mut hasher);
+        Path::new(NIX_STORE).join(format!("{:016x}-home-manager-generation", hasher.finish()))
     }
 
     pub fn active_lock(&self, user: &InvokingUser) -> Option<String> {
@@ -175,7 +202,7 @@ impl Context {
 
     pub(crate) fn interrupted(&self, dir: &Path) -> bool {
         match &self.host {
-            Host::Machine => !crate::effect::journal::unfinished(dir).is_empty(),
+            Host::Machine => !crate::effect::journal::abandoned(dir).is_empty(),
             Host::Model(world) => {
                 let world = world.lock().unwrap_or_else(PoisonError::into_inner);
                 world

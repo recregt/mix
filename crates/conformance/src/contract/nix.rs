@@ -3,6 +3,7 @@ use mix_core::declared::paths::GENERATION_LOCK_FILE;
 use mix_core::ops::update::Versions;
 use mix_exec::Scope;
 use mix_shell::effect::generations::active_input;
+use mix_shell::request::context::Host;
 use mix_shell::request::installed::Installed;
 use mix_shell::request::upstream::{Nix, Upstream};
 
@@ -29,7 +30,7 @@ pub fn versions_agree_with_the_listing(
     let pins = mix_core::declared::pins::read(&String::from_utf8_lossy(&lock))
         .ok_or("the active generation's lock holds no pins")?;
     let listed = runtime
-        .block_on(Installed::nix().listing(user, mirror, &scope))
+        .block_on(Installed::nix().listing(&Host::Machine, user, mirror, &scope))
         .map_err(|error| format!("listing the profile: {error}"))?
         .ok_or("the user has no active generation")?;
     let names: Vec<String> = listed

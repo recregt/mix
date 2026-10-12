@@ -2,10 +2,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use mix_core::declared::identity::InvokingUser;
-use mix_core::declared::paths::{
-    DEFAULT_PROFILE_NIX, DEFAULT_PROFILE_NIX_STORE, GENERATION_STATE_FILE,
-};
-use mix_core::declared::state::StateManifest;
+use mix_core::declared::paths::{DEFAULT_PROFILE_NIX, DEFAULT_PROFILE_NIX_STORE};
 use mix_core::effect::FlakeSource;
 use mix_core::ops::list::{Described, Stored, join};
 use mix_core::ops::update::Versions;
@@ -17,6 +14,7 @@ use mix_nixgen::{AttrPath, INPUTS, Installable, Pins};
 use serde::Deserialize;
 
 use crate::effect::exec::run_as;
+use crate::effect::generations::Active;
 use crate::profile::activation;
 
 const HOME_PATH: &str = "home-path";
@@ -102,22 +100,6 @@ fn unreadable(command: &str, error: impl std::fmt::Display) -> Error {
     }
 }
 
-fn requested(generation: &Path) -> Result<Vec<String>> {
-    let path = generation.join(GENERATION_STATE_FILE);
-    let text = crate::effect::generations::store_input(generation, GENERATION_STATE_FILE)
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-        .ok_or_else(|| Error::Io {
-            path: path.clone(),
-            source: std::io::Error::from(std::io::ErrorKind::NotFound),
-        })?;
-    StateManifest::parse(&text)
-        .map(|manifest| manifest.packages)
-        .map_err(|error| Error::Io {
-            path,
-            source: std::io::Error::new(std::io::ErrorKind::InvalidData, error),
-        })
-}
-
 async fn described(
     user: &InvokingUser,
     mirror: Option<&str>,
@@ -133,6 +115,18 @@ async fn described(
     .render();
     let apply = mix_nixgen::package_facts(names.iter().map(String::as_str))
         .map_err(|error| unreadable("nix eval", error))?;
+    let args = eval_args(installable, apply, pins, mirror);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let answer = run_as(user, DEFAULT_PROFILE_NIX, &args, scope).await?;
+    parse_facts(&answer).map_err(|error| unreadable("nix eval", error))
+}
+
+fn eval_args(
+    installable: String,
+    apply: String,
+    pins: Option<&Pins<LockedInput>>,
+    mirror: Option<&str>,
+) -> Vec<String> {
     let mut args = vec![
         "eval".to_string(),
         "--json".to_string(),
@@ -145,9 +139,14 @@ async fn described(
         args.extend(overrides(pins));
     }
     args.extend(activation::nix_options(mirror));
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    let answer = run_as(user, DEFAULT_PROFILE_NIX, &args, scope).await?;
-    parse_facts(&answer).map_err(|error| unreadable("nix eval", error))
+    args
+}
+
+fn evaluated_at(generation: &Active, mirror: Option<&str>) -> Option<Pins<LockedInput>> {
+    match crate::effect::mirror::filter_mirror(mirror) {
+        Some(_) => None,
+        None => generation.pins(),
+    }
 }
 
 fn overrides(pins: &Pins<LockedInput>) -> Vec<String> {
@@ -207,22 +206,23 @@ async fn stored(user: &InvokingUser, home_path: &Path, scope: &Scope) -> Result<
 
 pub async fn gather(
     user: &InvokingUser,
-    generation: &Path,
+    generation: &Active,
+    names: &[String],
     mirror: Option<&str>,
     scope: &Scope,
 ) -> Result<Vec<InstalledPackage>> {
-    let names = requested(generation)?;
     if names.is_empty() {
         return Ok(Vec::new());
     }
-    let link = generation.join(HOME_PATH);
+    let pins = evaluated_at(generation, mirror);
+    let link = generation.path.join(HOME_PATH);
     let home_path =
         std::fs::canonicalize(&link).map_err(|source| Error::Io { path: link, source })?;
     let (described, stored) = tokio::join!(
-        described(user, mirror, &names, None, scope),
+        described(user, mirror, names, pins.as_ref(), scope),
         stored(user, &home_path, scope)
     );
-    Ok(join(&names, &described?, &stored?))
+    Ok(join(names, &described?, &stored?))
 }
 
 #[cfg(test)]
@@ -324,50 +324,95 @@ mod tests {
         assert!(parse_path_info("[]").is_err());
     }
 
-    #[test]
-    fn a_signature_names_its_signer_by_what_precedes_the_first_colon() {
-        assert_eq!(signer("cache.nixos.org-1:abc+/=="), "cache.nixos.org-1");
-        assert_eq!(signer("no-colon"), "no-colon");
+    fn built_at(lock: Option<String>) -> Active {
+        Active {
+            number: 1,
+            path: "/nix/store/aaa-home-manager-generation".into(),
+            list: None,
+            lock,
+        }
+    }
+
+    fn embedded() -> Active {
+        built_at(Some(mix_nixgen::lock::render(mix_nixgen::lock::EMBEDDED)))
     }
 
     #[test]
-    fn the_requested_names_are_the_ones_the_generation_was_built_from() {
-        let generation = tempfile::tempdir().unwrap();
-        std::fs::write(
-            generation.path().join(GENERATION_STATE_FILE),
-            StateManifest::seed().render(),
-        )
-        .unwrap();
-
+    fn a_generation_is_evaluated_at_the_pins_it_was_built_from() {
         assert_eq!(
-            requested(generation.path()).unwrap(),
-            StateManifest::seed().packages
+            evaluated_at(&embedded(), None),
+            Some(mix_nixgen::lock::EMBEDDED)
+        );
+        assert_eq!(
+            evaluated_at(&embedded(), Some("  ")),
+            Some(mix_nixgen::lock::EMBEDDED)
         );
     }
 
     #[test]
-    fn a_generation_without_its_package_list_is_an_io_error_naming_the_file() {
-        let generation = tempfile::tempdir().unwrap();
-
-        match requested(generation.path()) {
-            Err(Error::Io { path, source }) => {
-                assert_eq!(path, generation.path().join(GENERATION_STATE_FILE));
-                assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
-            }
-            other => panic!("expected an I/O error, got {other:?}"),
-        }
+    fn on_a_mirror_the_mirror_decides_what_the_inputs_are() {
+        assert_eq!(
+            evaluated_at(&embedded(), Some("http://mirror.internal")),
+            None
+        );
     }
 
     #[test]
-    fn a_package_list_that_is_not_json_is_invalid_data() {
-        let generation = tempfile::tempdir().unwrap();
-        std::fs::write(generation.path().join(GENERATION_STATE_FILE), "{broken").unwrap();
+    fn a_generation_without_a_readable_lock_is_evaluated_from_the_profile_flake() {
+        assert_eq!(evaluated_at(&built_at(None), None), None);
+        assert_eq!(evaluated_at(&built_at(Some("{".into())), None), None);
+    }
 
-        match requested(generation.path()) {
-            Err(Error::Io { source, .. }) => {
-                assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
-            }
-            other => panic!("expected an I/O error, got {other:?}"),
+    #[test]
+    fn the_pins_an_evaluation_holds_override_each_input_with_its_hash() {
+        let args = eval_args(
+            "flake#pkgs".into(),
+            "pkgs: pkgs".into(),
+            Some(&mix_nixgen::lock::EMBEDDED),
+            None,
+        );
+
+        let pins = mix_nixgen::lock::EMBEDDED;
+        for input in &INPUTS {
+            let pin = pins.of(input.pin);
+            let at = args
+                .iter()
+                .position(|arg| arg == input.name)
+                .expect("each input is overridden");
+            assert_eq!(args[at - 1], "--override-input");
+            assert!(args[at + 1].starts_with(&format!(
+                "github:{}/{}/{}?narHash=",
+                input.owner,
+                input.repo,
+                pin.rev.as_str()
+            )));
         }
+        assert!(args.iter().any(|arg| arg == "--no-write-lock-file"));
+    }
+
+    #[test]
+    fn a_mirrored_evaluation_overrides_the_inputs_only_with_the_mirror() {
+        let args = eval_args(
+            "flake#pkgs".into(),
+            "pkgs: pkgs".into(),
+            evaluated_at(&embedded(), Some("http://mirror.internal")).as_ref(),
+            Some("http://mirror.internal"),
+        );
+
+        assert!(!args.iter().any(|arg| arg.starts_with("github:")));
+        assert_eq!(
+            args.iter().filter(|arg| *arg == "--override-input").count(),
+            INPUTS.len()
+        );
+        assert!(
+            args.iter()
+                .any(|arg| arg.starts_with("tarball+http://mirror.internal"))
+        );
+    }
+
+    #[test]
+    fn a_signature_names_its_signer_by_what_precedes_the_first_colon() {
+        assert_eq!(signer("cache.nixos.org-1:abc+/=="), "cache.nixos.org-1");
+        assert_eq!(signer("no-colon"), "no-colon");
     }
 }

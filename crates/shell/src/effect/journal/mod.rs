@@ -93,7 +93,7 @@ pub fn abandoned(dir: &Path) -> Vec<Abandoned> {
         .filter_map(|path| {
             let request = path.file_stem()?.to_string_lossy().into_owned();
             let records = read(&path).unwrap_or_default();
-            Some(mix_core::run::journal::abandoned(&request, &records))
+            (!records.is_empty()).then(|| mix_core::run::journal::abandoned(&request, &records))
         })
         .collect()
 }
@@ -174,6 +174,7 @@ async fn recover_from(
             continue;
         };
         let records = match read(&path) {
+            Ok(records) if records.is_empty() => continue,
             Ok(records) => records,
             Err(failure) => {
                 recovered.failures.push((Action::Commit, failure));

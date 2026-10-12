@@ -33,6 +33,7 @@ pub fn warning(diagnostic: &Wire) -> Diagnostic {
         Ok(
             code @ (Code::JournalUnwritable
             | Code::CleanupIncomplete
+            | Code::InterruptedRequest
             | Code::RollbackIncomplete
             | Code::GitRecordFailed),
         ) => plain(code, &context).unwrap_or_else(bug),
@@ -134,6 +135,13 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
         .help(help!(
             "run `mix doctor` to see what is left, and `mix repair` to put back what it can"
         )),
+        Code::InterruptedRequest => Diagnostic::new(phrase!(
+            "an interrupted request hasn't been put back yet"
+        ))
+        .note(note!(
+            "what is shown may change once it is, which the next change to your packages does"
+        ))
+        .help(help!("run `mix repair` to put it back now")),
         Code::RollbackIncomplete => Diagnostic::new(phrase!("`mix` couldn't undo every change"))
             .help(help!(
                 "run `mix doctor` to see what is left, and `mix repair` to put back what it can"
