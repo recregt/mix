@@ -9,15 +9,16 @@ license = "MPL-2.0"
 parse = []
 
 [dependencies]
+mix-pins = { path = "../pins" }
 thiserror = { workspace = true }
 
 [build-dependencies]
+mix-pins = { path = "../pins" }
 thiserror = { workspace = true }
 
 [dev-dependencies]
 mix-nixgen = { path = ".", features = ["parse"] }
 mix-exec = { path = "../exec" }
-mix-pins = { path = "../pins" }
 divan = { workspace = true }
 proptest = { workspace = true }
 tempfile = { workspace = true }

@@ -47,14 +47,9 @@ pub fn current_pins(user: &InvokingUser, host: &Host, pinned: &Pinned) -> Pins<L
 }
 
 fn rendered(system: System, username: &str, pins: &Pins<LockedInput>) -> (String, String) {
-    let flake = FlakeConfig::new(
-        system,
-        username,
-        pins.nixpkgs.rev.clone(),
-        pins.home_manager.rev.clone(),
-    )
-    .expect("a real username cannot contain a null byte")
-    .render();
+    let flake = FlakeConfig::new(system, username, &pins.nixpkgs.rev, &pins.home_manager.rev)
+        .expect("a real username cannot contain a null byte")
+        .render();
     (flake, lock::render(pins.clone()))
 }
 

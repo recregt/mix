@@ -9,8 +9,8 @@ fn flake() -> String {
     FlakeConfig::new(
         System::X86_64Linux,
         "mix",
-        Rev::new_static(NIXPKGS_REV),
-        Rev::new_static(HOME_MANAGER_REV),
+        &Rev::new_static(NIXPKGS_REV),
+        &Rev::new_static(HOME_MANAGER_REV),
     )
     .unwrap()
     .render()
@@ -36,8 +36,8 @@ fn flake_for(user: &str) -> String {
     FlakeConfig::new(
         System::X86_64Linux,
         user,
-        Rev::new_static(NIXPKGS_REV),
-        Rev::new_static(HOME_MANAGER_REV),
+        &Rev::new_static(NIXPKGS_REV),
+        &Rev::new_static(HOME_MANAGER_REV),
     )
     .unwrap()
     .render()

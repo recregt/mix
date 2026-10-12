@@ -61,6 +61,19 @@ pub struct LockedInput {
     pub last_modified: u64,
 }
 
+pub const EMBEDDED: Pins<LockedInput> = Pins {
+    home_manager: LockedInput {
+        rev: Rev::new_static(mix_pins::HOME_MANAGER_REV),
+        nar_hash: NarHash::new_static(mix_pins::HOME_MANAGER_NAR_HASH),
+        last_modified: mix_pins::HOME_MANAGER_LAST_MODIFIED,
+    },
+    nixpkgs: LockedInput {
+        rev: Rev::new_static(mix_pins::NIXPKGS_REV),
+        nar_hash: NarHash::new_static(mix_pins::NIXPKGS_NAR_HASH),
+        last_modified: mix_pins::NIXPKGS_LAST_MODIFIED,
+    },
+};
+
 pub fn render(locked: Pins<LockedInput>) -> String {
     let mut out = String::from("{\n  \"nodes\": {\n");
     for input in &INPUTS {

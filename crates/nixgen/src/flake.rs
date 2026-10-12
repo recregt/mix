@@ -90,25 +90,25 @@ enum FlakeHole {
 include!(concat!(env!("OUT_DIR"), "/flake_template.rs"));
 
 #[derive(Debug)]
-pub struct FlakeConfig {
+pub struct FlakeConfig<'a> {
     system: System,
     username: Key,
-    revs: Pins<Rev>,
+    revs: Pins<&'a str>,
 }
 
-impl FlakeConfig {
+impl<'a> FlakeConfig<'a> {
     pub fn new(
         system: System,
         username: &str,
-        nixpkgs_rev: Rev,
-        home_manager_rev: Rev,
+        nixpkgs_rev: &'a Rev,
+        home_manager_rev: &'a Rev,
     ) -> Result<Self, NulByte> {
         Ok(Self {
             system,
             username: Key::new(username)?,
             revs: Pins {
-                home_manager: home_manager_rev,
-                nixpkgs: nixpkgs_rev,
+                home_manager: home_manager_rev.as_str(),
+                nixpkgs: nixpkgs_rev.as_str(),
             },
         })
     }
@@ -126,7 +126,7 @@ impl FlakeConfig {
             match FLAKE_HOLES.get(index) {
                 Some(FlakeHole::Username) => print::write_key(&self.username, &mut out),
                 Some(FlakeHole::System) => print::write_key(self.system.key(), &mut out),
-                Some(FlakeHole::Rev(pin)) => out.push_str(self.revs.of(*pin).as_str()),
+                Some(FlakeHole::Rev(pin)) => out.push_str(self.revs.of(*pin)),
                 None => {}
             }
         }
@@ -159,8 +159,8 @@ mod tests {
             &flake.username,
             flake.system.key(),
             Pins {
-                home_manager: Verbatim::unchecked(flake.revs.home_manager.as_str()),
-                nixpkgs: Verbatim::unchecked(flake.revs.nixpkgs.as_str()),
+                home_manager: Verbatim::unchecked(flake.revs.home_manager),
+                nixpkgs: Verbatim::unchecked(flake.revs.nixpkgs),
             },
         );
         out.push('\n');
@@ -173,20 +173,25 @@ mod tests {
             username in "[^\\x00]{0,24}",
             system in 0usize..4,
         ) {
-            let flake = FlakeConfig::new(SYSTEMS[system], &username, NIXPKGS_PIN, HOME_MANAGER_PIN).unwrap();
+            let flake = FlakeConfig::new(SYSTEMS[system], &username, &NIXPKGS_PIN, &HOME_MANAGER_PIN).unwrap();
             prop_assert_eq!(flake.render(), written_in_full(&flake));
         }
     }
 
     use mix_pins::{HOME_MANAGER_REV, NIXPKGS_REV};
 
-    const NIXPKGS_PIN: Rev = Rev::new_static(NIXPKGS_REV);
-    const HOME_MANAGER_PIN: Rev = Rev::new_static(HOME_MANAGER_REV);
+    static NIXPKGS_PIN: Rev = Rev::new_static(NIXPKGS_REV);
+    static HOME_MANAGER_PIN: Rev = Rev::new_static(HOME_MANAGER_REV);
 
     fn render(username: &str) -> String {
-        FlakeConfig::new(System::X86_64Linux, username, NIXPKGS_PIN, HOME_MANAGER_PIN)
-            .unwrap()
-            .render()
+        FlakeConfig::new(
+            System::X86_64Linux,
+            username,
+            &NIXPKGS_PIN,
+            &HOME_MANAGER_PIN,
+        )
+        .unwrap()
+        .render()
     }
 
     #[test]
@@ -230,7 +235,13 @@ mod tests {
     #[test]
     fn rejects_a_null_byte_in_the_username() {
         assert!(
-            FlakeConfig::new(System::X86_64Linux, "mi\0x", NIXPKGS_PIN, HOME_MANAGER_PIN).is_err()
+            FlakeConfig::new(
+                System::X86_64Linux,
+                "mi\0x",
+                &NIXPKGS_PIN,
+                &HOME_MANAGER_PIN
+            )
+            .is_err()
         );
     }
 
@@ -243,13 +254,9 @@ mod tests {
 
     #[test]
     fn a_parsed_revision_renders_like_a_static_one() {
-        let parsed = FlakeConfig::new(
-            System::X86_64Linux,
-            "mix",
-            Rev::parse(NIXPKGS_REV).unwrap(),
-            Rev::parse(HOME_MANAGER_REV).unwrap(),
-        )
-        .unwrap();
+        let nixpkgs = Rev::parse(NIXPKGS_REV).unwrap();
+        let home_manager = Rev::parse(HOME_MANAGER_REV).unwrap();
+        let parsed = FlakeConfig::new(System::X86_64Linux, "mix", &nixpkgs, &home_manager).unwrap();
         assert_eq!(parsed.render(), render("mix"));
     }
 

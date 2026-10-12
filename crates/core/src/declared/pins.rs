@@ -65,8 +65,8 @@ mod tests {
         FlakeConfig::new(
             System::X86_64Linux,
             "mix",
-            pins.nixpkgs.rev.clone(),
-            pins.home_manager.rev.clone(),
+            &pins.nixpkgs.rev,
+            &pins.home_manager.rev,
         )
         .unwrap()
         .render()
