@@ -479,7 +479,7 @@ mod tests {
     #[test]
     fn a_list_aligns_name_version_and_size_and_ends_each_row_with_the_description() {
         let list = ListResult {
-            generation: None,
+            active: None,
             packages: vec![
                 package(
                     "git",
@@ -506,7 +506,7 @@ mod tests {
     #[test]
     fn a_package_that_could_not_be_resolved_shows_dashes_and_no_trailing_space() {
         let list = ListResult {
-            generation: None,
+            active: None,
             packages: vec![package("mystery", None, &[], "")],
         };
 

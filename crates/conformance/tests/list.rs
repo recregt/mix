@@ -60,6 +60,34 @@ async fn a_list_follows_every_change_made_to_the_profile() {
 }
 
 #[tokio::test]
+async fn a_list_names_the_generation_the_profile_is_on() {
+    let model = bootstrapped().await;
+    let active = |model: &Model| {
+        model
+            .snapshot()
+            .profile(model.user())
+            .and_then(|profile| profile.active)
+            .expect("an active generation")
+    };
+
+    let first = model.run(list(), false, false).await;
+    assert_eq!(
+        first["list"]["active"]["number"],
+        active(&model).to_string()
+    );
+    let path = first["list"]["active"]["storePath"].clone();
+
+    model.run(install(&["hello"]), false, false).await;
+    let second = model.run(list(), false, false).await;
+
+    assert_eq!(
+        second["list"]["active"]["number"],
+        active(&model).to_string()
+    );
+    assert_ne!(second["list"]["active"]["storePath"], path);
+}
+
+#[tokio::test]
 async fn a_list_changes_nothing() {
     let model = bootstrapped().await;
     model.run(install(&["hello"]), false, false).await;
@@ -101,4 +129,5 @@ async fn the_versions_a_list_shows_are_the_ones_an_update_reports() {
         listed_version(&after, "hello"),
         Some(Channel::version(&newest))
     );
+    assert_eq!(moved["update"]["active"], after["list"]["active"]);
 }

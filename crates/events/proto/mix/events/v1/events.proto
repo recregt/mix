@@ -448,9 +448,16 @@ message ExplainResult {
   repeated Code codes = 1;
 }
 
+message ActiveGeneration {
+  uint64 number = 1;
+  string store_path = 2;
+}
+
 message ListResult {
-  optional string generation = 1;
+  reserved 1;
+  reserved "generation";
   repeated InstalledPackage packages = 2;
+  optional ActiveGeneration active = 3;
 }
 
 message InstalledPackage {
@@ -526,9 +533,11 @@ message PackageUpdate {
 }
 
 message UpdateResult {
+  reserved 3;
+  reserved "generation";
   repeated InputUpdate inputs = 1;
   repeated PackageUpdate packages = 2;
-  optional uint64 generation = 3;
+  optional ActiveGeneration active = 4;
 }
 
 message CleanResult {

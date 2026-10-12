@@ -283,7 +283,10 @@ fn a_successful_run_still_states_its_exit_and_that_it_was_no_dry_run() {
 fn a_list_is_written_with_its_packages_outputs_and_64_bit_sizes_as_strings() {
     let document = document_of(false, |tree| {
         let result = mix_events::v1::ListResult {
-            generation: Some("/nix/store/aaa-home-manager-generation".into()),
+            active: Some(mix_events::v1::ActiveGeneration {
+                number: 12,
+                store_path: "/nix/store/aaa-home-manager-generation".into(),
+            }),
             packages: vec![mix_events::v1::InstalledPackage {
                 name: "curl".into(),
                 version: Some("8.22.0".into()),
@@ -310,8 +313,9 @@ fn a_list_is_written_with_its_packages_outputs_and_64_bit_sizes_as_strings() {
 
     let json = serde_json::to_value(&document).unwrap();
 
+    assert_eq!(json["list"]["active"]["number"], "12");
     assert_eq!(
-        json["list"]["generation"],
+        json["list"]["active"]["storePath"],
         "/nix/store/aaa-home-manager-generation"
     );
     let curl = &json["list"]["packages"][0];
@@ -364,7 +368,10 @@ fn an_update_is_written_with_each_input_its_revisions_the_packages_and_the_gener
                     to_version: Some("1.0".into()),
                 },
             ],
-            generation: Some(7),
+            active: Some(mix_events::v1::ActiveGeneration {
+                number: 7,
+                store_path: "/nix/store/ccc-home-manager-generation".into(),
+            }),
         };
         tree.finish(
             ROOT,
@@ -404,7 +411,11 @@ fn an_update_is_written_with_each_input_its_revisions_the_packages_and_the_gener
     let newcomer = &json["update"]["packages"][1];
     assert!(newcomer.get("fromVersion").is_none(), "{newcomer}");
     assert_eq!(newcomer["toVersion"], "1.0");
-    assert_eq!(json["update"]["generation"], "7");
+    assert_eq!(json["update"]["active"]["number"], "7");
+    assert_eq!(
+        json["update"]["active"]["storePath"],
+        "/nix/store/ccc-home-manager-generation"
+    );
 }
 
 #[test]

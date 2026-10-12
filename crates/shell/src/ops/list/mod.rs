@@ -26,8 +26,8 @@ pub(crate) async fn list(ctx: &Context, root: &mut Root, _request: &ListRequest)
     };
     let result = match listing {
         Some(listed) => ListResult {
-            generation: Some(listed.generation.path.display().to_string()),
             packages: listed.packages.to_vec(),
+            active: Some((&listed.generation).into()),
         },
         None => ListResult::default(),
     };
@@ -191,12 +191,9 @@ mod tests {
         assert!(names.contains(&"hello"));
         assert!(names.contains(&"ripgrep"));
         assert_eq!(names.len(), StateManifest::seed().packages.len() + 2);
-        assert_eq!(
-            list.generation
-                .as_deref()
-                .map(|path| path.starts_with("/nix/store/")),
-            Some(true)
-        );
+        let active = list.active.as_ref().expect("an active generation");
+        assert_eq!(active.number, 7);
+        assert!(active.store_path.starts_with("/nix/store/"));
     }
 
     #[tokio::test]

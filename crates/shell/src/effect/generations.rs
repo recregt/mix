@@ -148,6 +148,15 @@ pub struct Active {
     pub list: Option<String>,
 }
 
+impl From<&Active> for mix_events::v1::ActiveGeneration {
+    fn from(active: &Active) -> Self {
+        Self {
+            number: active.number,
+            store_path: active.path.display().to_string(),
+        }
+    }
+}
+
 pub fn active(user: &InvokingUser) -> Option<Active> {
     let link = profile_link(user);
     let target = std::fs::read_link(&link).ok()?;

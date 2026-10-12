@@ -376,6 +376,17 @@ async fn ran(model: &Model, command: Command) -> Vec<String> {
         if world != *before {
             found.push("a list changed the machine".to_string());
         }
+        let active = world
+            .profile(model.user())
+            .and_then(|profile| profile.active);
+        let said = done["list"]["active"]["number"]
+            .as_str()
+            .and_then(|number| number.parse::<u64>().ok());
+        if succeeded(&done) && said != active {
+            found.push(format!(
+                "listed generation {said:?} but the profile is on {active:?}"
+            ));
+        }
         if succeeded(&done) && listed_names(&done) != held(&world, model.user()) {
             found.push(format!(
                 "listed {:?} but the active generation holds {:?}",
@@ -386,6 +397,14 @@ async fn ran(model: &Model, command: Command) -> Vec<String> {
     }
     if command == Command::Update && succeeded(&done) {
         let listed_after = model.run(list(), false, false).await;
+        if !done["update"]["active"].is_null()
+            && done["update"]["active"] != listed_after["list"]["active"]
+        {
+            found.push(format!(
+                "update reported generation {} but the list shows {}",
+                done["update"]["active"], listed_after["list"]["active"]
+            ));
+        }
         for (name, from, to) in reported(&done) {
             if let Some(listed_before) = &listed_before
                 && from.is_some()

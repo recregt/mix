@@ -1,14 +1,12 @@
-use mix_core::declared::targets::UserConfig;
-use mix_core::effect::{Fact, Query};
 use mix_core::ops::update::{Decision, InputUpdate, Outcome, PackageChange, decide};
 use mix_core::run::Verdict;
 use mix_events::v1::{
-    InputOutcome, LockedRevision, PackageUpdate, UpdateRequest, UpdateResult, node_finished,
+    ActiveGeneration, InputOutcome, LockedRevision, PackageUpdate, UpdateRequest, UpdateResult,
+    node_finished,
 };
 use mix_nixgen::lock::LockedInput;
 
 use crate::Context;
-use crate::drive::Performer;
 use crate::profile::change::{self, Error};
 use crate::profile::repinned;
 use crate::profile::state::Settled;
@@ -47,7 +45,11 @@ fn input(update: &InputUpdate) -> mix_events::v1::InputUpdate {
     }
 }
 
-fn wire(decision: &Decision, packages: &[PackageChange], generation: Option<u64>) -> UpdateResult {
+fn wire(
+    decision: &Decision,
+    packages: &[PackageChange],
+    active: Option<ActiveGeneration>,
+) -> UpdateResult {
     UpdateResult {
         inputs: decision.inputs.iter().map(input).collect(),
         packages: packages
@@ -58,7 +60,7 @@ fn wire(decision: &Decision, packages: &[PackageChange], generation: Option<u64>
                 to_version: package.to.clone(),
             })
             .collect(),
-        generation,
+        active,
     }
 }
 
@@ -107,30 +109,17 @@ pub(crate) async fn update(ctx: &Context, root: &mut Root, _request: &UpdateRequ
         Ok(verdict) => verdict,
         Err(concluded) => return *concluded,
     };
-    let generation =
-        if ctx.dry_run || decision.is_current() || !matches!(verdict, Verdict::Succeeded) {
-            None
-        } else {
-            active_generation(&mut performer, cfg, &ctx.scope).await
-        };
+    let active = if ctx.dry_run || decision.is_current() || !matches!(verdict, Verdict::Succeeded) {
+        None
+    } else {
+        ctx.host
+            .active_generation(&cfg.user)
+            .as_ref()
+            .map(ActiveGeneration::from)
+    };
     change::conclude(root, verdict, || {
-        node_finished::Result::Update(wire(&decision, &changes, generation))
+        node_finished::Result::Update(wire(&decision, &changes, active))
     })
-}
-
-async fn active_generation(
-    performer: &mut Performer,
-    cfg: &UserConfig,
-    scope: &mix_exec::Scope,
-) -> Option<u64> {
-    let facts = performer
-        .observe(&[Query::Profile(cfg.user.clone())], scope)
-        .await
-        .ok()?;
-    match facts.first()? {
-        Fact::Profile(profile) => profile.active,
-        _ => None,
-    }
 }
 
 #[cfg(test)]
@@ -143,6 +132,7 @@ mod tests {
     use mix_core::declared::identity::InvokingUser;
     use mix_core::declared::paths::{FLAKE_LOCK, FLAKE_NIX, mix_state_dir};
     use mix_core::declared::policy::Policy;
+    use mix_core::declared::targets::UserConfig;
     use mix_core::ops::update::Versions;
     use mix_events::v1::Code;
     use mix_events::v1::command::Request;

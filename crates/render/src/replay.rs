@@ -802,7 +802,10 @@ fn updated() -> Vec<Envelope> {
                         from_version: Some("11.1.0".into()),
                         to_version: Some("11.1.1".into()),
                     }],
-                    generation: Some(7),
+                    active: Some(mix_events::v1::ActiveGeneration {
+                        number: 7,
+                        store_path: "/nix/store/ccc-home-manager-generation".into(),
+                    }),
                 },
             ))
             .for_root(false),
