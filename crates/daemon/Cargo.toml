@@ -1,9 +1,10 @@
 [package]
 name = "mix-daemon"
 version.workspace = true
-edition = "2024"
-authors = ["Ömer Tekin"]
-license = "MPL-2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "mix-daemon"
@@ -13,19 +14,19 @@ path = "src/main.rs"
 embed-tarball = ["mix-shell/embed-tarball"]
 
 [dependencies]
-mimalloc = "0.1.52"
-mix-core = { path = "../core" }
-mix-events = { path = "../events" }
-mix-exec = { path = "../exec" }
-mix-rpc = { path = "../rpc" }
-mix-shell = { path = "../shell" }
-mix-ui = { path = "../ui" }
+mimalloc = { workspace = true }
+mix-core = { workspace = true }
+mix-events = { workspace = true }
+mix-exec = { workspace = true }
+mix-rpc = { workspace = true }
+mix-shell = { workspace = true }
+mix-ui = { workspace = true }
 nix = { workspace = true, features = ["signal"] }
 tokio = { workspace = true, features = ["signal"] }
 
 [dev-dependencies]
 futures-util = { workspace = true }
-mix-core = { path = "../core", features = ["testkit"] }
+mix-core = { workspace = true, features = ["testkit"] }
 tempfile = { workspace = true }
 
 [lints]

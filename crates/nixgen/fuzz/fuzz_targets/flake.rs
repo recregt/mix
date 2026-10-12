@@ -19,7 +19,7 @@ fuzz_target!(|input: FlakeInput| {
         _ => System::Aarch64Darwin,
     };
 
-    if let Ok(config) = FlakeConfig::new(system, input.user, DUMMY_REV, DUMMY_REV) {
+    if let Ok(config) = FlakeConfig::new(system, input.user, &DUMMY_REV, &DUMMY_REV) {
         let nix_code = config.render();
 
         let parse_result = parse(&nix_code);

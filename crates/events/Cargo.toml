@@ -1,14 +1,15 @@
 [package]
 name = "mix-events"
 version.workspace = true
-edition = "2024"
-authors = ["Ömer Tekin"]
-license = "MPL-2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
 
 [dependencies]
 pbjson = "0.9.0"
 pbjson-types = "0.9.0"
-prost = "0.14.4"
+prost = { workspace = true }
 rustc-hash = "2.1.3"
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -18,7 +19,7 @@ thiserror = { workspace = true }
 pbjson-build = "0.9.0"
 prost-build = "0.14.4"
 prost-types = "0.14.4"
-protox = "0.10.0"
+protox = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

@@ -1,9 +1,10 @@
 [package]
 name = "mix-cli"
 version.workspace = true
-edition = "2024"
-authors = ["Ömer Tekin"]
-license = "MPL-2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
 default-run = "mix"
 
 [[bin]]
@@ -12,18 +13,18 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.6.6", features = ["derive", "env"] }
-mimalloc = "0.1.52"
-mix-events = { path = "../events" }
-mix-render = { path = "../render" }
-mix-rpc = { path = "../rpc" }
+mimalloc = { workspace = true }
+mix-events = { workspace = true }
+mix-render = { workspace = true }
+mix-rpc = { workspace = true }
 nix = { workspace = true, features = ["signal"] }
 tokio = { workspace = true, features = ["signal"] }
-uuid = { version = "1.26.1", features = ["v7"] }
+uuid = { workspace = true }
 
 [dev-dependencies]
-mix-core = { path = "../core" }
-mix-exec = { path = "../exec" }
-mix-shell = { path = "../shell" }
+mix-core = { workspace = true }
+mix-exec = { workspace = true }
+mix-shell = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

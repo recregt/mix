@@ -1,19 +1,20 @@
 [package]
 name = "mix-conformance"
 version.workspace = true
-edition = "2024"
-authors = ["Ömer Tekin"]
-license = "MPL-2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
 publish = false
 
 [dependencies]
-mimalloc = "0.1.52"
-mix-core = { path = "../core", features = ["testkit"] }
-mix-events = { path = "../events" }
-mix-exec = { path = "../exec" }
-mix-nixgen = { path = "../nixgen" }
-mix-render = { path = "../render" }
-mix-shell = { path = "../shell" }
+mimalloc = { workspace = true }
+mix-core = { workspace = true, features = ["testkit"] }
+mix-events = { workspace = true }
+mix-exec = { workspace = true }
+mix-nixgen = { workspace = true }
+mix-render = { workspace = true }
+mix-shell = { workspace = true }
 nix = { workspace = true }
 proptest = { workspace = true }
 proptest-state-machine = "0.8.0"

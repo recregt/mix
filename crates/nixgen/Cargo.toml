@@ -1,24 +1,25 @@
 [package]
 name = "mix-nixgen"
 version.workspace = true
-edition = "2024"
-authors = ["Ömer Tekin"]
-license = "MPL-2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
 
 [features]
 parse = []
 
 [dependencies]
-mix-pins = { path = "../pins" }
+mix-pins = { workspace = true }
 thiserror = { workspace = true }
 
 [build-dependencies]
-mix-pins = { path = "../pins" }
+mix-pins = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-mix-nixgen = { path = ".", features = ["parse"] }
-mix-exec = { path = "../exec" }
+mix-nixgen = { workspace = true, features = ["parse"] }
+mix-exec = { workspace = true }
 divan = { workspace = true }
 proptest = { workspace = true }
 tempfile = { workspace = true }
