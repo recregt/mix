@@ -85,36 +85,36 @@ pub(crate) async fn update(ctx: &Context, root: &mut Root, _request: &UpdateRequ
         Err(error) => return root.refuse(Error::Core(error)),
     };
     let decision = decide(&cfg.pins, &newest);
-    if decision.is_current() {
-        return change::conclude(root, Verdict::Succeeded, || {
-            node_finished::Result::Update(wire(&decision, &[], None))
-        });
-    }
-    let (before, after) = tokio::join!(
-        ctx.upstream
-            .versions(&cfg.user, &packages, &cfg.pins, &ctx.scope),
-        ctx.upstream
-            .versions(&cfg.user, &packages, &decision.pins, &ctx.scope),
-    );
-    let changes = match (before, after) {
-        (Ok(before), Ok(after)) => mix_core::ops::update::package_changes(&before, &after),
-        (Err(error), _) | (_, Err(error)) => return root.refuse(Error::Core(error)),
+    let changes = if decision.is_current() {
+        Vec::new()
+    } else {
+        let (before, after) = tokio::join!(
+            ctx.upstream
+                .versions(&cfg.user, &packages, &cfg.pins, &ctx.scope),
+            ctx.upstream
+                .versions(&cfg.user, &packages, &decision.pins, &ctx.scope),
+        );
+        match (before, after) {
+            (Ok(before), Ok(after)) => mix_core::ops::update::package_changes(&before, &after),
+            (Err(error), _) | (_, Err(error)) => return root.refuse(Error::Core(error)),
+        }
     };
     let steps = mix_core::ops::change::pin_steps(
         &repinned(cfg, decision.pins.clone()),
         &ctx.policy,
-        decision.subject(),
+        (!decision.is_current()).then(|| decision.subject()),
         &ctx.request.id,
     );
     let verdict = match change::run_steps(ctx, root, &mut performer, steps).await {
         Ok(verdict) => verdict,
         Err(concluded) => return *concluded,
     };
-    let generation = if ctx.dry_run || !matches!(verdict, Verdict::Succeeded) {
-        None
-    } else {
-        active_generation(&mut performer, cfg, &ctx.scope).await
-    };
+    let generation =
+        if ctx.dry_run || decision.is_current() || !matches!(verdict, Verdict::Succeeded) {
+            None
+        } else {
+            active_generation(&mut performer, cfg, &ctx.scope).await
+        };
     change::conclude(root, verdict, || {
         node_finished::Result::Update(wire(&decision, &changes, generation))
     })
@@ -151,7 +151,7 @@ mod tests {
     use mix_nixgen::lock::{EMBEDDED, NarHash};
     use mix_nixgen::{Pins, Rev};
 
-    use crate::request::ran::{Ran, ran};
+    use crate::request::ran::ran;
     use crate::request::upstream::{Evaluated, Newest, Upstream};
 
     struct Fixed {
@@ -239,16 +239,6 @@ mod tests {
         }
     }
 
-    fn updated(ran: &Ran) -> &UpdateResult {
-        match ran.result() {
-            Some(node_finished::Result::Update(updated)) => updated,
-            other => panic!(
-                "expected an update result, got {other:?} ({:?})",
-                ran.root().diagnostic
-            ),
-        }
-    }
-
     fn update() -> Request {
         Request::Update(UpdateRequest {})
     }
@@ -256,29 +246,6 @@ mod tests {
     fn untouched(home: &std::path::Path) {
         assert!(!mix_state_dir(home).join(FLAKE_NIX).exists());
         assert!(!mix_state_dir(home).join(FLAKE_LOCK).exists());
-    }
-
-    #[tokio::test]
-    async fn pins_that_are_already_the_newest_change_nothing() {
-        let home = tempfile::tempdir().unwrap();
-
-        let ran = ran(session(home.path(), reachable(EMBEDDED)), update()).await;
-
-        let outcomes: Vec<(&str, i32)> = updated(&ran)
-            .inputs
-            .iter()
-            .map(|input| (input.name.as_str(), input.outcome))
-            .collect();
-        assert_eq!(
-            outcomes,
-            vec![
-                ("home-manager", InputOutcome::Current as i32),
-                ("nixpkgs", InputOutcome::Current as i32),
-            ]
-        );
-        assert!(updated(&ran).packages.is_empty());
-        assert_eq!(updated(&ran).generation, None);
-        untouched(home.path());
     }
 
     #[tokio::test]

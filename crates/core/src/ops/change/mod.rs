@@ -253,11 +253,11 @@ pub fn steps(
 pub fn pin_steps(
     cfg: &UserConfig,
     policy: &Policy,
-    subject: String,
+    moved: Option<String>,
     request: &str,
 ) -> Vec<Box<dyn StepSpec>> {
     let intent = Intent {
-        activating: Some((Verb::Updating, Cow::Owned(subject))),
+        activating: moved.map(|subject| (Verb::Updating, Cow::Owned(subject))),
         ..Intent::user(cfg, policy)
     };
     reconcile_steps(Vec::new(), tree_for(&intent), request, Verb::Configuring)

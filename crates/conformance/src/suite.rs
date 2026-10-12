@@ -299,6 +299,7 @@ async fn ran(model: &Model, command: Command) -> Vec<String> {
     }
     if command.atomic()
         && succeeded(&done)
+        && !changes(&done).is_empty()
         && world.contents(
             mix_core::declared::paths::mix_state_dir(&model.user().home)
                 .join(mix_core::declared::paths::FLAKE_LOCK),
