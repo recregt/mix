@@ -6,8 +6,9 @@ use crate::profile::change;
 use crate::request::{Concluded, Root};
 
 pub(crate) async fn list(ctx: &Context, root: &mut Root, _request: &ListRequest) -> Concluded {
-    let Some(cfg) = ctx.user.as_ref() else {
-        return root.refuse(change::Error::NotBootstrapped);
+    let cfg = match change::profile_user(ctx) {
+        Ok(cfg) => cfg,
+        Err(error) => return root.refuse(error),
     };
     let mirror = ctx.policy.mirror().map(|mirror| mirror.url().to_string());
     let listing = match ctx
@@ -138,6 +139,19 @@ mod tests {
         let ran = listed(crate::Session::new(mix_exec::Scope::root())).await;
 
         assert_eq!(ran.code(), Some(Code::NotBootstrapped));
+    }
+
+    #[tokio::test]
+    async fn root_cannot_list_a_profile() {
+        let session =
+            crate::Session::new(mix_exec::Scope::root()).with_caller(crate::Caller::Account {
+                peer_is_root: true,
+                account: None,
+            });
+
+        let ran = listed(session).await;
+
+        assert_eq!(ran.code(), Some(Code::RootNotAllowed));
     }
 
     #[tokio::test]

@@ -234,8 +234,8 @@ pub fn explanation(code: Code) -> Explanation {
             ["run `mix bootstrap`"]
         ),
         Code::RootNotAllowed => explained!(
-            "Installing and removing packages cannot run as root.",
-            "These commands change your own profile, so they run as you.",
+            "Commands that work on your packages cannot run as root.",
+            "These commands use your own profile, so they run as you.",
             ["run the command again without sudo"]
         ),
         Code::InvalidPackage => explained!(

@@ -63,11 +63,9 @@ fn wire(decision: &Decision, packages: &[PackageChange], generation: Option<u64>
 }
 
 pub(crate) async fn update(ctx: &Context, root: &mut Root, _request: &UpdateRequest) -> Concluded {
-    if ctx.caller_is_root {
-        return root.refuse(Error::NotRoot);
-    }
-    let Some(cfg) = ctx.user.as_ref() else {
-        return root.refuse(Error::NotBootstrapped);
+    let cfg = match change::profile_user(ctx) {
+        Ok(cfg) => cfg,
+        Err(error) => return root.refuse(error),
     };
     if ctx.mirror().is_some() {
         return root.refuse(Error::Mirrored);

@@ -30,11 +30,9 @@ impl From<Refusal> for Error {
 }
 
 pub(crate) async fn remove(ctx: &Context, root: &mut Root, request: &RemoveRequest) -> Concluded {
-    if ctx.caller_is_root {
-        return root.refuse(Error::Change(change::Error::NotRoot));
-    }
-    let Some(cfg) = ctx.user.as_ref() else {
-        return root.refuse(Error::Change(change::Error::NotBootstrapped));
+    let cfg = match change::profile_user(ctx) {
+        Ok(cfg) => cfg,
+        Err(error) => return root.refuse(Error::Change(error)),
     };
     let mut performer = match change::begin(ctx, root).await {
         Ok(performer) => performer,

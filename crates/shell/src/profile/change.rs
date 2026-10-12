@@ -29,7 +29,7 @@ pub enum Error {
     #[error("the package list was written by a newer version of mix (format {0})")]
     NewerState(u32),
 
-    #[error("this command changes the invoking user's profile, and it was run as root")]
+    #[error("this command works on the invoking user's profile, and it was run as root")]
     NotRoot,
 
     #[error("no managed environment was found for the invoking user")]
@@ -59,6 +59,13 @@ impl From<NewerList> for Error {
     fn from(NewerList(version): NewerList) -> Self {
         Error::NewerState(version)
     }
+}
+
+pub fn profile_user(ctx: &Context) -> Result<&UserConfig> {
+    if ctx.caller_is_root {
+        return Err(Error::NotRoot);
+    }
+    ctx.user.as_ref().ok_or(Error::NotBootstrapped)
 }
 
 pub async fn begin(

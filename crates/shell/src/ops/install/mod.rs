@@ -5,11 +5,9 @@ use crate::profile::change;
 use crate::request::{Concluded, Root};
 
 pub(crate) async fn install(ctx: &Context, root: &mut Root, request: &InstallRequest) -> Concluded {
-    if ctx.caller_is_root {
-        return root.refuse(change::Error::NotRoot);
-    }
-    let Some(cfg) = ctx.user.as_ref() else {
-        return root.refuse(change::Error::NotBootstrapped);
+    let cfg = match change::profile_user(ctx) {
+        Ok(cfg) => cfg,
+        Err(error) => return root.refuse(error),
     };
     let mut performer = match change::begin(ctx, root).await {
         Ok(performer) => performer,

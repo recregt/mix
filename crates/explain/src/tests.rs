@@ -19,6 +19,8 @@ const REMOVE: (&str, &str) = ("mix remove", "remove git");
 const REPAIR: (&str, &str) = ("mix repair", "finish the repair");
 const DOCTOR: (&str, &str) = ("mix doctor", "finish the health check");
 const CLEAN: (&str, &str) = ("mix clean", "clean up your profile");
+const LIST: (&str, &str) = ("mix list", "list your packages");
+const UPDATE: (&str, &str) = ("mix update", "update your packages");
 
 fn says((command, action): (&str, &str), error: &impl Diagnose) -> String {
     said(command, action, error)
@@ -281,7 +283,7 @@ fn nothing_mix_does_internally_reaches_the_reader() {
 
 #[test]
 fn running_as_root_names_the_command_and_says_how_to_run_it_instead() {
-    for (command, action) in [INSTALL, REMOVE, CLEAN] {
+    for (command, action) in [INSTALL, REMOVE, CLEAN, LIST, UPDATE] {
         let message = said(command, action, &ChangeError::NotRoot);
 
         assert!(message.contains(&format!("`{command}` can't be run as root")));
