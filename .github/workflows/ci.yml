@@ -21,6 +21,7 @@ jobs:
   ci:
     name: CI (${{ matrix.arch }})
     strategy:
+      fail-fast: false
       matrix:
         include:
           - arch: x86_64
