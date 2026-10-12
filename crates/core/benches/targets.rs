@@ -18,7 +18,7 @@ fn user_config() -> UserConfig {
         },
         pins: mix_nixgen::lock::EMBEDDED,
         flake: "f".repeat(512),
-        lock: mix_nixgen::lock::render(mix_nixgen::lock::EMBEDDED),
+        lock: "lock-content".to_string(),
         home: "h".repeat(256),
         restored_state: None,
     }

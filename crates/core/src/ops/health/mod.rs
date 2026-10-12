@@ -621,7 +621,7 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
                     .and_then(|built| std::str::from_utf8(built).ok())
                     .and_then(crate::declared::pins::read)
                     .as_ref()
-                    != Some(pins.as_ref());
+                    != Some(&**pins);
             (active != validate(listed).ok() || built_with_other_pins)
                 .then_some(Finding::ProfileStale)
         }

@@ -246,7 +246,7 @@ pub enum Target<'a> {
         user: UserRef<'a>,
         verb: Option<Verb>,
         subject: Cow<'a, str>,
-        pins: Cow<'a, Pins<LockedInput>>,
+        pins: Box<Pins<LockedInput>>,
     },
     Retention {
         path: Cow<'a, Path>,
@@ -348,7 +348,7 @@ impl Target<'_> {
                 user: user.into_static(),
                 verb,
                 subject: Cow::Owned(subject.into_owned()),
-                pins: Cow::Owned(pins.into_owned()),
+                pins,
             },
             Target::Retention {
                 path,
@@ -593,7 +593,7 @@ fn user_tree<'a>(
             user: user(),
             verb,
             subject,
-            pins: Cow::Borrowed(&cfg.pins),
+            pins: Box::new(cfg.pins.clone()),
         },
     );
     for target in deferred {
