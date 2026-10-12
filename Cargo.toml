@@ -28,6 +28,17 @@ self_named_module_files = "deny"
 divan = { version = "=5.0.2", package = "codspeed-divan-compat" }
 futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
 mimalloc = "0.1.52"
+mix-core = { path = "crates/core" }
+mix-events = { path = "crates/events" }
+mix-exec = { path = "crates/exec" }
+mix-nixgen = { path = "crates/nixgen" }
+mix-nixlog = { path = "crates/nixlog" }
+mix-pins = { path = "crates/pins" }
+mix-render = { path = "crates/render" }
+mix-rpc = { path = "crates/rpc" }
+mix-shell = { path = "crates/shell" }
+mix-testchild = { path = "crates/testchild" }
+mix-ui = { path = "crates/ui" }
 nix = { version = "0.31.3", features = ["user", "fs"] }
 proptest = "1.11.0"
 prost = "0.14.4"

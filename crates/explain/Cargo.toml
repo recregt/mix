@@ -6,14 +6,14 @@ authors = ["Ömer Tekin"]
 license = "MPL-2.0"
 
 [dependencies]
-mix-events = { path = "../events" }
-mix-ui = { path = "../ui" }
+mix-events = { workspace = true }
+mix-ui = { workspace = true }
 
 [dev-dependencies]
 divan = { workspace = true }
-mix-core = { path = "../core" }
-mix-nixgen = { path = "../nixgen" }
-mix-shell = { path = "../shell" }
+mix-core = { workspace = true }
+mix-nixgen = { workspace = true }
+mix-shell = { workspace = true }
 
 [[bench]]
 name = "explain"

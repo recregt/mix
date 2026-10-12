@@ -14,18 +14,18 @@ embed-tarball = ["mix-shell/embed-tarball"]
 
 [dependencies]
 mimalloc = { workspace = true }
-mix-core = { path = "../core" }
-mix-events = { path = "../events" }
-mix-exec = { path = "../exec" }
-mix-rpc = { path = "../rpc" }
-mix-shell = { path = "../shell" }
-mix-ui = { path = "../ui" }
+mix-core = { workspace = true }
+mix-events = { workspace = true }
+mix-exec = { workspace = true }
+mix-rpc = { workspace = true }
+mix-shell = { workspace = true }
+mix-ui = { workspace = true }
 nix = { workspace = true, features = ["signal"] }
 tokio = { workspace = true, features = ["signal"] }
 
 [dev-dependencies]
 futures-util = { workspace = true }
-mix-core = { path = "../core", features = ["testkit"] }
+mix-core = { workspace = true, features = ["testkit"] }
 tempfile = { workspace = true }
 
 [lints]

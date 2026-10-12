@@ -12,7 +12,7 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 
 [dev-dependencies]
-mix-testchild = { path = "../testchild" }
+mix-testchild = { workspace = true }
 
 [lints]
 workspace = true

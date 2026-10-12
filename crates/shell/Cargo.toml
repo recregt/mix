@@ -13,12 +13,12 @@ machine-tests = []
 
 [dependencies]
 uuid = { workspace = true }
-mix-core = { path = "../core" }
-mix-events = { path = "../events" }
-mix-exec = { path = "../exec" }
-mix-nixgen = { path = "../nixgen" }
-mix-nixlog = { path = "../nixlog" }
-mix-pins = { path = "../pins" }
+mix-core = { workspace = true }
+mix-events = { workspace = true }
+mix-exec = { workspace = true }
+mix-nixgen = { workspace = true }
+mix-nixlog = { workspace = true }
+mix-pins = { workspace = true }
 futures-util = { workspace = true }
 liblzma = { version = "0.4.8", default-features = false, features = ["static"] }
 nix = { workspace = true }
@@ -34,12 +34,12 @@ tokio = { workspace = true }
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 
 [build-dependencies]
-mix-pins = { path = "../pins" }
+mix-pins = { workspace = true }
 sha2 = "0.11.0"
 
 [dev-dependencies]
-mix-core = { path = "../core", features = ["testkit"] }
-mix-testchild = { path = "../testchild" }
+mix-core = { workspace = true, features = ["testkit"] }
+mix-testchild = { workspace = true }
 divan = { workspace = true }
 mockito = "=1.7.2"
 tokio = { workspace = true, features = ["test-util"] }

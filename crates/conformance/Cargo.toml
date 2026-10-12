@@ -8,12 +8,12 @@ publish = false
 
 [dependencies]
 mimalloc = { workspace = true }
-mix-core = { path = "../core", features = ["testkit"] }
-mix-events = { path = "../events" }
-mix-exec = { path = "../exec" }
-mix-nixgen = { path = "../nixgen" }
-mix-render = { path = "../render" }
-mix-shell = { path = "../shell" }
+mix-core = { workspace = true, features = ["testkit"] }
+mix-events = { workspace = true }
+mix-exec = { workspace = true }
+mix-nixgen = { workspace = true }
+mix-render = { workspace = true }
+mix-shell = { workspace = true }
 nix = { workspace = true }
 proptest = { workspace = true }
 proptest-state-machine = "0.8.0"

@@ -7,9 +7,9 @@ license = "MPL-2.0"
 
 [dependencies]
 similar = "3.2.0"
-mix-events = { path = "../events" }
-mix-nixgen = { path = "../nixgen" }
-mix-nixlog = { path = "../nixlog" }
+mix-events = { workspace = true }
+mix-nixgen = { workspace = true }
+mix-nixlog = { workspace = true }
 serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -19,7 +19,7 @@ generativity = "1.2.1"
 testkit = []
 
 [dev-dependencies]
-mix-render = { path = "../render" }
+mix-render = { workspace = true }
 proptest = { workspace = true }
 divan = { workspace = true }
 trybuild = "=1.0.122"

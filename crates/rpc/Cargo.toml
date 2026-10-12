@@ -6,8 +6,8 @@ authors = ["Ömer Tekin"]
 license = "MPL-2.0"
 
 [dependencies]
-mix-events = { path = "../events" }
-mix-exec = { path = "../exec" }
+mix-events = { workspace = true }
+mix-exec = { workspace = true }
 futures-util = { workspace = true }
 hyper-util = { version = "0.1.21", features = ["tokio"] }
 prost = { workspace = true }
@@ -24,7 +24,7 @@ tonic-prost-build = "0.14.6"
 
 [dev-dependencies]
 divan = { workspace = true }
-mix-testchild = { path = "../testchild" }
+mix-testchild = { workspace = true }
 
 [[bench]]
 name = "stream"
