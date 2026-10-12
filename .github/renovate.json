@@ -1,12 +1,21 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:best-practices"],
-  "enabledManagers": ["cargo", "github-actions"],
+  "enabledManagers": ["cargo", "custom.regex", "github-actions", "rust-toolchain"],
   "dependencyDashboard": true,
   "semanticCommitScope": "",
   "lockFileMaintenance": {
     "enabled": false
   },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/(^|/)Cargo\\.toml$/"],
+      "matchStrings": ["rust-version\\s*=\\s*\"(?<currentValue>[^\"]+)\""],
+      "depNameTemplate": "rust",
+      "datasourceTemplate": "rust-version"
+    }
+  ],
   "packageRules": [
     {
       "matchManagers": ["github-actions"],
@@ -20,6 +29,11 @@
       "matchUpdateTypes": ["minor", "patch"],
       "groupName": "cargo non-major",
       "minimumReleaseAge": "3 days"
+    },
+    {
+      "matchDepNames": ["rust"],
+      "groupName": "rust toolchain",
+      "semanticCommitType": "chore"
     }
   ]
 }
