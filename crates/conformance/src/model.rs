@@ -106,7 +106,8 @@ impl Channel {
     }
 
     pub fn version(pins: &Pins<LockedInput>) -> String {
-        pins.nixpkgs.rev.as_str()[..7].to_string()
+        let rev = pins.nixpkgs.rev.as_str();
+        rev[rev.len() - 7..].to_string()
     }
 }
 
@@ -132,21 +133,11 @@ impl Upstream for Channel {
     }
 }
 
-pub struct Catalog {
-    world: Arc<Mutex<World>>,
-}
-
-impl Catalog {
-    fn version(&self, user: &InvokingUser) -> Option<String> {
-        let world = self.world.lock().unwrap_or_else(PoisonError::into_inner);
-        let lock = String::from_utf8_lossy(world.active_lock(user)?).into_owned();
-        mix_core::declared::pins::read(&lock).map(|pins| Channel::version(&pins))
-    }
-}
+pub struct Catalog;
 
 impl Source for Catalog {
     fn gather<'a>(&'a self, ask: Ask<'a>) -> Gathering<'a> {
-        let version = self.version(ask.user);
+        let version = ask.generation.pins().map(|pins| Channel::version(&pins));
         Box::pin(async move {
             Ok(ask
                 .names
@@ -176,9 +167,7 @@ impl Model {
         let dir = tempfile::tempdir().expect("a temporary directory for the model's locks");
         let locks = Arc::new(Locks::new(dir.path().join("lock")));
         let world = Arc::new(Mutex::new(world));
-        let installed = Arc::new(Installed::with_source(Arc::new(Catalog {
-            world: Arc::clone(&world),
-        })));
+        let installed = Arc::new(Installed::with_source(Arc::new(Catalog)));
         Self {
             world,
             dir,

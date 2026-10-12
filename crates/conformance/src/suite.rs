@@ -417,6 +417,7 @@ async fn ran(model: &Model, command: Command) -> Vec<String> {
         }
         for (name, from, to) in reported(&done) {
             if let Some(listed_before) = &listed_before
+                && succeeded(listed_before)
                 && !warned(listed_before, "CODE_INTERRUPTED_REQUEST")
                 && from.is_some()
                 && listed_version(listed_before, &name) != from

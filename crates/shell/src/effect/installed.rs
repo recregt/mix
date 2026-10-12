@@ -14,6 +14,7 @@ use mix_nixgen::{AttrPath, INPUTS, Installable, Pins};
 use serde::Deserialize;
 
 use crate::effect::exec::run_as;
+use crate::effect::generations::Active;
 use crate::profile::activation;
 
 const HOME_PATH: &str = "home-path";
@@ -114,6 +115,18 @@ async fn described(
     .render();
     let apply = mix_nixgen::package_facts(names.iter().map(String::as_str))
         .map_err(|error| unreadable("nix eval", error))?;
+    let args = eval_args(installable, apply, pins, mirror);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let answer = run_as(user, DEFAULT_PROFILE_NIX, &args, scope).await?;
+    parse_facts(&answer).map_err(|error| unreadable("nix eval", error))
+}
+
+fn eval_args(
+    installable: String,
+    apply: String,
+    pins: Option<&Pins<LockedInput>>,
+    mirror: Option<&str>,
+) -> Vec<String> {
     let mut args = vec![
         "eval".to_string(),
         "--json".to_string(),
@@ -126,9 +139,14 @@ async fn described(
         args.extend(overrides(pins));
     }
     args.extend(activation::nix_options(mirror));
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    let answer = run_as(user, DEFAULT_PROFILE_NIX, &args, scope).await?;
-    parse_facts(&answer).map_err(|error| unreadable("nix eval", error))
+    args
+}
+
+fn evaluated_at(generation: &Active, mirror: Option<&str>) -> Option<Pins<LockedInput>> {
+    match crate::effect::mirror::filter_mirror(mirror) {
+        Some(_) => None,
+        None => generation.pins(),
+    }
 }
 
 fn overrides(pins: &Pins<LockedInput>) -> Vec<String> {
@@ -188,7 +206,7 @@ async fn stored(user: &InvokingUser, home_path: &Path, scope: &Scope) -> Result<
 
 pub async fn gather(
     user: &InvokingUser,
-    generation: &Path,
+    generation: &Active,
     names: &[String],
     mirror: Option<&str>,
     scope: &Scope,
@@ -196,11 +214,12 @@ pub async fn gather(
     if names.is_empty() {
         return Ok(Vec::new());
     }
-    let link = generation.join(HOME_PATH);
+    let pins = evaluated_at(generation, mirror);
+    let link = generation.path.join(HOME_PATH);
     let home_path =
         std::fs::canonicalize(&link).map_err(|source| Error::Io { path: link, source })?;
     let (described, stored) = tokio::join!(
-        described(user, mirror, names, None, scope),
+        described(user, mirror, names, pins.as_ref(), scope),
         stored(user, &home_path, scope)
     );
     Ok(join(names, &described?, &stored?))
@@ -303,6 +322,92 @@ mod tests {
         assert!(parse_facts("not json").is_err());
         assert!(parse_facts(r#"{"name":"x"}"#).is_err());
         assert!(parse_path_info("[]").is_err());
+    }
+
+    fn built_at(lock: Option<String>) -> Active {
+        Active {
+            number: 1,
+            path: "/nix/store/aaa-home-manager-generation".into(),
+            list: None,
+            lock,
+        }
+    }
+
+    fn embedded() -> Active {
+        built_at(Some(mix_nixgen::lock::render(mix_nixgen::lock::EMBEDDED)))
+    }
+
+    #[test]
+    fn a_generation_is_evaluated_at_the_pins_it_was_built_from() {
+        assert_eq!(
+            evaluated_at(&embedded(), None),
+            Some(mix_nixgen::lock::EMBEDDED)
+        );
+        assert_eq!(
+            evaluated_at(&embedded(), Some("  ")),
+            Some(mix_nixgen::lock::EMBEDDED)
+        );
+    }
+
+    #[test]
+    fn on_a_mirror_the_mirror_decides_what_the_inputs_are() {
+        assert_eq!(
+            evaluated_at(&embedded(), Some("http://mirror.internal")),
+            None
+        );
+    }
+
+    #[test]
+    fn a_generation_without_a_readable_lock_is_evaluated_from_the_profile_flake() {
+        assert_eq!(evaluated_at(&built_at(None), None), None);
+        assert_eq!(evaluated_at(&built_at(Some("{".into())), None), None);
+    }
+
+    #[test]
+    fn the_pins_an_evaluation_holds_override_each_input_with_its_hash() {
+        let args = eval_args(
+            "flake#pkgs".into(),
+            "pkgs: pkgs".into(),
+            Some(&mix_nixgen::lock::EMBEDDED),
+            None,
+        );
+
+        let pins = mix_nixgen::lock::EMBEDDED;
+        for input in &INPUTS {
+            let pin = pins.of(input.pin);
+            let at = args
+                .iter()
+                .position(|arg| arg == input.name)
+                .expect("each input is overridden");
+            assert_eq!(args[at - 1], "--override-input");
+            assert!(args[at + 1].starts_with(&format!(
+                "github:{}/{}/{}?narHash=",
+                input.owner,
+                input.repo,
+                pin.rev.as_str()
+            )));
+        }
+        assert!(args.iter().any(|arg| arg == "--no-write-lock-file"));
+    }
+
+    #[test]
+    fn a_mirrored_evaluation_overrides_the_inputs_only_with_the_mirror() {
+        let args = eval_args(
+            "flake#pkgs".into(),
+            "pkgs: pkgs".into(),
+            evaluated_at(&embedded(), Some("http://mirror.internal")).as_ref(),
+            Some("http://mirror.internal"),
+        );
+
+        assert!(!args.iter().any(|arg| arg.starts_with("github:")));
+        assert_eq!(
+            args.iter().filter(|arg| *arg == "--override-input").count(),
+            INPUTS.len()
+        );
+        assert!(
+            args.iter()
+                .any(|arg| arg.starts_with("tarball+http://mirror.internal"))
+        );
     }
 
     #[test]

@@ -4,11 +4,13 @@ use std::sync::Arc;
 use mix_core::ActivityReporter;
 use mix_core::declared::identity::InvokingUser;
 use mix_core::declared::paths::{
-    DEFAULT_PROFILE_NIX_ENV, DEFAULT_PROFILE_NIX_STORE, GENERATION_STATE_FILE,
-    HOME_MANAGER_PROFILE_NAME, NIX_STORE, nix_profiles_dir,
+    DEFAULT_PROFILE_NIX_ENV, DEFAULT_PROFILE_NIX_STORE, GENERATION_LOCK_FILE,
+    GENERATION_STATE_FILE, HOME_MANAGER_PROFILE_NAME, NIX_STORE, nix_profiles_dir,
 };
 use mix_core::effect::{Action, Fact, Failure, Outcome, Performed, ProfileFacts, Query};
 use mix_exec::Scope;
+use mix_nixgen::Pins;
+use mix_nixgen::lock::LockedInput;
 
 use crate::effect::exec::{run_as, run_as_reporting};
 use crate::effect::files::Prepared;
@@ -146,6 +148,13 @@ pub struct Active {
     pub number: u64,
     pub path: PathBuf,
     pub list: Option<String>,
+    pub lock: Option<String>,
+}
+
+impl Active {
+    pub fn pins(&self) -> Option<Pins<LockedInput>> {
+        mix_core::declared::pins::read(self.lock.as_deref()?)
+    }
 }
 
 impl From<&Active> for mix_events::v1::ActiveGeneration {
@@ -157,19 +166,33 @@ impl From<&Active> for mix_events::v1::ActiveGeneration {
     }
 }
 
-pub fn active(user: &InvokingUser) -> Option<Active> {
+fn numbered(user: &InvokingUser) -> Option<(u64, PathBuf)> {
     let link = profile_link(user);
     let target = std::fs::read_link(&link).ok()?;
     let number = generation_of(target.file_name()?.to_str()?)?;
-    let path = store_generation(&link.parent()?.join(&target), Path::new(NIX_STORE))?;
-    let list = store_input(&path, GENERATION_STATE_FILE)
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
-    Some(Active { number, path, list })
+    Some((number, link.parent()?.join(target)))
+}
+
+pub fn active(user: &InvokingUser) -> Option<Active> {
+    active_in(user, Path::new(NIX_STORE))
+}
+
+fn active_in(user: &InvokingUser, store: &Path) -> Option<Active> {
+    let (number, link) = numbered(user)?;
+    let path = store_generation(&link, store)?;
+    let text = |file: &str| {
+        store_input(&path, file).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+    };
+    Some(Active {
+        number,
+        list: text(GENERATION_STATE_FILE),
+        lock: text(GENERATION_LOCK_FILE),
+        path,
+    })
 }
 
 fn current(user: &InvokingUser) -> Option<u64> {
-    let target = std::fs::read_link(profile_link(user)).ok()?;
-    generation_of(target.file_name()?.to_str()?)
+    numbered(user).map(|(number, _)| number)
 }
 
 pub(crate) fn existing(user: &InvokingUser) -> Vec<u64> {
@@ -467,6 +490,150 @@ async fn activate(
 #[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+
+    struct Profiles {
+        root: tempfile::TempDir,
+        store: PathBuf,
+        user: InvokingUser,
+    }
+
+    impl Profiles {
+        fn new() -> Self {
+            let root = tempfile::tempdir().unwrap();
+            let store = std::fs::canonicalize(root.path()).unwrap().join("store");
+            std::fs::create_dir_all(&store).unwrap();
+            let home = root.path().join("home");
+            std::fs::create_dir_all(nix_profiles_dir(&home)).unwrap();
+            let user = InvokingUser {
+                uid: 1000,
+                gid: 1000,
+                name: "mix-user".to_string(),
+                home,
+            };
+            Self { root, store, user }
+        }
+
+        fn built(&self, name: &str, inputs: &[(&str, &str)]) -> PathBuf {
+            let generation = self.store.join(name);
+            std::fs::create_dir_all(&generation).unwrap();
+            for (file, text) in inputs {
+                std::fs::write(generation.join(file), text).unwrap();
+            }
+            generation
+        }
+
+        fn point(&self, number: Option<u64>, target: &Path) {
+            let profiles = nix_profiles_dir(&self.user.home);
+            let link = profile_link(&self.user);
+            let _ = std::fs::remove_file(&link);
+            match number {
+                Some(number) => {
+                    let numbered = format!("{HOME_MANAGER_PROFILE_NAME}-{number}-link");
+                    let _ = std::fs::remove_file(profiles.join(&numbered));
+                    std::os::unix::fs::symlink(target, profiles.join(&numbered)).unwrap();
+                    std::os::unix::fs::symlink(&numbered, &link).unwrap();
+                }
+                None => std::os::unix::fs::symlink(target, &link).unwrap(),
+            }
+        }
+    }
+
+    #[test]
+    fn the_active_generation_is_its_number_store_path_list_and_lock_read_together() {
+        let profiles = Profiles::new();
+        let generation = profiles.built(
+            "aaa-home-manager-generation",
+            &[
+                (GENERATION_STATE_FILE, "listed"),
+                (GENERATION_LOCK_FILE, "locked"),
+            ],
+        );
+        profiles.point(Some(3), &generation);
+
+        let active = active_in(&profiles.user, &profiles.store).unwrap();
+
+        assert_eq!(active.number, 3);
+        assert_eq!(active.path, generation);
+        assert_eq!(active.list.as_deref(), Some("listed"));
+        assert_eq!(active.lock.as_deref(), Some("locked"));
+        assert_eq!(current(&profiles.user), Some(3));
+    }
+
+    #[test]
+    fn a_generation_without_its_inputs_is_still_active_but_holds_none() {
+        let profiles = Profiles::new();
+        let generation = profiles.built("aaa-home-manager-generation", &[]);
+        profiles.point(Some(1), &generation);
+
+        let active = active_in(&profiles.user, &profiles.store).unwrap();
+
+        assert_eq!(active.list, None);
+        assert_eq!(active.lock, None);
+        assert_eq!(active.pins(), None);
+    }
+
+    #[test]
+    fn a_generation_whose_store_path_is_gone_is_not_active_though_its_number_is_current() {
+        let profiles = Profiles::new();
+        profiles.point(
+            Some(4),
+            &profiles.store.join("gone-home-manager-generation"),
+        );
+
+        assert_eq!(active_in(&profiles.user, &profiles.store), None);
+        assert_eq!(current(&profiles.user), Some(4));
+    }
+
+    #[test]
+    fn a_profile_that_skips_the_numbered_link_has_no_active_generation() {
+        let profiles = Profiles::new();
+        let generation = profiles.built("aaa-home-manager-generation", &[]);
+        profiles.point(None, &generation);
+
+        assert_eq!(active_in(&profiles.user, &profiles.store), None);
+        assert_eq!(current(&profiles.user), None);
+    }
+
+    #[test]
+    fn a_generation_outside_the_store_is_not_active() {
+        let profiles = Profiles::new();
+        let elsewhere = profiles.root.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        profiles.point(Some(2), &elsewhere);
+
+        assert_eq!(active_in(&profiles.user, &profiles.store), None);
+    }
+
+    #[test]
+    fn a_new_generation_replaces_the_old_as_the_active_one() {
+        let profiles = Profiles::new();
+        let first = profiles.built("aaa-home-manager-generation", &[]);
+        let second = profiles.built("bbb-home-manager-generation", &[]);
+        profiles.point(Some(1), &first);
+        profiles.point(Some(2), &second);
+
+        let active = active_in(&profiles.user, &profiles.store).unwrap();
+
+        assert_eq!((active.number, active.path), (2, second));
+    }
+
+    #[test]
+    fn the_pins_of_a_generation_are_read_from_its_own_lock() {
+        let rendered = mix_nixgen::lock::render(mix_nixgen::lock::EMBEDDED);
+        let active = Active {
+            number: 1,
+            path: PathBuf::from("/nix/store/aaa-home-manager-generation"),
+            list: None,
+            lock: Some(rendered),
+        };
+        let broken = Active {
+            lock: Some("{".to_string()),
+            ..active.clone()
+        };
+
+        assert_eq!(active.pins(), Some(mix_nixgen::lock::EMBEDDED));
+        assert_eq!(broken.pins(), None);
+    }
 
     #[test]
     fn a_generation_is_read_only_from_a_regular_file_directly_in_the_store() {

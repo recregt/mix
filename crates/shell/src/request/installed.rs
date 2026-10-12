@@ -36,7 +36,7 @@ impl Source for Nix {
         Box::pin(async move {
             crate::effect::installed::gather(
                 ask.user,
-                &ask.generation.path,
+                ask.generation,
                 ask.names,
                 ask.mirror,
                 ask.scope,
@@ -118,11 +118,11 @@ impl Installed {
         mirror: Option<&str>,
         scope: &Scope,
     ) -> std::result::Result<Option<Listed>, Error> {
+        let slot = self.slot(user.uid);
+        let mut held = scope.guard(slot.lock()).await.map_err(|_| Error::Stopped)?;
         let Some(generation) = host.active_generation(user) else {
             return Ok(None);
         };
-        let slot = self.slot(user.uid);
-        let mut held = scope.guard(slot.lock()).await.map_err(|_| Error::Stopped)?;
         if let Some(listed) = held.as_ref()
             && listed.generation.path == generation.path
         {
@@ -446,6 +446,73 @@ mod tests {
             .await
             .unwrap();
 
+        assert_eq!(source.gathered.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_generation_whose_store_path_is_gone_has_nothing_to_list() {
+        let (world, host) = hosted();
+        activate(&world, &user(1000), 1, &list(&[]));
+        world
+            .lock()
+            .unwrap()
+            .profiles
+            .get_mut(&1000)
+            .unwrap()
+            .dangling
+            .push(1);
+        let source = Arc::new(Counted::default());
+
+        let listing = Installed::with_source(Arc::clone(&source) as Arc<dyn Source>)
+            .listing(&host, &user(1000), None, &Scope::root())
+            .await
+            .unwrap();
+
+        assert!(listing.is_none());
+        assert_eq!(source.gathered.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_listing_that_waited_answers_for_the_generation_active_when_it_ran() {
+        let (world, host) = hosted();
+        activate(&world, &user(1000), 1, &list(&[]));
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let source = Arc::new(Counted {
+            gate: Some(Arc::clone(&gate)),
+            ..Counted::default()
+        });
+        let installed = Arc::new(Installed::with_source(
+            Arc::clone(&source) as Arc<dyn Source>
+        ));
+        let spawn = || {
+            let installed = Arc::clone(&installed);
+            let host = host.clone();
+            tokio::spawn(async move {
+                installed
+                    .listing(&host, &user(1000), None, &Scope::root())
+                    .await
+            })
+        };
+        let first = spawn();
+        while source.gathered.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        let second = spawn();
+        tokio::task::yield_now().await;
+        activate(&world, &user(1000), 2, &list(&["hello"]));
+        gate.notify_one();
+        assert_eq!(first.await.unwrap().unwrap().unwrap().generation.number, 1);
+        gate.notify_one();
+
+        let waited = second.await.unwrap().unwrap().unwrap();
+        let again = installed
+            .listing(&host, &user(1000), None, &Scope::root())
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(waited.generation.number, 2);
+        assert_eq!(again.generation.number, 2);
         assert_eq!(source.gathered.load(Ordering::SeqCst), 2);
     }
 

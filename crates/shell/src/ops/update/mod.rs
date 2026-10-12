@@ -88,9 +88,14 @@ pub(crate) async fn update(ctx: &Context, root: &mut Root, _request: &UpdateRequ
     let changes = if decision.is_current() {
         Vec::new()
     } else {
+        let installed = ctx
+            .host
+            .active_generation(&cfg.user)
+            .and_then(|active| active.pins())
+            .unwrap_or_else(|| cfg.pins.clone());
         let (before, after) = tokio::join!(
             ctx.upstream
-                .versions(&cfg.user, &packages, &cfg.pins, &ctx.scope),
+                .versions(&cfg.user, &packages, &installed, &ctx.scope),
             ctx.upstream
                 .versions(&cfg.user, &packages, &decision.pins, &ctx.scope),
         );

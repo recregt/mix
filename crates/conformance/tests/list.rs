@@ -3,9 +3,14 @@ use mix_conformance::suite::{
     FaultKind, bootstrap, install, list, listed_names, listed_version, repair, succeeded, update,
     warned,
 };
+use std::sync::Arc;
+
+use mix_core::declared::paths::{FLAKE_LOCK, FLAKE_NIX, GENERATION_INPUTS, mix_state_dir};
+use mix_core::model::Content;
 use mix_events::v1::RemoveRequest;
 use mix_events::v1::command::Request;
-use mix_nixgen::lock::EMBEDDED;
+use mix_nixgen::Pins;
+use mix_nixgen::lock::{EMBEDDED, LockedInput};
 
 async fn bootstrapped() -> Model {
     let model = Model::new();
@@ -131,6 +136,73 @@ async fn the_versions_a_list_shows_are_the_ones_an_update_reports() {
         Some(Channel::version(&newest))
     );
     assert_eq!(moved["update"]["active"], after["list"]["active"]);
+}
+
+fn rewound_to(model: &Model, older: &Pins<LockedInput>) {
+    let rewind = |source: &str, text: &[u8]| -> Arc<[u8]> {
+        if source == FLAKE_LOCK {
+            return Arc::from(mix_nixgen::lock::render(older.clone()).as_bytes());
+        }
+        let text = String::from_utf8_lossy(text)
+            .replace(EMBEDDED.nixpkgs.rev.as_str(), older.nixpkgs.rev.as_str())
+            .replace(
+                EMBEDDED.home_manager.rev.as_str(),
+                older.home_manager.rev.as_str(),
+            );
+        Arc::from(text.as_bytes())
+    };
+    let mut world = model.world.lock().unwrap();
+    let dir = mix_state_dir(&model.user().home);
+    let uid = model.user().uid;
+    for (index, (source, _)) in GENERATION_INPUTS.iter().enumerate() {
+        if *source != FLAKE_LOCK && *source != FLAKE_NIX {
+            continue;
+        }
+        let entry = world.files.get_mut(&dir.join(source)).unwrap();
+        if let Content::File(text) = &entry.content {
+            entry.content = Content::File(rewind(source, text));
+        }
+        let profile = world.profiles.get_mut(&uid).unwrap();
+        let active = profile.active.unwrap();
+        let built = profile.built.get_mut(&active).unwrap();
+        if let Some(text) = built[index].clone() {
+            built[index] = Some(rewind(source, &text));
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_profile_built_before_this_mix_is_reported_at_the_versions_it_holds() {
+    let model = bootstrapped().await;
+    model.run(install(&["hello"]), false, false).await;
+    let older = Channel::at(-3).pins();
+    assert!(older.nixpkgs.last_modified < EMBEDDED.nixpkgs.last_modified);
+    rewound_to(&model, &older);
+    let newest = model.upstream().pins();
+
+    let before = model.run(list(), false, false).await;
+    assert!(succeeded(&before), "{before:#}");
+    assert_eq!(
+        listed_version(&before, "hello"),
+        Some(Channel::version(&older))
+    );
+
+    let moved = model.run(update(), false, false).await;
+    assert!(succeeded(&moved), "{moved:#}");
+    let hello = moved["update"]["packages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|package| package["name"] == "hello")
+        .expect("update names the package whose version moved");
+    assert_eq!(hello["fromVersion"], Channel::version(&older));
+    assert_eq!(hello["toVersion"], Channel::version(&newest));
+
+    let after = model.run(list(), false, false).await;
+    assert_eq!(
+        listed_version(&after, "hello"),
+        Some(Channel::version(&newest))
+    );
 }
 
 #[tokio::test]

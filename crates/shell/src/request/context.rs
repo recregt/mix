@@ -75,10 +75,14 @@ impl Host {
                 let world = Self::world(world);
                 let profile = world.profile(user)?;
                 let number = profile.active?;
+                if profile.dangling.contains(&number) {
+                    return None;
+                }
                 Some(Active {
                     number,
                     path: Self::stored(profile.built.get(&number)),
                     list: world.active_list(user).map(Self::text),
+                    lock: world.active_lock(user).map(Self::text),
                 })
             }
         }

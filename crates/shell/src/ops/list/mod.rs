@@ -67,7 +67,6 @@ mod tests {
     struct Fixed {
         asked: AtomicUsize,
         mirror: Mutex<Option<Option<String>>>,
-        names: Mutex<Vec<String>>,
         failure: bool,
     }
 
@@ -76,7 +75,6 @@ mod tests {
             Arc::new(Self {
                 asked: AtomicUsize::new(0),
                 mirror: Mutex::new(None),
-                names: Mutex::new(Vec::new()),
                 failure,
             })
         }
@@ -87,7 +85,6 @@ mod tests {
             Box::pin(async move {
                 self.asked.fetch_add(1, Ordering::SeqCst);
                 *self.mirror.lock().unwrap() = Some(ask.mirror.map(str::to_string));
-                *self.names.lock().unwrap() = ask.names.to_vec();
                 if self.failure {
                     return Err(mix_core::Error::Command {
                         command: "nix eval".to_string(),
