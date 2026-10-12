@@ -1,9 +1,9 @@
 [package]
 name = "mix-exec"
 version.workspace = true
-edition = "2024"
-authors = ["Ömer Tekin"]
-license = "MPL-2.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
 
 [dependencies]
 nix = { workspace = true, features = ["signal", "process"] }
