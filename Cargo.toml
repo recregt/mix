@@ -1,22 +1,6 @@
 [workspace]
 resolver = "2"
-members = [
-    "crates/exec",
-    "crates/events",
-    "crates/core",
-    "crates/pins",
-    "crates/nixgen",
-    "crates/shell",
-    "crates/ui",
-    "crates/cli",
-    "crates/rpc",
-    "crates/daemon",
-    "crates/explain",
-    "crates/render",
-    "crates/testchild",
-    "crates/conformance",
-    "crates/nixlog",
-]
+members = ["crates/*"]
 
 [workspace.package]
 version = "0.1.0"
