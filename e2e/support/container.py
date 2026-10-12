@@ -22,7 +22,6 @@ MIX_USERS_GROUP = "mix-users"
 NIX_CONF_DEST = "/etc/nix/nix.conf"
 
 IMAGE_REPOSITORY = "mix-bootstrap-test"
-REMOTE_IMAGE = os.environ.get("MIX_TEST_IMAGE")
 CONTAINER_NAME = re.compile(r"mix-test-(\d+)-\d+")
 SNAPSHOT_REPOSITORY = "mix-bootstrapped"
 SNAPSHOT_TAG = re.compile(r"(\d+)-[0-9a-f]+")
@@ -444,11 +443,6 @@ def container_image():
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     with open(CACHE_DIR / "container-image.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if REMOTE_IMAGE:
-            remote = f"{REMOTE_IMAGE}:{digest}"
-            pull = subprocess.run(["podman", "pull", remote], capture_output=True, check=False)
-            if pull.returncode == 0:
-                return remote
         if subprocess.run(["podman", "image", "exists", local], check=False).returncode != 0:
             subprocess.run(
                 [
