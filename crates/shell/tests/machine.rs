@@ -7,9 +7,9 @@ use mix_core::declared::identity::{
     NIXBLD_GID, NIXBLD_GROUP, NIXBLD_HOME, NIXBLD_SHELL, NIXBLD_UID_BASE,
 };
 use mix_core::declared::paths::{
-    DEFAULT_PROFILE_NIX_ENV, FLAKE_LOCK, FLAKE_NIX, HOME_NIX, NIX_DAEMON_SERVICE_SRC,
+    DEFAULT_PROFILE_NIX_ENV, GENERATION_INPUTS, HOME_NIX, NIX_DAEMON_SERVICE_SRC,
     NIX_DAEMON_SOCKET_SRC, NIX_TREE_MODE, NIX_TREE_PATHS, POLICY_FILE, REPOSITORY_CONFIG,
-    REPOSITORY_CONFIG_CONTENTS, STATE_FILE, mix_state_dir,
+    REPOSITORY_CONFIG_CONTENTS, mix_state_dir,
 };
 use mix_core::declared::policy::Policy;
 use mix_core::effect::{
@@ -310,7 +310,8 @@ fn every_profile_action_and_its_undo_match_the_model() {
     let user = enrolled();
     let owner = (user.uid, user.gid);
     let state = mix_state_dir(&user.home);
-    let config: Vec<Option<Arc<[u8]>>> = [FLAKE_NIX, HOME_NIX, FLAKE_LOCK, STATE_FILE]
+    let inputs: Vec<&str> = GENERATION_INPUTS.iter().map(|(file, _)| *file).collect();
+    let config: Vec<Option<Arc<[u8]>>> = inputs
         .iter()
         .map(|file| std::fs::read(state.join(file)).ok().map(Arc::from))
         .collect();
@@ -337,10 +338,7 @@ fn every_profile_action_and_its_undo_match_the_model() {
             0o644,
             owner,
         );
-    for (file, contents) in [FLAKE_NIX, HOME_NIX, FLAKE_LOCK, STATE_FILE]
-        .iter()
-        .zip(&config)
-    {
+    for (file, contents) in inputs.iter().zip(&config) {
         world.with_file(
             state.join(file),
             contents.as_deref().unwrap_or_default(),
@@ -364,7 +362,8 @@ fn every_profile_action_and_its_undo_match_the_model() {
     );
     let home_nix = state.join(HOME_NIX);
     let changed: Arc<[u8]> = {
-        let text = String::from_utf8(config[1].as_deref().unwrap().to_vec()).unwrap();
+        let at = inputs.iter().position(|file| *file == HOME_NIX).unwrap();
+        let text = String::from_utf8(config[at].as_deref().unwrap().to_vec()).unwrap();
         let end = text.rfind('}').unwrap();
         Arc::from(
             format!(
