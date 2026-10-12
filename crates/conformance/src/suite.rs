@@ -382,6 +382,16 @@ async fn ran(model: &Model, command: Command) -> Vec<String> {
         let said = done["list"]["active"]["number"]
             .as_str()
             .and_then(|number| number.parse::<u64>().ok());
+        let pending = before
+            .logs
+            .keys()
+            .any(|request| !before.held.contains(request));
+        if succeeded(&done) && warned(&done, "CODE_INTERRUPTED_REQUEST") != pending {
+            found.push(format!(
+                "a list with an interrupted request pending {pending} warned {}",
+                warned(&done, "CODE_INTERRUPTED_REQUEST")
+            ));
+        }
         if succeeded(&done) && said != active {
             found.push(format!(
                 "listed generation {said:?} but the profile is on {active:?}"
@@ -407,6 +417,7 @@ async fn ran(model: &Model, command: Command) -> Vec<String> {
         }
         for (name, from, to) in reported(&done) {
             if let Some(listed_before) = &listed_before
+                && !warned(listed_before, "CODE_INTERRUPTED_REQUEST")
                 && from.is_some()
                 && listed_version(listed_before, &name) != from
             {

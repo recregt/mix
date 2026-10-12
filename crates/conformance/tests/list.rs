@@ -1,6 +1,7 @@
 use mix_conformance::model::{Channel, Model};
 use mix_conformance::suite::{
-    bootstrap, install, list, listed_names, listed_version, succeeded, update,
+    FaultKind, bootstrap, install, list, listed_names, listed_version, repair, succeeded, update,
+    warned,
 };
 use mix_events::v1::RemoveRequest;
 use mix_events::v1::command::Request;
@@ -130,4 +131,26 @@ async fn the_versions_a_list_shows_are_the_ones_an_update_reports() {
         Some(Channel::version(&newest))
     );
     assert_eq!(moved["update"]["active"], after["list"]["active"]);
+}
+
+#[tokio::test]
+async fn a_list_taken_before_an_interrupted_request_is_put_back_says_so() {
+    let model = bootstrapped().await;
+    let installed = model.run(install(&["ripgrep"]), false, false).await;
+    assert!(succeeded(&installed), "{installed:#}");
+    let crashed = model
+        .faulted(remove("ripgrep"), false, 3, FaultKind::CrashBefore)
+        .await;
+    assert!(crashed.is_none(), "the remove was meant to be interrupted");
+
+    let pending = model.run(list(), false, false).await;
+    assert!(succeeded(&pending), "{pending:#}");
+    assert!(warned(&pending, "CODE_INTERRUPTED_REQUEST"), "{pending:#}");
+    assert_eq!(listed_names(&pending), ["git"]);
+
+    let repaired = model.run(repair(), false, true).await;
+    assert!(succeeded(&repaired), "{repaired:#}");
+    let settled = model.run(list(), false, false).await;
+    assert!(!warned(&settled, "CODE_INTERRUPTED_REQUEST"), "{settled:#}");
+    assert_eq!(listed_names(&settled), ["git", "ripgrep"]);
 }

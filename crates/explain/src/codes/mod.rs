@@ -120,6 +120,11 @@ pub fn explanation(code: Code) -> Explanation {
                 "run `mix repair` to put back what it can"
             ]
         ),
+        Code::InterruptedRequest => explained!(
+            "An earlier request was interrupted and has not been put back yet.",
+            "`mix` puts an interrupted request back before it changes anything else, so the packages shown now may change once that happens.",
+            ["run `mix repair` to put it back now"]
+        ),
         Code::Network => explained!(
             "A download failed.",
             "The Nix runtime or a package could not be fetched.",

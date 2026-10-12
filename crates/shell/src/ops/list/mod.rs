@@ -1,5 +1,5 @@
-use mix_events::Ending;
-use mix_events::v1::{ListRequest, ListResult, node_finished};
+use mix_events::v1::{Code, Diagnostic, ListRequest, ListResult, node_finished};
+use mix_events::{Ending, ROOT};
 
 use crate::Context;
 use crate::profile::change;
@@ -24,6 +24,18 @@ pub(crate) async fn list(ctx: &Context, root: &mut Root, _request: &ListRequest)
             }));
         }
     };
+    if ctx.interrupted(&ctx.journals) {
+        let _ = root.tree.warn(
+            ROOT,
+            Diagnostic {
+                code: Code::InterruptedRequest as i32,
+                message:
+                    "an interrupted request has not been put back, so what is listed may change"
+                        .to_string(),
+                ..Diagnostic::default()
+            },
+        );
+    }
     let result = match listing {
         Some(listed) => ListResult {
             packages: listed.packages.to_vec(),
@@ -181,6 +193,7 @@ mod tests {
 
         let ran = listed(session(&world, &source)).await;
 
+        assert!(ran.warnings().is_empty());
         let list = answer(&ran);
         let names: Vec<&str> = list
             .packages
@@ -194,6 +207,37 @@ mod tests {
         let active = list.active.as_ref().expect("an active generation");
         assert_eq!(active.number, 7);
         assert!(active.store_path.starts_with("/nix/store/"));
+    }
+
+    #[tokio::test]
+    async fn a_list_warns_while_an_interrupted_request_waits_to_be_put_back() {
+        let world = world_with(&["hello"]);
+        world
+            .lock()
+            .unwrap()
+            .logs
+            .insert("interrupted".to_string(), Vec::new());
+        let source = Fixed::new(false);
+
+        let ran = listed(session(&world, &source)).await;
+
+        assert!(answer(&ran).packages.iter().any(|p| p.name == "hello"));
+        assert_eq!(ran.warnings(), [Code::InterruptedRequest]);
+    }
+
+    #[tokio::test]
+    async fn a_request_still_running_is_not_taken_for_an_interrupted_one() {
+        let world = world_with(&["hello"]);
+        {
+            let mut held = world.lock().unwrap();
+            held.logs.insert("running".to_string(), Vec::new());
+            held.held.insert("running".to_string());
+        }
+        let source = Fixed::new(false);
+
+        let ran = listed(session(&world, &source)).await;
+
+        assert!(ran.warnings().is_empty());
     }
 
     #[tokio::test]
