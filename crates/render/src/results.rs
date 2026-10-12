@@ -7,7 +7,7 @@ use mix_events::v1::command::Request;
 use mix_events::v1::node_finished::Result;
 use mix_events::v1::{
     CleanResult, Code, ExplainRequest, ExplainResult, InspectionReport, ListResult, NodeFinished,
-    RepairReport, Status as Ended,
+    PinOutcome, PinUpdate, RepairReport, Status as Ended, UpdateResult,
 };
 use mix_ui::{Out, Report, Severity, Status};
 
@@ -102,8 +102,69 @@ pub(super) fn finished(
                 mix_ui::data(&listed(list));
             }
         }
+        Result::Update(update) => {
+            if chatty {
+                updated(out, update, elapsed);
+            }
+        }
         Result::Inspection(_) | Result::Process(_) => {}
     }
+}
+
+fn updated(out: &dyn Out, update: &UpdateResult, elapsed: Duration) {
+    let (moved, current): (Vec<&PinUpdate>, Vec<&PinUpdate>) = update
+        .inputs
+        .iter()
+        .partition(|input| input.outcome() == PinOutcome::Updated);
+    if !current.is_empty() {
+        let names: Vec<&str> = current.iter().filter_map(|input| pinned(input)).collect();
+        mix_ui::status_to(
+            out,
+            Status::Ignored,
+            &format!("{} (already up to date)", names.join(", ")),
+        );
+    }
+    if !moved.is_empty() {
+        let moves: Vec<String> = moved.iter().map(|input| moved_pin(input)).collect();
+        mix_ui::status_to(
+            out,
+            Status::Updated,
+            &format!("{} in {}", moves.join(", "), took(elapsed)),
+        );
+    }
+    for package in &update.packages {
+        mix_ui::status_to(
+            out,
+            Status::Updated,
+            &format!(
+                "{} {} to {}",
+                package.name,
+                package.from_version.as_deref().unwrap_or("-"),
+                package.to_version.as_deref().unwrap_or("-")
+            ),
+        );
+    }
+}
+
+fn pinned(input: &PinUpdate) -> Option<&str> {
+    input.after.as_ref().map(|after| after.name.as_str())
+}
+
+fn moved_pin(input: &PinUpdate) -> String {
+    match (&input.before, &input.after) {
+        (Some(before), Some(after)) => format!(
+            "{} {} to {}",
+            after.name,
+            short(&before.rev),
+            short(&after.rev)
+        ),
+        (None, Some(only)) | (Some(only), None) => only.name.clone(),
+        (None, None) => String::new(),
+    }
+}
+
+fn short(rev: &str) -> &str {
+    rev.get(..7).unwrap_or(rev)
 }
 
 fn listed(list: &ListResult) -> String {
@@ -159,7 +220,8 @@ fn explained(explain: &ExplainResult, request: Option<&Request>) -> String {
             | Request::Clean(_)
             | Request::Repair(_)
             | Request::Doctor(_)
-            | Request::List(_),
+            | Request::List(_)
+            | Request::Update(_),
         )
         | None => mix_explain::codes::list_text(codes),
     }

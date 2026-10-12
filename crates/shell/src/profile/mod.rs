@@ -10,6 +10,6 @@ pub mod config;
 pub mod state;
 
 pub use activation::{activate_generation, record, switch};
-pub use config::{existing_user_config_for, user_config_for};
+pub use config::{current_pins, embedded, existing_user_config_for, repinned, user_config_for};
 
 pub type Result<T> = mix_core::Result<T>;

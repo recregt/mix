@@ -329,6 +329,87 @@ fn a_list_is_written_with_its_packages_outputs_and_64_bit_sizes_as_strings() {
 }
 
 #[test]
+fn an_update_is_written_with_each_input_before_and_after_the_packages_and_the_generation() {
+    let document = document_of(false, |tree| {
+        let pinned = |rev: &str, modified: u64| mix_events::v1::PinnedInput {
+            name: "nixpkgs".into(),
+            owner: "NixOS".into(),
+            repo: "nixpkgs".into(),
+            branch: "nixos-unstable".into(),
+            rev: rev.into(),
+            nar_hash: "sha256-GnotcvKtbTMnoVx6G4E7ZdUX6487Dky74dqq3pU7iRk=".into(),
+            last_modified: modified,
+        };
+        let result = mix_events::v1::UpdateResult {
+            inputs: vec![mix_events::v1::PinUpdate {
+                outcome: mix_events::v1::PinOutcome::Updated as i32,
+                before: Some(pinned(
+                    "efe6f071ede9d21c37462d2d6682d5e670099684",
+                    1_789_426_278,
+                )),
+                after: Some(pinned(
+                    "6510408d147d8c5e6d76043e899e9251756f6a75",
+                    1_791_594_108,
+                )),
+            }],
+            packages: vec![
+                mix_events::v1::PackageUpdate {
+                    name: "qemu".into(),
+                    from_version: Some("11.1.0".into()),
+                    to_version: Some("11.1.1".into()),
+                },
+                mix_events::v1::PackageUpdate {
+                    name: "newcomer".into(),
+                    from_version: None,
+                    to_version: Some("1.0".into()),
+                },
+            ],
+            generation: Some("/nix/store/aaa-home-manager-generation".into()),
+        };
+        tree.finish(
+            ROOT,
+            Ending::succeeded()
+                .with_result(node_finished::Result::Update(result))
+                .for_root(false),
+        )
+        .unwrap();
+    });
+
+    let json = serde_json::to_value(&document).unwrap();
+
+    let input = &json["update"]["inputs"][0];
+    assert_eq!(input["outcome"], "PIN_OUTCOME_UPDATED");
+    assert_eq!(input["before"]["name"], "nixpkgs");
+    assert_eq!(
+        input["before"]["rev"],
+        "efe6f071ede9d21c37462d2d6682d5e670099684"
+    );
+    assert_eq!(
+        input["after"]["rev"],
+        "6510408d147d8c5e6d76043e899e9251756f6a75"
+    );
+    assert_eq!(input["after"]["owner"], "NixOS");
+    assert_eq!(input["after"]["branch"], "nixos-unstable");
+    assert_eq!(
+        input["after"]["narHash"],
+        "sha256-GnotcvKtbTMnoVx6G4E7ZdUX6487Dky74dqq3pU7iRk="
+    );
+    assert_eq!(input["before"]["lastModified"], "1789426278");
+    assert_eq!(input["after"]["lastModified"], "1791594108");
+    let qemu = &json["update"]["packages"][0];
+    assert_eq!(qemu["name"], "qemu");
+    assert_eq!(qemu["fromVersion"], "11.1.0");
+    assert_eq!(qemu["toVersion"], "11.1.1");
+    let newcomer = &json["update"]["packages"][1];
+    assert!(newcomer.get("fromVersion").is_none(), "{newcomer}");
+    assert_eq!(newcomer["toVersion"], "1.0");
+    assert_eq!(
+        json["update"]["generation"],
+        "/nix/store/aaa-home-manager-generation"
+    );
+}
+
+#[test]
 fn a_command_line_mix_cannot_read_is_a_usage_document() {
     let document = usage("r1".into(), "unrecognized subcommand 'instal'");
 

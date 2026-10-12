@@ -131,9 +131,12 @@ async fn repaired(
     let journals = ctx.journals.as_path();
     crate::ops::recover_interrupted(ctx, tree, &mut performer, true).await;
     let user_config = match &ctx.user {
-        Some(cfg) => observed_user_config(cfg.user.clone(), &mut performer, scope)
-            .await
-            .or_else(|| ctx.user.clone()),
+        Some(cfg) => {
+            let pins = crate::profile::current_pins(&cfg.user, &ctx.host, &ctx.pinned);
+            observed_user_config(cfg.user.clone(), &mut performer, scope, &pins)
+                .await
+                .or_else(|| ctx.user.clone())
+        }
         None => None,
     };
     let items = mix_core::declared::targets::tree(user_config.as_ref(), &ctx.policy);

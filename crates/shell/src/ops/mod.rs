@@ -6,6 +6,7 @@ pub mod install;
 pub mod list;
 pub mod remove;
 pub mod repair;
+pub mod update;
 
 pub(crate) async fn recover_interrupted(
     ctx: &crate::Context,

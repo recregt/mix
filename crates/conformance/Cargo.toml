@@ -20,6 +20,9 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 
+[dev-dependencies]
+mix-nixgen = { path = "../nixgen" }
+
 [lints]
 workspace = true
 

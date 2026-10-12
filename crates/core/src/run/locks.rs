@@ -17,15 +17,18 @@ pub fn locks_for(request: &Request, dry_run: bool) -> Need {
             | Request::Clean(_)
             | Request::Install(_)
             | Request::Remove(_)
+            | Request::Update(_)
             | Request::Doctor(_) => Need::Observe,
         };
     }
     match request {
         Request::Bootstrap(_) | Request::Repair(_) => Need::Exclusive,
         Request::Clean(clean) if clean.all => Need::Exclusive,
-        Request::Install(_) | Request::Remove(_) | Request::Doctor(_) | Request::Clean(_) => {
-            Need::SharedForUser
-        }
+        Request::Install(_)
+        | Request::Remove(_)
+        | Request::Update(_)
+        | Request::Doctor(_)
+        | Request::Clean(_) => Need::SharedForUser,
         Request::Explain(_) | Request::List(_) => Need::Nothing,
     }
 }
@@ -33,7 +36,7 @@ pub fn locks_for(request: &Request, dry_run: bool) -> Need {
 #[cfg(test)]
 mod tests {
     use mix_events::v1::{
-        CleanRequest, ExplainRequest, InstallRequest, ListRequest, RepairRequest,
+        CleanRequest, ExplainRequest, InstallRequest, ListRequest, RepairRequest, UpdateRequest,
     };
 
     use super::*;
@@ -64,6 +67,10 @@ mod tests {
             locks_for(&Request::Clean(CleanRequest { all: false }), false),
             Need::SharedForUser
         );
+        assert_eq!(
+            locks_for(&Request::Update(UpdateRequest {}), false),
+            Need::SharedForUser
+        );
     }
 
     #[test]
@@ -89,6 +96,7 @@ mod tests {
             Request::Repair(RepairRequest {}),
             Request::Clean(CleanRequest { all: true }),
             Request::Install(InstallRequest::default()),
+            Request::Update(UpdateRequest {}),
         ] {
             assert_eq!(locks_for(&request, true), Need::Observe, "{request:?}");
         }

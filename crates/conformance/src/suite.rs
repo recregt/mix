@@ -4,7 +4,9 @@ use std::sync::{Arc, OnceLock};
 use mix_core::model::World;
 use mix_core::model::testkit::{Breakage, Damage, owned};
 use mix_events::v1::command::Request;
-use mix_events::v1::{CleanRequest, DoctorRequest, InstallRequest, RemoveRequest, RepairRequest};
+use mix_events::v1::{
+    CleanRequest, DoctorRequest, InstallRequest, RemoveRequest, RepairRequest, UpdateRequest,
+};
 use mix_shell::drive::Fault;
 use proptest::prelude::*;
 use proptest::sample::select;
@@ -86,6 +88,10 @@ pub fn doctor() -> Request {
 
 pub fn repair() -> Request {
     Request::Repair(RepairRequest {})
+}
+
+pub fn update() -> Request {
+    Request::Update(UpdateRequest {})
 }
 
 pub fn succeeded(document: &Value) -> bool {

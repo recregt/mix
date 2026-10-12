@@ -1,17 +1,20 @@
 use mix_core::declared::identity::InvokingUser;
 use mix_core::declared::identity::MIX_USERS_GROUP;
+use mix_core::declared::pins;
 use mix_core::declared::state::StateManifest;
 use mix_core::declared::targets::UserConfig;
 use mix_core::ops::bootstrap::system::{Arch, Os};
 use mix_core::ops::change::render_home;
 use mix_nixgen::lock::{self, LockedInput, NarHash};
-use mix_nixgen::{FlakeConfig, Rev, System};
+use mix_nixgen::{FlakeConfig, Pins, Rev, System};
 use mix_pins::{
     HOME_MANAGER_LAST_MODIFIED, HOME_MANAGER_NAR_HASH, HOME_MANAGER_REV, NIXPKGS_LAST_MODIFIED,
     NIXPKGS_NAR_HASH, NIXPKGS_REV,
 };
 
 use crate::profile::state::{Settled, Source};
+use crate::request::context::Host;
+use crate::request::pinned::Pinned;
 
 const NIXPKGS: Rev = Rev::new_static(NIXPKGS_REV);
 const HOME_MANAGER: Rev = Rev::new_static(HOME_MANAGER_REV);
@@ -27,10 +30,41 @@ const HOME_MANAGER_LOCK: LockedInput = LockedInput {
     last_modified: HOME_MANAGER_LAST_MODIFIED,
 };
 
-fn render_lock() -> String {
-    lock::render(mix_nixgen::Pins {
+pub fn embedded() -> Pins<LockedInput> {
+    Pins {
         home_manager: HOME_MANAGER_LOCK,
         nixpkgs: NIXPKGS_LOCK,
+    }
+}
+
+pub fn current_pins(user: &InvokingUser, host: &Host, pinned: &Pinned) -> Pins<LockedInput> {
+    pinned.get_or_load(user.uid, || {
+        host.flake_nix(user)
+            .zip(host.flake_lock(user))
+            .and_then(|(flake, lock)| pins::read(&flake, &lock))
+            .unwrap_or_else(embedded)
+    })
+}
+
+fn rendered(system: System, username: &str, pins: &Pins<LockedInput>) -> (String, String) {
+    let flake = FlakeConfig::new(
+        system,
+        username,
+        pins.nixpkgs.rev.clone(),
+        pins.home_manager.rev.clone(),
+    )
+    .expect("a real username cannot contain a null byte")
+    .render();
+    (flake, lock::render(pins.clone()))
+}
+
+pub fn repinned(cfg: &UserConfig, pins: &Pins<LockedInput>) -> Option<UserConfig> {
+    let system = nix_system(Arch::current()?, Os::current()?);
+    let (flake, lock) = rendered(system, &cfg.user.name, pins);
+    Some(UserConfig {
+        flake,
+        lock,
+        ..cfg.clone()
     })
 }
 
@@ -48,11 +82,10 @@ fn configured(
     state: Option<&str>,
     active: Option<&str>,
     home_nix: Option<String>,
+    pins: &Pins<LockedInput>,
 ) -> Option<UserConfig> {
     let system = nix_system(Arch::current()?, Os::current()?);
-    let flake = FlakeConfig::new(system, &user.name, NIXPKGS, HOME_MANAGER)
-        .expect("a real username cannot contain a null byte")
-        .render();
+    let (flake, lock) = rendered(system, &user.name, pins);
     let (home, restored_state) = match mix_core::ops::change::settle(state, active) {
         Settled::Current { manifest, source } => (
             render_home(&user, &manifest.packages)
@@ -70,7 +103,7 @@ fn configured(
     Some(UserConfig {
         user,
         flake,
-        lock: render_lock(),
+        lock,
         home,
         restored_state,
     })
@@ -78,19 +111,22 @@ fn configured(
 
 pub fn user_config_for(
     user: InvokingUser,
-    host: &crate::request::context::Host,
+    host: &Host,
+    pinned: &Pinned,
     _locked: &crate::request::Locked,
 ) -> Option<UserConfig> {
     let state = host.state_file(&user);
     let active = host.active_list(&user);
     let home_nix = host.home_nix(&user);
-    configured(user, state.as_deref(), active.as_deref(), home_nix)
+    let pins = current_pins(&user, host, pinned);
+    configured(user, state.as_deref(), active.as_deref(), home_nix, &pins)
 }
 
 pub async fn observed_user_config(
     user: InvokingUser,
     performer: &mut crate::drive::Performer,
     scope: &mix_exec::Scope,
+    pins: &Pins<LockedInput>,
 ) -> Option<UserConfig> {
     use mix_core::declared::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
     use mix_core::effect::{Fact, Query};
@@ -115,17 +151,20 @@ pub async fn observed_user_config(
         text(&facts[0]).as_deref(),
         text(&facts[1]).as_deref(),
         text(&facts[2]),
+        pins,
     )
 }
 
 pub fn existing_user_config_for(
     user: InvokingUser,
-    host: &crate::request::context::Host,
+    host: &Host,
+    pinned: &Pinned,
     locked: &crate::request::Locked,
 ) -> Option<UserConfig> {
-    managed(user_config_for(user, host, locked)?, |group, user| {
-        host.is_member(group, user)
-    })
+    managed(
+        user_config_for(user, host, pinned, locked)?,
+        |group, user| host.is_member(group, user),
+    )
 }
 
 fn managed(cfg: UserConfig, member: impl Fn(&str, &str) -> bool) -> Option<UserConfig> {

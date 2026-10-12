@@ -11,6 +11,8 @@ use mix_events::v1::{Command, Envelope};
 use mix_shell::drive::Faults;
 use mix_shell::request::context::Host;
 use mix_shell::request::lock::Locks;
+use mix_shell::request::pinned::Pinned;
+use mix_shell::request::upstream::Upstream;
 use mix_shell::{Caller, Session};
 use serde_json::Value;
 
@@ -67,6 +69,8 @@ pub struct Model {
     locks: Arc<Locks>,
     user: InvokingUser,
     policy: Policy,
+    upstream: Option<Arc<dyn Upstream>>,
+    pinned: Option<Arc<Pinned>>,
 }
 
 impl Model {
@@ -79,7 +83,19 @@ impl Model {
             locks,
             user,
             policy,
+            upstream: None,
+            pinned: None,
         }
+    }
+
+    pub fn with_upstream(mut self, upstream: Arc<dyn Upstream>) -> Self {
+        self.upstream = Some(upstream);
+        self
+    }
+
+    pub fn remembering(mut self) -> Self {
+        self.pinned = Some(Arc::new(Pinned::default()));
+        self
     }
 
     pub fn new() -> Self {
@@ -125,7 +141,15 @@ impl Model {
     }
 
     pub fn fork(&self) -> Self {
-        Self::on(self.snapshot(), self.user.clone(), self.policy.clone())
+        let fork = Self::on(self.snapshot(), self.user.clone(), self.policy.clone());
+        let fork = match &self.upstream {
+            Some(upstream) => fork.with_upstream(Arc::clone(upstream)),
+            None => fork,
+        };
+        match &self.pinned {
+            Some(_) => fork.remembering(),
+            None => fork,
+        }
     }
 
     async fn request(
@@ -148,6 +172,12 @@ impl Model {
             .with_render(Recorded(Arc::clone(&recorded)));
         if let Some(faults) = &faults {
             session = session.with_faults(Arc::clone(faults));
+        }
+        if let Some(upstream) = &self.upstream {
+            session = session.with_upstream(Arc::clone(upstream));
+        }
+        if let Some(pinned) = &self.pinned {
+            session = session.with_pinned(Arc::clone(pinned));
         }
         let ran = mix_shell::request::run(
             &session,

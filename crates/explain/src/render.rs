@@ -120,6 +120,8 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
     let words = match code {
         Code::LockMissing => Diagnostic::new(phrase!("`mix` isn't set up yet"))
             .help(help!("run `mix bootstrap` first")),
+        Code::UpdateUnavailable => Diagnostic::new(phrase!("`mix` can't update from a mirror"))
+            .help(help!("update `mix` to get newer packages")),
         Code::Io | Code::CommandFailed | Code::SpawnFailed => failed(context.action),
         Code::Internal | Code::Unspecified => bug(),
         Code::JournalUnwritable => Diagnostic::new(phrase!("`mix` couldn't record its progress"))

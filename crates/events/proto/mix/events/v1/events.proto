@@ -50,6 +50,7 @@ message Command {
     CleanRequest clean = 15;
     ExplainRequest explain = 16;
     ListRequest list = 17;
+    UpdateRequest update = 18;
   }
 }
 
@@ -58,6 +59,8 @@ message ExplainRequest {
 }
 
 message ListRequest {}
+
+message UpdateRequest {}
 
 message BootstrapRequest {
   bool force = 1;
@@ -436,6 +439,7 @@ message NodeFinished {
     CleanResult clean = 17;
     ExplainResult explain = 18;
     ListResult list = 19;
+    UpdateResult update = 20;
   }
 }
 
@@ -489,6 +493,40 @@ message RemoveResult {
   repeated string removed = 1;
   repeated string skipped = 2;
   bool restored = 3;
+}
+
+enum PinOutcome {
+  PIN_OUTCOME_UNSPECIFIED = 0;
+  PIN_OUTCOME_UPDATED = 1;
+  PIN_OUTCOME_CURRENT = 2;
+}
+
+message PinnedInput {
+  string name = 1;
+  string owner = 2;
+  string repo = 3;
+  string branch = 4;
+  string rev = 5;
+  string nar_hash = 6;
+  uint64 last_modified = 7;
+}
+
+message PinUpdate {
+  PinOutcome outcome = 1;
+  PinnedInput before = 2;
+  PinnedInput after = 3;
+}
+
+message PackageUpdate {
+  string name = 1;
+  optional string from_version = 2;
+  optional string to_version = 3;
+}
+
+message UpdateResult {
+  repeated PinUpdate inputs = 1;
+  repeated PackageUpdate packages = 2;
+  optional string generation = 3;
 }
 
 message CleanResult {
@@ -665,6 +703,7 @@ enum Code {
   CODE_GIT_RECORD_FAILED = 47;
   CODE_UNKNOWN_PACKAGE = 48;
   CODE_BUILD_FAILED = 49;
+  CODE_UPDATE_UNAVAILABLE = 50;
   CODE_UNREPAIRABLE = 60;
   CODE_PRIVILEGES_UNAVAILABLE = 70;
   CODE_WORKER_ENDED = 71;

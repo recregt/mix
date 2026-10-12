@@ -250,6 +250,19 @@ pub fn steps(
     ))
 }
 
+pub fn pin_steps(
+    cfg: &UserConfig,
+    policy: &Policy,
+    subject: String,
+    request: &str,
+) -> Vec<Box<dyn StepSpec>> {
+    let intent = Intent {
+        activating: Some((Verb::Activating, Cow::Owned(subject))),
+        ..Intent::user(cfg, policy)
+    };
+    reconcile_steps(Vec::new(), tree_for(&intent), request, Verb::Configuring)
+}
+
 pub fn clean_steps(
     cfg: &UserConfig,
     policy: &Policy,

@@ -151,7 +151,12 @@ pub(crate) async fn bootstrap(
     let journals = ctx.journals.as_path();
     crate::ops::recover_interrupted(ctx, tree, &mut performer, true).await;
     if let Some(user) = ctx.user.as_ref().map(|cfg| cfg.user.clone()) {
-        settings.user = observed_user_config(user, &mut performer, scope)
+        let pins = if request.force {
+            crate::profile::embedded()
+        } else {
+            crate::profile::current_pins(&user, &ctx.host, &ctx.pinned)
+        };
+        settings.user = observed_user_config(user, &mut performer, scope, &pins)
             .await
             .or(settings.user);
     }

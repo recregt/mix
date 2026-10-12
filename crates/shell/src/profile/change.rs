@@ -37,6 +37,11 @@ pub enum Error {
 
     #[error("an interrupted request could not be put back, so nothing more was changed")]
     Unrecovered,
+
+    #[error(
+        "this machine fetches from a mirror, which only holds the versions this mix shipped with"
+    )]
+    Mirrored,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -154,62 +159,76 @@ pub async fn run(
 pub async fn perform(
     ctx: &Context,
     root: &mut Root,
-    mut performer: Performer,
+    performer: Performer,
     steps: Vec<Box<dyn StepSpec>>,
     result: impl FnOnce() -> node_finished::Result,
 ) -> Concluded {
-    let verdict = if steps.is_empty() {
-        Verdict::Succeeded
-    } else {
-        let mut runner = Runner::new(ROOT, steps);
-        if ctx.dry_run {
-            let verdict = drive(
-                &mut runner,
-                &mut root.tree,
-                &mut performer,
-                &ctx.scope,
-                &root.stopped,
-                &mut Vec::new(),
-                &mut ctx.relay(),
-            )
-            .await
-            .verdict
-            .clone();
-            return conclude(root, verdict, result);
-        }
-        let mut journal = match ctx.journal(&ctx.journals) {
-            Ok(journal) => journal,
-            Err(failure) => return root.refuse(Error::Core(core_error(failure, &ctx.journals))),
-        };
-        let report = drive(
+    match run_steps(ctx, root, performer, steps).await {
+        Ok(verdict) => conclude(root, verdict, result),
+        Err(concluded) => *concluded,
+    }
+}
+
+pub async fn run_steps(
+    ctx: &Context,
+    root: &mut Root,
+    mut performer: Performer,
+    steps: Vec<Box<dyn StepSpec>>,
+) -> std::result::Result<Verdict, Box<Concluded>> {
+    if steps.is_empty() {
+        return Ok(Verdict::Succeeded);
+    }
+    let mut runner = Runner::new(ROOT, steps);
+    if ctx.dry_run {
+        let verdict = drive(
             &mut runner,
             &mut root.tree,
             &mut performer,
             &ctx.scope,
             &root.stopped,
-            &mut journal,
+            &mut Vec::new(),
             &mut ctx.relay(),
         )
-        .await;
-        let verdict = report.verdict.clone();
-        if report.rollback_failures.is_empty()
-            && let Err(failure) = journal.finish()
-        {
-            let _ = root.tree.warn(
-                ROOT,
-                mix_core::report::diagnose::warning(
-                    Code::CleanupIncomplete,
-                    "could not remove the finished journal",
-                    &failure,
-                ),
-            );
+        .await
+        .verdict
+        .clone();
+        return Ok(verdict);
+    }
+    let mut journal = match ctx.journal(&ctx.journals) {
+        Ok(journal) => journal,
+        Err(failure) => {
+            return Err(Box::new(
+                root.refuse(Error::Core(core_error(failure, &ctx.journals))),
+            ));
         }
-        verdict
     };
-    conclude(root, verdict, result)
+    let report = drive(
+        &mut runner,
+        &mut root.tree,
+        &mut performer,
+        &ctx.scope,
+        &root.stopped,
+        &mut journal,
+        &mut ctx.relay(),
+    )
+    .await;
+    let verdict = report.verdict.clone();
+    if report.rollback_failures.is_empty()
+        && let Err(failure) = journal.finish()
+    {
+        let _ = root.tree.warn(
+            ROOT,
+            mix_core::report::diagnose::warning(
+                Code::CleanupIncomplete,
+                "could not remove the finished journal",
+                &failure,
+            ),
+        );
+    }
+    Ok(verdict)
 }
 
-fn conclude(
+pub fn conclude(
     root: &mut Root,
     verdict: Verdict,
     result: impl FnOnce() -> node_finished::Result,

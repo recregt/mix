@@ -44,6 +44,7 @@ pub enum Status {
     Exited,
     Installed,
     Removed,
+    Updated,
     Ignored,
     Repaired,
     Checked,
@@ -94,6 +95,7 @@ impl Status {
             Status::Exited => verb!("Exited"),
             Status::Installed => verb!("Installed"),
             Status::Removed => verb!("Removed"),
+            Status::Updated => verb!("Updated"),
             Status::Ignored => verb!("Ignored"),
             Status::Repaired => verb!("Repaired"),
             Status::Checked => verb!("Checked"),
@@ -137,6 +139,7 @@ impl Status {
             | Status::Journaled
             | Status::Installed
             | Status::Removed
+            | Status::Updated
             | Status::Ignored
             | Status::Repaired
             | Status::Checked

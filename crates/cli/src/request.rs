@@ -3,7 +3,7 @@ use mix_events::mirror::Mirror;
 use mix_events::v1::command::Request;
 use mix_events::v1::{
     BootstrapRequest, CleanRequest, Code, DoctorRequest, ExplainRequest, InstallRequest,
-    ListRequest, RemoveRequest, RepairRequest,
+    ListRequest, RemoveRequest, RepairRequest, UpdateRequest,
 };
 
 use crate::args::Command;
@@ -57,6 +57,7 @@ pub fn from_args(command: &Command, environment: &Environment) -> Request {
         }),
         Command::Clean { all, .. } => Request::Clean(CleanRequest { all: *all }),
         Command::Repair { .. } => Request::Repair(RepairRequest {}),
+        Command::Update { .. } => Request::Update(UpdateRequest {}),
         Command::Doctor => Request::Doctor(DoctorRequest {}),
         Command::Explain { code, .. } => Request::Explain(ExplainRequest {
             code: code.map(|code| code as i32),
@@ -72,6 +73,7 @@ pub fn route(request: &Request) -> Route {
         | Request::Remove(_)
         | Request::Clean(_)
         | Request::Repair(_)
+        | Request::Update(_)
         | Request::Doctor(_)
         | Request::Explain(_)
         | Request::List(_) => Route::Socket,
@@ -89,6 +91,7 @@ pub fn refused(request: &Request) -> Option<Fault> {
         | Request::Remove(_)
         | Request::Clean(_)
         | Request::Repair(_)
+        | Request::Update(_)
         | Request::Doctor(_)
         | Request::Explain(_)
         | Request::List(_) => None,
@@ -170,6 +173,7 @@ mod tests {
         for command in [
             Command::Doctor,
             Command::Repair { dry_run: false },
+            Command::Update { dry_run: false },
             Command::Clean {
                 all: true,
                 dry_run: false,
@@ -249,6 +253,10 @@ mod tests {
             (
                 Command::Repair { dry_run: false },
                 Request::Repair(RepairRequest {}),
+            ),
+            (
+                Command::Update { dry_run: false },
+                Request::Update(UpdateRequest {}),
             ),
             (Command::Doctor, Request::Doctor(DoctorRequest {})),
             (

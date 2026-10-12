@@ -1393,6 +1393,7 @@ dependencies = [
  "mix-core",
  "mix-events",
  "mix-exec",
+ "mix-nixgen",
  "mix-render",
  "mix-shell",
  "nix",
