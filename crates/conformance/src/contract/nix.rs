@@ -1,7 +1,8 @@
 use mix_core::declared::identity::InvokingUser;
-use mix_core::declared::paths::active_lock_path;
+use mix_core::declared::paths::GENERATION_LOCK_FILE;
 use mix_core::ops::update::Versions;
 use mix_exec::Scope;
+use mix_shell::effect::generations::active_input;
 use mix_shell::request::installed::Installed;
 use mix_shell::request::upstream::{Nix, Upstream};
 
@@ -23,9 +24,9 @@ pub fn versions_agree_with_the_listing(
     mirror: Option<&str>,
 ) -> Result<u32, String> {
     let scope = Scope::root();
-    let lock = std::fs::read_to_string(active_lock_path(&user.home))
-        .map_err(|error| format!("reading the active generation's lock: {error}"))?;
-    let pins = mix_core::declared::pins::read(&lock)
+    let lock = active_input(user, GENERATION_LOCK_FILE)
+        .ok_or("the active generation's lock could not be read from the Nix store")?;
+    let pins = mix_core::declared::pins::read(&String::from_utf8_lossy(&lock))
         .ok_or("the active generation's lock holds no pins")?;
     let listed = runtime
         .block_on(Installed::nix().listing(user, mirror, &scope))

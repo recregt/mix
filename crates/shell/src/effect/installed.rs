@@ -104,10 +104,12 @@ fn unreadable(command: &str, error: impl std::fmt::Display) -> Error {
 
 fn requested(generation: &Path) -> Result<Vec<String>> {
     let path = generation.join(GENERATION_STATE_FILE);
-    let text = std::fs::read_to_string(&path).map_err(|source| Error::Io {
-        path: path.clone(),
-        source,
-    })?;
+    let text = crate::effect::generations::store_input(generation, GENERATION_STATE_FILE)
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .ok_or_else(|| Error::Io {
+            path: path.clone(),
+            source: std::io::Error::from(std::io::ErrorKind::NotFound),
+        })?;
     StateManifest::parse(&text)
         .map(|manifest| manifest.packages)
         .map_err(|error| Error::Io {

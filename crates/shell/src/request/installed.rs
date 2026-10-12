@@ -42,6 +42,7 @@ type Slot = Arc<tokio::sync::Mutex<Option<Listed>>>;
 
 pub struct Installed {
     source: Arc<dyn Source>,
+    store: PathBuf,
     users: Mutex<HashMap<u32, Slot>>,
 }
 
@@ -53,8 +54,14 @@ impl Installed {
     pub fn with_source(source: Arc<dyn Source>) -> Self {
         Self {
             source,
+            store: PathBuf::from(mix_core::declared::paths::NIX_STORE),
             users: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub fn in_store(mut self, store: impl Into<PathBuf>) -> Self {
+        self.store = store.into();
+        self
     }
 
     fn slot(&self, uid: u32) -> Slot {
@@ -73,7 +80,9 @@ impl Installed {
         mirror: Option<&str>,
         scope: &Scope,
     ) -> Result<Option<Listed>> {
-        let Some(generation) = crate::effect::generations::active_generation(user) else {
+        let link = crate::effect::generations::profile_link(user);
+        let Some(generation) = crate::effect::generations::store_generation(&link, &self.store)
+        else {
             return Ok(None);
         };
         let slot = self.slot(user.uid);
@@ -174,7 +183,11 @@ mod tests {
     }
 
     fn activate(home: &Path, generation: &str) -> PathBuf {
-        let store = home.join("store").join(generation);
+        activate_in(home, &home.join("store"), generation)
+    }
+
+    fn activate_in(home: &Path, store: &Path, generation: &str) -> PathBuf {
+        let store = store.join(generation);
         std::fs::create_dir_all(&store).unwrap();
         let profiles = nix_profiles_dir(home);
         std::fs::create_dir_all(&profiles).unwrap();
@@ -184,8 +197,10 @@ mod tests {
         std::fs::canonicalize(store).unwrap()
     }
 
-    fn installed(source: &Arc<Counted>) -> Installed {
+    fn installed(source: &Arc<Counted>, home: &Path) -> Installed {
+        std::fs::create_dir_all(home.join("store")).unwrap();
         Installed::with_source(Arc::clone(source) as Arc<dyn Source>)
+            .in_store(std::fs::canonicalize(home.join("store")).unwrap())
     }
 
     #[tokio::test]
@@ -193,7 +208,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let source = Arc::new(Counted::default());
 
-        let listing = installed(&source)
+        let listing = installed(&source, home.path())
             .listing(&user(home.path()), None, &Scope::root())
             .await
             .unwrap();
@@ -207,7 +222,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let generation = activate(home.path(), "one");
         let source = Arc::new(Counted::default());
-        let installed = installed(&source);
+        let installed = installed(&source, home.path());
         let scope = Scope::root();
 
         let first = installed
@@ -231,7 +246,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         activate(home.path(), "one");
         let source = Arc::new(Counted::default());
-        let installed = installed(&source);
+        let installed = installed(&source, home.path());
         let scope = Scope::root();
         installed
             .listing(&user(home.path()), None, &scope)
@@ -258,7 +273,7 @@ mod tests {
             fail: Mutex::new(1),
             ..Counted::default()
         });
-        let installed = installed(&source);
+        let installed = installed(&source, home.path());
         let scope = Scope::root();
 
         assert!(
@@ -285,7 +300,7 @@ mod tests {
             gate: Some(Arc::clone(&gate)),
             ..Counted::default()
         });
-        let installed = Arc::new(installed(&source));
+        let installed = Arc::new(installed(&source, home.path()));
         let who = user(home.path());
         let listings: Vec<_> = (0..4)
             .map(|_| {
@@ -315,7 +330,7 @@ mod tests {
             gate: Some(Arc::clone(&gate)),
             ..Counted::default()
         });
-        let installed = Arc::new(installed(&source));
+        let installed = Arc::new(installed(&source, home.path()));
         let who = user(home.path());
         let first = {
             let installed = Arc::clone(&installed);
@@ -339,10 +354,11 @@ mod tests {
     async fn each_user_has_a_record_of_their_own() {
         let alice = tempfile::tempdir().unwrap();
         let bob = tempfile::tempdir().unwrap();
-        activate(alice.path(), "one");
-        activate(bob.path(), "one");
+        let store = alice.path().join("store");
+        activate_in(alice.path(), &store, "alice-one");
+        activate_in(bob.path(), &store, "bob-one");
         let source = Arc::new(Counted::default());
-        let installed = installed(&source);
+        let installed = installed(&source, alice.path());
         let scope = Scope::root();
         let mut other = user(bob.path());
         other.uid = 1001;

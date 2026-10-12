@@ -3,9 +3,10 @@ use std::path::Path;
 use mix_core::declared::identity::InvokingUser;
 
 use mix_core::declared::paths::{
-    GENERATION_INPUTS, GENERATION_STATE_FILE, HOME_MANAGER_PROFILE_NAME, mix_state_dir,
-    nix_profiles_dir,
+    GENERATION_INPUTS, HOME_MANAGER_PROFILE_NAME, NIX_STORE, mix_state_dir, nix_profiles_dir,
 };
+
+use crate::effect::generations::{store_generation, store_input};
 
 pub use mix_core::ops::change::{Invalid, STATE_VERSION, Settled, Source, validate};
 
@@ -20,13 +21,11 @@ pub fn settle(
     )
 }
 
-pub fn active_generation_state(home: &Path) -> std::path::PathBuf {
-    nix_profiles_dir(home)
-        .join(HOME_MANAGER_PROFILE_NAME)
-        .join(GENERATION_STATE_FILE)
+pub fn built_generation(home: &Path, generations: &[u64]) -> Option<u64> {
+    built_generation_in(home, generations, Path::new(NIX_STORE))
 }
 
-pub fn built_generation(home: &Path, generations: &[u64]) -> Option<u64> {
+fn built_generation_in(home: &Path, generations: &[u64], store: &Path) -> Option<u64> {
     let state = mix_state_dir(home);
     let inputs: Vec<Vec<u8>> = GENERATION_INPUTS
         .iter()
@@ -35,17 +34,16 @@ pub fn built_generation(home: &Path, generations: &[u64]) -> Option<u64> {
     let mut generations = generations.to_vec();
     generations.sort_unstable_by(|a, b| b.cmp(a));
     generations.into_iter().find(|generation| {
-        let dir =
+        let link =
             nix_profiles_dir(home).join(format!("{HOME_MANAGER_PROFILE_NAME}-{generation}-link"));
+        let Some(dir) = store_generation(&link, store) else {
+            return false;
+        };
         GENERATION_INPUTS
             .iter()
             .zip(&inputs)
-            .all(|((_, copy), wanted)| std::fs::read(dir.join(copy)).ok().as_ref() == Some(wanted))
+            .all(|((_, copy), wanted)| store_input(&dir, copy).as_ref() == Some(wanted))
     })
-}
-
-pub fn read(path: &Path) -> Option<String> {
-    std::fs::read_to_string(path).ok()
 }
 
 #[cfg(test)]
@@ -55,7 +53,7 @@ mod tests {
     use mix_core::model::testkit::required_with;
 
     use super::*;
-    use mix_core::declared::paths::STATE_FILE;
+    use mix_core::declared::paths::{GENERATION_STATE_FILE, STATE_FILE};
 
     fn owner(home: &Path) -> InvokingUser {
         InvokingUser {
@@ -82,7 +80,7 @@ mod tests {
     }
 
     #[test]
-    fn the_list_is_read_from_the_state_file_and_the_active_generation() {
+    fn a_generation_outside_the_nix_store_is_never_read() {
         let home = tempfile::tempdir().unwrap();
         write_file(home.path(), &required_with(&["hello"]).render());
         write_generation(home.path(), &required_with(&[]).render());
@@ -94,8 +92,8 @@ mod tests {
                 &crate::request::Locked::for_tests(),
             ),
             Settled::Current {
-                manifest: required_with(&[]),
-                source: Source::Generation,
+                manifest: required_with(&["hello"]),
+                source: Source::File,
             }
         );
     }
@@ -105,6 +103,10 @@ mod tests {
         for (index, _) in GENERATION_INPUTS.iter().enumerate() {
             std::fs::write(dir.join(names(index)), format!("{index} {packages}")).unwrap();
         }
+    }
+
+    fn built_in(home: &Path, generations: &[u64], store: &Path) -> Option<u64> {
+        built_generation_in(home, generations, store)
     }
 
     fn write_built(home: &Path, generation: u64, packages: &str) {
@@ -131,9 +133,11 @@ mod tests {
         write_built(home.path(), 3, "git");
         write_built(home.path(), 4, "git hello");
 
-        assert_eq!(built_generation(home.path(), &[1, 2, 3, 4]), Some(3));
-        assert_eq!(built_generation(home.path(), &[1, 2, 4]), Some(1));
-        assert_eq!(built_generation(home.path(), &[2, 4]), None);
+        let store = std::fs::canonicalize(home.path()).unwrap();
+        assert_eq!(built_in(home.path(), &[1, 2, 3, 4], &store), Some(3));
+        assert_eq!(built_in(home.path(), &[1, 2, 4], &store), Some(1));
+        assert_eq!(built_in(home.path(), &[2, 4], &store), None);
+        assert_eq!(built_generation(home.path(), &[1, 2, 3, 4]), None);
     }
 
     #[test]
@@ -148,7 +152,8 @@ mod tests {
         let out = home.path().join("store-1");
         std::fs::remove_file(out.join(GENERATION_INPUTS[3].1)).unwrap();
 
-        assert_eq!(built_generation(home.path(), &[1]), None);
+        let store = std::fs::canonicalize(home.path()).unwrap();
+        assert_eq!(built_in(home.path(), &[1], &store), None);
     }
 
     #[test]

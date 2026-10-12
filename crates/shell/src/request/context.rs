@@ -3,16 +3,19 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use mix_core::declared::identity::InvokingUser;
 use mix_core::declared::paths::{
-    FLAKE_LOCK, HOME_NIX, NIX_OWNERSHIP_MARKER, NIX_STORE, NIXOS_MARKER, STATE_FILE, mix_state_dir,
+    FLAKE_LOCK, GENERATION_LOCK_FILE, GENERATION_STATE_FILE, HOME_NIX, NIX_OWNERSHIP_MARKER,
+    NIX_STORE, NIXOS_MARKER, STATE_FILE, mix_state_dir,
 };
 use mix_core::declared::policy::{Mirror, Policy};
 use mix_core::declared::targets::UserConfig;
+use mix_core::effect::{Fact, Query};
 use mix_core::model::World;
 use mix_events::Outbox;
 use mix_exec::Scope;
 
 use crate::drive::Performer;
 use crate::effect::files::Files;
+use crate::effect::generations::active_input;
 use crate::request::Locked;
 
 #[derive(Clone, Default)]
@@ -27,12 +30,20 @@ impl Host {
         world.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    fn text(bytes: &[u8]) -> String {
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+
     fn read(&self, path: &Path) -> Option<String> {
         match self {
-            Host::Machine => crate::profile::state::read(path),
-            Host::Model(world) => Self::world(world)
-                .contents(path)
-                .map(|bytes| String::from_utf8_lossy(bytes).into_owned()),
+            Host::Machine => {
+                let files = Files::open(Path::new("/"), "host").ok()?;
+                match files.observe(&Query::Contents(path.to_path_buf()))? {
+                    Fact::Contents(Some(bytes)) => Some(Self::text(&bytes)),
+                    _ => None,
+                }
+            }
+            Host::Model(world) => Self::world(world).contents(path).map(Self::text),
         }
     }
 
@@ -50,23 +61,19 @@ impl Host {
 
     pub fn active_list(&self, user: &InvokingUser) -> Option<String> {
         match self {
-            Host::Machine => crate::profile::state::read(
-                &crate::profile::state::active_generation_state(&user.home),
-            ),
-            Host::Model(world) => Self::world(world)
-                .active_list(user)
-                .map(|bytes| String::from_utf8_lossy(bytes).into_owned()),
+            Host::Machine => active_input(user, GENERATION_STATE_FILE)
+                .as_deref()
+                .map(Self::text),
+            Host::Model(world) => Self::world(world).active_list(user).map(Self::text),
         }
     }
 
     pub fn active_lock(&self, user: &InvokingUser) -> Option<String> {
         match self {
-            Host::Machine => crate::profile::state::read(
-                &mix_core::declared::paths::active_lock_path(&user.home),
-            ),
-            Host::Model(world) => Self::world(world)
-                .active_lock(user)
-                .map(|bytes| String::from_utf8_lossy(bytes).into_owned()),
+            Host::Machine => active_input(user, GENERATION_LOCK_FILE)
+                .as_deref()
+                .map(Self::text),
+            Host::Model(world) => Self::world(world).active_lock(user).map(Self::text),
         }
     }
 
