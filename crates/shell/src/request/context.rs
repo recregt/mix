@@ -3,8 +3,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use mix_core::declared::identity::InvokingUser;
 use mix_core::declared::paths::{
-    FLAKE_LOCK, FLAKE_NIX, HOME_NIX, NIX_OWNERSHIP_MARKER, NIX_STORE, NIXOS_MARKER, STATE_FILE,
-    mix_state_dir,
+    FLAKE_LOCK, HOME_NIX, NIX_OWNERSHIP_MARKER, NIX_STORE, NIXOS_MARKER, STATE_FILE, mix_state_dir,
 };
 use mix_core::declared::policy::{Mirror, Policy};
 use mix_core::declared::targets::UserConfig;
@@ -41,10 +40,6 @@ impl Host {
         self.read(&mix_state_dir(&user.home).join(STATE_FILE))
     }
 
-    pub fn flake_nix(&self, user: &InvokingUser) -> Option<String> {
-        self.read(&mix_state_dir(&user.home).join(FLAKE_NIX))
-    }
-
     pub fn flake_lock(&self, user: &InvokingUser) -> Option<String> {
         self.read(&mix_state_dir(&user.home).join(FLAKE_LOCK))
     }
@@ -60,6 +55,17 @@ impl Host {
             ),
             Host::Model(world) => Self::world(world)
                 .active_list(user)
+                .map(|bytes| String::from_utf8_lossy(bytes).into_owned()),
+        }
+    }
+
+    pub fn active_lock(&self, user: &InvokingUser) -> Option<String> {
+        match self {
+            Host::Machine => crate::profile::state::read(
+                &mix_core::declared::paths::active_lock_path(&user.home),
+            ),
+            Host::Model(world) => Self::world(world)
+                .active_lock(user)
                 .map(|bytes| String::from_utf8_lossy(bytes).into_owned()),
         }
     }
@@ -133,7 +139,6 @@ pub struct Context {
     pub dry_run: bool,
     pub host: Host,
     pub installed: Arc<crate::request::installed::Installed>,
-    pub pinned: Arc<crate::request::pinned::Pinned>,
     pub upstream: Arc<dyn crate::request::upstream::Upstream>,
     pub faults: Option<Arc<crate::drive::Faults>>,
 }

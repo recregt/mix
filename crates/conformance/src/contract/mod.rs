@@ -1,6 +1,7 @@
 pub mod accounts;
 pub mod files;
 pub mod git;
+pub mod nix;
 pub mod units;
 
 use mix_core::effect::{Action, Fact, Failure, Outcome, PathFacts, Query};

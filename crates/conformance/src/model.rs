@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use mix_core::declared::identity::InvokingUser;
@@ -5,14 +6,16 @@ use mix_core::declared::paths::RUNNING_PROGRAM;
 use mix_core::declared::policy::Policy;
 use mix_core::effect::UserFacts;
 use mix_core::model::World;
+use mix_core::ops::update::Versions;
 use mix_events::Render;
 use mix_events::v1::command::Request;
 use mix_events::v1::{Command, Envelope};
+use mix_nixgen::lock::{EMBEDDED, LockedInput, NarHash};
+use mix_nixgen::{Pins, Rev};
 use mix_shell::drive::Faults;
 use mix_shell::request::context::Host;
 use mix_shell::request::lock::Locks;
-use mix_shell::request::pinned::Pinned;
-use mix_shell::request::upstream::Upstream;
+use mix_shell::request::upstream::{Evaluated, Newest, Upstream};
 use mix_shell::{Caller, Session};
 use serde_json::Value;
 
@@ -63,14 +66,78 @@ pub fn pristine(user: &InvokingUser) -> World {
     world
 }
 
+pub struct Channel {
+    head: AtomicI64,
+}
+
+impl Channel {
+    pub const DAY: i64 = 86_400;
+
+    pub fn at(head: i64) -> Self {
+        Self {
+            head: AtomicI64::new(head),
+        }
+    }
+
+    pub fn head(&self) -> i64 {
+        self.head.load(Ordering::SeqCst)
+    }
+
+    pub fn advance(&self) {
+        self.head.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub fn pins(&self) -> Pins<LockedInput> {
+        let head = self.head();
+        let locked = |embedded: &LockedInput, salt: u8| LockedInput {
+            rev: Rev::parse(format!("{salt:02x}{:038x}", head.unsigned_abs())).expect("hex digits"),
+            nar_hash: NarHash::parse("sha256-pD3qVlQ4mUCFoTWrYtxecpSitQMsgJvJIN0FUIDZoEU=")
+                .expect("a nar hash"),
+            last_modified: embedded
+                .last_modified
+                .checked_add_signed(head * Self::DAY)
+                .expect("a time after the epoch"),
+        };
+        Pins {
+            home_manager: locked(&EMBEDDED.home_manager, 0xaa),
+            nixpkgs: locked(&EMBEDDED.nixpkgs, 0xbb),
+        }
+    }
+
+    pub fn version(pins: &Pins<LockedInput>) -> String {
+        pins.nixpkgs.rev.as_str()[..7].to_string()
+    }
+}
+
+impl Upstream for Channel {
+    fn newest<'a>(&'a self, _: &'a InvokingUser, _: &'a mix_exec::Scope) -> Newest<'a> {
+        Box::pin(async move { Ok(self.pins()) })
+    }
+
+    fn versions<'a>(
+        &'a self,
+        _: &'a InvokingUser,
+        packages: &'a [String],
+        pins: &'a Pins<LockedInput>,
+        _: &'a mix_exec::Scope,
+    ) -> Evaluated<'a> {
+        let version = Self::version(pins);
+        Box::pin(async move {
+            Ok(packages
+                .iter()
+                .map(|name| (name.clone(), Some(version.clone())))
+                .collect::<Versions>())
+        })
+    }
+}
+
 pub struct Model {
     pub world: Arc<Mutex<World>>,
     dir: tempfile::TempDir,
     locks: Arc<Locks>,
     user: InvokingUser,
     policy: Policy,
-    upstream: Option<Arc<dyn Upstream>>,
-    pinned: Option<Arc<Pinned>>,
+    upstream: Arc<Channel>,
 }
 
 impl Model {
@@ -83,19 +150,22 @@ impl Model {
             locks,
             user,
             policy,
-            upstream: None,
-            pinned: None,
+            upstream: Arc::new(Channel::at(1)),
         }
     }
 
-    pub fn with_upstream(mut self, upstream: Arc<dyn Upstream>) -> Self {
-        self.upstream = Some(upstream);
+    pub fn with_upstream(mut self, upstream: Channel) -> Self {
+        self.upstream = Arc::new(upstream);
         self
     }
 
-    pub fn remembering(mut self) -> Self {
-        self.pinned = Some(Arc::new(Pinned::default()));
+    pub fn with_policy(mut self, policy: Policy) -> Self {
+        self.policy = policy;
         self
+    }
+
+    pub fn upstream(&self) -> &Channel {
+        &self.upstream
     }
 
     pub fn new() -> Self {
@@ -141,15 +211,8 @@ impl Model {
     }
 
     pub fn fork(&self) -> Self {
-        let fork = Self::on(self.snapshot(), self.user.clone(), self.policy.clone());
-        let fork = match &self.upstream {
-            Some(upstream) => fork.with_upstream(Arc::clone(upstream)),
-            None => fork,
-        };
-        match &self.pinned {
-            Some(_) => fork.remembering(),
-            None => fork,
-        }
+        Self::on(self.snapshot(), self.user.clone(), self.policy.clone())
+            .with_upstream(Channel::at(self.upstream.head()))
     }
 
     async fn request(
@@ -173,12 +236,7 @@ impl Model {
         if let Some(faults) = &faults {
             session = session.with_faults(Arc::clone(faults));
         }
-        if let Some(upstream) = &self.upstream {
-            session = session.with_upstream(Arc::clone(upstream));
-        }
-        if let Some(pinned) = &self.pinned {
-            session = session.with_pinned(Arc::clone(pinned));
-        }
+        session = session.with_upstream(Arc::clone(&self.upstream) as Arc<dyn Upstream>);
         let ran = mix_shell::request::run(
             &session,
             Command {

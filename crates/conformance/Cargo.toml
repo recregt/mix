@@ -11,6 +11,7 @@ mimalloc = "0.1.52"
 mix-core = { path = "../core", features = ["testkit"] }
 mix-events = { path = "../events" }
 mix-exec = { path = "../exec" }
+mix-nixgen = { path = "../nixgen" }
 mix-render = { path = "../render" }
 mix-shell = { path = "../shell" }
 nix = { workspace = true }
@@ -19,9 +20,6 @@ proptest-state-machine = "0.8.0"
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
-
-[dev-dependencies]
-mix-nixgen = { path = "../nixgen" }
 
 [lints]
 workspace = true

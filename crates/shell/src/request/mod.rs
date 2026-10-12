@@ -2,7 +2,6 @@ pub mod context;
 mod delivery;
 pub mod installed;
 pub mod lock;
-pub mod pinned;
 pub mod sink;
 pub mod upstream;
 
@@ -22,7 +21,6 @@ use crate::drive::stopped_by;
 use crate::request::context::Context;
 use crate::request::installed::Installed;
 use crate::request::lock::{Blocked, Holder, Locks};
-use crate::request::pinned::Pinned;
 use crate::request::sink::{Render, Shared};
 use crate::request::upstream::Upstream;
 use delivery::open;
@@ -41,7 +39,7 @@ pub enum Caller {
         peer_is_root: bool,
         account: Option<InvokingUser>,
     },
-    Fixed(Option<UserConfig>),
+    Fixed(Option<Box<UserConfig>>),
 }
 
 pub struct Session {
@@ -49,7 +47,6 @@ pub struct Session {
     pub render: Shared,
     pub locks: Option<Arc<Locks>>,
     pub installed: Arc<Installed>,
-    pub pinned: Arc<Pinned>,
     pub upstream: Arc<dyn Upstream>,
     pub caller: Caller,
     pub policy: Option<Policy>,
@@ -65,7 +62,6 @@ impl Session {
             render: crate::request::sink::shared(crate::request::sink::Quiet),
             locks: None,
             installed: Arc::new(Installed::nix()),
-            pinned: Arc::new(Pinned::default()),
             upstream: Arc::new(crate::request::upstream::Nix),
             caller: Caller::Fixed(None),
             policy: None,
@@ -105,11 +101,6 @@ impl Session {
         self
     }
 
-    pub fn with_pinned(mut self, pinned: Arc<Pinned>) -> Self {
-        self.pinned = pinned;
-        self
-    }
-
     pub fn with_upstream(mut self, upstream: Arc<dyn Upstream>) -> Self {
         self.upstream = upstream;
         self
@@ -121,7 +112,7 @@ impl Session {
     }
 
     pub fn with_user(self, user: Option<UserConfig>) -> Self {
-        self.with_caller(Caller::Fixed(user))
+        self.with_caller(Caller::Fixed(user.map(Box::new)))
     }
 
     pub fn with_policy(mut self, policy: Policy) -> Self {
@@ -151,22 +142,19 @@ impl Session {
         )
     }
 
-    fn user(&self, enrolling: bool, locked: &Locked) -> (Option<UserConfig>, bool) {
+    fn user(&self, enrolling: bool, mirrored: bool, locked: &Locked) -> (Option<UserConfig>, bool) {
         match &self.caller {
-            Caller::Fixed(config) => (config.clone(), false),
+            Caller::Fixed(config) => (config.as_deref().cloned(), false),
             Caller::Account {
                 peer_is_root,
                 account,
             } => {
                 let config = account.clone().and_then(|account| {
                     if enrolling {
-                        crate::profile::user_config_for(account, &self.host, &self.pinned, locked)
+                        crate::profile::user_config_for(account, &self.host, mirrored, locked)
                     } else {
                         crate::profile::existing_user_config_for(
-                            account,
-                            &self.host,
-                            &self.pinned,
-                            locked,
+                            account, &self.host, mirrored, locked,
                         )
                     }
                 });
@@ -267,22 +255,22 @@ async fn host(
         }
     };
     let locked = Locked(());
-    let (user, caller_is_root) = session.user(enrolling, &locked);
+    let policy = policy
+        .or_else(|| session.policy.clone())
+        .unwrap_or_else(stored_policy);
+    let (user, caller_is_root) = session.user(enrolling, policy.mirror().is_some(), &locked);
     let ctx = Context {
         request: opened,
         user,
         caller_is_root,
         scope: session.scope.clone(),
-        policy: policy
-            .or_else(|| session.policy.clone())
-            .unwrap_or_else(stored_policy),
+        policy,
         render: Arc::clone(&session.render),
         locked,
         journals: session.journals.clone(),
         dry_run,
         host: session.host.clone(),
         installed: Arc::clone(&session.installed),
-        pinned: Arc::clone(&session.pinned),
         upstream: Arc::clone(&session.upstream),
         faults: session.faults.clone(),
     };

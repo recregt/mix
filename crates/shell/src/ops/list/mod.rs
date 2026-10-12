@@ -93,8 +93,9 @@ mod tests {
                 name: "mix-user".to_string(),
                 home: home.to_path_buf(),
             },
+            pins: mix_nixgen::lock::EMBEDDED,
             flake: "flake-content".to_string(),
-            lock: "lock-content".to_string(),
+            lock: mix_nixgen::lock::render(mix_nixgen::lock::EMBEDDED),
             home: "home-content".to_string(),
             restored_state: None,
         }

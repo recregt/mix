@@ -1,48 +1,78 @@
 use std::collections::BTreeMap;
 
 use mix_nixgen::lock::LockedInput;
-use mix_nixgen::{INPUTS, Pins};
+use mix_nixgen::{INPUTS, Input, Pin, Pins};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    Updated,
+    Current,
+    Kept,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputUpdate {
-    pub name: &'static str,
-    pub owner: &'static str,
-    pub repo: &'static str,
-    pub branch: &'static str,
-    pub before: LockedInput,
-    pub after: LockedInput,
+    pub pin: Pin,
+    pub outcome: Outcome,
+    pub from: LockedInput,
+    pub to: LockedInput,
 }
 
 impl InputUpdate {
-    pub fn moved(&self) -> bool {
-        self.before.rev != self.after.rev
+    pub fn input(&self) -> &'static Input {
+        self.pin.input()
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Decision {
     pub inputs: Vec<InputUpdate>,
+    pub pins: Pins<LockedInput>,
+}
+
+fn step(from: &LockedInput, newest: &LockedInput) -> (Outcome, LockedInput) {
+    if newest.rev == from.rev {
+        (Outcome::Current, from.clone())
+    } else if newest.last_modified > from.last_modified {
+        (Outcome::Updated, newest.clone())
+    } else {
+        (Outcome::Kept, from.clone())
+    }
 }
 
 pub fn decide(have: &Pins<LockedInput>, newest: &Pins<LockedInput>) -> Decision {
-    Decision {
-        inputs: INPUTS
+    let inputs: Vec<InputUpdate> = INPUTS
+        .iter()
+        .map(|input| {
+            let from = have.of(input.pin);
+            let (outcome, to) = step(from, newest.of(input.pin));
+            InputUpdate {
+                pin: input.pin,
+                outcome,
+                from: from.clone(),
+                to,
+            }
+        })
+        .collect();
+    let to = |pin: Pin| {
+        inputs
             .iter()
-            .map(|input| InputUpdate {
-                name: input.name,
-                owner: input.owner,
-                repo: input.repo,
-                branch: input.branch,
-                before: have.of(input.pin).clone(),
-                after: newest.of(input.pin).clone(),
-            })
-            .collect(),
-    }
+            .find(|update| update.pin == pin)
+            .map(|update| update.to.clone())
+            .expect("every pin has an input")
+    };
+    let pins = Pins {
+        home_manager: to(Pin::HomeManager),
+        nixpkgs: to(Pin::Nixpkgs),
+    };
+    Decision { inputs, pins }
 }
 
 impl Decision {
     pub fn moved(&self) -> impl Iterator<Item = &InputUpdate> {
-        self.inputs.iter().filter(|input| input.moved())
+        self.inputs
+            .iter()
+            .filter(|update| update.outcome == Outcome::Updated)
     }
 
     pub fn is_current(&self) -> bool {
@@ -51,7 +81,7 @@ impl Decision {
 
     pub fn subject(&self) -> String {
         self.moved()
-            .map(|input| input.name)
+            .map(|update| update.input().name)
             .collect::<Vec<_>>()
             .join(", ")
     }
@@ -64,20 +94,22 @@ pub struct PackageChange {
     pub to: Option<String>,
 }
 
-pub fn package_changes(
-    before: &BTreeMap<String, String>,
-    after: &BTreeMap<String, String>,
-) -> Vec<PackageChange> {
+pub type Versions = BTreeMap<String, Option<String>>;
+
+pub fn package_changes(before: &Versions, after: &Versions) -> Vec<PackageChange> {
     let mut names: Vec<&String> = before.keys().chain(after.keys()).collect();
     names.sort_unstable();
     names.dedup();
     names
         .into_iter()
-        .filter(|name| before.get(*name) != after.get(*name))
-        .map(|name| PackageChange {
-            name: name.clone(),
-            from: before.get(name).cloned(),
-            to: after.get(name).cloned(),
+        .filter_map(|name| {
+            let from = before.get(name).cloned().flatten();
+            let to = after.get(name).cloned().flatten();
+            (from != to).then(|| PackageChange {
+                name: name.clone(),
+                from,
+                to,
+            })
         })
         .collect()
 }
@@ -101,59 +133,85 @@ mod tests {
         }
     }
 
-    fn pins(home_manager: &str, nixpkgs: &str) -> Pins<LockedInput> {
+    fn pins(home_manager: (&str, u64), nixpkgs: (&str, u64)) -> Pins<LockedInput> {
         Pins {
-            home_manager: locked(home_manager, 1),
-            nixpkgs: locked(nixpkgs, 2),
+            home_manager: locked(home_manager.0, home_manager.1),
+            nixpkgs: locked(nixpkgs.0, nixpkgs.1),
         }
     }
 
-    fn versions(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+    fn versions(pairs: &[(&str, Option<&str>)]) -> Versions {
         pairs
             .iter()
-            .map(|(name, version)| (name.to_string(), version.to_string()))
+            .map(|(name, version)| (name.to_string(), version.map(str::to_string)))
+            .collect()
+    }
+
+    fn outcomes(decision: &Decision) -> Vec<(&str, Outcome)> {
+        decision
+            .inputs
+            .iter()
+            .map(|update| (update.input().name, update.outcome))
             .collect()
     }
 
     #[test]
     fn every_input_is_reported_whether_or_not_it_moved() {
-        let decision = decide(&pins(OLD, OLD), &pins(OLD, NEW));
-        let names: Vec<&str> = decision.inputs.iter().map(|input| input.name).collect();
-        assert_eq!(names, vec!["home-manager", "nixpkgs"]);
+        let decision = decide(&pins((OLD, 1), (OLD, 1)), &pins((OLD, 1), (NEW, 2)));
+        assert_eq!(
+            outcomes(&decision),
+            vec![
+                ("home-manager", Outcome::Current),
+                ("nixpkgs", Outcome::Updated)
+            ]
+        );
     }
 
     #[test]
     fn pins_that_have_not_moved_need_no_update() {
-        let decision = decide(&pins(OLD, OLD), &pins(OLD, OLD));
+        let have = pins((OLD, 1), (OLD, 1));
+        let decision = decide(&have, &have);
         assert!(decision.is_current());
-        assert_eq!(decision.moved().count(), 0);
         assert_eq!(decision.subject(), "");
+        assert_eq!(decision.pins, have);
     }
 
     #[test]
-    fn only_the_input_that_moved_is_reported_as_moved() {
-        let decision = decide(&pins(OLD, OLD), &pins(OLD, NEW));
+    fn an_input_that_moved_takes_the_newest_pin() {
+        let decision = decide(&pins((OLD, 1), (OLD, 1)), &pins((OLD, 1), (NEW, 2)));
         let moved: Vec<&InputUpdate> = decision.moved().collect();
         assert_eq!(moved.len(), 1);
-        assert_eq!(moved[0].name, "nixpkgs");
-        assert_eq!(moved[0].owner, "NixOS");
-        assert_eq!(moved[0].branch, "nixos-unstable");
-        assert_eq!(moved[0].before, locked(OLD, 2));
-        assert_eq!(moved[0].after, locked(NEW, 2));
+        assert_eq!(moved[0].input().name, "nixpkgs");
+        assert_eq!(moved[0].input().branch, "nixos-unstable");
+        assert_eq!(moved[0].from, locked(OLD, 1));
+        assert_eq!(moved[0].to, locked(NEW, 2));
+        assert_eq!(decision.pins, pins((OLD, 1), (NEW, 2)));
         assert_eq!(decision.subject(), "nixpkgs");
     }
 
     #[test]
     fn both_inputs_can_move_together() {
-        let decision = decide(&pins(OLD, OLD), &pins(NEW, NEW));
+        let decision = decide(&pins((OLD, 1), (OLD, 1)), &pins((NEW, 2), (NEW, 2)));
         assert!(!decision.is_current());
         assert_eq!(decision.subject(), "home-manager, nixpkgs");
     }
 
     #[test]
+    fn a_pin_never_moves_back_to_an_older_upstream() {
+        let have = pins((NEW, 5), (NEW, 5));
+        let decision = decide(&have, &pins((OLD, 1), (OLD, 5)));
+        assert_eq!(
+            outcomes(&decision),
+            vec![("home-manager", Outcome::Kept), ("nixpkgs", Outcome::Kept)]
+        );
+        assert!(decision.is_current());
+        assert_eq!(decision.pins, have);
+    }
+
+    #[test]
     fn a_package_is_reported_only_when_its_version_changed() {
-        let before = versions(&[("curl", "8.22.0"), ("git", "2.55.0"), ("qemu", "11.1.0")]);
-        let after = versions(&[("curl", "8.22.0"), ("git", "2.55.0"), ("qemu", "11.1.1")]);
+        let before = versions(&[("curl", Some("8.22.0")), ("qemu", Some("11.1.0"))]);
+        let after = versions(&[("curl", Some("8.22.0")), ("qemu", Some("11.1.1"))]);
         assert_eq!(
             package_changes(&before, &after),
             vec![PackageChange {
@@ -165,30 +223,31 @@ mod tests {
     }
 
     #[test]
-    fn a_package_that_appears_or_vanishes_has_one_side_missing() {
-        let before = versions(&[("old", "1.0")]);
-        let after = versions(&[("new", "2.0")]);
+    fn a_package_that_gains_or_loses_a_version_has_one_side_missing() {
+        let before = versions(&[("gone", Some("1.0")), ("new", None)]);
+        let after = versions(&[("gone", None), ("new", Some("2.0"))]);
         assert_eq!(
             package_changes(&before, &after),
             vec![
                 PackageChange {
+                    name: "gone".into(),
+                    from: Some("1.0".into()),
+                    to: None,
+                },
+                PackageChange {
                     name: "new".into(),
                     from: None,
                     to: Some("2.0".into()),
-                },
-                PackageChange {
-                    name: "old".into(),
-                    from: Some("1.0".into()),
-                    to: None,
                 },
             ]
         );
     }
 
     #[test]
-    fn identical_versions_have_no_changes() {
-        let same = versions(&[("git", "2.55.0")]);
+    fn a_package_without_a_version_on_either_side_has_no_change() {
+        let same = versions(&[("lib", None), ("git", Some("2.55.0"))]);
         assert!(package_changes(&same, &same).is_empty());
-        assert!(package_changes(&BTreeMap::new(), &BTreeMap::new()).is_empty());
+        assert!(package_changes(&same, &versions(&[("lib", None)])).len() == 1);
+        assert!(package_changes(&Versions::new(), &Versions::new()).is_empty());
     }
 }

@@ -737,11 +737,23 @@ fn slot(envelope: &Envelope) -> Option<usize> {
 
 const SLOTS: usize = 25;
 
-fn pinned_input(name: &str, rev: &str) -> mix_events::v1::PinnedInput {
-    mix_events::v1::PinnedInput {
-        name: name.into(),
+fn input_update(
+    name: &str,
+    outcome: mix_events::v1::InputOutcome,
+    from: &str,
+    to: &str,
+) -> mix_events::v1::InputUpdate {
+    let revision = |rev: &str| mix_events::v1::LockedRevision {
         rev: rev.into(),
-        ..mix_events::v1::PinnedInput::default()
+        ..mix_events::v1::LockedRevision::default()
+    };
+    mix_events::v1::InputUpdate {
+        name: name.into(),
+        branch: "nixos-unstable".into(),
+        outcome: outcome as i32,
+        from: Some(revision(from)),
+        to: Some(revision(to)),
+        ..mix_events::v1::InputUpdate::default()
     }
 }
 
@@ -766,35 +778,31 @@ fn updated() -> Vec<Envelope> {
             .with_result(node_finished::Result::Update(
                 mix_events::v1::UpdateResult {
                     inputs: vec![
-                        mix_events::v1::PinUpdate {
-                            outcome: mix_events::v1::PinOutcome::Updated as i32,
-                            before: Some(pinned_input(
-                                "nixpkgs",
-                                "efe6f071ede9d21c37462d2d6682d5e670099684",
-                            )),
-                            after: Some(pinned_input(
-                                "nixpkgs",
-                                "6510408d147d8c5e6d76043e899e9251756f6a75",
-                            )),
-                        },
-                        mix_events::v1::PinUpdate {
-                            outcome: mix_events::v1::PinOutcome::Current as i32,
-                            before: Some(pinned_input(
-                                "home-manager",
-                                "efa3ccb4c3cc90d832eab232976379058fa75aa3",
-                            )),
-                            after: Some(pinned_input(
-                                "home-manager",
-                                "efa3ccb4c3cc90d832eab232976379058fa75aa3",
-                            )),
-                        },
+                        input_update(
+                            "home-manager",
+                            mix_events::v1::InputOutcome::Current,
+                            "efa3ccb4c3cc90d832eab232976379058fa75aa3",
+                            "efa3ccb4c3cc90d832eab232976379058fa75aa3",
+                        ),
+                        input_update(
+                            "nixpkgs",
+                            mix_events::v1::InputOutcome::Updated,
+                            "efe6f071ede9d21c37462d2d6682d5e670099684",
+                            "6510408d147d8c5e6d76043e899e9251756f6a75",
+                        ),
+                        input_update(
+                            "nur",
+                            mix_events::v1::InputOutcome::Kept,
+                            "1111111111111111111111111111111111111111",
+                            "1111111111111111111111111111111111111111",
+                        ),
                     ],
                     packages: vec![mix_events::v1::PackageUpdate {
                         name: "qemu".into(),
                         from_version: Some("11.1.0".into()),
                         to_version: Some("11.1.1".into()),
                     }],
-                    generation: Some("/nix/store/aaa-home-manager-generation".into()),
+                    generation: Some(7),
                 },
             ))
             .for_root(false),
@@ -929,6 +937,10 @@ fn an_update_names_the_inputs_that_moved_and_the_ones_that_did_not() {
     );
     assert!(
         shown.contains("Updated nixpkgs efe6f07 to 6510408"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("Ignored nur (newer than nixos-unstable)"),
         "{shown}"
     );
     assert!(shown.contains("Updated qemu 11.1.0 to 11.1.1"), "{shown}");

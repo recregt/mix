@@ -6,8 +6,8 @@ use mix_events::Detail;
 use mix_events::v1::command::Request;
 use mix_events::v1::node_finished::Result;
 use mix_events::v1::{
-    CleanResult, Code, ExplainRequest, ExplainResult, InspectionReport, ListResult, NodeFinished,
-    PinOutcome, PinUpdate, RepairReport, Status as Ended, UpdateResult,
+    CleanResult, Code, ExplainRequest, ExplainResult, InputOutcome, InspectionReport, ListResult,
+    LockedRevision, NodeFinished, RepairReport, Status as Ended, UpdateResult,
 };
 use mix_ui::{Out, Report, Severity, Status};
 
@@ -112,24 +112,51 @@ pub(super) fn finished(
 }
 
 fn updated(out: &dyn Out, update: &UpdateResult, elapsed: Duration) {
-    let (moved, current): (Vec<&PinUpdate>, Vec<&PinUpdate>) = update
-        .inputs
-        .iter()
-        .partition(|input| input.outcome() == PinOutcome::Updated);
+    let names = |outcome: InputOutcome| -> Vec<&str> {
+        update
+            .inputs
+            .iter()
+            .filter(|input| input.outcome() == outcome)
+            .map(|input| input.name.as_str())
+            .collect()
+    };
+    let current = names(InputOutcome::Current);
     if !current.is_empty() {
-        let names: Vec<&str> = current.iter().filter_map(|input| pinned(input)).collect();
         mix_ui::status_to(
             out,
             Status::Ignored,
-            &format!("{} (already up to date)", names.join(", ")),
+            &format!("{} (already up to date)", current.join(", ")),
         );
     }
+    for input in update
+        .inputs
+        .iter()
+        .filter(|input| input.outcome() == InputOutcome::Kept)
+    {
+        mix_ui::status_to(
+            out,
+            Status::Ignored,
+            &format!("{} (newer than {})", input.name, input.branch),
+        );
+    }
+    let moved: Vec<String> = update
+        .inputs
+        .iter()
+        .filter(|input| input.outcome() == InputOutcome::Updated)
+        .map(|input| {
+            format!(
+                "{} {} to {}",
+                input.name,
+                short(input.from.as_ref()),
+                short(input.to.as_ref())
+            )
+        })
+        .collect();
     if !moved.is_empty() {
-        let moves: Vec<String> = moved.iter().map(|input| moved_pin(input)).collect();
         mix_ui::status_to(
             out,
             Status::Updated,
-            &format!("{} in {}", moves.join(", "), took(elapsed)),
+            &format!("{} in {}", moved.join(", "), took(elapsed)),
         );
     }
     for package in &update.packages {
@@ -139,32 +166,20 @@ fn updated(out: &dyn Out, update: &UpdateResult, elapsed: Duration) {
             &format!(
                 "{} {} to {}",
                 package.name,
-                package.from_version.as_deref().unwrap_or("-"),
-                package.to_version.as_deref().unwrap_or("-")
+                version(package.from_version.as_deref()),
+                version(package.to_version.as_deref())
             ),
         );
     }
 }
 
-fn pinned(input: &PinUpdate) -> Option<&str> {
-    input.after.as_ref().map(|after| after.name.as_str())
-}
-
-fn moved_pin(input: &PinUpdate) -> String {
-    match (&input.before, &input.after) {
-        (Some(before), Some(after)) => format!(
-            "{} {} to {}",
-            after.name,
-            short(&before.rev),
-            short(&after.rev)
-        ),
-        (None, Some(only)) | (Some(only), None) => only.name.clone(),
-        (None, None) => String::new(),
-    }
-}
-
-fn short(rev: &str) -> &str {
+fn short(revision: Option<&LockedRevision>) -> &str {
+    let rev = revision.map_or("", |revision| revision.rev.as_str());
     rev.get(..7).unwrap_or(rev)
+}
+
+fn version(version: Option<&str>) -> &str {
+    version.unwrap_or("unversioned")
 }
 
 fn listed(list: &ListResult) -> String {

@@ -49,7 +49,6 @@ pub struct Host {
     pub gate: Gate,
     pub locks: Arc<Locks>,
     pub installed: Arc<mix_shell::request::installed::Installed>,
-    pub pinned: Arc<mix_shell::request::pinned::Pinned>,
 }
 
 impl Host {
@@ -62,7 +61,6 @@ impl Host {
             gate,
             locks: Arc::new(Locks::new(lock)),
             installed: Arc::new(mix_shell::request::installed::Installed::nix()),
-            pinned: Arc::new(mix_shell::request::pinned::Pinned::default()),
         }
     }
 
@@ -78,7 +76,6 @@ impl Host {
             .with_render(Forward(events.clone(), Arc::clone(ending), steps))
             .with_locks(Arc::clone(&self.locks))
             .with_installed(Arc::clone(&self.installed))
-            .with_pinned(Arc::clone(&self.pinned))
             .with_caller(mix_shell::Caller::Account {
                 peer_is_root: caller.uid == 0,
                 account,

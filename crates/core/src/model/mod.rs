@@ -857,15 +857,10 @@ impl World {
                     });
                 }
                 let state = crate::declared::paths::mix_state_dir(&user.home);
-                let config: Vec<Option<Arc<[u8]>>> = [
-                    crate::declared::paths::FLAKE_NIX,
-                    crate::declared::paths::HOME_NIX,
-                    crate::declared::paths::FLAKE_LOCK,
-                    crate::declared::paths::STATE_FILE,
-                ]
-                .iter()
-                .map(|file| self.contents(state.join(file)).map(Arc::from))
-                .collect();
+                let config: Vec<Option<Arc<[u8]>>> = crate::declared::paths::GENERATION_INPUTS
+                    .iter()
+                    .map(|(file, _)| self.contents(state.join(file)).map(Arc::from))
+                    .collect();
                 let profile = self.profiles.entry(user.uid).or_default();
                 let previous = profile.active;
                 let last = profile.generations.iter().max().copied();
@@ -1333,13 +1328,19 @@ impl World {
     }
 
     pub fn active_list(&self, user: &InvokingUser) -> Option<&[u8]> {
-        let profile = self.profiles.get(&user.uid)?;
-        profile.built.get(&profile.active?)?.get(3)?.as_deref()
+        self.active_input(user, crate::declared::paths::STATE_FILE)
     }
 
     pub fn active_lock(&self, user: &InvokingUser) -> Option<&[u8]> {
+        self.active_input(user, crate::declared::paths::FLAKE_LOCK)
+    }
+
+    fn active_input(&self, user: &InvokingUser, file: &str) -> Option<&[u8]> {
+        let index = crate::declared::paths::GENERATION_INPUTS
+            .iter()
+            .position(|(source, _)| *source == file)?;
         let profile = self.profiles.get(&user.uid)?;
-        profile.built.get(&profile.active?)?.get(2)?.as_deref()
+        profile.built.get(&profile.active?)?.get(index)?.as_deref()
     }
 
     pub fn profile(&self, user: &InvokingUser) -> Option<&Profile> {

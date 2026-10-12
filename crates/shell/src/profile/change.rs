@@ -159,11 +159,11 @@ pub async fn run(
 pub async fn perform(
     ctx: &Context,
     root: &mut Root,
-    performer: Performer,
+    mut performer: Performer,
     steps: Vec<Box<dyn StepSpec>>,
     result: impl FnOnce() -> node_finished::Result,
 ) -> Concluded {
-    match run_steps(ctx, root, performer, steps).await {
+    match run_steps(ctx, root, &mut performer, steps).await {
         Ok(verdict) => conclude(root, verdict, result),
         Err(concluded) => *concluded,
     }
@@ -172,7 +172,7 @@ pub async fn perform(
 pub async fn run_steps(
     ctx: &Context,
     root: &mut Root,
-    mut performer: Performer,
+    performer: &mut Performer,
     steps: Vec<Box<dyn StepSpec>>,
 ) -> std::result::Result<Verdict, Box<Concluded>> {
     if steps.is_empty() {
@@ -183,7 +183,7 @@ pub async fn run_steps(
         let verdict = drive(
             &mut runner,
             &mut root.tree,
-            &mut performer,
+            performer,
             &ctx.scope,
             &root.stopped,
             &mut Vec::new(),
@@ -205,7 +205,7 @@ pub async fn run_steps(
     let report = drive(
         &mut runner,
         &mut root.tree,
-        &mut performer,
+        performer,
         &ctx.scope,
         &root.stopped,
         &mut journal,

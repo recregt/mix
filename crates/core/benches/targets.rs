@@ -16,8 +16,9 @@ fn user_config() -> UserConfig {
             name: "mix-user".to_string(),
             home: PathBuf::from("/home/mix-user"),
         },
+        pins: mix_nixgen::lock::EMBEDDED,
         flake: "f".repeat(512),
-        lock: "lock-content".to_string(),
+        lock: mix_nixgen::lock::render(mix_nixgen::lock::EMBEDDED),
         home: "h".repeat(256),
         restored_state: None,
     }

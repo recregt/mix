@@ -1,52 +1,55 @@
-use std::collections::BTreeMap;
-
 use mix_core::declared::targets::UserConfig;
-use mix_core::ops::update::{Decision, InputUpdate, PackageChange, decide, package_changes};
+use mix_core::effect::{Fact, Query};
+use mix_core::ops::update::{Decision, InputUpdate, Outcome, PackageChange, decide};
 use mix_core::run::Verdict;
 use mix_events::v1::{
-    InstalledPackage, PackageUpdate, PinOutcome, PinUpdate, PinnedInput, UpdateRequest,
-    UpdateResult, node_finished,
+    InputOutcome, LockedRevision, PackageUpdate, UpdateRequest, UpdateResult, node_finished,
 };
-use mix_nixgen::Pins;
 use mix_nixgen::lock::LockedInput;
 
 use crate::Context;
+use crate::drive::Performer;
 use crate::profile::change::{self, Error};
+use crate::profile::repinned;
 use crate::profile::state::Settled;
-use crate::profile::{current_pins, repinned};
 use crate::request::{Concluded, Root};
 
-fn pinned(input: &InputUpdate, locked: &LockedInput) -> PinnedInput {
-    PinnedInput {
+fn revision(locked: &LockedInput) -> LockedRevision {
+    LockedRevision {
+        rev: locked.rev.as_str().to_string(),
+        nar_hash: locked.nar_hash.as_str().to_string(),
+        last_modified: Some(mix_events::Timestamp {
+            seconds: i64::try_from(locked.last_modified)
+                .expect("a pin is read only when its time fits a timestamp"),
+            nanos: 0,
+        }),
+    }
+}
+
+fn outcome(outcome: Outcome) -> InputOutcome {
+    match outcome {
+        Outcome::Updated => InputOutcome::Updated,
+        Outcome::Current => InputOutcome::Current,
+        Outcome::Kept => InputOutcome::Kept,
+    }
+}
+
+fn input(update: &InputUpdate) -> mix_events::v1::InputUpdate {
+    let input = update.input();
+    mix_events::v1::InputUpdate {
         name: input.name.to_string(),
         owner: input.owner.to_string(),
         repo: input.repo.to_string(),
         branch: input.branch.to_string(),
-        rev: locked.rev.as_str().to_string(),
-        nar_hash: locked.nar_hash.as_str().to_string(),
-        last_modified: locked.last_modified,
+        outcome: outcome(update.outcome) as i32,
+        from: Some(revision(&update.from)),
+        to: Some(revision(&update.to)),
     }
 }
 
-fn wire(
-    decision: &Decision,
-    packages: &[PackageChange],
-    generation: Option<String>,
-) -> UpdateResult {
+fn wire(decision: &Decision, packages: &[PackageChange], generation: Option<u64>) -> UpdateResult {
     UpdateResult {
-        inputs: decision
-            .inputs
-            .iter()
-            .map(|input| PinUpdate {
-                outcome: if input.moved() {
-                    PinOutcome::Updated
-                } else {
-                    PinOutcome::Current
-                } as i32,
-                before: Some(pinned(input, &input.before)),
-                after: Some(pinned(input, &input.after)),
-            })
-            .collect(),
+        inputs: decision.inputs.iter().map(input).collect(),
         packages: packages
             .iter()
             .map(|package| PackageUpdate {
@@ -73,83 +76,62 @@ pub(crate) async fn update(ctx: &Context, root: &mut Root, _request: &UpdateRequ
         Ok(performer) => performer,
         Err(concluded) => return *concluded,
     };
-    if let Settled::Newer(version) = change::settled(&mut performer, cfg, &ctx.scope).await {
-        return root.refuse(Error::NewerState(version));
-    }
-    let have = current_pins(&cfg.user, &ctx.host, &ctx.pinned);
+    let packages = match change::settled(&mut performer, cfg, &ctx.scope).await {
+        Settled::Current { manifest, .. } => manifest.packages,
+        Settled::Newer(version) => return root.refuse(Error::NewerState(version)),
+    };
     let newest = match ctx.upstream.newest(&cfg.user, &ctx.scope).await {
         Ok(newest) => newest,
         Err(error) => return root.refuse(Error::Core(error)),
     };
-    let decision = decide(&have, &newest);
-    let mut steps = Vec::new();
-    let mut before = None;
-    if !decision.is_current() {
-        let Some(repinned) = repinned(cfg, &newest) else {
-            return root.refuse(Error::NotBootstrapped);
-        };
-        before = versions(ctx, cfg).await;
-        steps = mix_core::ops::change::pin_steps(
-            &repinned,
-            &ctx.policy,
-            decision.subject(),
-            &ctx.request.id,
-        );
+    let decision = decide(&cfg.pins, &newest);
+    if decision.is_current() {
+        return change::conclude(root, Verdict::Succeeded, || {
+            node_finished::Result::Update(wire(&decision, &[], None))
+        });
     }
-    let verdict = match change::run_steps(ctx, root, performer, steps).await {
+    let (before, after) = tokio::join!(
+        ctx.upstream
+            .versions(&cfg.user, &packages, &cfg.pins, &ctx.scope),
+        ctx.upstream
+            .versions(&cfg.user, &packages, &decision.pins, &ctx.scope),
+    );
+    let changes = match (before, after) {
+        (Ok(before), Ok(after)) => mix_core::ops::update::package_changes(&before, &after),
+        (Err(error), _) | (_, Err(error)) => return root.refuse(Error::Core(error)),
+    };
+    let steps = mix_core::ops::change::pin_steps(
+        &repinned(cfg, decision.pins.clone()),
+        &ctx.policy,
+        decision.subject(),
+        &ctx.request.id,
+    );
+    let verdict = match change::run_steps(ctx, root, &mut performer, steps).await {
         Ok(verdict) => verdict,
         Err(concluded) => return *concluded,
     };
-    let after = if matches!(verdict, Verdict::Succeeded) && !ctx.dry_run && !decision.is_current() {
-        versions(ctx, cfg).await
-    } else {
+    let generation = if ctx.dry_run || !matches!(verdict, Verdict::Succeeded) {
         None
+    } else {
+        active_generation(&mut performer, cfg, &ctx.scope).await
     };
-    let packages = changed(before, after);
     change::conclude(root, verdict, || {
-        remember(ctx, cfg, newest, &decision);
-        node_finished::Result::Update(wire(&decision, &packages, generation(cfg)))
+        node_finished::Result::Update(wire(&decision, &changes, generation))
     })
 }
 
-fn by_name(packages: &[InstalledPackage]) -> BTreeMap<String, String> {
-    packages
-        .iter()
-        .filter_map(|package| {
-            package
-                .version
-                .clone()
-                .map(|version| (package.name.clone(), version))
-        })
-        .collect()
-}
-
-async fn versions(ctx: &Context, cfg: &UserConfig) -> Option<BTreeMap<String, String>> {
-    let listed = ctx
-        .installed
-        .listing(&cfg.user, ctx.mirror(), &ctx.scope)
+async fn active_generation(
+    performer: &mut Performer,
+    cfg: &UserConfig,
+    scope: &mix_exec::Scope,
+) -> Option<u64> {
+    let facts = performer
+        .observe(&[Query::Profile(cfg.user.clone())], scope)
         .await
-        .ok()??;
-    Some(by_name(&listed.packages))
-}
-
-fn changed(
-    before: Option<BTreeMap<String, String>>,
-    after: Option<BTreeMap<String, String>>,
-) -> Vec<PackageChange> {
-    match (before, after) {
-        (Some(before), Some(after)) => package_changes(&before, &after),
-        _ => Vec::new(),
-    }
-}
-
-fn generation(cfg: &UserConfig) -> Option<String> {
-    crate::effect::generations::active_generation(&cfg.user).map(|path| path.display().to_string())
-}
-
-fn remember(ctx: &Context, cfg: &UserConfig, newest: Pins<LockedInput>, decision: &Decision) {
-    if !ctx.dry_run && !decision.is_current() {
-        ctx.pinned.set(cfg.user.uid, newest);
+        .ok()?;
+    match facts.first()? {
+        Fact::Profile(profile) => profile.active,
+        _ => None,
     }
 }
 
@@ -163,28 +145,53 @@ mod tests {
     use mix_core::declared::identity::InvokingUser;
     use mix_core::declared::paths::{FLAKE_LOCK, FLAKE_NIX, mix_state_dir};
     use mix_core::declared::policy::Policy;
+    use mix_core::ops::update::Versions;
+    use mix_events::v1::Code;
     use mix_events::v1::command::Request;
-    use mix_events::v1::{Code, UpdateRequest, UpdateResult};
-    use mix_nixgen::Rev;
-    use mix_nixgen::lock::NarHash;
+    use mix_nixgen::lock::{EMBEDDED, NarHash};
+    use mix_nixgen::{Pins, Rev};
 
-    use crate::profile::embedded;
     use crate::request::ran::{Ran, ran};
-    use crate::request::upstream::{Newest, Upstream};
+    use crate::request::upstream::{Evaluated, Newest, Upstream};
 
-    struct Fixed(Option<Pins<LockedInput>>);
+    struct Fixed {
+        newest: Option<Pins<LockedInput>>,
+        evaluates: bool,
+    }
 
     impl Upstream for Fixed {
-        fn newest<'a>(
-            &'a self,
-            _: &'a mix_core::declared::identity::InvokingUser,
-            _: &'a mix_exec::Scope,
-        ) -> Newest<'a> {
+        fn newest<'a>(&'a self, _: &'a InvokingUser, _: &'a mix_exec::Scope) -> Newest<'a> {
             Box::pin(async move {
-                self.0.clone().ok_or_else(|| mix_core::Error::Command {
+                self.newest.clone().ok_or_else(|| mix_core::Error::Command {
                     command: "nix flake prefetch".to_string(),
                     detail: "no route to host".to_string(),
                 })
+            })
+        }
+
+        fn versions<'a>(
+            &'a self,
+            _: &'a InvokingUser,
+            packages: &'a [String],
+            pins: &'a Pins<LockedInput>,
+            _: &'a mix_exec::Scope,
+        ) -> Evaluated<'a> {
+            Box::pin(async move {
+                if !self.evaluates {
+                    return Err(mix_core::Error::Command {
+                        command: "nix eval".to_string(),
+                        detail: "attribute 'gone' missing".to_string(),
+                    });
+                }
+                Ok(packages
+                    .iter()
+                    .map(|name| {
+                        (
+                            name.clone(),
+                            Some(pins.nixpkgs.rev.as_str()[..7].to_string()),
+                        )
+                    })
+                    .collect::<Versions>())
             })
         }
     }
@@ -194,7 +201,7 @@ mod tests {
             rev: Rev::parse("fedcba9876543210fedcba9876543210fedcba98").unwrap(),
             nar_hash: NarHash::parse("sha256-pD3qVlQ4mUCFoTWrYtxecpSitQMsgJvJIN0FUIDZoEU=")
                 .unwrap(),
-            last_modified: 1_790_000_000,
+            last_modified: EMBEDDED.home_manager.last_modified + 1,
         };
         Pins {
             home_manager: locked.clone(),
@@ -210,18 +217,26 @@ mod tests {
                 name: "mix-user".to_string(),
                 home: home.to_path_buf(),
             },
+            pins: EMBEDDED,
             flake: "flake-content".to_string(),
-            lock: "lock-content".to_string(),
+            lock: mix_nixgen::lock::render(EMBEDDED),
             home: "home-content".to_string(),
             restored_state: None,
         }
     }
 
-    fn session(home: &std::path::Path, upstream: Option<Pins<LockedInput>>) -> crate::Session {
+    fn session(home: &std::path::Path, upstream: Fixed) -> crate::Session {
         crate::Session::new(mix_exec::Scope::root())
             .with_user(Some(user_config(home)))
             .with_journals(home.join("journal"))
-            .with_upstream(Arc::new(Fixed(upstream)))
+            .with_upstream(Arc::new(upstream))
+    }
+
+    fn reachable(newest: Pins<LockedInput>) -> Fixed {
+        Fixed {
+            newest: Some(newest),
+            evaluates: true,
+        }
     }
 
     fn updated(ran: &Ran) -> &UpdateResult {
@@ -247,29 +262,48 @@ mod tests {
     async fn pins_that_are_already_the_newest_change_nothing() {
         let home = tempfile::tempdir().unwrap();
 
-        let ran = ran(session(home.path(), Some(embedded())), update()).await;
+        let ran = ran(session(home.path(), reachable(EMBEDDED)), update()).await;
 
-        let outcomes: Vec<(String, i32)> = updated(&ran)
+        let outcomes: Vec<(&str, i32)> = updated(&ran)
             .inputs
             .iter()
-            .map(|input| (input.after.clone().unwrap().name, input.outcome))
+            .map(|input| (input.name.as_str(), input.outcome))
             .collect();
         assert_eq!(
             outcomes,
             vec![
-                ("home-manager".to_string(), PinOutcome::Current as i32),
-                ("nixpkgs".to_string(), PinOutcome::Current as i32),
+                ("home-manager", InputOutcome::Current as i32),
+                ("nixpkgs", InputOutcome::Current as i32),
             ]
         );
         assert!(updated(&ran).packages.is_empty());
+        assert_eq!(updated(&ran).generation, None);
         untouched(home.path());
     }
 
     #[tokio::test]
     async fn a_failed_lookup_fails_the_command_and_changes_nothing() {
         let home = tempfile::tempdir().unwrap();
+        let unreachable = Fixed {
+            newest: None,
+            evaluates: true,
+        };
 
-        let ran = ran(session(home.path(), None), update()).await;
+        let ran = ran(session(home.path(), unreachable), update()).await;
+
+        assert_eq!(ran.code(), Some(Code::CommandFailed));
+        untouched(home.path());
+    }
+
+    #[tokio::test]
+    async fn packages_that_cannot_be_evaluated_at_the_new_pins_fail_before_anything_changes() {
+        let home = tempfile::tempdir().unwrap();
+        let unevaluable = Fixed {
+            newest: Some(newer()),
+            evaluates: false,
+        };
+
+        let ran = ran(session(home.path(), unevaluable), update()).await;
 
         assert_eq!(ran.code(), Some(Code::CommandFailed));
         untouched(home.path());
@@ -278,7 +312,7 @@ mod tests {
     #[tokio::test]
     async fn a_machine_that_fetches_from_a_mirror_cannot_update() {
         let home = tempfile::tempdir().unwrap();
-        let session = session(home.path(), Some(newer()))
+        let session = session(home.path(), reachable(newer()))
             .with_policy(Policy::new(Some("http://mirror.internal"), None).unwrap());
 
         let ran = ran(session, update()).await;
@@ -309,43 +343,14 @@ mod tests {
         assert_eq!(ran.code(), Some(Code::RootNotAllowed));
     }
 
-    fn package(name: &str, version: Option<&str>) -> InstalledPackage {
-        InstalledPackage {
-            name: name.to_string(),
-            version: version.map(str::to_string),
-            ..InstalledPackage::default()
-        }
-    }
-
-    fn versions_of(pairs: &[(&str, &str)]) -> Option<BTreeMap<String, String>> {
-        Some(
-            pairs
-                .iter()
-                .map(|(name, version)| (name.to_string(), version.to_string()))
-                .collect(),
-        )
-    }
-
     #[test]
-    fn a_listing_is_read_as_the_versions_of_the_packages_that_have_one() {
-        let listed = [
-            package("curl", Some("8.22.0")),
-            package("lib", None),
-            package("git", Some("2.55.0")),
-        ];
+    fn a_revision_is_written_with_its_hash_and_the_time_it_was_made() {
+        let written = revision(&EMBEDDED.nixpkgs);
+        assert_eq!(written.rev, EMBEDDED.nixpkgs.rev.as_str());
+        assert_eq!(written.nar_hash, EMBEDDED.nixpkgs.nar_hash.as_str());
         assert_eq!(
-            Some(by_name(&listed)),
-            versions_of(&[("curl", "8.22.0"), ("git", "2.55.0")])
+            written.last_modified.unwrap().seconds,
+            i64::try_from(EMBEDDED.nixpkgs.last_modified).unwrap()
         );
-    }
-
-    #[test]
-    fn package_changes_are_reported_only_when_both_listings_were_read() {
-        let before = versions_of(&[("qemu", "11.1.0")]);
-        let after = versions_of(&[("qemu", "11.1.1")]);
-        assert_eq!(changed(before.clone(), after.clone()).len(), 1);
-        assert!(changed(None, after).is_empty());
-        assert!(changed(before, None).is_empty());
-        assert!(changed(None, None).is_empty());
     }
 }

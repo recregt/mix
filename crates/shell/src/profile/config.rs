@@ -5,63 +5,11 @@ use mix_core::declared::state::StateManifest;
 use mix_core::declared::targets::UserConfig;
 use mix_core::ops::bootstrap::system::{Arch, Os};
 use mix_core::ops::change::render_home;
-use mix_nixgen::lock::{self, LockedInput, NarHash};
-use mix_nixgen::{FlakeConfig, Pins, Rev, System};
-use mix_pins::{
-    HOME_MANAGER_LAST_MODIFIED, HOME_MANAGER_NAR_HASH, HOME_MANAGER_REV, NIXPKGS_LAST_MODIFIED,
-    NIXPKGS_NAR_HASH, NIXPKGS_REV,
-};
+use mix_nixgen::lock::{self, LockedInput};
+use mix_nixgen::{FlakeConfig, Pins, System};
 
 use crate::profile::state::{Settled, Source};
 use crate::request::context::Host;
-use crate::request::pinned::Pinned;
-
-const NIXPKGS: Rev = Rev::new_static(NIXPKGS_REV);
-const HOME_MANAGER: Rev = Rev::new_static(HOME_MANAGER_REV);
-
-const NIXPKGS_LOCK: LockedInput = LockedInput {
-    rev: NIXPKGS,
-    nar_hash: NarHash::new_static(NIXPKGS_NAR_HASH),
-    last_modified: NIXPKGS_LAST_MODIFIED,
-};
-const HOME_MANAGER_LOCK: LockedInput = LockedInput {
-    rev: HOME_MANAGER,
-    nar_hash: NarHash::new_static(HOME_MANAGER_NAR_HASH),
-    last_modified: HOME_MANAGER_LAST_MODIFIED,
-};
-
-pub fn embedded() -> Pins<LockedInput> {
-    Pins {
-        home_manager: HOME_MANAGER_LOCK,
-        nixpkgs: NIXPKGS_LOCK,
-    }
-}
-
-pub fn current_pins(user: &InvokingUser, host: &Host, pinned: &Pinned) -> Pins<LockedInput> {
-    pinned.get_or_load(user.uid, || {
-        host.flake_nix(user)
-            .zip(host.flake_lock(user))
-            .and_then(|(flake, lock)| pins::read(&flake, &lock))
-            .unwrap_or_else(embedded)
-    })
-}
-
-fn rendered(system: System, username: &str, pins: &Pins<LockedInput>) -> (String, String) {
-    let flake = FlakeConfig::new(system, username, &pins.nixpkgs.rev, &pins.home_manager.rev)
-        .expect("a real username cannot contain a null byte")
-        .render();
-    (flake, lock::render(pins.clone()))
-}
-
-pub fn repinned(cfg: &UserConfig, pins: &Pins<LockedInput>) -> Option<UserConfig> {
-    let system = nix_system(Arch::current()?, Os::current()?);
-    let (flake, lock) = rendered(system, &cfg.user.name, pins);
-    Some(UserConfig {
-        flake,
-        lock,
-        ..cfg.clone()
-    })
-}
 
 fn nix_system(arch: Arch, os: Os) -> System {
     match (arch, os) {
@@ -72,23 +20,47 @@ fn nix_system(arch: Arch, os: Os) -> System {
     }
 }
 
-fn configured(
-    user: InvokingUser,
-    state: Option<&str>,
-    active: Option<&str>,
+fn system() -> Option<System> {
+    Some(nix_system(Arch::current()?, Os::current()?))
+}
+
+fn rendered(system: System, username: &str, pins: &Pins<LockedInput>) -> (String, String) {
+    let flake = FlakeConfig::new(system, username, &pins.nixpkgs.rev, &pins.home_manager.rev)
+        .expect("a real username cannot contain a null byte")
+        .render();
+    (flake, lock::render(pins.clone()))
+}
+
+pub fn repinned(cfg: &UserConfig, pins: Pins<LockedInput>) -> UserConfig {
+    let system = system().expect("a user config is only made on a system nix runs on");
+    let (flake, lock) = rendered(system, &cfg.user.name, &pins);
+    UserConfig {
+        pins,
+        flake,
+        lock,
+        ..cfg.clone()
+    }
+}
+
+struct Found<'a> {
+    state: Option<&'a str>,
+    active: Option<&'a str>,
     home_nix: Option<String>,
-    pins: &Pins<LockedInput>,
-) -> Option<UserConfig> {
-    let system = nix_system(Arch::current()?, Os::current()?);
-    let (flake, lock) = rendered(system, &user.name, pins);
-    let (home, restored_state) = match mix_core::ops::change::settle(state, active) {
+    lock: Option<&'a str>,
+    active_lock: Option<&'a str>,
+}
+
+fn configured(user: InvokingUser, found: Found<'_>, mirrored: bool) -> Option<UserConfig> {
+    let pins = pins::settle(found.lock, found.active_lock, mirrored);
+    let (flake, lock) = rendered(system()?, &user.name, &pins);
+    let (home, restored_state) = match mix_core::ops::change::settle(found.state, found.active) {
         Settled::Current { manifest, source } => (
             render_home(&user, &manifest.packages)
                 .expect("a settled package list only holds valid names"),
             (source != Source::File).then(|| manifest.render()),
         ),
         Settled::Newer(_) => (
-            home_nix.unwrap_or_else(|| {
+            found.home_nix.unwrap_or_else(|| {
                 render_home(&user, StateManifest::seed().packages)
                     .expect("the seed package list is always valid")
             }),
@@ -97,6 +69,7 @@ fn configured(
     };
     Some(UserConfig {
         user,
+        pins,
         flake,
         lock,
         home,
@@ -107,23 +80,30 @@ fn configured(
 pub fn user_config_for(
     user: InvokingUser,
     host: &Host,
-    pinned: &Pinned,
+    mirrored: bool,
     _locked: &crate::request::Locked,
 ) -> Option<UserConfig> {
     let state = host.state_file(&user);
     let active = host.active_list(&user);
-    let home_nix = host.home_nix(&user);
-    let pins = current_pins(&user, host, pinned);
-    configured(user, state.as_deref(), active.as_deref(), home_nix, &pins)
+    let lock = host.flake_lock(&user);
+    let active_lock = host.active_lock(&user);
+    let found = Found {
+        state: state.as_deref(),
+        active: active.as_deref(),
+        home_nix: host.home_nix(&user),
+        lock: lock.as_deref(),
+        active_lock: active_lock.as_deref(),
+    };
+    configured(user, found, mirrored)
 }
 
 pub async fn observed_user_config(
     user: InvokingUser,
     performer: &mut crate::drive::Performer,
     scope: &mix_exec::Scope,
-    pins: &Pins<LockedInput>,
+    mirrored: bool,
 ) -> Option<UserConfig> {
-    use mix_core::declared::paths::{HOME_NIX, STATE_FILE, mix_state_dir};
+    use mix_core::declared::paths::{FLAKE_LOCK, HOME_NIX, STATE_FILE, mix_state_dir};
     use mix_core::effect::{Fact, Query};
     let state_dir = mix_state_dir(&user.home);
     let facts = performer
@@ -132,6 +112,8 @@ pub async fn observed_user_config(
                 Query::Contents(state_dir.join(STATE_FILE)),
                 Query::ActiveList(user.clone()),
                 Query::Contents(state_dir.join(HOME_NIX)),
+                Query::Contents(state_dir.join(FLAKE_LOCK)),
+                Query::ActiveLock(user.clone()),
             ],
             scope,
         )
@@ -141,23 +123,30 @@ pub async fn observed_user_config(
         Fact::Contents(Some(bytes)) => Some(String::from_utf8_lossy(bytes).into_owned()),
         _ => None,
     };
-    configured(
-        user,
-        text(&facts[0]).as_deref(),
-        text(&facts[1]).as_deref(),
-        text(&facts[2]),
-        pins,
-    )
+    let (state, active, lock, active_lock) = (
+        text(&facts[0]),
+        text(&facts[1]),
+        text(&facts[3]),
+        text(&facts[4]),
+    );
+    let found = Found {
+        state: state.as_deref(),
+        active: active.as_deref(),
+        home_nix: text(&facts[2]),
+        lock: lock.as_deref(),
+        active_lock: active_lock.as_deref(),
+    };
+    configured(user, found, mirrored)
 }
 
 pub fn existing_user_config_for(
     user: InvokingUser,
     host: &Host,
-    pinned: &Pinned,
+    mirrored: bool,
     locked: &crate::request::Locked,
 ) -> Option<UserConfig> {
     managed(
-        user_config_for(user, host, pinned, locked)?,
+        user_config_for(user, host, mirrored, locked)?,
         |group, user| host.is_member(group, user),
     )
 }
@@ -185,8 +174,9 @@ mod tests {
     fn config(home: &Path) -> UserConfig {
         UserConfig {
             user: sample_user(home),
+            pins: mix_nixgen::lock::EMBEDDED,
             flake: String::new(),
-            lock: String::new(),
+            lock: mix_nixgen::lock::render(mix_nixgen::lock::EMBEDDED),
             home: String::new(),
             restored_state: None,
         }

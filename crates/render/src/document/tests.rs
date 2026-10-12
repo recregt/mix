@@ -329,25 +329,25 @@ fn a_list_is_written_with_its_packages_outputs_and_64_bit_sizes_as_strings() {
 }
 
 #[test]
-fn an_update_is_written_with_each_input_before_and_after_the_packages_and_the_generation() {
+fn an_update_is_written_with_each_input_its_revisions_the_packages_and_the_generation() {
     let document = document_of(false, |tree| {
-        let pinned = |rev: &str, modified: u64| mix_events::v1::PinnedInput {
-            name: "nixpkgs".into(),
-            owner: "NixOS".into(),
-            repo: "nixpkgs".into(),
-            branch: "nixos-unstable".into(),
+        let revision = |rev: &str, seconds: i64| mix_events::v1::LockedRevision {
             rev: rev.into(),
             nar_hash: "sha256-GnotcvKtbTMnoVx6G4E7ZdUX6487Dky74dqq3pU7iRk=".into(),
-            last_modified: modified,
+            last_modified: Some(mix_events::Timestamp { seconds, nanos: 0 }),
         };
         let result = mix_events::v1::UpdateResult {
-            inputs: vec![mix_events::v1::PinUpdate {
-                outcome: mix_events::v1::PinOutcome::Updated as i32,
-                before: Some(pinned(
+            inputs: vec![mix_events::v1::InputUpdate {
+                name: "nixpkgs".into(),
+                owner: "NixOS".into(),
+                repo: "nixpkgs".into(),
+                branch: "nixos-unstable".into(),
+                outcome: mix_events::v1::InputOutcome::Updated as i32,
+                from: Some(revision(
                     "efe6f071ede9d21c37462d2d6682d5e670099684",
                     1_789_426_278,
                 )),
-                after: Some(pinned(
+                to: Some(revision(
                     "6510408d147d8c5e6d76043e899e9251756f6a75",
                     1_791_594_108,
                 )),
@@ -364,7 +364,7 @@ fn an_update_is_written_with_each_input_before_and_after_the_packages_and_the_ge
                     to_version: Some("1.0".into()),
                 },
             ],
-            generation: Some("/nix/store/aaa-home-manager-generation".into()),
+            generation: Some(7),
         };
         tree.finish(
             ROOT,
@@ -378,24 +378,25 @@ fn an_update_is_written_with_each_input_before_and_after_the_packages_and_the_ge
     let json = serde_json::to_value(&document).unwrap();
 
     let input = &json["update"]["inputs"][0];
-    assert_eq!(input["outcome"], "PIN_OUTCOME_UPDATED");
-    assert_eq!(input["before"]["name"], "nixpkgs");
+    assert_eq!(input["name"], "nixpkgs");
+    assert_eq!(input["owner"], "NixOS");
+    assert_eq!(input["repo"], "nixpkgs");
+    assert_eq!(input["branch"], "nixos-unstable");
+    assert_eq!(input["outcome"], "INPUT_OUTCOME_UPDATED");
     assert_eq!(
-        input["before"]["rev"],
+        input["from"]["rev"],
         "efe6f071ede9d21c37462d2d6682d5e670099684"
     );
     assert_eq!(
-        input["after"]["rev"],
+        input["to"]["rev"],
         "6510408d147d8c5e6d76043e899e9251756f6a75"
     );
-    assert_eq!(input["after"]["owner"], "NixOS");
-    assert_eq!(input["after"]["branch"], "nixos-unstable");
     assert_eq!(
-        input["after"]["narHash"],
+        input["to"]["narHash"],
         "sha256-GnotcvKtbTMnoVx6G4E7ZdUX6487Dky74dqq3pU7iRk="
     );
-    assert_eq!(input["before"]["lastModified"], "1789426278");
-    assert_eq!(input["after"]["lastModified"], "1791594108");
+    assert_eq!(input["from"]["lastModified"], "2026-09-14T22:51:18+00:00");
+    assert_eq!(input["to"]["lastModified"], "2026-10-10T01:01:48+00:00");
     let qemu = &json["update"]["packages"][0];
     assert_eq!(qemu["name"], "qemu");
     assert_eq!(qemu["fromVersion"], "11.1.0");
@@ -403,10 +404,7 @@ fn an_update_is_written_with_each_input_before_and_after_the_packages_and_the_ge
     let newcomer = &json["update"]["packages"][1];
     assert!(newcomer.get("fromVersion").is_none(), "{newcomer}");
     assert_eq!(newcomer["toVersion"], "1.0");
-    assert_eq!(
-        json["update"]["generation"],
-        "/nix/store/aaa-home-manager-generation"
-    );
+    assert_eq!(json["update"]["generation"], "7");
 }
 
 #[test]

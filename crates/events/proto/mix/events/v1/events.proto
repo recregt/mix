@@ -105,6 +105,7 @@ enum Verb {
   VERB_RESTARTING = 8;
   VERB_REPAIRING = 9;
   VERB_RECOVERING = 10;
+  VERB_UPDATING = 11;
 }
 
 message Rollback {
@@ -495,26 +496,27 @@ message RemoveResult {
   bool restored = 3;
 }
 
-enum PinOutcome {
-  PIN_OUTCOME_UNSPECIFIED = 0;
-  PIN_OUTCOME_UPDATED = 1;
-  PIN_OUTCOME_CURRENT = 2;
+enum InputOutcome {
+  INPUT_OUTCOME_UNSPECIFIED = 0;
+  INPUT_OUTCOME_UPDATED = 1;
+  INPUT_OUTCOME_CURRENT = 2;
+  INPUT_OUTCOME_KEPT = 3;
 }
 
-message PinnedInput {
+message LockedRevision {
+  string rev = 1;
+  string nar_hash = 2;
+  google.protobuf.Timestamp last_modified = 3;
+}
+
+message InputUpdate {
   string name = 1;
   string owner = 2;
   string repo = 3;
   string branch = 4;
-  string rev = 5;
-  string nar_hash = 6;
-  uint64 last_modified = 7;
-}
-
-message PinUpdate {
-  PinOutcome outcome = 1;
-  PinnedInput before = 2;
-  PinnedInput after = 3;
+  InputOutcome outcome = 5;
+  LockedRevision from = 6;
+  LockedRevision to = 7;
 }
 
 message PackageUpdate {
@@ -524,9 +526,9 @@ message PackageUpdate {
 }
 
 message UpdateResult {
-  repeated PinUpdate inputs = 1;
+  repeated InputUpdate inputs = 1;
   repeated PackageUpdate packages = 2;
-  optional string generation = 3;
+  optional uint64 generation = 3;
 }
 
 message CleanResult {

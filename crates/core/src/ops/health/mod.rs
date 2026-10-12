@@ -611,14 +611,17 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
             }),
             _ => None,
         },
-        Target::Activation { lock, .. } => {
+        Target::Activation { pins, .. } => {
             let listed = std::str::from_utf8(contents(facts, 0)?).ok()?;
             let active = contents(facts, 1)
                 .and_then(|active| std::str::from_utf8(active).ok())
                 .and_then(|active| validate(active).ok());
             let built_with_other_pins = active.is_some()
-                && contents(facts, 3).and_then(|built| std::str::from_utf8(built).ok())
-                    != Some(lock.as_ref());
+                && contents(facts, 3)
+                    .and_then(|built| std::str::from_utf8(built).ok())
+                    .and_then(crate::declared::pins::read)
+                    .as_ref()
+                    != Some(pins.as_ref());
             (active != validate(listed).ok() || built_with_other_pins)
                 .then_some(Finding::ProfileStale)
         }
