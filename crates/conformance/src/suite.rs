@@ -1,11 +1,14 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
+use mix_core::declared::identity::InvokingUser;
+use mix_core::declared::state::StateManifest;
 use mix_core::model::World;
 use mix_core::model::testkit::{Breakage, Damage, owned};
 use mix_events::v1::command::Request;
 use mix_events::v1::{
-    CleanRequest, DoctorRequest, InstallRequest, RemoveRequest, RepairRequest, UpdateRequest,
+    CleanRequest, DoctorRequest, InstallRequest, ListRequest, RemoveRequest, RepairRequest,
+    UpdateRequest,
 };
 use mix_shell::drive::Fault;
 use proptest::prelude::*;
@@ -24,6 +27,7 @@ pub enum Command {
     Clean(bool),
     Repair,
     Update,
+    List,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,7 +71,12 @@ impl Command {
             Command::Clean(all) => (Request::Clean(CleanRequest { all }), false),
             Command::Repair => (repair(), true),
             Command::Update => (update(), false),
+            Command::List => (list(), false),
         }
+    }
+
+    fn effectful(self) -> bool {
+        !matches!(self, Command::List)
     }
 
     fn atomic(self) -> bool {
@@ -98,6 +107,57 @@ pub fn repair() -> Request {
 
 pub fn update() -> Request {
     Request::Update(UpdateRequest {})
+}
+
+pub fn list() -> Request {
+    Request::List(ListRequest {})
+}
+
+fn listed(document: &Value) -> impl Iterator<Item = &Value> {
+    document["list"]["packages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+}
+
+pub fn listed_names(document: &Value) -> Vec<String> {
+    listed(document)
+        .filter_map(|package| package["name"].as_str().map(str::to_string))
+        .collect()
+}
+
+pub fn listed_version(document: &Value, name: &str) -> Option<String> {
+    listed(document)
+        .find(|package| package["name"] == name)
+        .and_then(|package| package["version"].as_str().map(str::to_string))
+}
+
+fn held(world: &World, user: &InvokingUser) -> Vec<String> {
+    let Some(raw) = world.active_list(user) else {
+        return Vec::new();
+    };
+    let mut names = StateManifest::parse(&String::from_utf8_lossy(raw))
+        .map(|manifest| manifest.packages)
+        .unwrap_or_default();
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn reported(document: &Value) -> Vec<(String, Option<String>, Option<String>)> {
+    document["update"]["packages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|package| {
+            let field = |key: &str| package[key].as_str().map(str::to_string);
+            (
+                field("name").unwrap_or_default(),
+                field("fromVersion"),
+                field("toVersion"),
+            )
+        })
+        .collect()
 }
 
 pub fn succeeded(document: &Value) -> bool {
@@ -269,6 +329,11 @@ async fn faulted(model: &Model, command: Command, at: usize, kind: FaultKind) ->
 async fn ran(model: &Model, command: Command) -> Vec<String> {
     let (request, as_root) = command.request();
     let mut found = Vec::new();
+    let before = (command == Command::List).then(|| model.snapshot());
+    let listed_before = match command {
+        Command::Update => Some(model.run(list(), false, false).await),
+        _ => None,
+    };
     let predicted = model.run(request.clone(), true, as_root).await;
     let done = model.run(request, false, as_root).await;
     if changes(&predicted) != changes(&done) {
@@ -282,10 +347,10 @@ async fn ran(model: &Model, command: Command) -> Vec<String> {
         found.push(format!("exited {} without a problem", done["exit"]));
     }
     let world = model.snapshot();
-    if succeeded(&done) && !world.logs.is_empty() {
+    if command.effectful() && succeeded(&done) && !world.logs.is_empty() {
         found.push(format!("journals left behind {:?}", world.logs.keys()));
     }
-    if !world.pending().is_empty() {
+    if command.effectful() && !world.pending().is_empty() {
         found.push(format!("left pending {:?}", world.pending()));
     }
     if command.atomic()
@@ -306,6 +371,38 @@ async fn ran(model: &Model, command: Command) -> Vec<String> {
         ) != world.active_lock(model.user())
     {
         found.push("the lock differs from the active generation".to_string());
+    }
+    if let Some(before) = &before {
+        if world != *before {
+            found.push("a list changed the machine".to_string());
+        }
+        if succeeded(&done) && listed_names(&done) != held(&world, model.user()) {
+            found.push(format!(
+                "listed {:?} but the active generation holds {:?}",
+                listed_names(&done),
+                held(&world, model.user())
+            ));
+        }
+    }
+    if command == Command::Update && succeeded(&done) {
+        let listed_after = model.run(list(), false, false).await;
+        for (name, from, to) in reported(&done) {
+            if let Some(listed_before) = &listed_before
+                && from.is_some()
+                && listed_version(listed_before, &name) != from
+            {
+                found.push(format!(
+                    "update moved {name} from {from:?} but the list showed {:?}",
+                    listed_version(listed_before, &name)
+                ));
+            }
+            if to.is_some() && listed_version(&listed_after, &name) != to {
+                found.push(format!(
+                    "update moved {name} to {to:?} but the list shows {:?}",
+                    listed_version(&listed_after, &name)
+                ));
+            }
+        }
     }
     if command == Command::Repair {
         let checked = model.run(doctor(), false, false).await;
@@ -353,6 +450,7 @@ fn command() -> impl Strategy<Value = Command> {
         any::<bool>().prop_map(Command::Clean),
         Just(Command::Repair),
         Just(Command::Update),
+        Just(Command::List),
     ]
 }
 

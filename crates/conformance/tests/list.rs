@@ -1,0 +1,104 @@
+use mix_conformance::model::{Channel, Model};
+use mix_conformance::suite::{
+    bootstrap, install, list, listed_names, listed_version, succeeded, update,
+};
+use mix_events::v1::RemoveRequest;
+use mix_events::v1::command::Request;
+use mix_nixgen::lock::EMBEDDED;
+
+async fn bootstrapped() -> Model {
+    let model = Model::new();
+    let done = model.run(bootstrap(), false, true).await;
+    assert!(succeeded(&done), "{done:#}");
+    model
+}
+
+fn remove(package: &str) -> Request {
+    Request::Remove(RemoveRequest {
+        packages: vec![package.to_string()],
+    })
+}
+
+#[tokio::test]
+async fn a_user_who_was_never_set_up_is_told_to_bootstrap() {
+    let model = Model::new();
+
+    let refused = model.run(list(), false, false).await;
+
+    assert!(!succeeded(&refused), "{refused:#}");
+    assert_eq!(refused["problems"][0]["code"], "CODE_NOT_BOOTSTRAPPED");
+}
+
+#[tokio::test]
+async fn root_is_refused_the_way_every_profile_command_refuses_it() {
+    let model = bootstrapped().await;
+
+    let refused = model.run(list(), false, true).await;
+
+    assert!(!succeeded(&refused), "{refused:#}");
+    assert_eq!(refused["problems"][0]["code"], "CODE_ROOT_NOT_ALLOWED");
+}
+
+#[tokio::test]
+async fn a_list_follows_every_change_made_to_the_profile() {
+    let model = bootstrapped().await;
+    let names = |document: &serde_json::Value| listed_names(document);
+
+    let seeded = model.run(list(), false, false).await;
+    assert!(succeeded(&seeded), "{seeded:#}");
+    assert_eq!(names(&seeded), ["git"]);
+
+    let added = model.run(install(&["hello", "jq"]), false, false).await;
+    assert!(succeeded(&added), "{added:#}");
+    let grown = model.run(list(), false, false).await;
+    assert_eq!(names(&grown), ["git", "hello", "jq"]);
+
+    let removed = model.run(remove("jq"), false, false).await;
+    assert!(succeeded(&removed), "{removed:#}");
+    let shrunk = model.run(list(), false, false).await;
+    assert_eq!(names(&shrunk), ["git", "hello"]);
+}
+
+#[tokio::test]
+async fn a_list_changes_nothing() {
+    let model = bootstrapped().await;
+    model.run(install(&["hello"]), false, false).await;
+    let before = model.snapshot();
+
+    let done = model.run(list(), false, false).await;
+    let predicted = model.run(list(), true, false).await;
+
+    assert!(succeeded(&done), "{done:#}");
+    assert!(succeeded(&predicted), "{predicted:#}");
+    assert!(model.snapshot() == before, "a list changed the model");
+}
+
+#[tokio::test]
+async fn the_versions_a_list_shows_are_the_ones_an_update_reports() {
+    let model = bootstrapped().await;
+    model.run(install(&["hello"]), false, false).await;
+    let newest = model.upstream().pins();
+
+    let before = model.run(list(), false, false).await;
+    assert_eq!(
+        listed_version(&before, "hello"),
+        Some(Channel::version(&EMBEDDED))
+    );
+
+    let moved = model.run(update(), false, false).await;
+    assert!(succeeded(&moved), "{moved:#}");
+    let hello = moved["update"]["packages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|package| package["name"] == "hello")
+        .expect("update names the package whose version moved");
+    assert_eq!(hello["fromVersion"], Channel::version(&EMBEDDED));
+    assert_eq!(hello["toVersion"], Channel::version(&newest));
+
+    let after = model.run(list(), false, false).await;
+    assert_eq!(
+        listed_version(&after, "hello"),
+        Some(Channel::version(&newest))
+    );
+}
