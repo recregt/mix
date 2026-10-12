@@ -1244,6 +1244,7 @@ impl World {
                     .unwrap_or_default(),
             ),
             Query::ActiveList(user) => Fact::Contents(self.active_list(user).map(Arc::from)),
+            Query::ActiveLock(user) => Fact::Contents(self.active_lock(user).map(Arc::from)),
             Query::Journals(_) => Fact::Journals(
                 self.journals
                     .iter()
@@ -1334,6 +1335,11 @@ impl World {
     pub fn active_list(&self, user: &InvokingUser) -> Option<&[u8]> {
         let profile = self.profiles.get(&user.uid)?;
         profile.built.get(&profile.active?)?.get(3)?.as_deref()
+    }
+
+    pub fn active_lock(&self, user: &InvokingUser) -> Option<&[u8]> {
+        let profile = self.profiles.get(&user.uid)?;
+        profile.built.get(&profile.active?)?.get(2)?.as_deref()
     }
 
     pub fn profile(&self, user: &InvokingUser) -> Option<&Profile> {

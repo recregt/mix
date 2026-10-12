@@ -243,6 +243,7 @@ pub enum Target<'a> {
         user: UserRef<'a>,
         verb: Option<Verb>,
         subject: Cow<'a, str>,
+        lock: Cow<'a, str>,
     },
     Retention {
         path: Cow<'a, Path>,
@@ -338,11 +339,13 @@ impl Target<'_> {
                 user,
                 verb,
                 subject,
+                lock,
             } => Target::Activation {
                 path: own_path(path),
                 user: user.into_static(),
                 verb,
                 subject: Cow::Owned(subject.into_owned()),
+                lock: Cow::Owned(lock.into_owned()),
             },
             Target::Retention {
                 path,
@@ -587,6 +590,7 @@ fn user_tree<'a>(
             user: user(),
             verb,
             subject,
+            lock: Cow::Borrowed(&cfg.lock),
         },
     );
     for target in deferred {

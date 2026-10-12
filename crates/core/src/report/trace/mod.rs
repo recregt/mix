@@ -76,6 +76,9 @@ fn query_of(query: &Query) -> observation::Query {
         Query::ActiveList(user) => {
             Wire::Contents(path(&crate::declared::paths::active_list_path(&user.home)))
         }
+        Query::ActiveLock(user) => {
+            Wire::Contents(path(&crate::declared::paths::active_lock_path(&user.home)))
+        }
         Query::Journals(at) => Wire::Journals(path(at)),
         Query::Leftovers(at) => Wire::Leftovers(path(at)),
         Query::Strangers { path: at, .. } => Wire::Strangers(path(at)),

@@ -216,7 +216,9 @@ impl Prediction {
             | Query::Strangers { path, .. }
             | Query::Program { path, .. } => near(path),
             Query::Repository(user) => near(&repository_dir(&user.home)),
-            Query::ActiveList(user) => self.touched.contains(&Subject::Profile(user.clone())),
+            Query::ActiveList(user) | Query::ActiveLock(user) => {
+                self.touched.contains(&Subject::Profile(user.clone()))
+            }
             Query::Group(name) => self.touched.contains(&Subject::Group(name.clone())),
             Query::User(name) => self.touched.contains(&Subject::User(name.clone())),
             Query::Unit(name) => self.touched.contains(&Subject::Unit(name.clone())),
@@ -889,6 +891,11 @@ impl Performer {
             Query::Journals(dir) => Some(Fact::Journals(crate::effect::journal::abandoned(dir))),
             Query::ActiveList(user) => Some(Fact::Contents(
                 std::fs::read(mix_core::declared::paths::active_list_path(&user.home))
+                    .ok()
+                    .map(Into::into),
+            )),
+            Query::ActiveLock(user) => Some(Fact::Contents(
+                std::fs::read(mix_core::declared::paths::active_lock_path(&user.home))
                     .ok()
                     .map(Into::into),
             )),
