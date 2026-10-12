@@ -1,22 +1,29 @@
 use std::collections::HashMap;
 use std::future::Future;
-use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use mix_core::declared::identity::{InvokingUser, MIX_USERS_GROUP};
-use mix_core::{Error, Result};
+use mix_core::declared::paths::GENERATION_STATE_FILE;
+use mix_core::{Error as CoreError, Result as CoreResult};
 use mix_events::v1::InstalledPackage;
 use mix_exec::Scope;
 
+use crate::effect::generations::Active;
+use crate::profile::change;
+use crate::profile::state::{Invalid, validate};
+use crate::request::context::Host;
+
 pub struct Ask<'a> {
     pub user: &'a InvokingUser,
-    pub generation: &'a Path,
+    pub generation: &'a Active,
+    pub names: &'a [String],
     pub mirror: Option<&'a str>,
     pub scope: &'a Scope,
 }
 
-pub type Gathering<'a> = Pin<Box<dyn Future<Output = Result<Vec<InstalledPackage>>> + Send + 'a>>;
+pub type Gathering<'a> =
+    Pin<Box<dyn Future<Output = CoreResult<Vec<InstalledPackage>>> + Send + 'a>>;
 
 pub trait Source: Send + Sync {
     fn gather<'a>(&'a self, ask: Ask<'a>) -> Gathering<'a>;
@@ -27,14 +34,30 @@ pub struct Nix;
 impl Source for Nix {
     fn gather<'a>(&'a self, ask: Ask<'a>) -> Gathering<'a> {
         Box::pin(async move {
-            crate::effect::installed::gather(ask.user, ask.generation, ask.mirror, ask.scope).await
+            crate::effect::installed::gather(
+                ask.user,
+                &ask.generation.path,
+                ask.names,
+                ask.mirror,
+                ask.scope,
+            )
+            .await
         })
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(transparent)]
+    Profile(#[from] change::Error),
+
+    #[error("the listing was stopped while it waited for another")]
+    Stopped,
+}
+
 #[derive(Clone)]
 pub struct Listed {
-    pub generation: PathBuf,
+    pub generation: Active,
     pub packages: Arc<Vec<InstalledPackage>>,
 }
 
@@ -42,8 +65,28 @@ type Slot = Arc<tokio::sync::Mutex<Option<Listed>>>;
 
 pub struct Installed {
     source: Arc<dyn Source>,
-    store: PathBuf,
     users: Mutex<HashMap<u32, Slot>>,
+}
+
+fn requested(generation: &Active) -> change::Result<Vec<String>> {
+    let path = generation.path.join(GENERATION_STATE_FILE);
+    let unreadable = |source: std::io::Error| {
+        change::Error::Core(CoreError::Io {
+            path: path.clone(),
+            source,
+        })
+    };
+    let Some(raw) = generation.list.as_deref() else {
+        return Err(unreadable(std::io::ErrorKind::NotFound.into()));
+    };
+    match validate(raw) {
+        Ok(manifest) => Ok(manifest.packages),
+        Err(Invalid::Newer(version)) => Err(change::Error::NewerState(version)),
+        Err(invalid) => Err(unreadable(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            invalid,
+        ))),
+    }
 }
 
 impl Installed {
@@ -54,14 +97,8 @@ impl Installed {
     pub fn with_source(source: Arc<dyn Source>) -> Self {
         Self {
             source,
-            store: PathBuf::from(mix_core::declared::paths::NIX_STORE),
             users: Mutex::new(HashMap::new()),
         }
-    }
-
-    pub fn in_store(mut self, store: impl Into<PathBuf>) -> Self {
-        self.store = store.into();
-        self
     }
 
     fn slot(&self, uid: u32) -> Slot {
@@ -76,36 +113,33 @@ impl Installed {
 
     pub async fn listing(
         &self,
+        host: &Host,
         user: &InvokingUser,
         mirror: Option<&str>,
         scope: &Scope,
-    ) -> Result<Option<Listed>> {
-        let link = crate::effect::generations::profile_link(user);
-        let Some(generation) = crate::effect::generations::store_generation(&link, &self.store)
-        else {
+    ) -> std::result::Result<Option<Listed>, Error> {
+        let Some(generation) = host.active_generation(user) else {
             return Ok(None);
         };
         let slot = self.slot(user.uid);
-        let mut held = scope
-            .guard(slot.lock())
-            .await
-            .map_err(|_| Error::Cancelled {
-                command: "mix list".to_string(),
-            })?;
+        let mut held = scope.guard(slot.lock()).await.map_err(|_| Error::Stopped)?;
         if let Some(listed) = held.as_ref()
-            && listed.generation == generation
+            && listed.generation.path == generation.path
         {
             return Ok(Some(listed.clone()));
         }
+        let names = requested(&generation)?;
         let packages = self
             .source
             .gather(Ask {
                 user,
                 generation: &generation,
+                names: &names,
                 mirror,
                 scope,
             })
-            .await?;
+            .await
+            .map_err(change::Error::Core)?;
         let listed = Listed {
             generation,
             packages: Arc::new(packages),
@@ -114,11 +148,14 @@ impl Installed {
         Ok(Some(listed))
     }
 
-    pub fn warm(self: &Arc<Self>, user: InvokingUser, mirror: Option<String>) {
+    pub fn warm(self: &Arc<Self>, host: Host, user: InvokingUser, mirror: Option<String>) {
+        if !matches!(host, Host::Machine) {
+            return;
+        }
         let installed = Arc::clone(self);
         tokio::spawn(async move {
             let _ = installed
-                .listing(&user, mirror.as_deref(), &Scope::root())
+                .listing(&host, &user, mirror.as_deref(), &Scope::root())
                 .await;
         });
     }
@@ -128,7 +165,9 @@ impl Installed {
         tokio::spawn(async move {
             let scope = Scope::root();
             for user in crate::effect::accounts::group_members(MIX_USERS_GROUP) {
-                let _ = installed.listing(&user, mirror.as_deref(), &scope).await;
+                let _ = installed
+                    .listing(&Host::Machine, &user, mirror.as_deref(), &scope)
+                    .await;
             }
         });
     }
@@ -137,9 +176,12 @@ impl Installed {
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod tests {
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use mix_core::declared::paths::{HOME_MANAGER_PROFILE_NAME, nix_profiles_dir};
+    use mix_core::declared::paths::{GENERATION_INPUTS, STATE_FILE};
+    use mix_core::declared::state::StateManifest;
+    use mix_core::model::World;
 
     use super::*;
 
@@ -148,68 +190,77 @@ mod tests {
         gathered: AtomicUsize,
         fail: Mutex<usize>,
         gate: Option<Arc<tokio::sync::Notify>>,
+        asked: Mutex<Vec<Vec<String>>>,
     }
 
     impl Source for Counted {
         fn gather<'a>(&'a self, ask: Ask<'a>) -> Gathering<'a> {
             Box::pin(async move {
                 self.gathered.fetch_add(1, Ordering::SeqCst);
+                self.asked.lock().unwrap().push(ask.names.to_vec());
                 if let Some(gate) = &self.gate {
                     gate.notified().await;
                 }
                 let mut fail = self.fail.lock().unwrap();
                 if *fail > 0 {
                     *fail -= 1;
-                    return Err(Error::Command {
+                    return Err(CoreError::Command {
                         command: "nix eval".to_string(),
                         detail: "no".to_string(),
                     });
                 }
                 Ok(vec![InstalledPackage {
-                    name: ask.generation.display().to_string(),
+                    name: ask.generation.number.to_string(),
                     ..InstalledPackage::default()
                 }])
             })
         }
     }
 
-    fn user(home: &Path) -> InvokingUser {
+    fn user(uid: u32) -> InvokingUser {
         InvokingUser {
-            uid: 1000,
-            gid: 1000,
-            name: "mix-user".to_string(),
-            home: home.to_path_buf(),
+            uid,
+            gid: uid,
+            name: format!("user{uid}"),
+            home: PathBuf::from(format!("/home/user{uid}")),
         }
     }
 
-    fn activate(home: &Path, generation: &str) -> PathBuf {
-        activate_in(home, &home.join("store"), generation)
+    fn list(extra: &[&str]) -> String {
+        let mut manifest = StateManifest::seed();
+        manifest
+            .packages
+            .extend(extra.iter().map(|name| name.to_string()));
+        manifest.render()
     }
 
-    fn activate_in(home: &Path, store: &Path, generation: &str) -> PathBuf {
-        let store = store.join(generation);
-        std::fs::create_dir_all(&store).unwrap();
-        let profiles = nix_profiles_dir(home);
-        std::fs::create_dir_all(&profiles).unwrap();
-        let link = profiles.join(HOME_MANAGER_PROFILE_NAME);
-        let _ = std::fs::remove_file(&link);
-        std::os::unix::fs::symlink(&store, &link).unwrap();
-        std::fs::canonicalize(store).unwrap()
+    fn activate(world: &Mutex<World>, user: &InvokingUser, number: u64, list: &str) {
+        let mut inputs: Vec<Option<Arc<[u8]>>> = vec![None; GENERATION_INPUTS.len()];
+        let index = GENERATION_INPUTS
+            .iter()
+            .position(|(source, _)| *source == STATE_FILE)
+            .unwrap();
+        inputs[index] = Some(Arc::from(list.as_bytes()));
+        let mut world = world.lock().unwrap();
+        let profile = world.profiles.entry(user.uid).or_default();
+        profile.generations.push(number);
+        profile.built.insert(number, inputs);
+        profile.active = Some(number);
     }
 
-    fn installed(source: &Arc<Counted>, home: &Path) -> Installed {
-        std::fs::create_dir_all(home.join("store")).unwrap();
-        Installed::with_source(Arc::clone(source) as Arc<dyn Source>)
-            .in_store(std::fs::canonicalize(home.join("store")).unwrap())
+    fn hosted() -> (Arc<Mutex<World>>, Host) {
+        let world = Arc::new(Mutex::new(World::default()));
+        let host = Host::Model(Arc::clone(&world));
+        (world, host)
     }
 
     #[tokio::test]
     async fn a_user_with_no_generation_has_nothing_to_list_and_nothing_is_asked() {
-        let home = tempfile::tempdir().unwrap();
+        let (_, host) = hosted();
         let source = Arc::new(Counted::default());
 
-        let listing = installed(&source, home.path())
-            .listing(&user(home.path()), None, &Scope::root())
+        let listing = Installed::with_source(Arc::clone(&source) as Arc<dyn Source>)
+            .listing(&host, &user(1000), None, &Scope::root())
             .await
             .unwrap();
 
@@ -218,72 +269,89 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_second_listing_of_a_generation_is_answered_from_memory() {
-        let home = tempfile::tempdir().unwrap();
-        let generation = activate(home.path(), "one");
+    async fn the_source_is_asked_for_the_names_the_generation_was_built_from() {
+        let (world, host) = hosted();
+        activate(&world, &user(1000), 1, &list(&["hello", "ripgrep"]));
         let source = Arc::new(Counted::default());
-        let installed = installed(&source, home.path());
+
+        Installed::with_source(Arc::clone(&source) as Arc<dyn Source>)
+            .listing(&host, &user(1000), None, &Scope::root())
+            .await
+            .unwrap();
+
+        let asked = source.asked.lock().unwrap().clone();
+        assert_eq!(asked.len(), 1);
+        assert!(asked[0].iter().any(|name| name == "hello"));
+        assert!(asked[0].iter().any(|name| name == "ripgrep"));
+    }
+
+    #[tokio::test]
+    async fn the_second_listing_of_a_generation_is_answered_from_memory() {
+        let (world, host) = hosted();
+        activate(&world, &user(1000), 1, &list(&[]));
+        let source = Arc::new(Counted::default());
+        let installed = Installed::with_source(Arc::clone(&source) as Arc<dyn Source>);
         let scope = Scope::root();
 
         let first = installed
-            .listing(&user(home.path()), None, &scope)
+            .listing(&host, &user(1000), None, &scope)
             .await
             .unwrap()
             .unwrap();
         let second = installed
-            .listing(&user(home.path()), None, &scope)
+            .listing(&host, &user(1000), None, &scope)
             .await
             .unwrap()
             .unwrap();
 
         assert_eq!(source.gathered.load(Ordering::SeqCst), 1);
-        assert_eq!(first.generation, generation);
+        assert_eq!(first.generation.number, 1);
         assert!(Arc::ptr_eq(&first.packages, &second.packages));
     }
 
     #[tokio::test]
     async fn a_new_generation_is_gathered_again_and_the_old_answer_is_dropped() {
-        let home = tempfile::tempdir().unwrap();
-        activate(home.path(), "one");
+        let (world, host) = hosted();
+        activate(&world, &user(1000), 1, &list(&[]));
         let source = Arc::new(Counted::default());
-        let installed = installed(&source, home.path());
+        let installed = Installed::with_source(Arc::clone(&source) as Arc<dyn Source>);
         let scope = Scope::root();
         installed
-            .listing(&user(home.path()), None, &scope)
+            .listing(&host, &user(1000), None, &scope)
             .await
             .unwrap();
 
-        let next = activate(home.path(), "two");
+        activate(&world, &user(1000), 2, &list(&["hello"]));
         let listed = installed
-            .listing(&user(home.path()), None, &scope)
+            .listing(&host, &user(1000), None, &scope)
             .await
             .unwrap()
             .unwrap();
 
         assert_eq!(source.gathered.load(Ordering::SeqCst), 2);
-        assert_eq!(listed.generation, next);
-        assert_eq!(listed.packages[0].name, next.display().to_string());
+        assert_eq!(listed.generation.number, 2);
+        assert_eq!(listed.packages[0].name, "2");
     }
 
     #[tokio::test]
     async fn a_failed_gather_is_not_remembered() {
-        let home = tempfile::tempdir().unwrap();
-        activate(home.path(), "one");
+        let (world, host) = hosted();
+        activate(&world, &user(1000), 1, &list(&[]));
         let source = Arc::new(Counted {
             fail: Mutex::new(1),
             ..Counted::default()
         });
-        let installed = installed(&source, home.path());
+        let installed = Installed::with_source(Arc::clone(&source) as Arc<dyn Source>);
         let scope = Scope::root();
 
         assert!(
             installed
-                .listing(&user(home.path()), None, &scope)
+                .listing(&host, &user(1000), None, &scope)
                 .await
                 .is_err()
         );
         let retried = installed
-            .listing(&user(home.path()), None, &scope)
+            .listing(&host, &user(1000), None, &scope)
             .await
             .unwrap();
 
@@ -293,20 +361,25 @@ mod tests {
 
     #[tokio::test]
     async fn listings_that_arrive_together_share_one_gather() {
-        let home = tempfile::tempdir().unwrap();
-        activate(home.path(), "one");
+        let (world, host) = hosted();
+        activate(&world, &user(1000), 1, &list(&[]));
         let gate = Arc::new(tokio::sync::Notify::new());
         let source = Arc::new(Counted {
             gate: Some(Arc::clone(&gate)),
             ..Counted::default()
         });
-        let installed = Arc::new(installed(&source, home.path()));
-        let who = user(home.path());
+        let installed = Arc::new(Installed::with_source(
+            Arc::clone(&source) as Arc<dyn Source>
+        ));
         let listings: Vec<_> = (0..4)
             .map(|_| {
                 let installed = Arc::clone(&installed);
-                let who = who.clone();
-                tokio::spawn(async move { installed.listing(&who, None, &Scope::root()).await })
+                let host = host.clone();
+                tokio::spawn(async move {
+                    installed
+                        .listing(&host, &user(1000), None, &Scope::root())
+                        .await
+                })
             })
             .collect();
         while source.gathered.load(Ordering::SeqCst) == 0 {
@@ -322,20 +395,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_listing_stopped_while_it_waits_for_another_ends_cancelled() {
-        let home = tempfile::tempdir().unwrap();
-        activate(home.path(), "one");
+    async fn a_listing_stopped_while_it_waits_for_another_ends_stopped() {
+        let (world, host) = hosted();
+        activate(&world, &user(1000), 1, &list(&[]));
         let gate = Arc::new(tokio::sync::Notify::new());
         let source = Arc::new(Counted {
             gate: Some(Arc::clone(&gate)),
             ..Counted::default()
         });
-        let installed = Arc::new(installed(&source, home.path()));
-        let who = user(home.path());
+        let installed = Arc::new(Installed::with_source(
+            Arc::clone(&source) as Arc<dyn Source>
+        ));
         let first = {
             let installed = Arc::clone(&installed);
-            let who = who.clone();
-            tokio::spawn(async move { installed.listing(&who, None, &Scope::root()).await })
+            let host = host.clone();
+            tokio::spawn(async move {
+                installed
+                    .listing(&host, &user(1000), None, &Scope::root())
+                    .await
+            })
         };
         while source.gathered.load(Ordering::SeqCst) == 0 {
             tokio::task::yield_now().await;
@@ -343,32 +421,110 @@ mod tests {
         let scope = Scope::root();
         scope.cancel(mix_exec::Reason::Interrupted);
 
-        let stopped = installed.listing(&who, None, &scope).await;
+        let stopped = installed.listing(&host, &user(1000), None, &scope).await;
 
-        assert!(matches!(stopped, Err(Error::Cancelled { .. })));
+        assert!(matches!(stopped, Err(Error::Stopped)));
         gate.notify_one();
         assert!(first.await.unwrap().unwrap().is_some());
     }
 
     #[tokio::test]
     async fn each_user_has_a_record_of_their_own() {
-        let alice = tempfile::tempdir().unwrap();
-        let bob = tempfile::tempdir().unwrap();
-        let store = alice.path().join("store");
-        activate_in(alice.path(), &store, "alice-one");
-        activate_in(bob.path(), &store, "bob-one");
+        let (world, host) = hosted();
+        activate(&world, &user(1000), 1, &list(&[]));
+        activate(&world, &user(1001), 1, &list(&[]));
         let source = Arc::new(Counted::default());
-        let installed = installed(&source, alice.path());
+        let installed = Installed::with_source(Arc::clone(&source) as Arc<dyn Source>);
         let scope = Scope::root();
-        let mut other = user(bob.path());
-        other.uid = 1001;
 
         installed
-            .listing(&user(alice.path()), None, &scope)
+            .listing(&host, &user(1000), None, &scope)
             .await
             .unwrap();
-        installed.listing(&other, None, &scope).await.unwrap();
+        installed
+            .listing(&host, &user(1001), None, &scope)
+            .await
+            .unwrap();
 
         assert_eq!(source.gathered.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_generation_without_its_package_list_is_an_io_error_naming_the_file() {
+        let (world, host) = hosted();
+        activate(&world, &user(1000), 1, &list(&[]));
+        world
+            .lock()
+            .unwrap()
+            .profiles
+            .get_mut(&1000)
+            .unwrap()
+            .built
+            .insert(1, vec![None; GENERATION_INPUTS.len()]);
+
+        let failed = Installed::with_source(Arc::new(Counted::default()))
+            .listing(&host, &user(1000), None, &Scope::root())
+            .await;
+
+        match failed {
+            Err(Error::Profile(change::Error::Core(CoreError::Io { path, source }))) => {
+                assert!(path.ends_with(GENERATION_STATE_FILE));
+                assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+            }
+            other => panic!("expected an I/O error, got {:?}", other.err()),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_package_list_that_is_not_json_is_invalid_data() {
+        let (world, host) = hosted();
+        activate(&world, &user(1000), 1, "{broken");
+
+        let failed = Installed::with_source(Arc::new(Counted::default()))
+            .listing(&host, &user(1000), None, &Scope::root())
+            .await;
+
+        match failed {
+            Err(Error::Profile(change::Error::Core(CoreError::Io { source, .. }))) => {
+                assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
+            }
+            other => panic!("expected an I/O error, got {:?}", other.err()),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_package_list_that_would_not_pass_the_checks_install_runs_is_not_listed() {
+        let (world, host) = hosted();
+        let mut manifest = StateManifest::seed();
+        manifest.packages.retain(|name| name != "git");
+        activate(&world, &user(1000), 1, &manifest.render());
+        let source = Arc::new(Counted::default());
+
+        let failed = Installed::with_source(Arc::clone(&source) as Arc<dyn Source>)
+            .listing(&host, &user(1000), None, &Scope::root())
+            .await;
+
+        assert!(matches!(
+            failed,
+            Err(Error::Profile(change::Error::Core(CoreError::Io { .. })))
+        ));
+        assert_eq!(source.gathered.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_package_list_from_a_newer_mix_is_told_apart_from_a_broken_one() {
+        let (world, host) = hosted();
+        let mut manifest = StateManifest::seed();
+        manifest.version += 1;
+        activate(&world, &user(1000), 1, &manifest.render());
+
+        let failed = Installed::with_source(Arc::new(Counted::default()))
+            .listing(&host, &user(1000), None, &Scope::root())
+            .await;
+
+        assert!(matches!(
+            failed,
+            Err(Error::Profile(change::Error::NewerState(version))) if version == manifest.version
+        ));
     }
 }

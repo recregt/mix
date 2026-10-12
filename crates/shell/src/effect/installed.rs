@@ -2,10 +2,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use mix_core::declared::identity::InvokingUser;
-use mix_core::declared::paths::{
-    DEFAULT_PROFILE_NIX, DEFAULT_PROFILE_NIX_STORE, GENERATION_STATE_FILE,
-};
-use mix_core::declared::state::StateManifest;
+use mix_core::declared::paths::{DEFAULT_PROFILE_NIX, DEFAULT_PROFILE_NIX_STORE};
 use mix_core::effect::FlakeSource;
 use mix_core::ops::list::{Described, Stored, join};
 use mix_core::ops::update::Versions;
@@ -102,22 +99,6 @@ fn unreadable(command: &str, error: impl std::fmt::Display) -> Error {
     }
 }
 
-fn requested(generation: &Path) -> Result<Vec<String>> {
-    let path = generation.join(GENERATION_STATE_FILE);
-    let text = crate::effect::generations::store_input(generation, GENERATION_STATE_FILE)
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-        .ok_or_else(|| Error::Io {
-            path: path.clone(),
-            source: std::io::Error::from(std::io::ErrorKind::NotFound),
-        })?;
-    StateManifest::parse(&text)
-        .map(|manifest| manifest.packages)
-        .map_err(|error| Error::Io {
-            path,
-            source: std::io::Error::new(std::io::ErrorKind::InvalidData, error),
-        })
-}
-
 async fn described(
     user: &InvokingUser,
     mirror: Option<&str>,
@@ -208,10 +189,10 @@ async fn stored(user: &InvokingUser, home_path: &Path, scope: &Scope) -> Result<
 pub async fn gather(
     user: &InvokingUser,
     generation: &Path,
+    names: &[String],
     mirror: Option<&str>,
     scope: &Scope,
 ) -> Result<Vec<InstalledPackage>> {
-    let names = requested(generation)?;
     if names.is_empty() {
         return Ok(Vec::new());
     }
@@ -219,10 +200,10 @@ pub async fn gather(
     let home_path =
         std::fs::canonicalize(&link).map_err(|source| Error::Io { path: link, source })?;
     let (described, stored) = tokio::join!(
-        described(user, mirror, &names, None, scope),
+        described(user, mirror, names, None, scope),
         stored(user, &home_path, scope)
     );
-    Ok(join(&names, &described?, &stored?))
+    Ok(join(names, &described?, &stored?))
 }
 
 #[cfg(test)]
@@ -328,46 +309,5 @@ mod tests {
     fn a_signature_names_its_signer_by_what_precedes_the_first_colon() {
         assert_eq!(signer("cache.nixos.org-1:abc+/=="), "cache.nixos.org-1");
         assert_eq!(signer("no-colon"), "no-colon");
-    }
-
-    #[test]
-    fn the_requested_names_are_the_ones_the_generation_was_built_from() {
-        let generation = tempfile::tempdir().unwrap();
-        std::fs::write(
-            generation.path().join(GENERATION_STATE_FILE),
-            StateManifest::seed().render(),
-        )
-        .unwrap();
-
-        assert_eq!(
-            requested(generation.path()).unwrap(),
-            StateManifest::seed().packages
-        );
-    }
-
-    #[test]
-    fn a_generation_without_its_package_list_is_an_io_error_naming_the_file() {
-        let generation = tempfile::tempdir().unwrap();
-
-        match requested(generation.path()) {
-            Err(Error::Io { path, source }) => {
-                assert_eq!(path, generation.path().join(GENERATION_STATE_FILE));
-                assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
-            }
-            other => panic!("expected an I/O error, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn a_package_list_that_is_not_json_is_invalid_data() {
-        let generation = tempfile::tempdir().unwrap();
-        std::fs::write(generation.path().join(GENERATION_STATE_FILE), "{broken").unwrap();
-
-        match requested(generation.path()) {
-            Err(Error::Io { source, .. }) => {
-                assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
-            }
-            other => panic!("expected an I/O error, got {other:?}"),
-        }
     }
 }

@@ -1,12 +1,15 @@
 #![allow(clippy::disallowed_methods)]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use futures_util::FutureExt;
 use mix_core::declared::identity::InvokingUser;
-use mix_core::declared::paths::{HOME_MANAGER_PROFILE_NAME, nix_profiles_dir};
+use mix_core::declared::paths::{GENERATION_INPUTS, STATE_FILE};
+use mix_core::declared::state::StateManifest;
+use mix_core::model::World;
 use mix_events::v1::{InstalledPackage, PackageOutput};
 use mix_exec::Scope;
+use mix_shell::request::context::Host;
 use mix_shell::request::installed::{Ask, Gathering, Installed, Source};
 
 fn main() {
@@ -46,33 +49,42 @@ fn package(n: usize) -> InstalledPackage {
     }
 }
 
+fn active(user: &InvokingUser) -> Host {
+    let mut inputs: Vec<Option<Arc<[u8]>>> = vec![None; GENERATION_INPUTS.len()];
+    let index = GENERATION_INPUTS
+        .iter()
+        .position(|(source, _)| *source == STATE_FILE)
+        .expect("the package list is a generation input");
+    inputs[index] = Some(Arc::from(StateManifest::seed().render().as_bytes()));
+    let mut world = World::default();
+    let profile = world.profiles.entry(user.uid).or_default();
+    profile.generations.push(1);
+    profile.built.insert(1, inputs);
+    profile.active = Some(1);
+    Host::Model(Arc::new(Mutex::new(world)))
+}
+
 #[divan::bench(args = [1, 16, 128])]
 fn answer_a_list_from_memory(bencher: divan::Bencher, packages: usize) {
-    let home = tempfile::tempdir().unwrap();
-    let generation = home.path().join("generation");
-    std::fs::create_dir_all(&generation).unwrap();
-    let profiles = nix_profiles_dir(home.path());
-    std::fs::create_dir_all(&profiles).unwrap();
-    std::os::unix::fs::symlink(&generation, profiles.join(HOME_MANAGER_PROFILE_NAME)).unwrap();
     let user = InvokingUser {
         uid: 1000,
         gid: 1000,
         name: "mix-user".to_string(),
-        home: home.path().to_path_buf(),
+        home: "/home/mix-user".into(),
     };
+    let host = active(&user);
     let installed =
-        Installed::with_source(Arc::new(Recorded((0..packages).map(package).collect())))
-            .in_store(std::fs::canonicalize(home.path()).unwrap());
+        Installed::with_source(Arc::new(Recorded((0..packages).map(package).collect())));
     let scope = Scope::root();
     installed
-        .listing(&user, None, &scope)
+        .listing(&host, &user, None, &scope)
         .now_or_never()
         .expect("a recorded source answers at once")
         .unwrap();
 
     bencher.bench_local(|| {
         installed
-            .listing(divan::black_box(&user), None, &scope)
+            .listing(&host, divan::black_box(&user), None, &scope)
             .now_or_never()
             .expect("a recorded generation answers at once")
             .unwrap()

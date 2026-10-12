@@ -4,8 +4,8 @@ use std::sync::Arc;
 use mix_core::ActivityReporter;
 use mix_core::declared::identity::InvokingUser;
 use mix_core::declared::paths::{
-    DEFAULT_PROFILE_NIX_ENV, DEFAULT_PROFILE_NIX_STORE, HOME_MANAGER_PROFILE_NAME, NIX_STORE,
-    nix_profiles_dir,
+    DEFAULT_PROFILE_NIX_ENV, DEFAULT_PROFILE_NIX_STORE, GENERATION_STATE_FILE,
+    HOME_MANAGER_PROFILE_NAME, NIX_STORE, nix_profiles_dir,
 };
 use mix_core::effect::{Action, Fact, Failure, Outcome, Performed, ProfileFacts, Query};
 use mix_exec::Scope;
@@ -139,6 +139,23 @@ pub fn active_generation(user: &InvokingUser) -> Option<PathBuf> {
 
 pub fn active_input(user: &InvokingUser, file: &str) -> Option<Vec<u8>> {
     store_input(&active_generation(user)?, file)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Active {
+    pub number: u64,
+    pub path: PathBuf,
+    pub list: Option<String>,
+}
+
+pub fn active(user: &InvokingUser) -> Option<Active> {
+    let link = profile_link(user);
+    let target = std::fs::read_link(&link).ok()?;
+    let number = generation_of(target.file_name()?.to_str()?)?;
+    let path = store_generation(&link.parent()?.join(&target), Path::new(NIX_STORE))?;
+    let list = store_input(&path, GENERATION_STATE_FILE)
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
+    Some(Active { number, path, list })
 }
 
 fn current(user: &InvokingUser) -> Option<u64> {
