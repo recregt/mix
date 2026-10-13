@@ -56,6 +56,13 @@
           };
           cargoArtifacts = craneLib.buildDepsOnly common;
           distArtifacts = craneLib.buildDepsOnly (common // { CARGO_PROFILE = "dist"; });
+          fuzzManifests = [
+            "crates/nixgen/fuzz"
+            "crates/render/fuzz"
+          ];
+          nightly = pkgs.rust-bin.selectLatestNightlyWith (
+            toolchain: toolchain.minimal.override { extensions = [ "llvm-tools-preview" ]; }
+          );
           layers = [
             "core"
             "cli"
@@ -65,6 +72,13 @@
           ];
         in
         {
+          devShells.fuzz = pkgs.mkShell {
+            packages = [
+              nightly
+              pkgs.cargo-fuzz
+            ];
+          };
+
           packages.default = craneLib.buildPackage (
             common
             // {
@@ -151,6 +165,22 @@
                   touch $out
                 '';
 
+            fuzz = craneLib.mkCargoDerivation (
+              common
+              // {
+                pname = "mix-fuzz";
+                cargoArtifacts = null;
+                cargoVendorDir = craneLib.vendorMultipleCargoDeps {
+                  cargoLockList = map (dir: ./. + "/${dir}/Cargo.lock") fuzzManifests;
+                };
+                buildPhaseCargoCommand = lib.concatMapStrings (dir: ''
+                  cargo check --locked --all-targets --manifest-path ${dir}/Cargo.toml
+                '') fuzzManifests;
+                doInstallCargoArtifacts = false;
+                installPhaseCommand = "touch $out";
+              }
+            );
+
             deny = craneLib.cargoDeny (
               common
               // {
@@ -190,5 +220,7 @@
       }) perSystem;
 
       checks = nixpkgs.lib.mapAttrs (_: outputs: outputs.checks) perSystem;
+
+      devShells = nixpkgs.lib.mapAttrs (_: outputs: outputs.devShells) perSystem;
     };
 }

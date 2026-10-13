@@ -4,21 +4,15 @@ This directory contains `cargo-fuzz` targets for `mix-nixgen`.
 
 ## Prerequisites
 
-You can bootstrap the entire toolchain using `mix`:
+The repository's flake provides `cargo-fuzz` and the nightly compiler libFuzzer needs. Enter its shell from the repository root:
 
 ```bash
-# Bootstrap Nix on the host (provides `nix` and `nix-instantiate`)
-mix bootstrap
-
-# Install fuzzing tools via mix
-mix install cargo-fuzz rustup tmux
-
-# Add the nightly compiler required by libFuzzer
-rustup toolchain install nightly
-
+nix develop .#fuzz
 ```
 
-Alternatively, install `cargo-fuzz` and `rustup` via your system package manager.
+Run the commands below from that shell. `verify-corpus` also calls `nix-instantiate` and `nix eval`, which come with Nix itself.
+
+Without Nix, install `cargo-fuzz` and a nightly toolchain with `rustup`, and write `cargo +nightly fuzz` wherever this page says `cargo fuzz`.
 
 ## Targets
 
@@ -34,17 +28,17 @@ Run targets from `crates/nixgen/fuzz`:
 
 ```bash
 # Interactive run (single target)
-cargo +nightly fuzz run parse
-cargo +nightly fuzz run ident
-cargo +nightly fuzz run attr-path
-cargo +nightly fuzz run flake
-cargo +nightly fuzz run home
+cargo fuzz run parse
+cargo fuzz run ident
+cargo fuzz run attr-path
+cargo fuzz run flake
+cargo fuzz run home
 
 # Faster run by reducing ASAN allocation overhead
-ASAN_OPTIONS="malloc_context_size=0" cargo +nightly fuzz run parse
+ASAN_OPTIONS="malloc_context_size=0" cargo fuzz run parse
 
 # Timed run (e.g., 1 hour with a 10s per-input timeout)
-cargo +nightly fuzz run parse -- -max_total_time=3600 -timeout=10
+cargo fuzz run parse -- -max_total_time=3600 -timeout=10
 ```
 
 ## Running with `tmux` (kinda cool!)
@@ -52,12 +46,12 @@ cargo +nightly fuzz run parse -- -max_total_time=3600 -timeout=10
 Run all 5 targets concurrently across split panes in an isolated session:
 
 ```bash
-tmux new-session -d -s fuzz "cargo +nightly fuzz run parse" \; \
-  split-window -h "cargo +nightly fuzz run ident" \; \
-  split-window -v "cargo +nightly fuzz run attr-path" \; \
+tmux new-session -d -s fuzz "cargo fuzz run parse" \; \
+  split-window -h "cargo fuzz run ident" \; \
+  split-window -v "cargo fuzz run attr-path" \; \
   select-pane -t 0 \; \
-  split-window -v "cargo +nightly fuzz run flake" \; \
-  split-window -h "cargo +nightly fuzz run home" \; \
+  split-window -v "cargo fuzz run flake" \; \
+  split-window -h "cargo fuzz run home" \; \
   attach
 ```
 
@@ -66,17 +60,17 @@ tmux new-session -d -s fuzz "cargo +nightly fuzz run parse" \; \
 If a crash is found, re-run against the crash artifact directly to get a full backtrace:
 
 ```bash
-RUST_BACKTRACE=1 cargo +nightly fuzz run parse artifacts/parse/<crash-file>
+RUST_BACKTRACE=1 cargo fuzz run parse artifacts/parse/<crash-file>
 ```
 
 ## Coverage & Corpus Management
 
 ```bash
 # Generate LLVM source-based code coverage from the corpus
-cargo +nightly fuzz coverage parse
+cargo fuzz coverage parse
 
 # Minimize corpus
-cargo +nightly fuzz cmin parse
+cargo fuzz cmin parse
 
 # Verify corpus parses with real Nix evaluator (requires nix CLI)
 cargo run --release --bin verify-corpus -- corpus/parse
