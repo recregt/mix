@@ -48,7 +48,7 @@ jobs:
           read -ra args <<< "$ARGS"
           cargo test --release --locked --no-run "${args[@]}"
 
-      - name: Run the ${{ matrix.name }} properties until the budget is spent
+      - name: Repeat the ${{ matrix.name }} tests until the budget is spent
         run: |
           read -ra args <<< "$ARGS"
           deadline=$((SECONDS + BUDGET_SECONDS))
