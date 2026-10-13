@@ -47,12 +47,11 @@ def build_mix() -> None:
 
 
 def resolve_image(requested: str | None) -> str:
-    image = requested or os.environ.get("MIX_TEST_IMAGE")
-    if image:
-        step(f"pulling {image}")
-        if subprocess.run(["podman", "pull", "-q", image], check=False).returncode == 0:
-            return image
-        print(f"could not pull {image}, building it locally instead", file=sys.stderr)
+    if requested:
+        step(f"pulling {requested}")
+        if subprocess.run(["podman", "pull", "-q", requested], check=False).returncode == 0:
+            return requested
+        print(f"could not pull {requested}, building it locally instead", file=sys.stderr)
     step(f"building {LOCAL_IMAGE} from {CONTAINERFILE.relative_to(REPO_ROOT)}")
     subprocess.run(
         [
@@ -194,9 +193,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--user", help="user to create and log in as (default: dev, or ciuser offline)"
     )
-    parser.add_argument(
-        "--image", help="container image to use (default: $MIX_TEST_IMAGE, else built locally)"
-    )
+    parser.add_argument("--image", help="container image to use (default: built locally)")
     parser.add_argument(
         "--no-build", action="store_true", help="use the existing target/release/mix"
     )
