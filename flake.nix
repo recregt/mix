@@ -76,6 +76,7 @@
             packages = [
               nightly
               pkgs.cargo-fuzz
+              pkgs.tmux
             ];
           };
 
