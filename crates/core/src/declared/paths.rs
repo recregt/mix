@@ -57,6 +57,22 @@ pub const MIX_DAEMON_SOCKET_DEST: &str = "/etc/systemd/system/mix-daemon.socket"
 pub const MIX_DAEMON_SERVICE_DEST: &str = "/etc/systemd/system/mix-daemon.service";
 
 pub const MIX_STATE_DIR: &str = ".local/state/mix";
+pub const HOME_TRACES: &[&str] = &[
+    MIX_STATE_DIR,
+    ".local/state/nix",
+    ".local/state/home-manager",
+    ".nix-profile",
+    ".nix-defexpr",
+    ".nix-channels",
+    ".cache/nix",
+];
+pub const NIX_ENTRIES: &[&str] = &[
+    "/nix/store",
+    "/nix/var",
+    NIX_OWNERSHIP_MARKER,
+    NIX_PROVISIONING_MANIFEST,
+];
+pub const INSTALLED_PROGRAMS: [&str; 2] = ["/usr/local/bin/mix", "/usr/local/bin/mix-daemon"];
 pub const MIX_STATE_DIR_MODE: u32 = 0o700;
 pub const FLAKE_NIX: &str = "flake.nix";
 pub const HOME_NIX: &str = "home.nix";

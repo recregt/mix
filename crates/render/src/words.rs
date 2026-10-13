@@ -16,6 +16,7 @@ pub fn name(request: &Request) -> &'static str {
         Request::Explain(_) => "mix explain",
         Request::List(_) => "mix list",
         Request::Update(_) => "mix update",
+        Request::SelfRemove(_) => "mix self remove",
     }
 }
 
@@ -30,12 +31,14 @@ pub fn action(request: &Request) -> Box<dyn Display + '_> {
         Request::Explain(_) => Box::new("explain the code"),
         Request::List(_) => Box::new("list your packages"),
         Request::Update(_) => Box::new("update your packages"),
+        Request::SelfRemove(_) => Box::new("remove `mix`"),
     }
 }
 
 pub fn stopping(request: &Request) -> Option<Note> {
     match request {
         Request::Bootstrap(_) => Some(note!("cancelling and cleaning up")),
+        Request::SelfRemove(_) => Some(note!("cancelling and putting everything back")),
         Request::Install(_) | Request::Remove(_) => {
             Some(note!("cancelling and putting the package list back"))
         }

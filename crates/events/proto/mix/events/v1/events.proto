@@ -51,6 +51,7 @@ message Command {
     ExplainRequest explain = 16;
     ListRequest list = 17;
     UpdateRequest update = 18;
+    SelfRemoveRequest self_remove = 19;
   }
 }
 
@@ -61,6 +62,8 @@ message ExplainRequest {
 message ListRequest {}
 
 message UpdateRequest {}
+
+message SelfRemoveRequest {}
 
 message BootstrapRequest {
   bool force = 1;
@@ -235,6 +238,7 @@ message Observation {
     string strangers = 24;
     string clobbered = 25;
     string program = 26;
+    string linked = 27;
   }
   oneof fact {
     PathFact path_fact = 10;
@@ -250,6 +254,7 @@ message Observation {
     StrangerFact stranger_fact = 20;
     PathsFact clobbered_fact = 21;
     ProgramFact program_fact = 30;
+    PathsFact linked_fact = 31;
   }
 }
 
@@ -441,6 +446,7 @@ message NodeFinished {
     ExplainResult explain = 18;
     ListResult list = 19;
     UpdateResult update = 20;
+    SelfRemoveResult self_remove = 21;
   }
 }
 
@@ -538,6 +544,10 @@ message UpdateResult {
   repeated InputUpdate inputs = 1;
   repeated PackageUpdate packages = 2;
   optional ActiveGeneration active = 4;
+}
+
+message SelfRemoveResult {
+  repeated string users = 1;
 }
 
 message CleanResult {
@@ -722,6 +732,7 @@ enum Code {
   CODE_VERSION_MISMATCH = 72;
   CODE_USAGE = 73;
   CODE_DAEMON_OUTDATED = 74;
+  CODE_CONFIRMATION_REQUIRED = 75;
 }
 
 enum Host {

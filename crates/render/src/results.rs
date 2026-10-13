@@ -54,6 +54,22 @@ pub(super) fn finished(
                 );
             }
         }
+        Result::SelfRemove(_) => {
+            if chatty {
+                mix_ui::status_to(
+                    out,
+                    Status::Finished,
+                    &format!("removal in {}", took(elapsed)),
+                );
+                mix_ui::note_to(
+                    out,
+                    &mix_ui::note!("terminal sessions opened before the removal still load Nix"),
+                    Some(&mix_ui::help!(
+                        "run `exec $SHELL -l` to start one without it"
+                    )),
+                );
+            }
+        }
         Result::Repair(repair) => repaired(
             out,
             &repair.reports,
@@ -241,7 +257,8 @@ fn explained(explain: &ExplainResult, request: Option<&Request>) -> String {
             | Request::Repair(_)
             | Request::Doctor(_)
             | Request::List(_)
-            | Request::Update(_),
+            | Request::Update(_)
+            | Request::SelfRemove(_),
         )
         | None => mix_explain::codes::list_text(codes),
     }

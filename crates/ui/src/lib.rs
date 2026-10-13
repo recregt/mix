@@ -397,6 +397,22 @@ pub fn causes_of(first: Option<&dyn std::error::Error>, already: &str) -> Vec<St
     causes
 }
 
+pub fn interactive() -> bool {
+    std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+}
+
+pub fn confirm(question: &str) -> bool {
+    let mut stderr = std::io::stderr();
+    let _ = write!(stderr, "{question} [y/N] ");
+    let _ = stderr.flush();
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer).is_ok() && agreed(&answer)
+}
+
+fn agreed(answer: &str) -> bool {
+    matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
 pub fn restore_terminal() {
     let mut stderr = std::io::stderr();
     if stderr.is_terminal() {
@@ -408,6 +424,16 @@ pub fn restore_terminal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_y_or_yes_agrees() {
+        for answer in ["y\n", "Y", " yes \n", "YES"] {
+            assert!(agreed(answer), "{answer:?}");
+        }
+        for answer in ["", "\n", "n", "no", "yess", "sure"] {
+            assert!(!agreed(answer), "{answer:?}");
+        }
+    }
 
     #[test]
     fn color_follows_the_flag_then_the_environment_as_cargo_does() {

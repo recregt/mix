@@ -64,20 +64,35 @@ fn clobbered(user: &InvokingUser) -> Vec<PathBuf> {
 }
 
 fn clobbered_in(user: &InvokingUser, store: &Path) -> Vec<PathBuf> {
+    placed_in(user, store).clobbered
+}
+
+pub fn linked(user: &InvokingUser) -> Vec<PathBuf> {
+    placed_in(user, Path::new(NIX_STORE)).linked
+}
+
+#[derive(Default)]
+struct Placed {
+    clobbered: Vec<PathBuf>,
+    linked: Vec<PathBuf>,
+}
+
+fn placed_in(user: &InvokingUser, store: &Path) -> Placed {
+    let mut placed = Placed::default();
     let Some(generation) = store_generation(&profile_link(user), store) else {
-        return Vec::new();
+        return placed;
     };
     let managed = generation.join(HOME_FILES);
     let Ok(files) = std::fs::canonicalize(&managed) else {
-        return Vec::new();
+        return placed;
     };
-    let mut found = Vec::new();
-    in_the_way(&managed, &user.home, &[&files, &managed], &mut found);
-    found.sort();
-    found
+    in_the_way(&managed, &user.home, &[&files, &managed], &mut placed);
+    placed.clobbered.sort();
+    placed.linked.sort();
+    placed
 }
 
-fn in_the_way(managed: &Path, home: &Path, ours: &[&Path], found: &mut Vec<PathBuf>) {
+fn in_the_way(managed: &Path, home: &Path, ours: &[&Path], placed: &mut Placed) {
     let Ok(entries) = std::fs::read_dir(managed) else {
         return;
     };
@@ -89,17 +104,18 @@ fn in_the_way(managed: &Path, home: &Path, ours: &[&Path], found: &mut Vec<PathB
         };
         if std::fs::metadata(&source).is_ok_and(|source| source.is_dir()) {
             if there.is_dir() {
-                in_the_way(&source, &destination, ours, found);
+                in_the_way(&source, &destination, ours, placed);
             } else {
-                found.push(destination);
+                placed.clobbered.push(destination);
             }
             continue;
         }
         let linked = there.file_type().is_symlink()
             && std::fs::read_link(&destination)
                 .is_ok_and(|target| ours.iter().any(|files| target.starts_with(files)));
-        if !linked {
-            found.push(destination);
+        match linked {
+            true => placed.linked.push(destination),
+            false => placed.clobbered.push(destination),
         }
     }
 }
@@ -440,8 +456,14 @@ mod tests {
         std::fs::create_dir_all(home.path().join(".config/app/settings")).unwrap();
 
         assert_eq!(clobbered(&user), Vec::<PathBuf>::new());
+        assert_eq!(linked(&user), Vec::<PathBuf>::new());
         let store = std::fs::canonicalize(home.path().join("store")).unwrap();
         let found = clobbered_in(&user, &store);
+
+        assert_eq!(
+            placed_in(&user, &store).linked,
+            [home.path().join(".profile")]
+        );
 
         assert_eq!(
             found,

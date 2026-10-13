@@ -31,5 +31,16 @@ pub async fn run() -> ExitCode {
         },
         args.draws_progress(environment.ci),
     );
-    session::run(command, &view, std::path::Path::new(mix_rpc::SOCKET_PATH)).await
+    let unconfirmed = request::unconfirmed(
+        &args.command,
+        !args.json && mix_render::interactive(),
+        || mix_render::confirm("This removes `mix`, Nix and every user's `mix` state. Continue?"),
+    );
+    session::run(
+        command,
+        &view,
+        std::path::Path::new(mix_rpc::SOCKET_PATH),
+        unconfirmed,
+    )
+    .await
 }

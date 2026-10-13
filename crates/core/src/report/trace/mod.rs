@@ -84,6 +84,7 @@ fn query_of(query: &Query) -> observation::Query {
         Query::Strangers { path: at, .. } => Wire::Strangers(path(at)),
         Query::Clobbered(user) => Wire::Clobbered(user.name.clone()),
         Query::Program { path: at, .. } => Wire::Program(path(at)),
+        Query::Linked(user) => Wire::Linked(user.name.clone()),
     }
 }
 
@@ -187,6 +188,12 @@ fn fact_of(fact: &Fact) -> observation::Fact {
         Fact::Program(program) => Wire::ProgramFact(ProgramFact { same: program.same }),
         Fact::Clobbered(found) => Wire::ClobberedFact(PathsFact {
             paths: found.iter().map(|at| at.display().to_string()).collect(),
+        }),
+        Fact::Linked(found) => Wire::LinkedFact(PathsFact {
+            paths: found
+                .iter()
+                .map(|(at, _)| at.display().to_string())
+                .collect(),
         }),
     }
 }

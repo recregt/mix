@@ -140,6 +140,24 @@ pub enum Command {
         #[arg(long, conflicts_with = "code")]
         list: bool,
     },
+
+    /// Manage `mix` itself
+    #[command(name = "self", subcommand)]
+    Itself(Itself),
+}
+
+#[derive(Subcommand)]
+pub enum Itself {
+    /// Remove `mix`, Nix and every user's `mix` state from this machine
+    Remove {
+        /// Remove without asking first
+        #[arg(short, long)]
+        yes: bool,
+
+        /// Show what would change without changing it
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+    },
 }
 
 fn code(name: &str) -> Result<mix_events::v1::Code, String> {
@@ -253,7 +271,8 @@ impl Args {
             | Command::Remove { dry_run, .. }
             | Command::Clean { dry_run, .. }
             | Command::Update { dry_run }
-            | Command::Repair { dry_run } => dry_run,
+            | Command::Repair { dry_run }
+            | Command::Itself(Itself::Remove { dry_run, .. }) => dry_run,
             Command::Doctor | Command::Explain { .. } | Command::List => false,
         }
     }
@@ -329,6 +348,8 @@ mod tests {
             (&["mix", "update"], false),
             (&["mix", "repair", "-n"], true),
             (&["mix", "bootstrap", "-n"], true),
+            (&["mix", "self", "remove", "-n"], true),
+            (&["mix", "self", "remove", "--yes"], false),
             (&["mix", "install", "hello"], false),
         ] {
             assert_eq!(parse(args).dry_run(), dry_run, "{args:?}");

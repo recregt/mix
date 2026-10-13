@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use mix_core::declared::identity::InvokingUser;
 use mix_core::declared::paths::RUNNING_PROGRAM;
-use mix_core::effect::{Action, Fact, Failure, Outcome, Query};
+use mix_core::effect::{Action, Fact, Failure, Outcome, PathFacts, Query};
 use mix_exec::Scope;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
@@ -98,6 +98,15 @@ pub fn observe(files: &Files, query: &Query) -> Option<Fact> {
         Query::Profile(_) | Query::Clobbered(_) | Query::ActiveList(_) | Query::ActiveLock(_) => {
             generation::observe(query)
         }
+        Query::Linked(user) => Some(Fact::Linked(
+            generation::linked(user)
+                .into_iter()
+                .filter_map(|path| match files.observe(&Query::Path(path.clone())) {
+                    Some(Fact::Path(PathFacts { id: Some(id), .. })) => Some((path, id)),
+                    _ => None,
+                })
+                .collect(),
+        )),
         _ => None,
     }
 }
@@ -141,7 +150,8 @@ fn subject(request: &Request) -> Option<&InvokingUser> {
             Query::Profile(user)
             | Query::Clobbered(user)
             | Query::ActiveList(user)
-            | Query::ActiveLock(user),
+            | Query::ActiveLock(user)
+            | Query::Linked(user),
         ) => Some(user),
         _ => None,
     }

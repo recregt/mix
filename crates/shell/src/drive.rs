@@ -225,6 +225,7 @@ impl Prediction {
             Query::Profile(user) | Query::Clobbered(user) => {
                 self.touched.contains(&Subject::Profile(user.clone()))
             }
+            Query::Linked(user) => near(&user.home),
             Query::Journals(_) => false,
         }
     }
@@ -347,7 +348,8 @@ impl Performer {
             Query::Profile(user)
             | Query::Clobbered(user)
             | Query::ActiveList(user)
-            | Query::ActiveLock(user) => (Some(user.uid), &user.home),
+            | Query::ActiveLock(user)
+            | Query::Linked(user) => (Some(user.uid), &user.home),
             _ => return Ok(self.files.observe(query)),
         };
         match uid {

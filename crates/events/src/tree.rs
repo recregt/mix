@@ -8,8 +8,8 @@ use rustc_hash::FxHashSet;
 
 use crate::outbox::Outbox;
 use crate::v1::{
-    Builds, Bytes, Cancellation, Command, Diagnostic, NodeFinished, NodeProgress, NodeStarted,
-    NotRun, NotRunReason, OutputLine, Status, Stream, envelope::Event, node_finished,
+    Builds, Bytes, Cancellation, Code, Command, Diagnostic, NodeFinished, NodeProgress,
+    NodeStarted, NotRun, NotRunReason, OutputLine, Status, Stream, envelope::Event, node_finished,
     node_progress::Progress, node_started,
 };
 
@@ -118,8 +118,19 @@ impl Ending {
         self
     }
 
+    pub fn exit_code(&self) -> u32 {
+        self.exit_code
+    }
+
     pub fn for_root(self, problems_remain: bool) -> Self {
+        let misused = self.diagnostic.as_ref().is_some_and(|diagnostic| {
+            matches!(
+                Code::try_from(diagnostic.code),
+                Ok(Code::Usage | Code::ConfirmationRequired)
+            )
+        });
         let exit_code = match self.status {
+            Status::Failed if misused => exit::USAGE,
             Status::Failed => exit::FAILED,
             Status::Cancelled => exit::INTERRUPTED,
             Status::Unspecified | Status::Succeeded | Status::AlreadySatisfied

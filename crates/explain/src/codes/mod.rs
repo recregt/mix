@@ -293,6 +293,14 @@ pub fn explanation(code: Code) -> Explanation {
             "The daemon does the work for every command after `mix bootstrap`, and it was installed by an earlier `mix`. A request can carry settings an older daemon does not know, such as `--dry-run`, and an older daemon would carry the request out without them. So `mix` refused to send it, and nothing was changed.",
             ["run `mix bootstrap` to install the daemon that matches this `mix`"]
         ),
+        Code::ConfirmationRequired => explained!(
+            "The command needs a confirmation.",
+            "`mix self remove` deletes mix, Nix and every user's mix state, so it asks before it starts. There was no terminal to ask on and `--yes` was not given, so nothing was changed.",
+            [
+                "run `mix self remove --dry-run` to see what it would delete",
+                "run it again with `--yes` to confirm"
+            ]
+        ),
         Code::VersionMismatch => explained!(
             "The privileged helper is a different version of `mix` than the command that started it.",
             "`mix` starts its helper with administrator rights from its own program file. That file was replaced, usually by an update, between the command starting and the helper starting. The two must be the same version, so the helper refused the request before changing anything.",
