@@ -137,7 +137,8 @@ pub struct Catalog;
 
 impl Source for Catalog {
     fn gather<'a>(&'a self, ask: Ask<'a>) -> Gathering<'a> {
-        let version = ask.generation.pins().map(|pins| Channel::version(&pins));
+        let version = mix_shell::effect::generations::pins(ask.generation)
+            .map(|pins| Channel::version(&pins));
         Box::pin(async move {
             Ok(ask
                 .names

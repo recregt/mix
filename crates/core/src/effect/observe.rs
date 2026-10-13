@@ -1,10 +1,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 use super::{Digest, FileId, Owner};
 use crate::declared::identity::InvokingUser;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Query {
     Path(PathBuf),
     Contents(PathBuf),
@@ -23,24 +25,24 @@ pub enum Query {
     Program { path: PathBuf, source: PathBuf },
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProfileFacts {
     pub generations: Vec<u64>,
     pub active: Option<u64>,
     pub dangling: Vec<u64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
     Missing,
-    Unreadable(std::io::ErrorKind),
+    Unreadable(#[serde(with = "super::error_kind")] std::io::ErrorKind),
     Directory,
     File,
     Symlink,
     Other,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PathFacts {
     pub kind: Kind,
     pub mode: u32,
@@ -50,13 +52,13 @@ pub struct PathFacts {
     pub changed: Option<(i64, u32)>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GroupFacts {
     pub gid: u32,
     pub members: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserFacts {
     pub uid: u32,
     pub gid: u32,
@@ -65,7 +67,7 @@ pub struct UserFacts {
     pub comment: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UnitFacts {
     pub load_state: String,
     pub active_state: String,
@@ -80,13 +82,13 @@ impl UnitFacts {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Abandoned {
     pub request: String,
     pub pending: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Fact {
     Path(PathFacts),
     Contents(Option<Arc<[u8]>>),
@@ -103,7 +105,7 @@ pub enum Fact {
     Program(ProgramFacts),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProgramFacts {
     pub same: bool,
     pub source: Option<Arc<[u8]>>,

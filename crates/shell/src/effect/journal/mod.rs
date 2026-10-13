@@ -70,6 +70,7 @@ impl Journal for FileJournal {
     }
 }
 
+#[allow(clippy::disallowed_methods)]
 pub fn read(path: &Path) -> Result<Vec<Record>, Failure> {
     let contents = std::fs::read_to_string(path).map_err(|error| io(path, error))?;
     Ok(contents
@@ -79,6 +80,7 @@ pub fn read(path: &Path) -> Result<Vec<Record>, Failure> {
 }
 
 /// Holds `path`'s journal if no running request does.
+#[allow(clippy::disallowed_methods)]
 fn unheld(path: &Path) -> Option<Flock<File>> {
     let file = File::open(path).ok()?;
     Flock::lock(file, FlockArg::LockExclusiveNonblock).ok()
@@ -98,6 +100,7 @@ pub fn abandoned(dir: &Path) -> Vec<Abandoned> {
         .collect()
 }
 
+#[allow(clippy::disallowed_methods)]
 pub fn unfinished(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();

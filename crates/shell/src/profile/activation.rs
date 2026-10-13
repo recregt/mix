@@ -14,10 +14,10 @@ use mix_core::declared::paths::{
     DEFAULT_PROFILE_NIX, GIT_DIR, HOME_MANAGER_PROFILE_NAME, mix_state_dir, nix_profiles_dir,
 };
 use mix_exec::Scope;
+use mix_home::Home;
 use mix_nixgen::{AttrPath, FlakeRef, Installable};
 
 use crate::effect::exec::run_as_reporting;
-use crate::effect::fs;
 use crate::effect::git;
 use crate::effect::mirror;
 use crate::profile::Result;
@@ -107,13 +107,18 @@ pub async fn activate_generation(
     Ok(())
 }
 
-pub async fn record(user: &InvokingUser, scope: &Scope) -> Result<()> {
+pub async fn record(user: &InvokingUser, home: &mut Home<'_>, scope: &Scope) -> Result<()> {
     let state_dir = mix_state_dir(&user.home);
-    let git = git::Git::resolve(user, scope).await?;
-    if !fs::exists(state_dir.join(GIT_DIR)).await {
+    let git = git::Git::resolve(user, home, scope).await?;
+    let git_dir = state_dir.join(GIT_DIR);
+    if !home
+        .exists(&git_dir)
+        .await
+        .map_err(|failure| crate::effect::core_error(failure, &git_dir))?
+    {
         git.init(user, &state_dir, scope).await?;
     }
-    git.sync(user, &state_dir, scope).await.map(|_| ())
+    git.sync(user, home, &state_dir, scope).await.map(|_| ())
 }
 
 #[cfg(test)]

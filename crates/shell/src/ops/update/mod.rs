@@ -89,11 +89,18 @@ pub(crate) async fn update(ctx: &Context, root: &mut Root, _request: &UpdateRequ
     let changes = if decision.is_current() {
         Vec::new()
     } else {
-        let installed = ctx
-            .host
-            .active_generation(&cfg.user)
-            .and_then(|active| active.pins())
-            .unwrap_or_else(|| cfg.pins.clone());
+        let installed = match ctx.host.active_generation(&cfg.user, &ctx.scope).await {
+            Ok(active) => active
+                .as_ref()
+                .and_then(crate::effect::generations::pins)
+                .unwrap_or_else(|| cfg.pins.clone()),
+            Err(failure) => {
+                return root.refuse(Error::Core(crate::effect::core_error(
+                    failure,
+                    &cfg.user.home,
+                )));
+            }
+        };
         let (before, after) = tokio::join!(
             ctx.upstream
                 .versions(&cfg.user, &packages, &installed, &ctx.scope),
@@ -118,10 +125,15 @@ pub(crate) async fn update(ctx: &Context, root: &mut Root, _request: &UpdateRequ
     let active = if ctx.dry_run || decision.is_current() || !matches!(verdict, Verdict::Succeeded) {
         None
     } else {
-        ctx.host
-            .active_generation(&cfg.user)
-            .as_ref()
-            .map(ActiveGeneration::from)
+        match ctx.host.active_generation(&cfg.user, &ctx.scope).await {
+            Ok(active) => active.as_ref().map(crate::effect::generations::wire),
+            Err(failure) => {
+                return root.refuse(Error::Core(crate::effect::core_error(
+                    failure,
+                    &cfg.user.home,
+                )));
+            }
+        }
     };
     change::conclude(root, verdict, || {
         node_finished::Result::Update(wire(&decision, &changes, active))

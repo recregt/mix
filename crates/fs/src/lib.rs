@@ -199,7 +199,11 @@ impl Files {
     }
 
     pub fn tree_owner(&self, path: &Path) -> Option<u32> {
-        walk(&self.root, path)
+        walk(&self.root, path, false)
+    }
+
+    pub fn tree_owner_within(&self, path: &Path) -> Option<u32> {
+        walk(&self.root, path, true)
     }
 
     pub fn adopt(&mut self, pending: impl IntoIterator<Item = PathBuf>) {
@@ -1465,7 +1469,7 @@ fn stranger_at(
         .find_map(|entry| stranger_at(&child, &entry, &path.join(&entry), foreign))
 }
 
-fn walk(root: &OwnedFd, path: &Path) -> Option<u32> {
+fn walk(root: &OwnedFd, path: &Path, within: bool) -> Option<u32> {
     let mut parts = path
         .components()
         .filter_map(|component| match component {
@@ -1475,7 +1479,9 @@ fn walk(root: &OwnedFd, path: &Path) -> Option<u32> {
         .peekable();
     let mut dir: Option<OwnedFd> = None;
     while let Some(name) = parts.next() {
-        parts.peek()?;
+        if !within {
+            parts.peek()?;
+        }
         let parent = dir.as_ref().unwrap_or(root);
         let stat = sys::statx(parent, name, AtFlags::SYMLINK_NOFOLLOW, WANTED).ok()?;
         if kind(&stat) != Kind::Directory {

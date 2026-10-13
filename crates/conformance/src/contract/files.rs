@@ -498,6 +498,7 @@ impl Real {
             .join(path.strip_prefix("/").expect("model paths are absolute"))
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn paths(&self) -> Vec<PathBuf> {
         let mut found = vec![PathBuf::from("/")];
         let mut pending = vec![PathBuf::from("/")];

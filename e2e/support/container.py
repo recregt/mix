@@ -224,7 +224,7 @@ class Container:
     @contextlib.contextmanager
     def traced_daemon(self, unit: str = "mix-daemon.service"):
         output = f"/tmp/{unit}.strace"
-        writes: list[trace.Write] = []
+        traced = trace.Traced([], [])
         self.exec("systemctl", "start", unit, check=True)
         pid = self.exec(
             "systemctl", "show", "--property", "MainPID", "--value", unit, check=True
@@ -245,12 +245,13 @@ class Container:
             if tracer.ended.is_set():
                 raise AssertionError(f"strace ended before it attached to {unit}: {tracer.stderr}")
         try:
-            yield writes
+            yield traced
         finally:
             self.exec("kill", "-INT", tracer.pid(), check=True)
             tracer.wait()
             calls = self.exec("cat", output, check=True).stdout
-            writes.extend(trace.writes(calls, 0, set()))
+            traced.writes.extend(trace.writes(calls, 0, set()))
+            traced.accesses.extend(trace.accesses(calls, 0, set()))
 
     def _tracer_of(self, pid: str) -> str:
         status = self.exec("cat", f"/proc/{pid}/status", check=True).stdout

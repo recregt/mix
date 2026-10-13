@@ -3,12 +3,12 @@
 //! Note: Nix holds `<profile>.lock` with `flock` while it changes a profile, so a `nix-env` or
 //! `nix profile` the user runs makes mix's own profile commands wait.
 
+#![allow(clippy::disallowed_methods)]
+
 use std::fs::File;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
-use mix_core::ActivityReporter;
 use mix_core::declared::identity::InvokingUser;
 use mix_core::declared::paths::{
     HOME_MANAGER_PROFILE_NAME, PROFILE_LOCK_SUFFIX, USER_PROFILE_NAME, nix_profiles_dir,
@@ -18,6 +18,7 @@ use mix_exec::Scope;
 use nix::errno::Errno;
 use nix::fcntl::{Flock, FlockArg, OFlag};
 use nix::sys::stat::Mode;
+use serde::{Deserialize, Serialize};
 
 /// Kernel table of the file locks held on the machine.
 const PROC_LOCKS: &str = "/proc/locks";
@@ -29,30 +30,27 @@ fn locks(user: &InvokingUser) -> [PathBuf; 2] {
         .map(|profile| profiles.join(format!("{profile}{PROFILE_LOCK_SUFFIX}")))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Waiting {
+    pub lock: PathBuf,
+    pub holder: Option<String>,
+    pub command: Option<String>,
+}
+
 /// Returns once no other process holds a lock Nix takes on `user`'s profiles, reporting the
 /// holder of each lock it waits for.
 ///
 /// Note: A lock is only waited for, never kept: Nix takes it again for the command that follows.
 pub async fn wait(
     user: &InvokingUser,
-    activity: &Arc<dyn ActivityReporter>,
+    on_wait: &mut (dyn FnMut(Waiting) + Send),
     scope: &Scope,
 ) -> Result<(), Failure> {
     for lock in locks(user) {
-        let Some(file) = open(&lock) else {
+        let Some(file) = busy(&lock) else {
             continue;
         };
-        let file = match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
-            Ok(_free) => continue,
-            Err((file, Errno::EWOULDBLOCK)) => file,
-            Err(_) => continue,
-        };
-        let holder = holder(&lock);
-        activity.waiting(
-            &lock.display().to_string(),
-            holder.as_ref().map(|(user, _)| user.as_str()),
-            holder.as_ref().map(|(_, command)| command.as_str()),
-        );
+        on_wait(waiting(lock));
         let (sender, receiver) = tokio::sync::oneshot::channel();
         std::thread::spawn(move || {
             if let Ok(held) = Flock::lock(file, FlockArg::LockExclusive) {
@@ -64,6 +62,33 @@ pub async fn wait(
         }
     }
     Ok(())
+}
+
+pub fn wait_blocking(user: &InvokingUser, on_wait: &mut dyn FnMut(Waiting)) {
+    for lock in locks(user) {
+        let Some(file) = busy(&lock) else {
+            continue;
+        };
+        on_wait(waiting(lock));
+        let _ = Flock::lock(file, FlockArg::LockExclusive);
+    }
+}
+
+fn busy(lock: &Path) -> Option<File> {
+    let file = open(lock)?;
+    match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
+        Err((file, Errno::EWOULDBLOCK)) => Some(file),
+        _ => None,
+    }
+}
+
+fn waiting(lock: PathBuf) -> Waiting {
+    let (holder, command) = holder(&lock).unzip();
+    Waiting {
+        lock,
+        holder,
+        command,
+    }
 }
 
 fn open(lock: &Path) -> Option<File> {
@@ -144,18 +169,6 @@ mod tests {
         );
     }
 
-    #[derive(Default)]
-    struct Recorded(std::sync::Mutex<Vec<String>>);
-
-    impl ActivityReporter for Recorded {
-        fn line(&self, _line: &str) {}
-        fn progress(&self, _progress: &mix_nixlog::BuildProgress) {}
-        fn clear(&self) {}
-        fn waiting(&self, lock: &str, _holder: Option<&str>, _command: Option<&str>) {
-            self.0.lock().unwrap().push(lock.to_string());
-        }
-    }
-
     #[tokio::test]
     #[allow(clippy::disallowed_methods)]
     async fn a_held_lock_is_reported_and_waited_for_until_it_is_released() {
@@ -171,18 +184,21 @@ mod tests {
         std::fs::write(&home_manager, "").unwrap();
         std::fs::write(&profile, "").unwrap();
         let held = Flock::lock(File::open(&profile).unwrap(), FlockArg::LockExclusive).unwrap();
-        let recorded = Arc::new(Recorded::default());
-        let activity: Arc<dyn ActivityReporter> = recorded.clone();
+        let recorded = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = std::sync::Arc::clone(&recorded);
         let scope = Scope::root();
 
-        let waiting = tokio::spawn(async move { wait(&user, &activity, &scope).await });
-        while recorded.0.lock().unwrap().is_empty() {
+        let waiting = tokio::spawn(async move {
+            let mut on_wait = |found: Waiting| seen.lock().unwrap().push(found.lock);
+            wait(&user, &mut on_wait, &scope).await
+        });
+        while recorded.lock().unwrap().is_empty() {
             tokio::task::yield_now().await;
         }
         assert!(!waiting.is_finished());
         drop(held);
 
         assert!(waiting.await.unwrap().is_ok());
-        assert_eq!(*recorded.0.lock().unwrap(), [profile.display().to_string()]);
+        assert_eq!(*recorded.lock().unwrap(), [profile]);
     }
 }

@@ -11,6 +11,7 @@ use std::sync::Arc;
 use mix_core::declared::identity::InvokingUser;
 use mix_core::declared::policy::Policy;
 use mix_core::declared::targets::UserConfig;
+use mix_core::effect::Failure;
 use mix_core::run::locks::Need;
 use mix_core::run::locks::locks_for;
 use mix_events::v1::{Cancellation, Code, Command, command};
@@ -142,23 +143,42 @@ impl Session {
         )
     }
 
-    fn user(&self, enrolling: bool, mirrored: bool, locked: &Locked) -> (Option<UserConfig>, bool) {
+    async fn user(
+        &self,
+        enrolling: bool,
+        mirrored: bool,
+        locked: &Locked,
+    ) -> Result<(Option<UserConfig>, bool), Failure> {
         match &self.caller {
-            Caller::Fixed(config) => (config.as_deref().cloned(), false),
+            Caller::Fixed(config) => Ok((config.as_deref().cloned(), false)),
             Caller::Account {
                 peer_is_root,
                 account,
             } => {
-                let config = account.clone().and_then(|account| {
-                    if enrolling {
-                        crate::profile::user_config_for(account, &self.host, mirrored, locked)
-                    } else {
-                        crate::profile::existing_user_config_for(
-                            account, &self.host, mirrored, locked,
+                let config = match account.clone() {
+                    None => None,
+                    Some(account) if enrolling => {
+                        crate::profile::user_config_for(
+                            account,
+                            &self.host,
+                            mirrored,
+                            locked,
+                            &self.scope,
                         )
+                        .await?
                     }
-                });
-                (config, *peer_is_root)
+                    Some(account) => {
+                        crate::profile::existing_user_config_for(
+                            account,
+                            &self.host,
+                            mirrored,
+                            locked,
+                            &self.scope,
+                        )
+                        .await?
+                    }
+                };
+                Ok((config, *peer_is_root))
             }
         }
     }
@@ -258,7 +278,20 @@ async fn host(
     let policy = policy
         .or_else(|| session.policy.clone())
         .unwrap_or_else(stored_policy);
-    let (user, caller_is_root) = session.user(enrolling, policy.mirror().is_some(), &locked);
+    let (user, caller_is_root) = match session
+        .user(enrolling, policy.mirror().is_some(), &locked)
+        .await
+    {
+        Ok(found) => found,
+        Err(failure) => {
+            let ending = Ending::failed(mix_core::report::diagnose::diagnostic(&failure));
+            let _ = tree.finish(ROOT, ending.for_root(false));
+            drop(tree);
+            drop(held);
+            delivery.finish().await;
+            return;
+        }
+    };
     let ctx = Context {
         request: opened,
         user,

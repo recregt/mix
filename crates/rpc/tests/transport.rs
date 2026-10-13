@@ -48,6 +48,7 @@ impl Worker for Scripted {
     }
 }
 
+#[allow(clippy::disallowed_methods)]
 fn current_uid() -> u32 {
     std::fs::metadata("/proc/self").unwrap().uid()
 }

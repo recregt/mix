@@ -23,7 +23,16 @@ def _no_root_writes_under_home(writes, what):
     assert not as_root, "\n".join(f"{write.call} {write.path}" for write in as_root)
 
 
-def test_no_command_writes_into_a_home_directory_as_root(container, mock_nix_server, mirror_cache):
+def _no_root_reads_under_home(accesses, what):
+    under_home = [access for access in accesses if access.path.startswith(f"{HOME}/")]
+    assert any(access.uid != 0 for access in under_home), (
+        f"{what} read nothing under {HOME} as the user, so the trace proves nothing"
+    )
+    as_root = [access for access in under_home if access.uid == 0]
+    assert not as_root, "\n".join(f"{access.call} {access.path}" for access in as_root)
+
+
+def test_no_command_touches_a_home_directory_as_root(container, mock_nix_server, mirror_cache):
     create_user(container, USER, sudo=True)
 
     _, writes = _traced(container, "bootstrap", *mirror_args(mock_nix_server, mirror_cache))
@@ -35,16 +44,19 @@ def test_no_command_writes_into_a_home_directory_as_root(container, mock_nix_ser
         for args in (
             ("install", INSTALL_TEST_PACKAGE),
             ("remove", INSTALL_TEST_PACKAGE),
+            ("list",),
+            ("doctor",),
         ):
             run = container.mix(*args, user=USER)
             assert run.succeeded(), run
         container.exec("sh", "-c", f"echo '{{ }}' > {HOME_NIX}", user=USER, check=True)
         repair = container.mix("repair", user=USER)
         assert repair.succeeded(), repair
-    _no_root_writes_under_home(daemon, "the daemon")
-    assert any(write.uid == 0 and write.path.startswith("/var/lib/mix/") for write in daemon), (
-        "the daemon's trace saw no root writes, so it cannot tell root from the user"
-    )
+    _no_root_writes_under_home(daemon.writes, "the daemon")
+    _no_root_reads_under_home(daemon.accesses, "the daemon")
+    assert any(
+        write.uid == 0 and write.path.startswith("/var/lib/mix/") for write in daemon.writes
+    ), "the daemon's trace saw no root writes, so it cannot tell root from the user"
     fixed = [
         report["target"] for report in repair.result("repair")["reports"] if report.get("fixed")
     ]

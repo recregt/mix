@@ -25,7 +25,7 @@ use mix_events::v1::{
 use mix_events::{NodeId, ROOT, Stopped, Tree, output};
 use mix_exec::Scope;
 use mix_fs::{Files, Prepared};
-use mix_home::Agent;
+use mix_home::{Agent, Home};
 use mix_nixlog::{BuildProgress, package_name};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
@@ -331,18 +331,37 @@ impl Performer {
         Ok(self.agents.get_mut(&uid).expect("inserted above"))
     }
 
+    fn home(&mut self, uid: u32, path: &Path, scope: &Scope) -> Result<Home<'_>, Failure> {
+        if uid == nix::unistd::geteuid().as_raw() {
+            return Ok(Home::Local(&self.files));
+        }
+        Ok(Home::Agent(self.agent(uid, path, scope)?))
+    }
+
+    async fn look(&mut self, query: &Query, scope: &Scope) -> Result<Option<Fact>, Failure> {
+        let (uid, path) = match query {
+            Query::Path(path) | Query::Contents(path) => (self.files.tree_owner(path), path),
+            Query::Leftovers(path) | Query::Strangers { path, .. } => {
+                (self.files.tree_owner_within(path), path)
+            }
+            Query::Profile(user)
+            | Query::Clobbered(user)
+            | Query::ActiveList(user)
+            | Query::ActiveLock(user) => (Some(user.uid), &user.home),
+            _ => return Ok(self.files.observe(query)),
+        };
+        match uid {
+            Some(uid) => self.home(uid, path, scope)?.observe(query).await,
+            None => Ok(self.files.observe(query)),
+        }
+    }
+
     async fn find_built(
         &mut self,
         user: &mix_core::declared::identity::InvokingUser,
         scope: &Scope,
     ) -> Result<Option<u64>, Failure> {
-        let generations = generations::existing(user);
-        if user.uid == nix::unistd::geteuid().as_raw() {
-            return Ok(mix_home::built_generation(&user.home, &generations));
-        }
-        self.agent(user.uid, &user.home, scope)?
-            .find_built(&user.home, &generations)
-            .await
+        self.home(user.uid, &user.home, scope)?.built(user).await
     }
 
     async fn perform_file(
@@ -352,16 +371,19 @@ impl Performer {
         scope: &Scope,
         prepared: &mut Prepared<'_>,
     ) -> Outcome {
+        let running = nix::unistd::geteuid().as_raw();
+        if let Some(uid) = self.files.tree_owner(path).filter(|uid| *uid != running) {
+            let agent = self.agent(uid, path, scope)?;
+            return Box::pin(agent.perform(action, prepared)).await;
+        }
         let removed = match action {
             Action::RemoveCreated { .. } | Action::RemoveCreatedTree { .. } => {
                 self.files.owner_of(path)
             }
             _ => None,
         };
-        let running = nix::unistd::geteuid().as_raw();
         let tree_removal = matches!(action, Action::RemoveCreatedTree { .. });
         match removed
-            .or_else(|| self.files.tree_owner(path))
             .filter(|uid| *uid != running)
             .filter(|uid| !(tree_removal && self.files.holds_other_than(path, *uid)))
         {
@@ -405,8 +427,9 @@ impl Performer {
             path: path.to_path_buf(),
             expect,
         };
-        self.perform_file(&removal, path, scope, &mut announced)
-            .await?;
+        self.files
+            .perform(&removal, &mut announced)
+            .expect("a file action")?;
         self.perform_file(&restore, path, scope, &mut announced)
             .await?;
         Ok(Performed { undo: Vec::new() })
@@ -421,7 +444,8 @@ impl Performer {
         scope: &Scope,
         prepared: &mut Prepared<'_>,
     ) -> Outcome {
-        let Some(Fact::Path(found)) = self.files.observe(&Query::Path(path.to_path_buf())) else {
+        let Some(Fact::Path(found)) = self.look(&Query::Path(path.to_path_buf()), scope).await?
+        else {
             return Err(Failure::Conflict {
                 subject: path.display().to_string(),
                 expected: format!("{expect:?}"),
@@ -490,7 +514,7 @@ impl Performer {
     ) -> Outcome {
         let git = repository_dir(&user.home);
         let existed = !matches!(
-            self.files.observe(&Query::Path(git.clone())),
+            self.look(&Query::Path(git.clone()), scope).await?,
             Some(Fact::Path(PathFacts {
                 kind: Kind::Missing,
                 ..
@@ -505,7 +529,12 @@ impl Performer {
         let recorded = match owned {
             Ok(restore) => {
                 undo.extend(restore);
-                profile::record(user, scope).await.map_err(core_failure)
+                match self.home(user.uid, &user.home, scope) {
+                    Ok(mut home) => profile::record(user, &mut home, scope)
+                        .await
+                        .map_err(core_failure),
+                    Err(failure) => Err(failure),
+                }
             }
             Err(failure) => Err(failure),
         };
@@ -523,7 +552,7 @@ impl Performer {
             )));
         }
         if let Some(Fact::Path(PathFacts { id: Some(id), .. })) =
-            self.files.observe(&Query::Path(git.clone()))
+            self.look(&Query::Path(git.clone()), scope).await?
             && !existed
         {
             undo.push(Action::RemoveCreatedTree {
@@ -541,11 +570,11 @@ impl Performer {
         prepared: &mut Prepared<'_>,
     ) -> Result<Vec<Action>, Failure> {
         let config = repository_dir(&user.home).join(REPOSITORY_CONFIG);
-        let Some(Fact::Path(found)) = self.files.observe(&Query::Path(config.clone())) else {
+        let Some(Fact::Path(found)) = self.look(&Query::Path(config.clone()), scope).await? else {
             return Ok(Vec::new());
         };
         let ours = matches!(
-            self.files.observe(&Query::Contents(config.clone())),
+            self.look(&Query::Contents(config.clone()), scope).await?,
             Some(Fact::Contents(Some(bytes))) if *bytes == *REPOSITORY_CONFIG_CONTENTS.as_bytes()
         );
         if found.kind == Kind::File && ours {
@@ -581,7 +610,7 @@ impl Performer {
         scope: &Scope,
     ) -> Outcome {
         let repository = repository_dir(&user.home);
-        let found = self.files.observe(&Query::Path(repository.clone()));
+        let found = self.look(&Query::Path(repository.clone()), scope).await?;
         if !matches!(
             found,
             Some(Fact::Path(PathFacts {
@@ -596,11 +625,12 @@ impl Performer {
             });
         }
         prepared(&[])?;
-        let created = match Git::resolve(user, scope).await {
+        let mut home = self.home(user.uid, &user.home, scope)?;
+        let created = match Git::resolve(user, &mut home, scope).await {
             Ok(git) => git.create(user, &mix_state_dir(&user.home), scope).await,
             Err(error) => Err(error),
         };
-        let undo = match self.files.observe(&Query::Path(repository.clone())) {
+        let undo = match self.look(&Query::Path(repository.clone()), scope).await? {
             Some(Fact::Path(PathFacts { id: Some(id), .. })) => vec![Action::RemoveCreatedTree {
                 path: repository.clone(),
                 expect: id,
@@ -687,16 +717,14 @@ impl Performer {
             }
             let fact = match &self.prediction {
                 Some(prediction) if prediction.answers(query) => prediction.world.observe(query),
-                _ => match self.observed(query) {
-                    Some(fact) => fact,
-                    None => self.observe_one(query, scope).await?,
-                },
+                _ => self.observe_one(query, scope).await?,
             };
             facts.push(fact);
         }
         Ok(facts)
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn seed_running(&mut self, source: &Path) {
         let Some(prediction) = &mut self.prediction else {
             return;
@@ -834,11 +862,11 @@ impl Performer {
             Query::Repository(user) => {
                 let repository = repository_dir(&user.home);
                 let config = self
-                    .files
-                    .observe(&Query::Contents(repository.join(REPOSITORY_CONFIG)));
+                    .look(&Query::Contents(repository.join(REPOSITORY_CONFIG)), scope)
+                    .await?;
                 let index = self
-                    .files
-                    .observe(&Query::Path(repository.join(REPOSITORY_INDEX)));
+                    .look(&Query::Path(repository.join(REPOSITORY_INDEX)), scope)
+                    .await?;
                 let usable = matches!(
                     config,
                     Some(Fact::Contents(Some(bytes))) if *bytes == *REPOSITORY_CONFIG_CONTENTS.as_bytes()
@@ -855,10 +883,13 @@ impl Performer {
                         recorded: false,
                     });
                 }
-                let git = Git::resolve(user, scope).await.map_err(core_failure)?;
+                let mut home = self.home(user.uid, &user.home, scope)?;
+                let git = Git::resolve(user, &mut home, scope)
+                    .await
+                    .map_err(core_failure)?;
                 let state_dir = mix_state_dir(&user.home);
                 let verified = git
-                    .verify(user, &repository_dir(&user.home), scope)
+                    .verify(user, &mut home, &repository_dir(&user.home), scope)
                     .await
                     .map_err(core_failure)?;
                 let unrecorded = match verified {
@@ -867,7 +898,7 @@ impl Performer {
                 };
                 let reusable = match &unrecorded {
                     Some(files) if !files.is_empty() => git
-                        .reusable(user, &state_dir, files, scope)
+                        .reusable(user, &mut home, &state_dir, files, scope)
                         .await
                         .map_err(core_failure)?,
                     _ => true,
@@ -878,38 +909,25 @@ impl Performer {
                     recorded: intact && unrecorded.is_some_and(|files| files.is_empty()),
                 }
             }
-            query => self.observed(query).expect("every query has an observer"),
+            query => match self.observed(query) {
+                Some(fact) => fact,
+                None => self
+                    .look(query, scope)
+                    .await?
+                    .expect("every query has an observer"),
+            },
         })
     }
 
     fn observed(&self, query: &Query) -> Option<Fact> {
         match query {
-            Query::Unit(_) | Query::Repository(_) => None,
             Query::Journals(dir) => Some(Fact::Journals(crate::effect::journal::abandoned(dir))),
-            Query::ActiveList(user) => Some(Fact::Contents(
-                crate::effect::generations::active_input(
-                    user,
-                    mix_core::declared::paths::GENERATION_STATE_FILE,
-                )
-                .map(Into::into),
-            )),
-            Query::ActiveLock(user) => Some(Fact::Contents(
-                crate::effect::generations::active_input(
-                    user,
-                    mix_core::declared::paths::GENERATION_LOCK_FILE,
-                )
-                .map(Into::into),
-            )),
             Query::Program { path, source } => {
                 Some(Fact::Program(crate::effect::program::observe(path, source)))
             }
             Query::Group(_) | Query::User(_) => identity::observe(query),
-            Query::Profile(_) | Query::Clobbered(_) => generations::observe(query),
-            Query::Path(_)
-            | Query::Contents(_)
-            | Query::TreeOwner(_)
-            | Query::Leftovers(_)
-            | Query::Strangers { .. } => self.files.observe(query),
+            Query::TreeOwner(_) => self.files.observe(query),
+            _ => None,
         }
     }
 
@@ -1042,14 +1060,17 @@ impl Performer {
                 Action::ActivateProfile { user, .. } => self.find_built(user, scope).await?,
                 _ => None,
             };
-            let profile = self.profile.as_ref().expect("checked above");
-            let activity: std::sync::Arc<dyn ActivityReporter> = self.activity.clone();
-            if let Some(outcome) = Box::pin(generations::perform(
-                action, built, profile, &activity, scope, prepared,
-            ))
-            .await
-            {
-                return outcome;
+            if let Some(user) = generations::user_of(action) {
+                let profile = self.profile.clone().expect("checked above");
+                let activity: std::sync::Arc<dyn ActivityReporter> = self.activity.clone();
+                let mut home = self.home(user.uid, &user.home, scope)?;
+                if let Some(outcome) = Box::pin(generations::perform(
+                    action, built, &profile, &activity, &mut home, scope, prepared,
+                ))
+                .await
+                {
+                    return outcome;
+                }
             }
         }
         let units = Box::pin(self.units()).await?;
@@ -1072,15 +1093,16 @@ impl Performer {
         let mut ours = Vec::new();
         let running = nix::unistd::geteuid().as_raw();
         for path in pending {
-            match self
-                .files
-                .owner_of(&path)
-                .or(mix_home::owner(&self.files, &path))
-            {
-                Some(uid) if uid != running && !self.files.holds_other_than(&path, uid) => {
-                    theirs.entry(uid).or_default().push(path);
-                }
-                _ => ours.push(path),
+            let owner = match self.files.tree_owner(&path).filter(|uid| *uid != running) {
+                Some(uid) => (!self.files.holds_other_than(&path, uid)).then_some(uid),
+                None => self
+                    .files
+                    .owner_of(&path)
+                    .filter(|uid| *uid != running && !self.files.holds_other_than(&path, *uid)),
+            };
+            match owner {
+                Some(uid) => theirs.entry(uid).or_default().push(path),
+                None => ours.push(path),
             }
         }
         self.files.adopt(ours);
@@ -1450,6 +1472,7 @@ mod tests {
         found
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn walk(dir: &Path) -> Vec<PathBuf> {
         let mut found = Vec::new();
         for entry in std::fs::read_dir(dir).unwrap() {
@@ -1511,6 +1534,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
     async fn a_plan_runs_on_a_real_file_system_and_commits() {
         let root = tempfile::tempdir().unwrap();
 
@@ -1575,6 +1599,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
     async fn a_stop_between_steps_rolls_back_on_the_real_file_system() {
         let root = tempfile::tempdir().unwrap();
         let before = listing(root.path());

@@ -3,6 +3,7 @@ use mix_core::declared::identity::MIX_USERS_GROUP;
 use mix_core::declared::pins;
 use mix_core::declared::state::StateManifest;
 use mix_core::declared::targets::UserConfig;
+use mix_core::effect::Failure;
 use mix_core::ops::bootstrap::system::{Arch, Os};
 use mix_core::ops::change::render_home;
 use mix_nixgen::lock::{self, LockedInput};
@@ -77,24 +78,22 @@ fn configured(user: InvokingUser, found: Found<'_>, mirrored: bool) -> Option<Us
     })
 }
 
-pub fn user_config_for(
+pub async fn user_config_for(
     user: InvokingUser,
     host: &Host,
     mirrored: bool,
     _locked: &crate::request::Locked,
-) -> Option<UserConfig> {
-    let state = host.state_file(&user);
-    let active = host.active_list(&user);
-    let lock = host.flake_lock(&user);
-    let active_lock = host.active_lock(&user);
+    scope: &mix_exec::Scope,
+) -> Result<Option<UserConfig>, Failure> {
+    let files = host.home_files(&user, scope).await?;
     let found = Found {
-        state: state.as_deref(),
-        active: active.as_deref(),
-        home_nix: host.home_nix(&user),
-        lock: lock.as_deref(),
-        active_lock: active_lock.as_deref(),
+        state: files.state.as_deref(),
+        active: files.active.as_deref(),
+        home_nix: files.home_nix,
+        lock: files.lock.as_deref(),
+        active_lock: files.active_lock.as_deref(),
     };
-    configured(user, found, mirrored)
+    Ok(configured(user, found, mirrored))
 }
 
 pub async fn observed_user_config(
@@ -139,20 +138,17 @@ pub async fn observed_user_config(
     configured(user, found, mirrored)
 }
 
-pub fn existing_user_config_for(
+pub async fn existing_user_config_for(
     user: InvokingUser,
     host: &Host,
     mirrored: bool,
     locked: &crate::request::Locked,
-) -> Option<UserConfig> {
-    managed(
-        user_config_for(user, host, mirrored, locked)?,
-        |group, user| host.is_member(group, user),
-    )
-}
-
-fn managed(cfg: UserConfig, member: impl Fn(&str, &str) -> bool) -> Option<UserConfig> {
-    member(MIX_USERS_GROUP, &cfg.user.name).then_some(cfg)
+    scope: &mix_exec::Scope,
+) -> Result<Option<UserConfig>, Failure> {
+    if !host.is_member(MIX_USERS_GROUP, &user.name) {
+        return Ok(None);
+    }
+    user_config_for(user, host, mirrored, locked, scope).await
 }
 
 #[cfg(test)]
@@ -171,24 +167,37 @@ mod tests {
         }
     }
 
-    fn config(home: &Path) -> UserConfig {
-        UserConfig {
-            user: sample_user(home),
-            pins: mix_nixgen::lock::EMBEDDED,
-            flake: String::new(),
-            lock: mix_nixgen::lock::render(mix_nixgen::lock::EMBEDDED),
-            home: String::new(),
-            restored_state: None,
-        }
-    }
+    #[tokio::test]
+    async fn only_a_member_of_mix_users_is_managed() {
+        let user = sample_user(Path::new("/home/mix-user"));
+        let locked = crate::request::Locked::for_tests();
+        let scope = mix_exec::Scope::root();
+        let mut enrolled = mix_core::model::World::default();
+        enrolled.seed_group(
+            MIX_USERS_GROUP,
+            Some(mix_core::effect::GroupFacts {
+                gid: 30000,
+                members: vec![user.name.clone()],
+            }),
+        );
+        let host = |world| Host::Model(std::sync::Arc::new(std::sync::Mutex::new(world)));
 
-    #[test]
-    fn only_a_member_of_mix_users_is_managed() {
-        let home = Path::new("/home/mix-user");
-        let enrolled = |group: &str, name: &str| group == MIX_USERS_GROUP && name == "mix-user";
+        let member =
+            existing_user_config_for(user.clone(), &host(enrolled), false, &locked, &scope)
+                .await
+                .unwrap();
+        let outsider = existing_user_config_for(
+            user,
+            &host(mix_core::model::World::default()),
+            false,
+            &locked,
+            &scope,
+        )
+        .await
+        .unwrap();
 
-        assert!(managed(config(home), enrolled).is_some());
-        assert!(managed(config(home), |_: &str, _: &str| false).is_none());
+        assert!(member.is_some());
+        assert!(outsider.is_none());
     }
 
     #[test]

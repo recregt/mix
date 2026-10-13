@@ -2,7 +2,7 @@ use mix_core::declared::identity::InvokingUser;
 use mix_core::declared::paths::GENERATION_LOCK_FILE;
 use mix_core::ops::update::Versions;
 use mix_exec::Scope;
-use mix_shell::effect::generations::active_input;
+use mix_home::active_input;
 use mix_shell::request::context::Host;
 use mix_shell::request::installed::Installed;
 use mix_shell::request::upstream::{Nix, Upstream};

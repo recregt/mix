@@ -39,7 +39,7 @@ pub(crate) async fn list(ctx: &Context, root: &mut Root, _request: &ListRequest)
     let result = match listing {
         Some(listed) => ListResult {
             packages: listed.packages.to_vec(),
-            active: Some((&listed.generation).into()),
+            active: Some(crate::effect::generations::wire(&listed.generation)),
         },
         None => ListResult::default(),
     };

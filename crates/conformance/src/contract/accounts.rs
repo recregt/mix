@@ -153,6 +153,7 @@ fn queries() -> Vec<Query> {
         .collect()
 }
 
+#[allow(clippy::disallowed_methods)]
 fn database(path: &str) -> Vec<Vec<String>> {
     std::fs::read_to_string(path)
         .unwrap_or_default()
