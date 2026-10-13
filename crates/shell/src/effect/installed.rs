@@ -9,12 +9,13 @@ use mix_core::ops::update::Versions;
 use mix_core::{Error, Result};
 use mix_events::v1::InstalledPackage;
 use mix_exec::Scope;
+use mix_home::Active;
 use mix_nixgen::lock::LockedInput;
 use mix_nixgen::{AttrPath, INPUTS, Installable, Pins};
 use serde::Deserialize;
 
 use crate::effect::exec::run_as;
-use crate::effect::generations::Active;
+
 use crate::profile::activation;
 
 const HOME_PATH: &str = "home-path";
@@ -145,7 +146,7 @@ fn eval_args(
 fn evaluated_at(generation: &Active, mirror: Option<&str>) -> Option<Pins<LockedInput>> {
     match crate::effect::mirror::filter_mirror(mirror) {
         Some(_) => None,
-        None => generation.pins(),
+        None => crate::effect::generations::pins(generation),
     }
 }
 
@@ -204,6 +205,7 @@ async fn stored(user: &InvokingUser, home_path: &Path, scope: &Scope) -> Result<
     parse_path_info(&answer).map_err(|error| unreadable("nix path-info", error))
 }
 
+#[allow(clippy::disallowed_methods)]
 pub async fn gather(
     user: &InvokingUser,
     generation: &Active,

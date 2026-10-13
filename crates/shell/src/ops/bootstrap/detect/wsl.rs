@@ -22,6 +22,7 @@ pub async fn detect() -> Wsl {
     .await
 }
 
+#[allow(clippy::disallowed_methods)]
 async fn detect_at(
     osrelease_path: &Path,
     cgroup_controllers_path: &Path,
@@ -45,6 +46,7 @@ async fn detect_at(
     }
 }
 
+#[allow(clippy::disallowed_methods)]
 async fn has_real_cgroup2_at(controllers_path: &Path) -> bool {
     tokio::fs::read_to_string(controllers_path)
         .await
@@ -78,6 +80,7 @@ pub async fn systemd_active() -> bool {
     systemd_active_at(Path::new("/run/systemd/system"), Path::new("/proc/1/comm")).await
 }
 
+#[allow(clippy::disallowed_methods)]
 async fn systemd_active_at(marker: &Path, comm_path: &Path) -> bool {
     exists(marker).await
         && tokio::fs::read_to_string(comm_path)

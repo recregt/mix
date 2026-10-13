@@ -306,6 +306,7 @@ fn profile_of(fact: Fact) -> ProfileFacts {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods)]
 fn every_profile_action_and_its_undo_match_the_model() {
     let user = enrolled();
     let owner = (user.uid, user.gid);

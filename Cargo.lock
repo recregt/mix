@@ -1428,6 +1428,7 @@ dependencies = [
  "mix-events",
  "mix-exec",
  "mix-fs",
+ "mix-home",
  "mix-nixgen",
  "mix-render",
  "mix-shell",

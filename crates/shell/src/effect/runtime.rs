@@ -12,6 +12,7 @@ use crate::ops::bootstrap::Error;
 use crate::ops::bootstrap::steps::fetch_and_unpack::{provision_runtime, remove_runtime};
 use crate::ops::bootstrap::tarball;
 
+#[allow(clippy::disallowed_methods)]
 pub fn listing(root: &Path, skip: &Path) -> BTreeSet<PathBuf> {
     let mut found = BTreeSet::new();
     let mut pending = vec![root.to_path_buf()];
@@ -89,6 +90,7 @@ async fn blocking<T: Send + 'static>(
         })
 }
 
+#[allow(clippy::disallowed_methods)]
 pub(crate) async fn install(
     url: &str,
     sha256: &Digest,

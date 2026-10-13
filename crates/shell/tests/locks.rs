@@ -224,6 +224,7 @@ async fn a_cancelled_waiter_leaves_the_lock_free_for_the_next_request() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods)]
 async fn another_process_reads_the_exclusive_holder_from_the_lock_file() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = Locks::new(lock_in(&dir));
@@ -293,6 +294,7 @@ async fn every_request_waiting_for_a_lock_is_counted_while_it_waits() {
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods)]
 async fn a_dry_run_on_a_machine_without_the_lock_creates_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let lock = dir.path().join("var/lib/mix/lock");

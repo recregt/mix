@@ -6,6 +6,7 @@ use mix_events::v1::Command;
 use mix_events::{Outbox, Start, Tree};
 use mix_shell::request::lock::{Holder, Locks, Need};
 
+#[allow(clippy::disallowed_methods)]
 fn mode(path: &Path) -> u32 {
     std::fs::metadata(path).unwrap().permissions().mode() & 0o7777
 }

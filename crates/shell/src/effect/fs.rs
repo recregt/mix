@@ -7,16 +7,19 @@ use mix_core::{Error, Result};
 use nix::fcntl::{AT_FDCWD, AtFlags};
 use nix::unistd::{Gid, Uid, fchownat};
 
+#[allow(clippy::disallowed_methods)]
 pub async fn exists(path: impl AsRef<Path>) -> bool {
     tokio::fs::try_exists(path.as_ref()).await.unwrap_or(false)
 }
 
+#[allow(clippy::disallowed_methods)]
 pub async fn is_file(path: impl AsRef<Path>) -> bool {
     tokio::fs::metadata(path.as_ref())
         .await
         .is_ok_and(|meta| meta.is_file())
 }
 
+#[allow(clippy::disallowed_methods)]
 pub async fn is_dir(path: impl AsRef<Path>) -> bool {
     tokio::fs::metadata(path.as_ref())
         .await
@@ -24,6 +27,7 @@ pub async fn is_dir(path: impl AsRef<Path>) -> bool {
 }
 
 /// Gives everything under `root` the same owner, without following a symlink out of it.
+#[allow(clippy::disallowed_methods)]
 pub(crate) fn chown_tree(root: &Path, uid: Uid, gid: Gid) -> Result<()> {
     let mut stack = vec![root.to_path_buf()];
     while let Some(path) = stack.pop() {

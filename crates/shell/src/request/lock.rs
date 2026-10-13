@@ -296,6 +296,7 @@ fn written(file: &mut File) -> Option<Holder> {
     Some(Holder { user, command })
 }
 
+#[allow(clippy::disallowed_methods)]
 fn open_existing(path: &Path) -> Result<Option<File>, Error> {
     match File::open(path) {
         Ok(file) => Ok(Some(file)),

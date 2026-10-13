@@ -23,10 +23,12 @@ trait Inspect {
 struct Host;
 
 impl Inspect for Host {
+    #[allow(clippy::disallowed_methods)]
     fn resolve(&self, path: &Path) -> Option<PathBuf> {
         std::fs::canonicalize(path).ok()
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn entry(&self, path: &Path, follow: bool) -> std::io::Result<Entry> {
         let meta = if follow {
             std::fs::metadata(path)?

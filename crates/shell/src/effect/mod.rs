@@ -7,7 +7,6 @@ pub mod identity;
 pub(crate) mod installed;
 pub mod journal;
 pub(crate) mod mirror;
-pub(crate) mod profile_lock;
 pub(crate) mod program;
 pub mod runtime;
 pub mod tools;

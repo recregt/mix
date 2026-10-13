@@ -3,7 +3,8 @@
 use std::io::Cursor;
 use std::sync::Arc;
 
-use mix_core::effect::{Expect, Fact, PathFacts, Performed, Query};
+use mix_core::declared::identity::InvokingUser;
+use mix_core::effect::{Expect, Fact, Failure, PathFacts, Performed, Query};
 
 use super::*;
 
@@ -148,13 +149,99 @@ fn the_agent_answers_which_generation_was_built_from_the_current_files() {
 
     serve(
         "r1",
-        lines(&[Request::FindBuilt {
-            home: home.path().to_path_buf(),
-            generations: vec![1, 2],
-        }]),
+        lines(&[Request::FindBuilt(me(home.path()))]),
         &mut output,
     )
     .unwrap();
 
     assert!(matches!(replies(&output).as_slice(), [Reply::Built(None)]));
+}
+
+fn me(home: &Path) -> InvokingUser {
+    InvokingUser {
+        uid: nix::unistd::Uid::current().as_raw(),
+        gid: nix::unistd::Gid::current().as_raw(),
+        name: "mix-user".into(),
+        home: home.to_path_buf(),
+    }
+}
+
+#[test]
+fn the_agent_observes_paths_and_profiles_as_its_user() {
+    let home = tempfile::tempdir().unwrap();
+    let config = home.path().join("config");
+    std::fs::write(&config, b"mine").unwrap();
+    let mut output = Vec::new();
+
+    serve(
+        "r1",
+        lines(&[
+            Request::Observe(Query::Contents(config.clone())),
+            Request::Observe(Query::Profile(me(home.path()))),
+            Request::Exists(config),
+            Request::Exists(home.path().join("missing")),
+            Request::Active(me(home.path())),
+        ]),
+        &mut output,
+    )
+    .unwrap();
+
+    let replies = replies(&output);
+    assert!(
+        matches!(&replies[0], Reply::Observed(Some(Fact::Contents(Some(bytes)))) if **bytes == *b"mine")
+    );
+    assert!(matches!(
+        &replies[1],
+        Reply::Observed(Some(Fact::Profile(profile))) if profile.generations.is_empty()
+    ));
+    assert!(matches!(replies[2], Reply::Exists(true)));
+    assert!(matches!(replies[3], Reply::Exists(false)));
+    assert!(matches!(replies[4], Reply::Active(None)));
+}
+
+#[test]
+fn the_agent_refuses_a_question_about_another_user() {
+    let home = tempfile::tempdir().unwrap();
+    let other = InvokingUser {
+        uid: nix::unistd::Uid::current().as_raw() + 1,
+        ..me(home.path())
+    };
+    let mut output = Vec::new();
+
+    let refused = serve("r1", lines(&[Request::Active(other)]), &mut output);
+
+    assert!(refused.is_err());
+    assert!(output.is_empty());
+}
+
+#[test]
+fn a_tree_holding_another_owners_files_is_neither_set_aside_nor_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let tree = dir.path().join("tree");
+    std::fs::create_dir_all(tree.join("inner")).unwrap();
+    let files = Files::open(Path::new("/"), "r1").unwrap();
+    let Some(Fact::Path(PathFacts { id: Some(id), .. })) =
+        files.observe(&Query::Path(tree.clone()))
+    else {
+        panic!("the tree is there");
+    };
+    let me = nix::unistd::Uid::current().as_raw();
+
+    for action in [
+        Action::SetAside {
+            path: tree.clone(),
+            expect: id,
+        },
+        Action::RemoveCreatedTree {
+            path: tree.clone(),
+            expect: id,
+        },
+    ] {
+        assert_eq!(refused(&files, &action, me), None);
+        assert!(matches!(
+            refused(&files, &action, me + 1),
+            Some(Failure::Conflict { subject, .. }) if subject == tree.display().to_string()
+        ));
+    }
+    assert_eq!(refused(&files, &put(&tree, Expect::Absent), me + 1), None);
 }

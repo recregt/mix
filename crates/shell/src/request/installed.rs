@@ -8,8 +8,8 @@ use mix_core::declared::paths::GENERATION_STATE_FILE;
 use mix_core::{Error as CoreError, Result as CoreResult};
 use mix_events::v1::InstalledPackage;
 use mix_exec::Scope;
+use mix_home::Active;
 
-use crate::effect::generations::Active;
 use crate::profile::change;
 use crate::profile::state::{Invalid, validate};
 use crate::request::context::Host;
@@ -120,7 +120,13 @@ impl Installed {
     ) -> std::result::Result<Option<Listed>, Error> {
         let slot = self.slot(user.uid);
         let mut held = scope.guard(slot.lock()).await.map_err(|_| Error::Stopped)?;
-        let Some(generation) = host.active_generation(user) else {
+        let found = host
+            .active_generation(user, scope)
+            .await
+            .map_err(|failure| {
+                change::Error::Core(crate::effect::core_error(failure, &user.home))
+            })?;
+        let Some(generation) = found else {
             return Ok(None);
         };
         if let Some(listed) = held.as_ref()

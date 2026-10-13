@@ -68,6 +68,7 @@ impl Accounts for System {
     }
 }
 
+#[allow(clippy::disallowed_methods)]
 fn primary_of(gid: u32) -> Option<String> {
     let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
     passwd.lines().find_map(|line| {
@@ -187,6 +188,7 @@ fn subject(action: &Action) -> String {
     }
 }
 
+#[allow(clippy::disallowed_methods)]
 fn supplementary_groups(user: &str) -> Vec<String> {
     let Ok(contents) = std::fs::read_to_string("/etc/group") else {
         return Vec::new();

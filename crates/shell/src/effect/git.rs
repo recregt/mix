@@ -8,12 +8,14 @@ use std::path::{Path, PathBuf};
 use mix_core::Result;
 use mix_core::declared::identity::InvokingUser;
 use mix_core::declared::paths::{GIT_DIR, MANAGED_FILES, REPOSITORY_BRANCH as BRANCH};
+use mix_core::effect::{Fact, Kind, PathFacts, Query};
 use mix_exec::Scope;
+use mix_home::Home;
 
 use mix_exec::Command;
 
+use crate::effect::core_error;
 use crate::effect::exec::{command_as, exec_error, run, status};
-use crate::effect::fs::exists;
 
 const AUTHOR: &[(&str, &str)] = &[
     ("GIT_AUTHOR_NAME", "mix"),
@@ -49,9 +51,9 @@ pub struct Git {
 }
 
 impl Git {
-    pub async fn resolve(user: &InvokingUser, scope: &Scope) -> Result<Self> {
+    pub async fn resolve(user: &InvokingUser, home: &mut Home<'_>, scope: &Scope) -> Result<Self> {
         let git = Self {
-            binary: resolve_binary(user).await,
+            binary: resolve_binary(user, home).await?,
         };
         let reported = git.run_as(user, &["--version"], scope).await?;
         let found = reported.split_whitespace().nth(2).unwrap_or_default();
@@ -96,18 +98,24 @@ impl Git {
     pub async fn verify(
         &self,
         user: &InvokingUser,
+        home: &mut Home<'_>,
         repository: &Path,
         scope: &Scope,
     ) -> Result<bool> {
+        let heads_dir = repository.join("refs/heads");
+        let heads = matches!(
+            home.observe(&Query::Path(heads_dir.clone()))
+                .await
+                .map_err(|failure| core_error(failure, &heads_dir))?,
+            Some(Fact::Path(PathFacts {
+                kind: Kind::Directory | Kind::Missing,
+                ..
+            }))
+        );
         let repository = repository.to_string_lossy();
         let dir = ["--git-dir", &*repository];
         let head = [&dir[..], &["symbolic-ref", "--quiet", "HEAD"]].concat();
         let branch = [&dir[..], &["rev-parse", "--verify", "--quiet", BRANCH]].concat();
-        let heads =
-            match tokio::fs::symlink_metadata(Path::new(&*repository).join("refs/heads")).await {
-                Ok(found) => found.is_dir(),
-                Err(error) => error.kind() == std::io::ErrorKind::NotFound,
-            };
         if heads
             && self.run_as(user, &head, scope).await.ok().as_deref() == Some(BRANCH)
             && !self.status_as(user, &branch, scope).await?
@@ -158,13 +166,19 @@ impl Git {
     pub async fn reusable(
         &self,
         user: &InvokingUser,
+        home: &mut Home<'_>,
         state_dir: &Path,
         files: &[String],
         scope: &Scope,
     ) -> Result<bool> {
         let mut present = Vec::with_capacity(files.len());
         for file in files {
-            if exists(state_dir.join(file)).await {
+            let path = state_dir.join(file);
+            if home
+                .exists(&path)
+                .await
+                .map_err(|failure| core_error(failure, &path))?
+            {
                 present.push(file.as_str());
             }
         }
@@ -188,8 +202,19 @@ impl Git {
         Ok(true)
     }
 
-    pub async fn sync(&self, user: &InvokingUser, state_dir: &Path, scope: &Scope) -> Result<bool> {
-        if !exists(state_dir.join(GIT_DIR)).await {
+    pub async fn sync(
+        &self,
+        user: &InvokingUser,
+        home: &mut Home<'_>,
+        state_dir: &Path,
+        scope: &Scope,
+    ) -> Result<bool> {
+        let git_dir = state_dir.join(GIT_DIR);
+        if !home
+            .exists(&git_dir)
+            .await
+            .map_err(|failure| core_error(failure, &git_dir))?
+        {
             return Ok(false);
         }
         let state_dir = state_dir.to_string_lossy();
@@ -315,12 +340,16 @@ fn export(only: &str) -> [&str; 4] {
     ]
 }
 
-async fn resolve_binary(user: &InvokingUser) -> String {
+async fn resolve_binary(user: &InvokingUser, home: &mut Home<'_>) -> Result<String> {
     let profile_git = profile_git(user);
-    if exists(&profile_git).await {
-        return profile_git.to_string_lossy().into_owned();
+    if home
+        .exists(&profile_git)
+        .await
+        .map_err(|failure| core_error(failure, &profile_git))?
+    {
+        return Ok(profile_git.to_string_lossy().into_owned());
     }
-    "git".to_string()
+    Ok("git".to_string())
 }
 
 fn profile_git(user: &InvokingUser) -> PathBuf {
@@ -348,14 +377,20 @@ mod tests {
         std::fs::create_dir_all(profile_git.parent().unwrap()).unwrap();
         std::fs::write(&profile_git, "").unwrap();
 
-        let binary = resolve_binary(&user(home.path())).await;
+        let files = mix_fs::Files::open(Path::new("/"), "r1").unwrap();
 
-        assert_eq!(binary, profile_git.to_string_lossy());
+        let binary = resolve_binary(&user(home.path()), &mut Home::Local(&files)).await;
+
+        assert_eq!(binary.unwrap(), profile_git.to_string_lossy());
     }
 
     #[tokio::test]
     async fn resolve_binary_falls_back_to_the_path() {
         let home = tempfile::tempdir().unwrap();
-        assert_eq!(resolve_binary(&user(home.path())).await, "git");
+        let files = mix_fs::Files::open(Path::new("/"), "r1").unwrap();
+
+        let binary = resolve_binary(&user(home.path()), &mut Home::Local(&files)).await;
+
+        assert_eq!(binary.unwrap(), "git");
     }
 }

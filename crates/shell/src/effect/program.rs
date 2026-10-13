@@ -3,6 +3,7 @@ use std::path::Path;
 
 use mix_core::effect::ProgramFacts;
 
+#[allow(clippy::disallowed_methods)]
 pub fn observe(path: &Path, source: &Path) -> ProgramFacts {
     let installed = std::fs::symlink_metadata(path).ok();
     let running = std::fs::metadata(source).ok();

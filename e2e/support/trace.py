@@ -5,10 +5,22 @@ SPAWNS = ("clone", "clone3", "fork", "vfork")
 CREDENTIALS = ("setuid", "setreuid", "setresuid", "setfsuid")
 EXECS = ("execve", "execveat")
 WRITE_FLAGS = ("O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND")
+READS = (
+    "statx",
+    "newfstatat",
+    "readlink",
+    "readlinkat",
+    "getdents64",
+    "access",
+    "faccessat",
+    "faccessat2",
+)
+AT_READS = ("openat", "openat2", "statx", "newfstatat", "readlinkat", "faccessat", "faccessat2")
 SYSCALLS = ",".join(
     SPAWNS
     + CREDENTIALS
     + EXECS
+    + READS
     + (
         "open",
         "openat",
@@ -51,6 +63,12 @@ class Write:
     uid: int
     call: str
     path: str
+
+
+@dataclass(frozen=True)
+class Traced:
+    writes: list[Write]
+    accesses: list[Write]
 
 
 @dataclass(frozen=True)
@@ -169,6 +187,17 @@ def _targets(call: Call) -> list[str | None]:
     return []
 
 
+def _accessed(call: Call) -> list[str | None]:
+    name, args = call.name, call.args
+    if name in ("open", "readlink", "access"):
+        return [_string(args[0])]
+    if name in AT_READS:
+        return [_at(args[0], args[1])]
+    if name == "getdents64":
+        return [_descriptor(args[0])]
+    return _targets(call)
+
+
 def _effective(call: Call, current: int) -> int:
     args = call.args
     if call.name == "setfsuid":
@@ -183,6 +212,14 @@ def _effective(call: Call, current: int) -> int:
 
 
 def writes(trace: str, first_uid: int, setuid_root: set[str]) -> list[Write]:
+    return _found(trace, first_uid, setuid_root, _targets, failed=False)
+
+
+def accesses(trace: str, first_uid: int, setuid_root: set[str]) -> list[Write]:
+    return _found(trace, first_uid, setuid_root, _accessed, failed=True)
+
+
+def _found(trace, first_uid, setuid_root, targets, failed: bool) -> list[Write]:
     calls = _calls(trace)
     parent = {
         int(call.ret): call.pid
@@ -205,10 +242,10 @@ def writes(trace: str, first_uid: int, setuid_root: set[str]) -> list[Write]:
             program = _string(call.args[1] if call.name == "execveat" else call.args[0])
             if call.ret == "0" and program in setuid_root:
                 uid[call.pid] = 0
-        elif call.ret != "?" and not call.ret.startswith("-"):
+        elif call.ret != "?" and (failed or not call.ret.startswith("-")):
             found += [
                 Write(call.pid, current, call.name, path)
-                for path in _targets(call)
+                for path in targets(call)
                 if path is not None
             ]
     return found

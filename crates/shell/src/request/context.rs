@@ -3,20 +3,28 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use mix_core::declared::identity::InvokingUser;
 use mix_core::declared::paths::{
-    FLAKE_LOCK, GENERATION_LOCK_FILE, GENERATION_STATE_FILE, HOME_NIX, NIX_OWNERSHIP_MARKER,
-    NIX_STORE, NIXOS_MARKER, STATE_FILE, mix_state_dir,
+    FLAKE_LOCK, HOME_NIX, NIX_OWNERSHIP_MARKER, NIX_STORE, NIXOS_MARKER, STATE_FILE, mix_state_dir,
 };
 use mix_core::declared::policy::{Mirror, Policy};
 use mix_core::declared::targets::UserConfig;
-use mix_core::effect::{Fact, Query};
+use mix_core::effect::{Fact, Failure, Query};
 use mix_core::model::World;
 use mix_events::Outbox;
 use mix_exec::Scope;
 use mix_fs::Files;
+use mix_home::{Active, Session, myself};
 
 use crate::drive::Performer;
-use crate::effect::generations::{Active, active_input};
 use crate::request::Locked;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HomeFiles {
+    pub state: Option<String>,
+    pub active: Option<String>,
+    pub lock: Option<String>,
+    pub active_lock: Option<String>,
+    pub home_nix: Option<String>,
+}
 
 #[derive(Clone, Default)]
 pub enum Host {
@@ -34,56 +42,80 @@ impl Host {
         String::from_utf8_lossy(bytes).into_owned()
     }
 
-    fn read(&self, path: &Path) -> Option<String> {
-        match self {
+    pub async fn home_files(
+        &self,
+        user: &InvokingUser,
+        scope: &Scope,
+    ) -> Result<HomeFiles, Failure> {
+        let state_dir = mix_state_dir(&user.home);
+        let queries = [
+            Query::Contents(state_dir.join(STATE_FILE)),
+            Query::ActiveList(user.clone()),
+            Query::Contents(state_dir.join(FLAKE_LOCK)),
+            Query::ActiveLock(user.clone()),
+            Query::Contents(state_dir.join(HOME_NIX)),
+        ];
+        let facts = match self {
             Host::Machine => {
-                let files = Files::open(Path::new("/"), "host").ok()?;
-                match files.observe(&Query::Contents(path.to_path_buf()))? {
-                    Fact::Contents(Some(bytes)) => Some(Self::text(&bytes)),
-                    _ => None,
+                let mut session = Session::open(&myself()?, user, &request_id(), scope)?;
+                let mut facts = Vec::with_capacity(queries.len());
+                let mut home = session.home();
+                for query in &queries {
+                    facts.push(home.observe(query).await?);
                 }
+                session.close().await?;
+                facts
             }
-            Host::Model(world) => Self::world(world).contents(path).map(Self::text),
-        }
-    }
-
-    pub fn state_file(&self, user: &InvokingUser) -> Option<String> {
-        self.read(&mix_state_dir(&user.home).join(STATE_FILE))
-    }
-
-    pub fn flake_lock(&self, user: &InvokingUser) -> Option<String> {
-        self.read(&mix_state_dir(&user.home).join(FLAKE_LOCK))
-    }
-
-    pub fn home_nix(&self, user: &InvokingUser) -> Option<String> {
-        self.read(&mix_state_dir(&user.home).join(HOME_NIX))
-    }
-
-    pub fn active_list(&self, user: &InvokingUser) -> Option<String> {
-        match self {
-            Host::Machine => active_input(user, GENERATION_STATE_FILE)
-                .as_deref()
-                .map(Self::text),
-            Host::Model(world) => Self::world(world).active_list(user).map(Self::text),
-        }
-    }
-
-    pub fn active_generation(&self, user: &InvokingUser) -> Option<Active> {
-        match self {
-            Host::Machine => crate::effect::generations::active(user),
             Host::Model(world) => {
                 let world = Self::world(world);
-                let profile = world.profile(user)?;
-                let number = profile.active?;
+                queries
+                    .iter()
+                    .map(|query| Some(world.observe(query)))
+                    .collect()
+            }
+        };
+        let text = |fact: &Option<Fact>| match fact {
+            Some(Fact::Contents(Some(bytes))) => Some(Self::text(bytes)),
+            _ => None,
+        };
+        Ok(HomeFiles {
+            state: text(&facts[0]),
+            active: text(&facts[1]),
+            lock: text(&facts[2]),
+            active_lock: text(&facts[3]),
+            home_nix: text(&facts[4]),
+        })
+    }
+
+    pub async fn active_generation(
+        &self,
+        user: &InvokingUser,
+        scope: &Scope,
+    ) -> Result<Option<Active>, Failure> {
+        match self {
+            Host::Machine => {
+                let mut session = Session::open(&myself()?, user, &request_id(), scope)?;
+                let active = session.home().active(user).await?;
+                session.close().await?;
+                Ok(active)
+            }
+            Host::Model(world) => {
+                let world = Self::world(world);
+                let Some(profile) = world.profile(user) else {
+                    return Ok(None);
+                };
+                let Some(number) = profile.active else {
+                    return Ok(None);
+                };
                 if profile.dangling.contains(&number) {
-                    return None;
+                    return Ok(None);
                 }
-                Some(Active {
+                Ok(Some(Active {
                     number,
                     path: Self::stored(profile.built.get(&number)),
                     list: world.active_list(user).map(Self::text),
                     lock: world.active_lock(user).map(Self::text),
-                })
+                }))
             }
         }
     }
@@ -93,15 +125,6 @@ impl Host {
         let mut hasher = DefaultHasher::new();
         built.hash(&mut hasher);
         Path::new(NIX_STORE).join(format!("{:016x}-home-manager-generation", hasher.finish()))
-    }
-
-    pub fn active_lock(&self, user: &InvokingUser) -> Option<String> {
-        match self {
-            Host::Machine => active_input(user, GENERATION_LOCK_FILE)
-                .as_deref()
-                .map(Self::text),
-            Host::Model(world) => Self::world(world).active_lock(user).map(Self::text),
-        }
     }
 
     pub fn available(&self) -> Option<u64> {

@@ -427,6 +427,7 @@ fn remove(path: &Path) -> bool {
 }
 
 impl Real {
+    #[allow(clippy::disallowed_methods)]
     fn object(&self, target: Target) -> Option<PathBuf> {
         match target {
             Target::Content(contents) => {
@@ -440,6 +441,7 @@ impl Real {
         }
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn other(&self, target: Target) -> Option<PathBuf> {
         match target {
             Target::Content(contents) => (0..CONTENTS.len())
@@ -489,6 +491,7 @@ impl Real {
         "damaged"
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn branch(&self) -> Option<PathBuf> {
         std::fs::read_to_string(repository().join("refs/heads/main"))
             .ok()
@@ -502,6 +505,7 @@ impl Real {
         moved(&mut self.commits, before, after, outcome)
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn hostile(&self) {
         let user_config = format!("[core]\n\thooksPath = {HOME}/hooks\n{HOSTILE_CONFIG}");
         write(&Path::new(HOME).join(".gitconfig"), user_config.as_bytes());
@@ -525,6 +529,7 @@ impl Real {
         }
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn outer(&self) {
         let home = Path::new(HOME);
         if home.join(GIT_DIR).exists() {
@@ -550,6 +555,7 @@ impl Real {
         .expect("committed");
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn tracked(&mut self) -> Option<Vec<String>> {
         let repository = repository();
         let heads = repository.join("refs/heads");
@@ -578,6 +584,7 @@ fn model_tracked(world: &World) -> Option<Vec<String>> {
         .map(|committed| committed.keys().cloned().collect())
 }
 
+#[allow(clippy::disallowed_methods)]
 fn same(state: &Reference, real: &mut Real, after: &str) {
     let config = Query::Contents(repository().join(REPOSITORY_CONFIG));
     assert_eq!(
@@ -637,6 +644,7 @@ impl StateMachineTest for Git {
         real
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn apply(mut real: Real, state: &Reference, op: Op) -> Real {
         let outcome = match &op {
             Op::Write { file, contents } => {
