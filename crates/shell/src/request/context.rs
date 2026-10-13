@@ -57,7 +57,7 @@ impl Host {
         ];
         let facts = match self {
             Host::Machine => {
-                let mut session = Session::open(&myself()?, user, &request_id(), scope)?;
+                let mut session = Session::open(&myself(), user, &request_id(), scope)?;
                 let mut facts = Vec::with_capacity(queries.len());
                 let mut home = session.home();
                 for query in &queries {
@@ -94,7 +94,7 @@ impl Host {
     ) -> Result<Option<Active>, Failure> {
         match self {
             Host::Machine => {
-                let mut session = Session::open(&myself()?, user, &request_id(), scope)?;
+                let mut session = Session::open(&myself(), user, &request_id(), scope)?;
                 let active = session.home().active(user).await?;
                 session.close().await?;
                 Ok(active)

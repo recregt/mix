@@ -84,8 +84,21 @@ fn report(line: &str) {
     let _ = writeln!(std::io::stdout(), "{line}");
 }
 
+#[allow(clippy::disallowed_methods)]
 fn main() -> ExitCode {
-    let mut args = std::env::args().skip(1);
+    let given: Vec<String> = std::env::args().skip(1).collect();
+    if let [command, request] = given.as_slice()
+        && command == mix_home::COMMAND
+    {
+        return match mix_home::serve_stdio(request) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(failure) => {
+                let _ = writeln!(std::io::stderr(), "{failure:?}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    let mut args = given.into_iter();
     let mut chosen = Vec::new();
     let mut seeds = None;
     let mut user = None;
