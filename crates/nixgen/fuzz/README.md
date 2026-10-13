@@ -4,13 +4,14 @@ This directory contains `cargo-fuzz` targets for `mix-nixgen`.
 
 ## Prerequisites
 
-The repository's flake provides `cargo-fuzz` and the nightly compiler libFuzzer needs. Enter its shell from the repository root:
+The repository's flake provides `cargo-fuzz`, the nightly compiler libFuzzer needs, and `tmux`. Enter its shell from this directory:
 
 ```bash
+cd crates/nixgen/fuzz
 nix develop .#fuzz
 ```
 
-Run the commands below from that shell. `verify-corpus` also calls `nix-instantiate` and `nix eval`, which come with Nix itself.
+Nix finds the repository's flake from any directory inside it. Run every command on this page in that shell, from `crates/nixgen/fuzz`. `verify-corpus` also calls `nix-instantiate` and `nix eval`, which come with Nix itself.
 
 Without Nix, install `cargo-fuzz` and a nightly toolchain with `rustup`, and write `cargo +nightly fuzz` wherever this page says `cargo fuzz`.
 
@@ -76,4 +77,4 @@ cargo fuzz cmin parse
 cargo run --release --bin verify-corpus -- corpus/parse
 ```
 
-*(Note: If executing from `crates/nixgen` instead of `crates/nixgen/fuzz`, add `--manifest-path fuzz/Cargo.toml` and prefix paths with `fuzz/`)*
+*(From `crates/nixgen` instead of `crates/nixgen/fuzz`, the `cargo fuzz` commands work unchanged; prefix the `corpus/` and `artifacts/` paths with `fuzz/`, and add `--manifest-path fuzz/Cargo.toml` to `cargo run`.)*
