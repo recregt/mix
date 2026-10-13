@@ -1,11 +1,14 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:best-practices"],
-  "enabledManagers": ["cargo", "custom.regex", "github-actions", "rust-toolchain"],
+  "enabledManagers": ["cargo", "custom.regex", "github-actions", "nix", "rust-toolchain"],
   "dependencyDashboard": true,
   "semanticCommitScope": "",
   "lockFileMaintenance": {
     "enabled": false
+  },
+  "nix": {
+    "enabled": true
   },
   "customManagers": [
     {
@@ -31,8 +34,15 @@
       "minimumReleaseAge": "3 days"
     },
     {
-      "matchDepNames": ["rust"],
+      "matchManagers": ["nix"],
+      "groupName": "nix inputs",
+      "schedule": ["* * 1,15 * *"],
+      "semanticCommitType": "chore"
+    },
+    {
+      "matchDepNames": ["rust", "rust-overlay"],
       "groupName": "rust toolchain",
+      "schedule": ["* * 1,15 * *"],
       "semanticCommitType": "chore"
     }
   ]
