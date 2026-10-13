@@ -10,10 +10,11 @@ pub(crate) async fn clean(ctx: &Context, root: &mut Root, request: &CleanRequest
         Ok(cfg) => cfg,
         Err(error) => return root.refuse(error),
     };
-    let mut performer = match change::begin(ctx, root).await {
-        Ok(performer) => performer,
+    let (mut performer, cfg) = match change::begin(ctx, root, cfg).await {
+        Ok(begun) => begun,
         Err(concluded) => return *concluded,
     };
+    let cfg = &cfg;
     let old = match performer
         .observe(&[Query::Profile(cfg.user.clone())], &ctx.scope)
         .await
