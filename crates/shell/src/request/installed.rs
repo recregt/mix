@@ -129,9 +129,10 @@ impl Installed {
         let Some(generation) = found else {
             return Ok(None);
         };
-        if let Some(listed) = held.as_ref()
+        if let Some(listed) = held.as_mut()
             && listed.generation.path == generation.path
         {
+            listed.generation = generation;
             return Ok(Some(listed.clone()));
         }
         let names = requested(&generation)?;
@@ -337,6 +338,32 @@ mod tests {
         assert_eq!(source.gathered.load(Ordering::SeqCst), 2);
         assert_eq!(listed.generation.number, 2);
         assert_eq!(listed.packages[0].name, "2");
+    }
+
+    #[tokio::test]
+    async fn a_later_generation_built_from_the_same_files_is_listed_under_its_own_number() {
+        let (world, host) = hosted();
+        activate(&world, &user(1000), 2, &list(&[]));
+        let source = Arc::new(Counted::default());
+        let installed = Installed::with_source(Arc::clone(&source) as Arc<dyn Source>);
+        let scope = Scope::root();
+        let first = installed
+            .listing(&host, &user(1000), None, &scope)
+            .await
+            .unwrap()
+            .unwrap();
+
+        activate(&world, &user(1000), 4, &list(&[]));
+        let again = installed
+            .listing(&host, &user(1000), None, &scope)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(first.generation.path, again.generation.path);
+        assert_eq!(source.gathered.load(Ordering::SeqCst), 1);
+        assert_eq!(again.generation.number, 4);
+        assert!(Arc::ptr_eq(&first.packages, &again.packages));
     }
 
     #[tokio::test]
