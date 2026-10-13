@@ -22,9 +22,6 @@ jobs:
     timeout-minutes: 200
     env:
       ASAN_OPTIONS: malloc_context_size=0
-      RUSTUP_TOOLCHAIN: nightly
-    container:
-      image: ghcr.io/recregt/mix-nix-fuzz@sha256:c81e71c1e17055e7394d8e96bb972d952a96d9dc1b7a92abc0c1ba2df9914191 # latest
     strategy:
       fail-fast: false
       matrix:
@@ -59,11 +56,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          workspaces: crates/nixgen/fuzz
-          key: ${{ matrix.target }}
+      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
 
       - name: Restore the fuzz corpus
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -75,12 +68,12 @@ jobs:
 
       - name: Fuzz mix-nixgen's ${{ matrix.target }} for ${{ matrix.hours }} hour(s)
         working-directory: crates/nixgen
-        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=${{ matrix.max-total-time }} -timeout=10
+        run: nix develop ../..#fuzz --command cargo fuzz run ${{ matrix.target }} -- -max_total_time=${{ matrix.max-total-time }} -timeout=10
 
       - name: Minimize the corpus
         if: always()
         working-directory: crates/nixgen
-        run: cargo fuzz cmin ${{ matrix.target }}
+        run: nix develop ../..#fuzz --command cargo fuzz cmin ${{ matrix.target }}
 
       - name: Save the fuzz corpus
         if: always()
@@ -92,7 +85,7 @@ jobs:
       - name: Build the corpus verifier
         if: always() && matrix.verifier != ''
         working-directory: crates/nixgen/fuzz
-        run: cargo build --release --bin ${{ matrix.verifier }}
+        run: nix develop ../../..#fuzz --command cargo build --release --bin ${{ matrix.verifier }}
 
       - name: Verify the grown corpus parses and evaluates through real Nix
         if: always() && matrix.verifier != ''
@@ -112,19 +105,12 @@ jobs:
     timeout-minutes: 100
     env:
       ASAN_OPTIONS: malloc_context_size=0
-      RUSTUP_TOOLCHAIN: nightly
-    container:
-      image: ghcr.io/recregt/mix-nix-fuzz@sha256:c81e71c1e17055e7394d8e96bb972d952a96d9dc1b7a92abc0c1ba2df9914191 # latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          workspaces: crates/render/fuzz
-          key: event_stream
+      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
 
       - name: Restore the fuzz corpus
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -137,12 +123,12 @@ jobs:
 
       - name: Fuzz mix-render's event_stream for 1 hour
         working-directory: crates/render
-        run: cargo fuzz run event_stream -- -max_total_time=3600 -timeout=10 -close_fd_mask=3
+        run: nix develop ../..#fuzz --command cargo fuzz run event_stream -- -max_total_time=3600 -timeout=10 -close_fd_mask=3
 
       - name: Minimize the corpus
         if: always()
         working-directory: crates/render
-        run: cargo fuzz cmin event_stream
+        run: nix develop ../..#fuzz --command cargo fuzz cmin event_stream
 
       - name: Save the fuzz corpus
         if: always()
