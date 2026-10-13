@@ -1393,6 +1393,7 @@ dependencies = [
  "mix-core",
  "mix-events",
  "mix-exec",
+ "mix-fs",
  "mix-nixgen",
  "mix-render",
  "mix-shell",
@@ -1431,6 +1432,7 @@ dependencies = [
  "mix-core",
  "mix-events",
  "mix-exec",
+ "mix-home",
  "mix-rpc",
  "mix-shell",
  "mix-ui",
@@ -1478,6 +1480,31 @@ dependencies = [
  "mix-nixgen",
  "mix-shell",
  "mix-ui",
+]
+
+[[package]]
+name = "mix-fs"
+version = "0.1.0"
+dependencies = [
+ "mix-core",
+ "nix",
+ "rustix",
+ "tempfile",
+]
+
+[[package]]
+name = "mix-home"
+version = "0.1.0"
+dependencies = [
+ "mix-core",
+ "mix-exec",
+ "mix-fs",
+ "nix",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -1549,6 +1576,8 @@ dependencies = [
  "mix-core",
  "mix-events",
  "mix-exec",
+ "mix-fs",
+ "mix-home",
  "mix-nixgen",
  "mix-nixlog",
  "mix-pins",

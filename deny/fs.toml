@@ -1,0 +1,14 @@
+[graph]
+targets = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"]
+exclude-dev = true
+
+[bans]
+multiple-versions = "allow"
+deny = [
+    { crate = "mix-exec", reason = "mix-fs changes files and nothing else; running programs belongs to the shell" },
+    { crate = "mix-home", reason = "mix-fs changes files and nothing else; the agent builds on it" },
+    { crate = "mix-shell", reason = "mix-fs changes files and nothing else; the shell builds on it" },
+    { crate = "reqwest", reason = "mix-fs changes files and nothing else; the network belongs to the shell" },
+    { crate = "tokio", reason = "mix-fs changes files synchronously; async code belongs to its callers" },
+    { crate = "zbus", reason = "mix-fs changes files and nothing else; systemd belongs to the shell" },
+]

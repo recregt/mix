@@ -18,6 +18,7 @@ mimalloc = { workspace = true }
 mix-core = { workspace = true }
 mix-events = { workspace = true }
 mix-exec = { workspace = true }
+mix-home = { workspace = true }
 mix-rpc = { workspace = true }
 mix-shell = { workspace = true }
 mix-ui = { workspace = true }

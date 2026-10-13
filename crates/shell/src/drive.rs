@@ -24,13 +24,13 @@ use mix_events::v1::{
 };
 use mix_events::{NodeId, ROOT, Stopped, Tree, output};
 use mix_exec::Scope;
+use mix_fs::{Files, Prepared};
+use mix_home::Agent;
 use mix_nixlog::{BuildProgress, package_name};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use crate::effect::files::{Files, Prepared};
 use crate::effect::generations::{self, ProfileContext, core_failure};
 use crate::effect::git::Git;
-use crate::effect::home::{self, Agent};
 use crate::effect::identity;
 use crate::effect::runtime;
 use crate::effect::units::Units;
@@ -318,11 +318,11 @@ impl Performer {
         if !self.agents.contains_key(&uid) {
             let program = match &self.agent_program {
                 Some(program) => program.clone(),
-                None => home::myself()?,
+                None => mix_home::myself()?,
             };
             let agent = Agent::spawn(
                 &program,
-                &home::account(uid, path)?,
+                &mix_home::account(uid, path)?,
                 self.files.request(),
                 scope,
             )?;
@@ -338,10 +338,7 @@ impl Performer {
     ) -> Result<Option<u64>, Failure> {
         let generations = generations::existing(user);
         if user.uid == nix::unistd::geteuid().as_raw() {
-            return Ok(crate::profile::state::built_generation(
-                &user.home,
-                &generations,
-            ));
+            return Ok(mix_home::built_generation(&user.home, &generations));
         }
         self.agent(user.uid, &user.home, scope)?
             .find_built(&user.home, &generations)
@@ -997,7 +994,7 @@ impl Performer {
             Action::Commit => return Box::pin(self.commit(prepared)).await,
             _ => {}
         }
-        if let Some(path) = home::path_of(action) {
+        if let Some(path) = mix_home::path_of(action) {
             let outcome = self.perform_file(action, path, scope, prepared).await;
             return match (action, outcome) {
                 (
@@ -1078,7 +1075,7 @@ impl Performer {
             match self
                 .files
                 .owner_of(&path)
-                .or(home::owner(&self.files, &path))
+                .or(mix_home::owner(&self.files, &path))
             {
                 Some(uid) if uid != running && !self.files.holds_other_than(&path, uid) => {
                     theirs.entry(uid).or_default().push(path);

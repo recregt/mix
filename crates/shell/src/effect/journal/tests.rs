@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use mix_core::effect::{Expect, Fact, Query};
+use mix_fs::Files;
 
 use super::*;
-use crate::effect::files::Files;
 
 fn listing(root: &Path) -> Vec<(PathBuf, Option<Vec<u8>>)> {
     let mut found = Vec::new();
@@ -71,7 +71,7 @@ fn changes(files: &Files) -> Vec<Action> {
 async fn perform(
     performer: &mut Performer,
     action: &Action,
-    prepared: &mut crate::effect::files::Prepared<'_>,
+    prepared: &mut mix_fs::Prepared<'_>,
 ) -> mix_core::effect::Outcome {
     let mut quiet = |_| {};
     performer

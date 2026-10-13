@@ -2,13 +2,17 @@ use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
 use mix_core::declared::identity::InvokingUser;
-use mix_core::effect::{Action, Expect, Fact, Failure, Outcome, PathFacts, Query};
+use mix_core::effect::{Action, Failure, Outcome};
 use mix_exec::Scope;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{ChildStdin, ChildStdout};
 
-use crate::effect::files::{Files, Prepared};
+use mix_fs::{Files, Prepared};
+
+mod generation;
+
+pub use generation::{built_generation, store_generation, store_input};
 
 pub const COMMAND: &str = "home-files";
 
@@ -90,7 +94,7 @@ pub fn serve(
                 continue;
             }
             Request::FindBuilt { home, generations } => {
-                let built = crate::profile::state::built_generation(&home, &generations);
+                let built = built_generation(&home, &generations);
                 send(&mut output, &Reply::Built(built))?;
                 continue;
             }
@@ -233,26 +237,6 @@ impl Agent {
     }
 }
 
-pub fn core_error(failure: Failure, path: &Path) -> mix_core::Error {
-    match failure {
-        Failure::Io { path, kind } => mix_core::Error::Io {
-            path,
-            source: kind.into(),
-        },
-        Failure::SpawnFailed { program, kind } => mix_core::Error::Exec {
-            command: program,
-            source: kind.into(),
-        },
-        Failure::Cancelled => mix_core::Error::Cancelled {
-            command: format!("change {}", path.display()),
-        },
-        other => mix_core::Error::Command {
-            command: format!("change {}", path.display()),
-            detail: format!("{other:?}"),
-        },
-    }
-}
-
 pub fn myself() -> Result<PathBuf, Failure> {
     std::env::current_exe().map_err(|error| Failure::SpawnFailed {
         program: PROGRAM.to_string(),
@@ -281,50 +265,6 @@ pub fn account(uid: u32, path: &Path) -> Result<InvokingUser, Failure> {
         name: found.name,
         home: found.dir,
     })
-}
-
-fn write_request() -> String {
-    format!("write-{}", crate::request::context::request_id())
-}
-
-pub async fn write_file(
-    path: &Path,
-    contents: &[u8],
-    mode: u32,
-    scope: &Scope,
-) -> Result<(), Failure> {
-    let request = write_request();
-    let mut files = Files::open(Path::new("/"), &request).map_err(|error| Failure::Io {
-        path: "/".into(),
-        kind: error.kind(),
-    })?;
-    let expect = match files.observe(&Query::Path(path.to_path_buf())) {
-        Some(Fact::Path(PathFacts { id: Some(id), .. })) => Expect::Present(id),
-        _ => Expect::Absent,
-    };
-    let put = Action::PutFile {
-        path: path.to_path_buf(),
-        contents: contents.into(),
-        mode,
-        owner: None,
-        expect,
-    };
-    let mut prepared = |_: &[Action]| Ok(());
-    match owner(&files, path) {
-        Some(uid) => {
-            let mut agent = Agent::spawn(&myself()?, &account(uid, path)?, &request, scope)?;
-            agent.perform(&put, &mut prepared).await?;
-            agent.perform(&Action::Commit, &mut prepared).await?;
-            agent.close().await
-        }
-        None => {
-            files.perform(&put, &mut prepared).expect("a file action")?;
-            files
-                .perform(&Action::Commit, &mut prepared)
-                .expect("a file action")
-                .map(|_| ())
-        }
-    }
 }
 
 #[cfg(test)]

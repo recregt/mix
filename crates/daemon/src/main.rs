@@ -18,7 +18,7 @@ const SERVE_STDIN: &str = "serve-stdin";
 fn home_files(request: &str) -> ExitCode {
     let input = std::io::BufReader::new(std::io::stdin());
     let output = std::io::BufWriter::new(std::io::stdout());
-    match mix_shell::effect::home::serve(request, input, output) {
+    match mix_home::serve(request, input, output) {
         Ok(()) => ExitCode::SUCCESS,
         Err(failure) => {
             let _ = writeln!(std::io::stderr(), "{failure:?}");
@@ -48,7 +48,7 @@ async fn main() -> ExitCode {
     {
         [SERVE] => serve::serve().await,
         [SERVE_STDIN] => worker::serve_stdin().await,
-        [command, request] if *command == mix_shell::effect::home::COMMAND => home_files(request),
+        [command, request] if *command == mix_home::COMMAND => home_files(request),
         _ => usage(),
     }
 }

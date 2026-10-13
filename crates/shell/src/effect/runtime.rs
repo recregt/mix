@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use mix_core::effect::{Digest, Failure, Outcome, Performed};
 use mix_events::v1::Code;
 use mix_exec::Scope;
+use mix_fs::Prepared;
 
 use crate::drive::Relay;
-use crate::effect::files::Prepared;
 use crate::ops::bootstrap::Error;
 use crate::ops::bootstrap::steps::fetch_and_unpack::{provision_runtime, remove_runtime};
 use crate::ops::bootstrap::tarball;

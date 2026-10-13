@@ -12,9 +12,9 @@ use mix_core::effect::{Fact, Query};
 use mix_core::model::World;
 use mix_events::Outbox;
 use mix_exec::Scope;
+use mix_fs::Files;
 
 use crate::drive::Performer;
-use crate::effect::files::Files;
 use crate::effect::generations::{Active, active_input};
 use crate::request::Locked;
 

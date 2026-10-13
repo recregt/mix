@@ -18,8 +18,8 @@ use mix_core::effect::{
 use mix_core::model::{Profile, World};
 use mix_core::run::journal::rollback_order;
 use mix_exec::Scope;
+use mix_fs::Files;
 use mix_shell::drive::Performer;
-use mix_shell::effect::files::Files;
 use mix_shell::effect::generations::ProfileContext;
 
 const ROOT_OWNER: Owner = (0, 0);

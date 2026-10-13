@@ -12,6 +12,7 @@ mimalloc = { workspace = true }
 mix-core = { workspace = true, features = ["testkit"] }
 mix-events = { workspace = true }
 mix-exec = { workspace = true }
+mix-fs = { workspace = true }
 mix-nixgen = { workspace = true }
 mix-render = { workspace = true }
 mix-shell = { workspace = true }

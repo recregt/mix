@@ -67,6 +67,8 @@
             "core"
             "cli"
             "explain"
+            "fs"
+            "home"
             "render"
             "ui"
           ];

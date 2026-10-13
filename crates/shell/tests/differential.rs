@@ -9,8 +9,8 @@ use mix_core::effect::{Action, Expect, Fact, FileId, Owner, PathFacts, Query};
 use mix_core::model::{Content, World};
 use mix_core::run::journal::rollback_order;
 use mix_exec::Scope;
+use mix_fs::Files;
 use mix_shell::drive::Performer;
-use mix_shell::effect::files::Files;
 
 const ROOT_OWNER: Owner = (0, 0);
 
