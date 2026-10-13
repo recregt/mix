@@ -1,0 +1,18 @@
+[package]
+name = "mix-fs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+mix-core = { workspace = true }
+nix = { workspace = true }
+rustix = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

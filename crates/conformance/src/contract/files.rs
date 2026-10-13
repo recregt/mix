@@ -8,7 +8,7 @@ use mix_core::effect::{Action, Expect, Fact, FileId, Outcome, Owner, PathFacts, 
 use mix_core::model::World;
 use mix_core::model::testkit::{Breakage, Damage};
 use mix_core::run::journal::rollback_order;
-use mix_shell::effect::files::Files;
+use mix_fs::Files;
 use proptest::prelude::*;
 use proptest::sample::select;
 use proptest_state_machine::{ReferenceStateMachine, StateMachineTest};

@@ -3,8 +3,8 @@ use mix_core::effect::{
     account_precondition,
 };
 use mix_exec::Scope;
+use mix_fs::Prepared;
 
-use crate::effect::files::Prepared;
 use crate::effect::tools::root_command;
 
 pub fn observe(query: &Query) -> Option<Fact> {

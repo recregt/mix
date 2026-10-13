@@ -8,8 +8,8 @@ use mix_core::declared::paths::{
 };
 use mix_core::effect::{Action, Fact, Query};
 use mix_core::model::{Content, World};
+use mix_fs::Files;
 use mix_shell::drive::Performer;
-use mix_shell::effect::files::Files;
 use proptest::prelude::*;
 use proptest::sample::select;
 use proptest_state_machine::{ReferenceStateMachine, StateMachineTest};

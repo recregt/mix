@@ -1,0 +1,23 @@
+[package]
+name = "mix-home"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+mix-core = { workspace = true }
+mix-exec = { workspace = true }
+mix-fs = { workspace = true }
+nix = { workspace = true }
+rustix = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -19,6 +19,8 @@ mimalloc = "0.1.52"
 mix-core = { path = "crates/core" }
 mix-events = { path = "crates/events" }
 mix-exec = { path = "crates/exec" }
+mix-fs = { path = "crates/fs" }
+mix-home = { path = "crates/home" }
 mix-nixgen = { path = "crates/nixgen" }
 mix-nixlog = { path = "crates/nixlog" }
 mix-pins = { path = "crates/pins" }
@@ -31,6 +33,7 @@ nix = { version = "0.31.3", features = ["user", "fs"] }
 proptest = "1.11.0"
 prost = "0.14.4"
 protox = "0.10.0"
+rustix = { version = "1.1.4", features = ["fs"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.145", features = ["raw_value"] }
 tempfile = "3.27.0"

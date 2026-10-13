@@ -6,7 +6,7 @@ use mix_exec::Scope;
 use zbus::zvariant::OwnedObjectPath;
 use zbus::{Connection, Proxy};
 
-use crate::effect::files::Prepared;
+use mix_fs::Prepared;
 
 const DESTINATION: &str = "org.freedesktop.systemd1";
 const MANAGER_PATH: &str = "/org/freedesktop/systemd1";

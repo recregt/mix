@@ -9,11 +9,12 @@ use mix_core::declared::paths::{
 };
 use mix_core::effect::{Action, Fact, Failure, Outcome, Performed, ProfileFacts, Query};
 use mix_exec::Scope;
+use mix_fs::Prepared;
+use mix_home::{store_generation, store_input};
 use mix_nixgen::Pins;
 use mix_nixgen::lock::LockedInput;
 
 use crate::effect::exec::{run_as, run_as_reporting};
-use crate::effect::files::Prepared;
 use crate::effect::tools::trusted;
 use crate::profile;
 
@@ -107,32 +108,6 @@ fn in_the_way(managed: &Path, home: &Path, ours: &[&Path], found: &mut Vec<PathB
             found.push(destination);
         }
     }
-}
-
-pub fn store_generation(link: &Path, store: &Path) -> Option<PathBuf> {
-    let generation = std::fs::canonicalize(link).ok()?;
-    (generation.parent() == Some(store)).then_some(generation)
-}
-
-pub fn store_input(generation: &Path, file: &str) -> Option<Vec<u8>> {
-    use std::io::Read as _;
-    use std::os::fd::OwnedFd;
-    let nofollow =
-        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC;
-    let dir = rustix::fs::open(
-        generation,
-        nofollow | rustix::fs::OFlags::DIRECTORY,
-        rustix::fs::Mode::empty(),
-    )
-    .ok()?;
-    let found: OwnedFd =
-        rustix::fs::openat(&dir, file, nofollow, rustix::fs::Mode::empty()).ok()?;
-    if !rustix::fs::FileType::from_raw_mode(rustix::fs::fstat(&found).ok()?.st_mode).is_file() {
-        return None;
-    }
-    let mut contents = Vec::new();
-    std::fs::File::from(found).read_to_end(&mut contents).ok()?;
-    Some(contents)
 }
 
 pub fn active_generation(user: &InvokingUser) -> Option<PathBuf> {

@@ -1,0 +1,14 @@
+[graph]
+targets = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"]
+exclude-dev = true
+
+[bans]
+multiple-versions = "allow"
+deny = [
+    { crate = "liblzma", reason = "mix-home runs as a user and changes that user's files; unpacking the runtime belongs to the shell" },
+    { crate = "mix-rpc", reason = "mix-home runs as a user and changes that user's files; the daemon protocol belongs to the shell" },
+    { crate = "mix-shell", reason = "mix-home runs as a user and changes that user's files; the shell runs as root" },
+    { crate = "reqwest", reason = "mix-home runs as a user and changes that user's files; the network belongs to the shell" },
+    { crate = "tar", reason = "mix-home runs as a user and changes that user's files; unpacking the runtime belongs to the shell" },
+    { crate = "zbus", reason = "mix-home runs as a user and changes that user's files; systemd belongs to the shell" },
+]

@@ -18,8 +18,8 @@ use mix_exec::Scope;
 
 use crate::Context;
 use crate::drive::{Journal, Observer, Performer, drive};
+use crate::effect::core_error;
 use crate::effect::generations::ProfileContext;
-use crate::effect::home::core_error;
 
 use crate::request::sink::Relay;
 use crate::request::{Concluded, Root};
@@ -281,7 +281,7 @@ mod tests {
 
     use super::*;
     use crate::drive::stopped_by;
-    use crate::effect::files::Files;
+    use mix_fs::Files;
 
     #[test]
     fn a_report_carries_either_a_repair_or_the_reason_there_was_none() {

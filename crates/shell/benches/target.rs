@@ -10,8 +10,8 @@ use mix_core::run::Runner;
 use mix_core::run::journal::Record;
 use mix_events::v1::Command;
 use mix_events::{Ending, Outbox, ROOT, Start, Tree};
+use mix_fs::Files;
 use mix_shell::drive::{Performer, drive};
-use mix_shell::effect::files::Files;
 
 fn main() {
     divan::main();

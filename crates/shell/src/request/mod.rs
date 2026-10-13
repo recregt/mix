@@ -349,7 +349,7 @@ pub async fn recover(
             },
             Blocked::Failed(error) => error,
         })?;
-    let files = crate::effect::files::Files::open(
+    let files = mix_fs::Files::open(
         std::path::Path::new("/"),
         crate::request::context::request_id(),
     )
