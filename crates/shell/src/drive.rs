@@ -318,7 +318,7 @@ impl Performer {
         if !self.agents.contains_key(&uid) {
             let program = match &self.agent_program {
                 Some(program) => program.clone(),
-                None => mix_home::myself()?,
+                None => mix_home::myself(),
             };
             let agent = Agent::spawn(
                 &program,

@@ -2,6 +2,7 @@ use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
 use mix_core::declared::identity::InvokingUser;
+use mix_core::declared::paths::RUNNING_PROGRAM;
 use mix_core::effect::{Action, Fact, Failure, Outcome, Query};
 use mix_exec::Scope;
 use serde::{Deserialize, Serialize};
@@ -473,11 +474,15 @@ impl Session {
     }
 }
 
-pub fn myself() -> Result<PathBuf, Failure> {
-    std::env::current_exe().map_err(|error| Failure::SpawnFailed {
-        program: PROGRAM.to_string(),
-        kind: error.kind(),
-    })
+pub fn myself() -> PathBuf {
+    PathBuf::from(RUNNING_PROGRAM)
+}
+
+#[allow(clippy::disallowed_methods)]
+pub fn serve_stdio(request: &str) -> Result<(), Failure> {
+    let input = std::io::BufReader::new(std::io::stdin());
+    let output = std::io::BufWriter::new(std::io::stdout());
+    serve(request, input, output)
 }
 
 pub fn account(uid: u32, path: &Path) -> Result<InvokingUser, Failure> {

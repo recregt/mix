@@ -16,9 +16,7 @@ const SERVE_STDIN: &str = "serve-stdin";
 
 #[allow(clippy::disallowed_methods)]
 fn home_files(request: &str) -> ExitCode {
-    let input = std::io::BufReader::new(std::io::stdin());
-    let output = std::io::BufWriter::new(std::io::stdout());
-    match mix_home::serve(request, input, output) {
+    match mix_home::serve_stdio(request) {
         Ok(()) => ExitCode::SUCCESS,
         Err(failure) => {
             let _ = writeln!(std::io::stderr(), "{failure:?}");
