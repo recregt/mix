@@ -1,10 +1,12 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use mix_conformance::model::Model;
+use mix_conformance::model::{Model, alice};
 use mix_conformance::suite::{
     Command, FaultKind, Mix, Spec, Transition, bootstrap, doctor, findings, healthy, install,
     repair, succeeded, violations,
 };
+use mix_core::model::World;
 use mix_core::model::testkit::{Breakage, Damage, breakages, owned};
 use proptest::prelude::ProptestConfig;
 use proptest_state_machine::{StateMachineTest, prop_state_machine};
@@ -139,6 +141,15 @@ prop_state_machine! {
     );
 }
 
+fn object_holding(file: &str) -> PathBuf {
+    let user = alice();
+    let staged = healthy().world.staged(&user);
+    let bytes = staged
+        .get(file)
+        .unwrap_or_else(|| panic!("mix records no {file} in its repository"));
+    World::blob_object(&user, bytes)
+}
+
 fn replay(transitions: Vec<Transition>) {
     let owned = &healthy().owned;
     for transition in &transitions {
@@ -165,7 +176,7 @@ fn a_failed_remove_over_a_damaged_repository_is_rolled_back() {
     replay(vec![
         Transition::Faulted(Command::Install("hello"), 4, FaultKind::Fail),
         Transition::Damage(Breakage {
-            path: "/home/alice/.local/state/mix/.git/objects/8d407ffa98fc71f6".into(),
+            path: object_holding("flake.nix"),
             damage: Damage::Removed,
         }),
         Transition::Faulted(Command::Remove("hello"), 5, FaultKind::Fail),
@@ -176,7 +187,7 @@ fn a_failed_remove_over_a_damaged_repository_is_rolled_back() {
 fn an_install_over_an_unreadable_git_object_and_a_missing_gitignore() {
     replay(vec![
         Transition::Damage(Breakage {
-            path: "/home/alice/.local/state/mix/.git/objects/ef519f855b059980".into(),
+            path: object_holding(".gitignore"),
             damage: Damage::Unreadable,
         }),
         Transition::Damage(Breakage {
@@ -191,7 +202,7 @@ fn an_install_over_an_unreadable_git_object_and_a_missing_gitignore() {
 fn a_repair_after_an_install_crashed_over_a_swapped_git_object() {
     replay(vec![
         Transition::Damage(Breakage {
-            path: "/home/alice/.local/state/mix/.git/objects/1d1e7d396cb2c7c4".into(),
+            path: object_holding("home.nix"),
             damage: Damage::Swapped,
         }),
         Transition::Faulted(Command::Install("hello"), 3, FaultKind::CrashAfter),
@@ -225,7 +236,7 @@ fn a_swapped_git_object_after_a_clean_that_followed_a_crashed_install() {
         Transition::Faulted(Command::Install("hello"), 3, FaultKind::CrashBefore),
         Transition::Run(Command::Clean(false)),
         Transition::Damage(Breakage {
-            path: "/home/alice/.local/state/mix/.git/objects/1d1e7d396cb2c7c4".into(),
+            path: object_holding("home.nix"),
             damage: Damage::Swapped,
         }),
     ]);
@@ -280,7 +291,7 @@ fn an_unreadable_git_object_after_an_install_with_the_flake_lock_missing() {
         }),
         Transition::Run(Command::Install("hello")),
         Transition::Damage(Breakage {
-            path: "/home/alice/.local/state/mix/.git/objects/13ee42a3d7007401".into(),
+            path: object_holding("flake.lock"),
             damage: Damage::Unreadable,
         }),
     ]);
@@ -291,7 +302,7 @@ fn a_remove_and_a_repair_over_a_swapped_git_object() {
     replay(vec![
         Transition::Run(Command::Install("hello")),
         Transition::Damage(Breakage {
-            path: "/home/alice/.local/state/mix/.git/objects/1d1e7d396cb2c7c4".into(),
+            path: object_holding("home.nix"),
             damage: Damage::Swapped,
         }),
         Transition::Run(Command::Remove("hello")),
