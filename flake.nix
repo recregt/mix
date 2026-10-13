@@ -72,6 +72,10 @@
           ];
         in
         {
+          devShells.default = pkgs.mkShell {
+            packages = [ (pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml) ];
+          };
+
           devShells.fuzz = pkgs.mkShell {
             packages = [
               nightly

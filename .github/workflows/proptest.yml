@@ -1,0 +1,70 @@
+name: Proptest
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  long:
+    name: ${{ matrix.name }} (3h)
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: conformance model
+            key: model
+            args: -p mix-conformance --test model any_sequence_of_commands_damage_and_faults_keeps_every_invariant
+          - name: properties
+            key: properties
+            args: -p mix-core -p mix-events -p mix-nixgen
+    env:
+      ARGS: ${{ matrix.args }}
+      BUDGET_SECONDS: "10800"
+    defaults:
+      run:
+        shell: nix develop --command bash -e {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+
+      - name: Build the tests
+        run: |
+          read -ra args <<< "$ARGS"
+          cargo test --release --locked --no-run "${args[@]}"
+
+      - name: Run the ${{ matrix.name }} properties until the budget is spent
+        run: |
+          read -ra args <<< "$ARGS"
+          deadline=$((SECONDS + BUDGET_SECONDS))
+          rounds=0
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            cargo test --release --locked "${args[@]}"
+            rounds=$((rounds + 1))
+          done
+          echo "ran $rounds rounds"
+
+      - name: Upload new regression seeds
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: proptest-regressions-${{ matrix.key }}
+          path: |
+            crates/**/*.proptest-regressions
+            crates/*/proptest-regressions/
+          if-no-files-found: warn
