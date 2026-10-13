@@ -1,0 +1,90 @@
+name: Reproducible
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.system }} on ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-22.04
+          - system: x86_64-linux
+            runner: ubuntu-24.04
+          - system: x86_64-linux
+            runner: ubuntu-26.04
+          - system: aarch64-linux
+            runner: ubuntu-22.04-arm
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - system: aarch64-linux
+            runner: ubuntu-26.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+
+      - name: Build the release binaries
+        run: nix build -L .#packages.${{ matrix.system }}.default
+
+      - name: Build them again and compare with the first build
+        run: nix build -L --rebuild .#packages.${{ matrix.system }}.default
+
+      - name: Record the checksums
+        run: |
+          mkdir -p "checksums/${{ matrix.system }}"
+          cd result/bin
+          sha256sum mix mix-daemon > "$GITHUB_WORKSPACE/checksums/${{ matrix.system }}/${{ matrix.runner }}.sha256"
+          cat "$GITHUB_WORKSPACE/checksums/${{ matrix.system }}/${{ matrix.runner }}.sha256"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: checksums-${{ matrix.system }}-${{ matrix.runner }}
+          path: checksums/
+          if-no-files-found: error
+
+  compare:
+    name: Compare the checksums
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: checksums-*
+          path: checksums
+          merge-multiple: true
+
+      - name: Fail if any two runners built different binaries
+        working-directory: checksums
+        run: |
+          status=0
+          for system in */; do
+            system=${system%/}
+            first=
+            for file in "$system"/*.sha256; do
+              echo "$file"
+              cat "$file"
+              if [ -z "$first" ]; then
+                first=$file
+              elif ! cmp -s "$first" "$file"; then
+                echo "::error::$system built on $(basename "$file" .sha256) differs from $(basename "$first" .sha256)"
+                status=1
+              fi
+            done
+          done
+          exit $status
