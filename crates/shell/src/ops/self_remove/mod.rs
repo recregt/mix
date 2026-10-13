@@ -148,12 +148,23 @@ mod tests {
     }
 
     fn session(world: &Arc<Mutex<World>>) -> crate::Session {
+        as_caller(world, Some(alice()))
+    }
+
+    fn as_caller(world: &Arc<Mutex<World>>, account: Option<InvokingUser>) -> crate::Session {
         crate::Session::new(mix_exec::Scope::root())
             .with_host(Host::Model(Arc::clone(world)))
             .with_caller(crate::Caller::Account {
                 peer_is_root: true,
-                account: Some(alice()),
+                account,
             })
+    }
+
+    fn users(ran: &crate::request::ran::Ran) -> Vec<String> {
+        match ran.result() {
+            Some(node_finished::Result::SelfRemove(removed)) => removed.users.clone(),
+            other => panic!("expected a removal result, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -197,5 +208,71 @@ mod tests {
 
         assert_eq!(removed.code(), None);
         assert_eq!(*world.lock().unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn a_machine_root_set_up_alone_is_removed_with_no_home_touched() {
+        let world = machine();
+        let booted = ran(as_caller(&world, None), Request::Bootstrap(Box::default())).await;
+        assert_eq!(booted.code(), None);
+        {
+            let world = world.lock().unwrap();
+            assert!(world.files.contains_key(Path::new("/nix/store")));
+            assert!(world.groups["mix-users"].members.is_empty());
+        }
+        let home = world.lock().unwrap().files.clone();
+
+        let removed = ran(
+            as_caller(&world, None),
+            Request::SelfRemove(SelfRemoveRequest {}),
+        )
+        .await;
+
+        assert_eq!(removed.code(), None);
+        assert_eq!(users(&removed), Vec::<String>::new());
+        let world = world.lock().unwrap();
+        assert!(!world.files.contains_key(Path::new("/nix/store")));
+        let alice_before: Vec<_> = home
+            .keys()
+            .filter(|path| path.starts_with("/home/alice"))
+            .collect();
+        let alice_after: Vec<_> = world
+            .files
+            .keys()
+            .filter(|path| path.starts_with("/home/alice"))
+            .collect();
+        assert_eq!(alice_before, alice_after);
+    }
+
+    #[tokio::test]
+    async fn root_removes_the_homes_of_users_who_enrolled_after_a_root_setup() {
+        let world = machine();
+        let machine_only = ran(as_caller(&world, None), Request::Bootstrap(Box::default())).await;
+        assert_eq!(machine_only.code(), None);
+        let enrolled = ran(session(&world), Request::Bootstrap(Box::default())).await;
+        assert_eq!(enrolled.code(), None);
+        assert!(
+            world
+                .lock()
+                .unwrap()
+                .files
+                .contains_key(&mix_core::declared::paths::mix_state_dir(&alice().home))
+        );
+
+        let removed = ran(
+            as_caller(&world, None),
+            Request::SelfRemove(SelfRemoveRequest {}),
+        )
+        .await;
+
+        assert_eq!(removed.code(), None);
+        assert_eq!(users(&removed), ["alice"]);
+        let world = world.lock().unwrap();
+        assert!(
+            !world
+                .files
+                .contains_key(&mix_core::declared::paths::mix_state_dir(&alice().home))
+        );
+        assert!(!world.files.contains_key(Path::new("/nix/store")));
     }
 }
