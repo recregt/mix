@@ -298,3 +298,15 @@ fn a_remove_and_a_repair_over_a_swapped_git_object() {
         Transition::Run(Command::Repair),
     ]);
 }
+
+#[test]
+fn an_update_after_a_crashed_clean_over_a_swapped_package_list() {
+    replay(vec![
+        Transition::Damage(Breakage {
+            path: "/home/alice/.local/state/mix/state".into(),
+            damage: Damage::Swapped,
+        }),
+        Transition::Faulted(Command::Clean(true), 0, FaultKind::CrashAfter),
+        Transition::Run(Command::Update),
+    ]);
+}

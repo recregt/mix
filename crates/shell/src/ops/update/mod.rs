@@ -72,10 +72,11 @@ pub(crate) async fn update(ctx: &Context, root: &mut Root, _request: &UpdateRequ
     if ctx.mirror().is_some() {
         return root.refuse(Error::Mirrored);
     }
-    let mut performer = match change::begin(ctx, root).await {
-        Ok(performer) => performer,
+    let (mut performer, cfg) = match change::begin(ctx, root, cfg).await {
+        Ok(begun) => begun,
         Err(concluded) => return *concluded,
     };
+    let cfg = &cfg;
     let packages = match change::settled(&mut performer, cfg, &ctx.scope).await {
         Settled::Current { manifest, .. } => manifest.packages,
         Settled::Newer(version) => return root.refuse(Error::NewerState(version)),

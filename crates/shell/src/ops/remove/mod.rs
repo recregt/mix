@@ -34,10 +34,11 @@ pub(crate) async fn remove(ctx: &Context, root: &mut Root, request: &RemoveReque
         Ok(cfg) => cfg,
         Err(error) => return root.refuse(Error::Change(error)),
     };
-    let mut performer = match change::begin(ctx, root).await {
-        Ok(performer) => performer,
+    let (mut performer, cfg) = match change::begin(ctx, root, cfg).await {
+        Ok(begun) => begun,
         Err(concluded) => return *concluded,
     };
+    let cfg = &cfg;
     let settled = change::settled(&mut performer, cfg, &ctx.scope).await;
     let decided = match mix_core::ops::change::remove(&request.packages, settled) {
         Ok(decided) => decided,

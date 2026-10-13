@@ -71,7 +71,8 @@ pub fn profile_user(ctx: &Context) -> Result<&UserConfig> {
 pub async fn begin(
     ctx: &Context,
     root: &mut Root,
-) -> std::result::Result<Performer, Box<Concluded>> {
+    cfg: &UserConfig,
+) -> std::result::Result<(Performer, UserConfig), Box<Concluded>> {
     let performer = match ctx.performer() {
         Ok(performer) => performer,
         Err(source) => {
@@ -87,7 +88,15 @@ pub async fn begin(
     if !crate::ops::recover_interrupted(ctx, &mut root.tree, &mut performer, false).await {
         return Err(Box::new(root.refuse(Error::Unrecovered)));
     }
-    Ok(performer)
+    let cfg = crate::profile::config::observed_user_config(
+        cfg.user.clone(),
+        &mut performer,
+        &ctx.scope,
+        ctx.mirror().is_some(),
+    )
+    .await
+    .unwrap_or_else(|| cfg.clone());
+    Ok((performer, cfg))
 }
 
 pub async fn settled(
