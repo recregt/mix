@@ -119,7 +119,6 @@ jobs:
           key: render-event-stream-fuzz-corpus-${{ github.run_id }}
           restore-keys: |
             render-event-stream-fuzz-corpus-
-            cli-event-stream-fuzz-corpus-
 
       - name: Fuzz mix-render's event_stream for 1 hour
         working-directory: crates/render
