@@ -321,3 +321,15 @@ fn an_update_after_a_crashed_clean_over_a_swapped_package_list() {
         Transition::Run(Command::Update),
     ]);
 }
+
+#[test]
+fn a_repair_after_an_update_crashed_and_the_local_directory_was_swapped() {
+    replay(vec![
+        Transition::Faulted(Command::Update, 1, FaultKind::CrashBefore),
+        Transition::Damage(Breakage {
+            path: "/home/alice/.local".into(),
+            damage: Damage::Swapped,
+        }),
+        Transition::Run(Command::Repair),
+    ]);
+}
