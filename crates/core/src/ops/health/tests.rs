@@ -1008,6 +1008,29 @@ fn a_directory_that_is_taken_over_and_made_unreadable_is_put_right_by_one_repair
 }
 
 #[test]
+fn a_daemon_binary_that_is_taken_over_and_made_unreadable_is_put_right_by_one_repair() {
+    let alice = user("alice", 1000);
+    let mut world = bootstrapped(std::slice::from_ref(&alice));
+    let program = Path::new(crate::declared::paths::MIX_DAEMON_BIN);
+    let entry = world.files.get_mut(program).unwrap();
+    entry.owner = (4242, 4242);
+    entry.mode = 0;
+
+    let run = repair(&mut world, &alice);
+
+    assert_eq!(
+        run.performed(),
+        [
+            "SetOwner /var/lib/mix/bin/mix-daemon",
+            "SetMode /var/lib/mix/bin/mix-daemon",
+            "Commit changes"
+        ]
+    );
+    assert_eq!(audit(&world, &alice), []);
+    assert_eq!(world.files[program].owner, (0, 0));
+}
+
+#[test]
 fn the_history_is_judged_after_the_files_it_records_are_put_right() {
     use crate::model::testkit::{Breakage, Damage};
 
