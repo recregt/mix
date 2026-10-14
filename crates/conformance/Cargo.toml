@@ -19,7 +19,7 @@ mix-render = { workspace = true }
 mix-shell = { workspace = true }
 nix = { workspace = true }
 proptest = { workspace = true }
-proptest-state-machine = "0.8.0"
+proptest-state-machine = "0.9.0"
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
