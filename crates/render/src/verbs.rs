@@ -49,12 +49,13 @@ pub(crate) fn action(operation: Operation) -> Status {
         | Operation::SetUserIds
         | Operation::Unspecified => Status::Changing,
         Operation::SetAside => Status::Moving,
-        Operation::Restore => Status::Restoring,
+        Operation::Restore | Operation::Keep => Status::Restoring,
         Operation::ReclaimTree => Status::Reclaiming,
         Operation::CopyTree => Status::Copying,
         Operation::AddGroup | Operation::AddUser | Operation::AddMember => Status::Adding,
         Operation::RemoveCreated
         | Operation::RemoveCreatedTree
+        | Operation::Discard
         | Operation::DeleteGroup
         | Operation::DeleteUser
         | Operation::RemoveMember

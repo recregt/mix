@@ -186,7 +186,20 @@ impl StepSpec for RemoveMachine {
     }
 
     fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
-        Ok(set_aside_each(&Self::paths(), facts))
+        let (nix, rest) = facts.split_at(NIX_ENTRIES.len());
+        let paths = Self::paths();
+        let mut actions: Vec<Action> = paths
+            .iter()
+            .zip(nix)
+            .filter_map(|(at, fact)| {
+                path(fact).id.map(|expect| Action::Discard {
+                    path: at.clone(),
+                    expect,
+                })
+            })
+            .collect();
+        actions.extend(set_aside_each(&paths[NIX_ENTRIES.len()..], rest));
+        Ok(actions)
     }
 }
 

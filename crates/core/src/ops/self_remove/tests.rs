@@ -177,6 +177,38 @@ fn a_failure_before_the_commit_puts_everything_back() {
 }
 
 #[test]
+fn the_nix_store_is_never_moved_or_copied_and_only_goes_at_the_commit() {
+    let mut world = bootstrapped();
+    let store = world.files[Path::new(NIX_STORE)].id;
+    let accounts = |action: &Action| matches!(action, Action::DeleteGroup { .. });
+
+    let failed = remove(
+        &mut world,
+        &Script {
+            fail_when: Some(accounts),
+            ..Script::default()
+        },
+    );
+
+    assert!(failed.performed.contains(&Action::Discard {
+        path: NIX_STORE.into(),
+        expect: store,
+    }));
+    assert!(!failed.performed.iter().any(|action| matches!(
+        action,
+        Action::SetAside { path, .. } | Action::CopyTree { from: path, .. }
+            if path.starts_with("/nix")
+    )));
+    assert_eq!(world.files[Path::new(NIX_STORE)].id, store);
+    assert!(world.pending().is_empty(), "{:?}", world.pending());
+
+    let removed = remove(&mut world, &Script::default());
+
+    assert_eq!(removed.report().verdict, Verdict::Succeeded);
+    assert!(!present(&world, NIX_STORE));
+}
+
+#[test]
 fn a_linked_file_inside_a_removed_directory_is_not_set_aside_twice() {
     let mut world = bootstrapped();
     let inner = format!("/home/alice/{MIX_STATE_DIR}/home.nix");

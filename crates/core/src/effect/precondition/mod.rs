@@ -209,7 +209,7 @@ fn check<G: Ground>(action: &Action, look: &mut Looking<'_, '_, G>) -> Result<Ve
                 ));
             }
         }
-        Action::SetAside { path, expect } => {
+        Action::SetAside { path, expect } | Action::Discard { path, expect } => {
             holding(path, *expect, look.spot(path))?;
         }
         Action::RemoveCreated { path, expect } | Action::RemoveCreatedTree { path, expect } => {

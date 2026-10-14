@@ -59,6 +59,8 @@ pub fn path_of(action: &Action) -> Option<&Path> {
         | Action::SetMode { path, .. }
         | Action::SetOwner { path, .. }
         | Action::SetAside { path, .. }
+        | Action::Discard { path, .. }
+        | Action::Keep { path }
         | Action::RemoveCreated { path, .. }
         | Action::RemoveCreatedTree { path, .. }
         | Action::Restore { path, .. }
@@ -118,7 +120,9 @@ pub fn exists(path: &Path) -> bool {
 
 pub fn refused(files: &Files, action: &Action, uid: u32) -> Option<Failure> {
     let path = match action {
-        Action::SetAside { path, .. } | Action::RemoveCreatedTree { path, .. } => path,
+        Action::SetAside { path, .. }
+        | Action::Discard { path, .. }
+        | Action::RemoveCreatedTree { path, .. } => path,
         _ => return None,
     };
     files

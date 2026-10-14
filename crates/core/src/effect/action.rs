@@ -57,6 +57,13 @@ pub enum Action {
         path: PathBuf,
         expect: FileId,
     },
+    Discard {
+        path: PathBuf,
+        expect: FileId,
+    },
+    Keep {
+        path: PathBuf,
+    },
     RemoveCreated {
         path: PathBuf,
         expect: FileId,
@@ -205,6 +212,8 @@ impl Action {
             | Action::SetMode { path: at, .. }
             | Action::SetOwner { path: at, .. }
             | Action::SetAside { path: at, .. }
+            | Action::Discard { path: at, .. }
+            | Action::Keep { path: at }
             | Action::RemoveCreated { path: at, .. }
             | Action::RemoveCreatedTree { path: at, .. }
             | Action::ReclaimTree { path: at, .. } => vec![path(at)],
@@ -297,6 +306,8 @@ impl Action {
             Action::SetMode { path: at, .. } => (Operation::SetMode, path(at)),
             Action::SetOwner { path: at, .. } => (Operation::SetOwner, path(at)),
             Action::SetAside { path: at, .. } => (Operation::SetAside, path(at)),
+            Action::Discard { path: at, .. } => (Operation::Discard, path(at)),
+            Action::Keep { path: at } => (Operation::Keep, path(at)),
             Action::RemoveCreated { path: at, .. } => (Operation::RemoveCreated, path(at)),
             Action::RemoveCreatedTree { path: at, .. } => (Operation::RemoveCreatedTree, path(at)),
             Action::Restore { path: at, .. } => (Operation::Restore, path(at)),

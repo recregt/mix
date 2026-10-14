@@ -580,6 +580,16 @@ impl World {
                     expect: Expect::Absent,
                 }])
             }
+            Action::Discard { path, .. } => {
+                self.pend(path.clone());
+                done(vec![Action::Keep { path: path.clone() }])
+            }
+            Action::Keep { path } => {
+                for pending in self.pending.values_mut() {
+                    pending.retain(|pending| pending != path);
+                }
+                done(Vec::new())
+            }
             Action::ReclaimTree {
                 path, owner, mode, ..
             } => {

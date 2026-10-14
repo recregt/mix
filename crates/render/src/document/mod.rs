@@ -197,6 +197,8 @@ fn known_after(operation: Operation) -> Vec<String> {
         | Operation::SetMode
         | Operation::SetOwner
         | Operation::SetAside
+        | Operation::Discard
+        | Operation::Keep
         | Operation::RemoveCreated
         | Operation::RemoveCreatedTree
         | Operation::Restore
@@ -241,6 +243,7 @@ fn change_action(operation: Operation) -> Option<ChangeAction> {
         Operation::RemoveCreated
         | Operation::RemoveCreatedTree
         | Operation::SetAside
+        | Operation::Discard
         | Operation::DeleteGroup
         | Operation::DeleteUser
         | Operation::RemoveMember
@@ -251,6 +254,7 @@ fn change_action(operation: Operation) -> Option<ChangeAction> {
         | Operation::SetMode
         | Operation::SetOwner
         | Operation::Restore
+        | Operation::Keep
         | Operation::ReclaimTree
         | Operation::SetGroupGid
         | Operation::SetUserIds

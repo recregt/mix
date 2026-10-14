@@ -338,6 +338,56 @@ fn a_tree_set_aside_is_deleted_by_commit_or_brought_back_by_undo() {
 }
 
 #[test]
+fn a_discarded_tree_stays_in_place_until_commit_deletes_it_or_undo_keeps_it() {
+    for commit in [true, false] {
+        let mut root = root();
+        std::fs::create_dir_all(root.real("/nix/store/abc")).unwrap();
+        std::fs::write(root.real("/nix/store/abc/bin"), "x").unwrap();
+        let before = root.tree();
+        let id = root.id("/nix");
+
+        let journal = [root
+            .apply(Action::Discard {
+                path: "/nix".into(),
+                expect: id,
+            })
+            .unwrap()
+            .undo];
+        assert_eq!(root.tree(), before);
+        if commit {
+            root.apply(Action::Commit).unwrap();
+            assert!(!root.real("/nix").exists());
+        } else {
+            undo(&mut root, &journal);
+            root.apply(Action::Commit).unwrap();
+            assert_eq!(root.tree(), before);
+        }
+        assert!(root.files.pending().is_empty());
+    }
+}
+
+#[test]
+fn a_tree_that_changed_since_it_was_seen_is_not_discarded() {
+    let mut root = root();
+    std::fs::create_dir(root.real("/var/old")).unwrap();
+    std::fs::create_dir(root.real("/var/new")).unwrap();
+    let seen = root.id("/var/old");
+    std::fs::rename(root.real("/var/old"), root.real("/var/kept")).unwrap();
+    std::fs::rename(root.real("/var/new"), root.real("/var/old")).unwrap();
+
+    let refused = root.apply(Action::Discard {
+        path: "/var/old".into(),
+        expect: seen,
+    });
+
+    assert!(
+        matches!(refused, Err(Failure::Conflict { .. })),
+        "{refused:?}"
+    );
+    assert!(root.files.pending().is_empty());
+}
+
+#[test]
 fn the_file_system_shows_what_the_model_predicts() {
     let mut root = root();
     let mut world = World::default();
