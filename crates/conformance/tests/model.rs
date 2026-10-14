@@ -333,3 +333,17 @@ fn a_repair_after_an_update_crashed_and_the_local_directory_was_swapped() {
         Transition::Run(Command::Repair),
     ]);
 }
+
+#[test]
+fn a_repair_over_missing_heads_in_an_unreadable_refs_directory() {
+    replay(vec![
+        Transition::Damage(Breakage {
+            path: "/home/alice/.local/state/mix/.git/refs/heads".into(),
+            damage: Damage::Removed,
+        }),
+        Transition::Damage(Breakage {
+            path: "/home/alice/.local/state/mix/.git/refs".into(),
+            damage: Damage::Unreadable,
+        }),
+    ]);
+}

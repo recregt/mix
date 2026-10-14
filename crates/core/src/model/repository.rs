@@ -29,26 +29,29 @@ fn listing(staged: &Snapshot) -> String {
         .collect()
 }
 
+fn allowed(entry: &Entry, uid: u32, bit: u32) -> bool {
+    let bits = if entry.owner.0 == uid {
+        entry.mode >> 6
+    } else {
+        entry.mode
+    };
+    uid == 0 || bits & bit != 0
+}
+
 impl World {
+    fn searchable(&self, path: &Path, uid: u32) -> bool {
+        path.ancestors()
+            .skip(1)
+            .filter_map(|dir| self.files.get(dir))
+            .all(|dir| allowed(dir, uid, 0o1))
+    }
+
     fn readable(&self, path: &Path, uid: u32) -> Option<&Arc<[u8]>> {
         let entry = self.files.get(path)?;
         let Content::File(bytes) = &entry.content else {
             return None;
         };
-        let allowed = |entry: &Entry, bit: u32| {
-            let bits = if entry.owner.0 == uid {
-                entry.mode >> 6
-            } else {
-                entry.mode
-            };
-            uid == 0 || bits & bit != 0
-        };
-        let searchable = path
-            .ancestors()
-            .skip(1)
-            .filter_map(|dir| self.files.get(dir))
-            .all(|dir| allowed(dir, 0o1));
-        (searchable && allowed(entry, 0o4)).then_some(bytes)
+        (self.searchable(path, uid) && allowed(entry, uid, 0o4)).then_some(bytes)
     }
 
     fn is_dir(&self, path: &Path) -> bool {
@@ -158,6 +161,7 @@ impl World {
             && self.is_dir(&repository.join("refs"))
             && (self.is_dir(&heads) || !self.files.contains_key(&heads))
             && !self.files.contains_key(&repository.join(BRANCH))
+            && self.searchable(&repository.join(BRANCH), uid)
             && self
                 .readable(&repository.join(REPOSITORY_HEAD), uid)
                 .is_some_and(|head| head.as_ref() == HEAD_CONTENTS)
