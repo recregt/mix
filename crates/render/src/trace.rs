@@ -21,6 +21,7 @@ fn query(query: &observation::Query) -> (&'static str, &str) {
         Query::Strangers(path) => ("other owners in", path),
         Query::Clobbered(name) => ("files in the way for", name),
         Query::Program(path) => ("running program against", path),
+        Query::Linked(name) => ("files mix linked into the home of", name),
     }
 }
 
@@ -93,12 +94,18 @@ fn fact(out: &mut String, fact: &observation::Fact) {
             write!(out, "intact, behind the config")
         }
         Fact::RepositoryFact(_) => write!(out, "damaged"),
-        Fact::JournalsFact(found) | Fact::LeftoversFact(found) | Fact::ClobberedFact(found)
+        Fact::JournalsFact(found)
+        | Fact::LeftoversFact(found)
+        | Fact::ClobberedFact(found)
+        | Fact::LinkedFact(found)
             if found.paths.is_empty() =>
         {
             write!(out, "none")
         }
-        Fact::JournalsFact(found) | Fact::LeftoversFact(found) | Fact::ClobberedFact(found) => {
+        Fact::JournalsFact(found)
+        | Fact::LeftoversFact(found)
+        | Fact::ClobberedFact(found)
+        | Fact::LinkedFact(found) => {
             write!(out, "{}", found.paths.join(", "))
         }
         Fact::ProgramFact(program) if program.same => write!(out, "the same"),

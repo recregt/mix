@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use mix_core::declared::identity::InvokingUser;
+use mix_core::declared::identity::{InvokingUser, MIX_USERS_GROUP};
 use mix_core::declared::paths::{
     FLAKE_LOCK, HOME_NIX, NIX_OWNERSHIP_MARKER, NIX_STORE, NIXOS_MARKER, STATE_FILE, mix_state_dir,
 };
@@ -160,6 +160,44 @@ impl Host {
                     return Err(Error::AlreadyManaged);
                 }
                 Ok(())
+            }
+        }
+    }
+
+    pub fn enrolled(&self) -> Vec<InvokingUser> {
+        match self {
+            Host::Machine => crate::effect::accounts::group_members(MIX_USERS_GROUP),
+            Host::Model(world) => {
+                let world = Self::world(world);
+                let Some(group) = world.groups.get(MIX_USERS_GROUP) else {
+                    return Vec::new();
+                };
+                group
+                    .members
+                    .iter()
+                    .filter_map(|name| {
+                        let found = world.users.get(name)?;
+                        Some(InvokingUser {
+                            uid: found.uid,
+                            gid: found.gid,
+                            name: name.clone(),
+                            home: found.home.clone(),
+                        })
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    pub fn finish_removal(&self) -> Vec<Failure> {
+        match self {
+            Host::Machine => crate::effect::removal::finish(),
+            Host::Model(world) => {
+                let mut world = Self::world(world);
+                for path in crate::effect::removal::leftovers() {
+                    world.files.remove(path);
+                }
+                Vec::new()
             }
         }
     }

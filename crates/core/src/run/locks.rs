@@ -13,6 +13,7 @@ pub fn locks_for(request: &Request, dry_run: bool) -> Need {
         return match request {
             Request::Explain(_) | Request::List(_) => Need::Nothing,
             Request::Bootstrap(_)
+            | Request::SelfRemove(_)
             | Request::Repair(_)
             | Request::Clean(_)
             | Request::Install(_)
@@ -22,7 +23,7 @@ pub fn locks_for(request: &Request, dry_run: bool) -> Need {
         };
     }
     match request {
-        Request::Bootstrap(_) | Request::Repair(_) => Need::Exclusive,
+        Request::Bootstrap(_) | Request::SelfRemove(_) | Request::Repair(_) => Need::Exclusive,
         Request::Clean(clean) if clean.all => Need::Exclusive,
         Request::Install(_)
         | Request::Remove(_)

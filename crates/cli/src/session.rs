@@ -7,8 +7,14 @@ use mix_render::View;
 use crate::client::{self, Failure};
 use crate::request;
 
-pub async fn run(command: Command, view: &View, socket: &Path) -> ExitCode {
-    let result = match command.request.as_ref().and_then(request::refused) {
+pub async fn run(
+    command: Command,
+    view: &View,
+    socket: &Path,
+    unconfirmed: Option<mix_events::Fault>,
+) -> ExitCode {
+    let refused = unconfirmed.or_else(|| command.request.as_ref().and_then(request::refused));
+    let result = match refused {
         Some(fault) => Err(Failure::Failed(Box::new(fault))),
         None => {
             let route = command
@@ -32,7 +38,10 @@ pub async fn run(command: Command, view: &View, socket: &Path) -> ExitCode {
         .map(|code| ExitCode::from(u8::try_from(code).unwrap_or(u8::MAX)));
     match result {
         Ok(()) => from_root.unwrap_or(ExitCode::SUCCESS),
-        Err(_) => from_root.unwrap_or(ExitCode::FAILURE),
+        Err(failure) => from_root.unwrap_or_else(|| {
+            let ending = mix_events::Ending::from(failure.fault()).for_root(false);
+            ExitCode::from(u8::try_from(ending.exit_code()).unwrap_or(u8::MAX))
+        }),
     }
 }
 
@@ -181,7 +190,7 @@ mod tests {
         let socket = listening(directory.path(), || RequestHost);
         let recorded = Recorded::default();
 
-        let exit = run(explain(Code::Network), &recorded.view(), &socket).await;
+        let exit = run(explain(Code::Network), &recorded.view(), &socket, None).await;
 
         assert_eq!(exit, ExitCode::SUCCESS);
         assert_eq!(
@@ -202,6 +211,7 @@ mod tests {
             explain(Code::Network),
             &recorded.view(),
             &directory.path().join("daemon.sock"),
+            None,
         )
         .await;
 
@@ -218,7 +228,7 @@ mod tests {
         drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
         let recorded = Recorded::default();
 
-        let exit = run(explain(Code::Network), &recorded.view(), &socket).await;
+        let exit = run(explain(Code::Network), &recorded.view(), &socket, None).await;
 
         assert_eq!(exit, ExitCode::FAILURE);
         assert_eq!(
@@ -236,7 +246,7 @@ mod tests {
         }));
         let recorded = Recorded::default();
 
-        let exit = run(command, &recorded.view(), &socket).await;
+        let exit = run(command, &recorded.view(), &socket, None).await;
 
         assert_eq!(exit, ExitCode::from(3));
         assert_eq!(recorded.document().exit, mix_events::exit::PROBLEMS_REMAIN);
@@ -248,9 +258,68 @@ mod tests {
         let socket = listening(directory.path(), || EndsSilently);
         let recorded = Recorded::default();
 
-        let exit = run(explain(Code::Network), &recorded.view(), &socket).await;
+        let exit = run(explain(Code::Network), &recorded.view(), &socket, None).await;
 
         assert_eq!(exit, ExitCode::FAILURE);
         assert_eq!(recorded.document().problems[0].code(), Code::WorkerEnded);
+    }
+
+    #[tokio::test]
+    async fn an_unconfirmed_removal_is_refused_before_any_daemon_is_asked() {
+        let directory = tempfile::tempdir().unwrap();
+        let command =
+            mix_events::command(Request::SelfRemove(mix_events::v1::SelfRemoveRequest {}));
+        let unconfirmed = mix_events::Fault::failed(
+            Code::ConfirmationRequired,
+            "there is no terminal to ask on and `--yes` was not given",
+            None,
+        );
+        let recorded = Recorded::default();
+
+        let exit = run(
+            command,
+            &recorded.view(),
+            &directory.path().join("daemon.sock"),
+            Some(unconfirmed),
+        )
+        .await;
+
+        assert_eq!(exit, ExitCode::from(2));
+        let document = recorded.document();
+        assert_eq!(document.command, "self remove");
+        assert_eq!(document.exit, mix_events::exit::USAGE);
+        assert_eq!(document.problems[0].code(), Code::ConfirmationRequired);
+        assert_eq!(
+            document.problems[0].title,
+            "The command needs a confirmation"
+        );
+        assert!(document.changes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_unconfirmed_removal_exits_as_a_usage_error_without_json_too() {
+        let directory = tempfile::tempdir().unwrap();
+        let command =
+            mix_events::command(Request::SelfRemove(mix_events::v1::SelfRemoveRequest {}));
+        let view = View {
+            json: Json::Off,
+            verbose: 0,
+            quiet: true,
+            exit: Exit::default(),
+        };
+
+        let exit = run(
+            command,
+            &view,
+            &directory.path().join("daemon.sock"),
+            Some(mix_events::Fault::failed(
+                Code::ConfirmationRequired,
+                "the answer was not yes",
+                None,
+            )),
+        )
+        .await;
+
+        assert_eq!(exit, ExitCode::from(2));
     }
 }

@@ -902,16 +902,24 @@ pub fn fix(
         Target::Program { path, mode, .. } => {
             let found = path_facts(facts, 0);
             match finding {
-                Finding::Mode { actual, .. } => vec![Action::SetMode {
-                    path: (*path).into(),
-                    mode: *mode,
-                    expect: actual,
-                }],
-                Finding::Owner { actual, expected } => vec![Action::SetOwner {
-                    path: (*path).into(),
-                    owner: expected,
-                    expect: actual,
-                }],
+                Finding::Mode { .. } | Finding::Owner { .. } => {
+                    let mut actions = Vec::new();
+                    if found.owner != (0, 0) {
+                        actions.push(Action::SetOwner {
+                            path: (*path).into(),
+                            owner: (0, 0),
+                            expect: found.owner,
+                        });
+                    }
+                    if found.mode != *mode {
+                        actions.push(Action::SetMode {
+                            path: (*path).into(),
+                            mode: *mode,
+                            expect: found.mode,
+                        });
+                    }
+                    actions
+                }
                 _ => vec![Action::PutFile {
                     path: (*path).into(),
                     contents: match &facts[1] {

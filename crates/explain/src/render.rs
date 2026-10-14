@@ -238,6 +238,11 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
         ))
         .note(note!("nothing was changed"))
         .help(help!("run the same command again")),
+        Code::ConfirmationRequired => Diagnostic::new(phrase!(
+            "`mix self remove` needs a confirmation and there's no terminal to ask on"
+        ))
+        .note(note!("nothing was changed"))
+        .help(help!("run it again with `--yes` to confirm")),
         Code::Usage => Diagnostic::new(phrase!("the command line isn't one `mix` understands"))
             .help(help!("run `mix help` to see the commands and their flags")),
         Code::PermissionDenied

@@ -23,6 +23,7 @@ pub enum Query {
     Strangers { path: PathBuf, owner: Owner },
     Clobbered(InvokingUser),
     Program { path: PathBuf, source: PathBuf },
+    Linked(InvokingUser),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,6 +104,7 @@ pub enum Fact {
     Stranger(Option<(PathBuf, Owner)>),
     Clobbered(Vec<PathBuf>),
     Program(ProgramFacts),
+    Linked(Vec<(PathBuf, FileId)>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

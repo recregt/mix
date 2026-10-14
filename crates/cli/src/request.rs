@@ -3,10 +3,10 @@ use mix_events::mirror::Mirror;
 use mix_events::v1::command::Request;
 use mix_events::v1::{
     BootstrapRequest, CleanRequest, Code, DoctorRequest, ExplainRequest, InstallRequest,
-    ListRequest, RemoveRequest, RepairRequest, UpdateRequest,
+    ListRequest, RemoveRequest, RepairRequest, SelfRemoveRequest, UpdateRequest,
 };
 
-use crate::args::Command;
+use crate::args::{Command, Itself};
 use crate::env::Environment;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,12 +63,13 @@ pub fn from_args(command: &Command, environment: &Environment) -> Request {
             code: code.map(|code| code as i32),
         }),
         Command::List => Request::List(ListRequest {}),
+        Command::Itself(Itself::Remove { .. }) => Request::SelfRemove(SelfRemoveRequest {}),
     }
 }
 
 pub fn route(request: &Request) -> Route {
     match request {
-        Request::Bootstrap(_) => Route::OneShot,
+        Request::Bootstrap(_) | Request::SelfRemove(_) => Route::OneShot,
         Request::Install(_)
         | Request::Remove(_)
         | Request::Clean(_)
@@ -94,8 +95,28 @@ pub fn refused(request: &Request) -> Option<Fault> {
         | Request::Update(_)
         | Request::Doctor(_)
         | Request::Explain(_)
-        | Request::List(_) => None,
+        | Request::List(_)
+        | Request::SelfRemove(_) => None,
     }
+}
+
+pub fn unconfirmed(
+    command: &Command,
+    interactive: bool,
+    ask: impl FnOnce() -> bool,
+) -> Option<Fault> {
+    let Command::Itself(Itself::Remove { yes, dry_run }) = command else {
+        return None;
+    };
+    if *yes || *dry_run {
+        return None;
+    }
+    let message = match interactive {
+        false => "there is no terminal to ask on and `--yes` was not given",
+        true if ask() => return None,
+        true => "the answer was not yes",
+    };
+    Some(Fault::failed(Code::ConfirmationRequired, message, None))
 }
 
 #[cfg(test)]
@@ -276,8 +297,45 @@ mod tests {
                 Request::Explain(ExplainRequest { code: None }),
             ),
             (Command::List, Request::List(ListRequest {})),
+            (
+                Command::Itself(Itself::Remove {
+                    yes: true,
+                    dry_run: false,
+                }),
+                Request::SelfRemove(SelfRemoveRequest {}),
+            ),
         ] {
             assert_eq!(from_args(&command, &Environment::default()), request);
         }
+    }
+
+    #[test]
+    fn a_removal_asks_on_a_terminal_and_refuses_without_one() {
+        let remove = |yes, dry_run| Command::Itself(Itself::Remove { yes, dry_run });
+        let refused = |fault: Option<Fault>| fault.and_then(|fault| fault.code());
+
+        assert_eq!(
+            refused(unconfirmed(&remove(true, false), false, || false)),
+            None
+        );
+        assert_eq!(
+            refused(unconfirmed(&remove(false, true), false, || false)),
+            None
+        );
+        assert_eq!(
+            refused(unconfirmed(&remove(false, false), true, || true)),
+            None
+        );
+        assert_eq!(
+            refused(unconfirmed(&remove(false, false), true, || false)),
+            Some(Code::ConfirmationRequired)
+        );
+        assert_eq!(
+            refused(unconfirmed(&remove(false, false), false, || panic!(
+                "asked"
+            ))),
+            Some(Code::ConfirmationRequired)
+        );
+        assert_eq!(refused(unconfirmed(&Command::List, false, || false)), None);
     }
 }

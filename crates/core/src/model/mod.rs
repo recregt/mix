@@ -110,6 +110,7 @@ pub struct World {
     pub acting_for: String,
     pub runs_as: Option<Owner>,
     pub clobbered: BTreeMap<u32, Vec<PathBuf>>,
+    pub linked: BTreeMap<u32, Vec<PathBuf>>,
     pending: BTreeMap<String, Vec<PathBuf>>,
     next_ino: u64,
 }
@@ -124,6 +125,7 @@ impl PartialEq for World {
             && self.journals == other.journals
             && self.logs == other.logs
             && self.clobbered == other.clobbered
+            && self.linked == other.linked
             && self.pending() == other.pending()
     }
 }
@@ -226,6 +228,7 @@ impl Default for World {
             acting_for: "model".to_string(),
             runs_as: None,
             clobbered: BTreeMap::new(),
+            linked: BTreeMap::new(),
             pending: BTreeMap::new(),
             next_ino: 1,
         };
@@ -1291,6 +1294,14 @@ impl World {
             Query::Clobbered(user) => {
                 Fact::Clobbered(self.clobbered.get(&user.uid).cloned().unwrap_or_default())
             }
+            Query::Linked(user) => Fact::Linked(
+                self.linked
+                    .get(&user.uid)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|path| Some((path.clone(), self.files.get(path)?.id)))
+                    .collect(),
+            ),
             Query::Unit(name) => {
                 let facts = self.units.get(name).cloned().unwrap_or_default();
                 let file = self.contents(unit_path(name)).map(Arc::from);

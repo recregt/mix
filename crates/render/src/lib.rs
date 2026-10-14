@@ -19,6 +19,7 @@ use mix_events::{Detail, Fault, ROOT, Render};
 use human::Human;
 
 pub use mix_ui::ColorChoice as Color;
+pub use mix_ui::{confirm, interactive};
 
 pub fn start(color: Color, draws_progress: bool) {
     mix_ui::set_color(color);
@@ -134,8 +135,12 @@ impl View {
             return;
         }
         if self.json.on() {
-            let mut sinks = self.sinks_to(Arc::new(mix_ui::Silent));
-            mix_events::fail(id, command.clone(), fault.clone(), &mut sinks);
+            let mut documented = Documented {
+                builder: document::Builder::default(),
+                json: self.json.clone(),
+                exit: self.exit.clone(),
+            };
+            mix_events::fail(id, command.clone(), fault.clone(), &mut documented);
         }
         let Some(request) = &command.request else {
             return;
@@ -173,6 +178,41 @@ pub struct Sinks {
     exit: Exit,
 }
 
+fn root_exit(envelope: &Envelope) -> Option<u32> {
+    match &envelope.event {
+        Some(envelope::Event::NodeFinished(finished)) if finished.id == ROOT => {
+            Some(finished.exit_code)
+        }
+        Some(
+            envelope::Event::NodeFinished(_)
+            | envelope::Event::NodeStarted(_)
+            | envelope::Event::NodeProgress(_)
+            | envelope::Event::NotRun(_)
+            | envelope::Event::Diagnostic(_),
+        )
+        | None => None,
+    }
+}
+
+struct Documented {
+    builder: document::Builder,
+    json: Json,
+    exit: Exit,
+}
+
+impl Render for Documented {
+    fn detail(&self) -> Detail {
+        Detail::Action
+    }
+
+    fn envelope(&mut self, envelope: Envelope) {
+        self.exit.saw(root_exit(&envelope));
+        if let Some(document) = self.builder.envelope(&envelope) {
+            self.json.write(document);
+        }
+    }
+}
+
 impl Render for Sinks {
     fn detail(&self) -> Detail {
         let human = self.human.detail();
@@ -183,19 +223,7 @@ impl Render for Sinks {
     }
 
     fn envelope(&mut self, envelope: Envelope) {
-        self.exit.saw(match &envelope.event {
-            Some(envelope::Event::NodeFinished(finished)) if finished.id == ROOT => {
-                Some(finished.exit_code)
-            }
-            Some(
-                envelope::Event::NodeFinished(_)
-                | envelope::Event::NodeStarted(_)
-                | envelope::Event::NodeProgress(_)
-                | envelope::Event::NotRun(_)
-                | envelope::Event::Diagnostic(_),
-            )
-            | None => None,
-        });
+        self.exit.saw(root_exit(&envelope));
         if let Some((builder, json)) = &mut self.document
             && let Some(document) = builder.envelope(&envelope)
         {
