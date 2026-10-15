@@ -347,3 +347,22 @@ fn a_repair_over_missing_heads_in_an_unreadable_refs_directory() {
         }),
     ]);
 }
+
+#[test]
+fn a_repair_over_a_swapped_commit_and_missing_heads() {
+    let commit = healthy()
+        .world
+        .branch_object(&alice())
+        .expect("mix records a commit");
+    replay(vec![
+        Transition::Damage(Breakage {
+            path: commit,
+            damage: Damage::Swapped,
+        }),
+        Transition::Damage(Breakage {
+            path: "/home/alice/.local/state/mix/.git/refs/heads".into(),
+            damage: Damage::Removed,
+        }),
+        Transition::Run(Command::Repair),
+    ]);
+}

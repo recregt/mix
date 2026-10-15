@@ -137,7 +137,11 @@ impl World {
         std::str::from_utf8(text)
             .ok()?
             .lines()
-            .filter(|line| !line.starts_with("parent ") && !line.starts_with("lost "))
+            .filter(|line| {
+                !line.starts_with("parent ")
+                    && !line.starts_with("lost ")
+                    && !line.starts_with("time ")
+            })
             .map(|line| {
                 let (name, object) = line.split_once(' ')?;
                 MANAGED_FILES
@@ -379,6 +383,8 @@ impl World {
             (None, Some(lost)) => contents.push_str(&format!("lost {lost}\n")),
             (None, None) => {}
         }
+        // A commit carries its time as git's does, so a new one never takes an old one's name.
+        contents.push_str(&format!("time {}\n", self.fresh().ino));
         contents.push_str(&listing);
         let commit = digest(contents.as_bytes());
         self.write_object(&objects.join(&commit), contents.as_bytes(), owner)?;
