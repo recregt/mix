@@ -5,7 +5,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     crane.url = "github:ipetkov/crane";
     rust-overlay = {
-      url = "github:oxalica/rust-overlay/4ca2963243427cb86bd6b4d9ca6010db0162a619";
+      url = "github:oxalica/rust-overlay/8111d2b45adcbaeaff037f996643f1ac43f944e6";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
