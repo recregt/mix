@@ -542,12 +542,28 @@ fn user_tree<'a>(
         path: Cow::Owned(repository.clone()),
         user: user(),
     };
+    let inner = REPOSITORY_DIRS.map(|name| {
+        let path = join(&repository, name);
+        (
+            path.clone(),
+            Target::Parent {
+                path: Cow::Owned(path),
+                bits: USER_PARENT_BITS,
+                owner,
+            },
+        )
+    });
     let mut deferred = Vec::new();
     if intent.runtime.is_some() {
-        deferred.extend([repo, config_file, history]);
+        deferred.extend([repo, config_file]);
+        deferred.extend(inner.into_iter().map(|(_, target)| target));
+        deferred.push(history);
     } else {
         tree.path(repository, repo);
         tree.path(config, config_file);
+        for (path, target) in inner {
+            tree.path(path, target);
+        }
         tree.up(state_node, history);
     }
     tree.path(
@@ -624,6 +640,10 @@ fn parent(tree: &mut Builder<'_>, path: &'static str, bits: u32) -> Handle {
 const STATES: &str = ".local/state";
 const USER_PARENTS: [&str; 3] = [".local", STATES, ".local/state/nix"];
 const USER_PARENT_BITS: u32 = 0o700;
+
+/// Directories git keeps its objects and branches in, which the user must be able to enter and
+/// write for any record to work.
+const REPOSITORY_DIRS: [&str; 2] = ["objects", "refs"];
 pub const NIXBLD_HOME_MODE: u32 = 0o555;
 
 fn file<'a>(tree: &mut Builder<'a>, path: &'static str, expected: &'a str) -> Handle {
@@ -1079,10 +1099,10 @@ mod tests {
     #[test]
     fn a_user_adds_exactly_their_own_checks() {
         let cfg = sample_user_config();
-        assert_eq!(user_targets(&cfg).len(), 24);
+        assert_eq!(user_targets(&cfg).len(), 26);
         assert_eq!(
             listed(Some(&cfg), default_policy()).len(),
-            listed(None, default_policy()).len() + 24
+            listed(None, default_policy()).len() + 26
         );
     }
 

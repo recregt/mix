@@ -163,6 +163,52 @@ impl Git {
             .collect())
     }
 
+    /// The managed files whose contents differ from what `HEAD` records, or that one side lacks.
+    ///
+    /// Note: Each file is hashed and compared with `HEAD`'s tree directly. The index is never read,
+    /// because every record rebuilds it, so a damaged index does not hide a changed file.
+    pub async fn changed(
+        &self,
+        user: &InvokingUser,
+        home: &mut Home<'_>,
+        state_dir: &Path,
+        scope: &Scope,
+    ) -> Result<Vec<String>> {
+        let state = state_dir.to_string_lossy();
+        let dir = ["-C", &*state];
+        let mut changed = Vec::new();
+        for file in MANAGED_FILES {
+            let path = state_dir.join(file);
+            let present = matches!(
+                home.observe(&Query::Path(path.clone()))
+                    .await
+                    .map_err(|failure| core_error(failure, &path))?,
+                Some(Fact::Path(PathFacts {
+                    kind: Kind::File,
+                    ..
+                }))
+            );
+            let hashed = match present {
+                true => {
+                    self.answered(
+                        user,
+                        &[&dir[..], &["hash-object", "--", file]].concat(),
+                        scope,
+                    )
+                    .await?
+                }
+                false => None,
+            };
+            let recorded = self
+                .found(user, &dir, &format!("HEAD:{file}"), scope)
+                .await?;
+            if hashed != recorded {
+                changed.push((*file).to_string());
+            }
+        }
+        Ok(changed)
+    }
+
     pub async fn reusable(
         &self,
         user: &InvokingUser,
@@ -296,8 +342,17 @@ impl Git {
         scope: &Scope,
     ) -> Result<Option<String>> {
         let args = [dir, &["rev-parse", "--verify", "--quiet", rev]].concat();
+        self.answered(user, &args, scope).await
+    }
+
+    async fn answered(
+        &self,
+        user: &InvokingUser,
+        args: &[&str],
+        scope: &Scope,
+    ) -> Result<Option<String>> {
         let output = self
-            .command(user, &args)
+            .command(user, args)
             .output(scope)
             .await
             .map_err(exec_error)?;

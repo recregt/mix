@@ -129,7 +129,7 @@ fn gone(failure: &Failure) -> bool {
         failure,
         Failure::Conflict { .. }
             | Failure::Io {
-                kind: std::io::ErrorKind::NotFound,
+                kind: std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory,
                 ..
             }
     )

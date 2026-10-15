@@ -68,6 +68,10 @@ pub enum Op {
         path: PathBuf,
         expect: Guess,
     },
+    Discard {
+        path: PathBuf,
+        expect: Guess,
+    },
     RemoveCreated {
         path: PathBuf,
         expect: Guess,
@@ -172,6 +176,13 @@ fn concrete(op: &Op, facts: &mut dyn FnMut(&Path) -> PathFacts, siblings: &[Path
             path,
             expect: guess,
         } => Action::SetAside {
+            path: path.clone(),
+            expect: id(*guess, &facts(path)),
+        },
+        Op::Discard {
+            path,
+            expect: guess,
+        } => Action::Discard {
             path: path.clone(),
             expect: id(*guess, &facts(path)),
         },
@@ -432,6 +443,7 @@ impl ReferenceStateMachine for FileTree {
                 }
             }),
             (path.clone(), guess.clone()).prop_map(|(path, expect)| Op::SetAside { path, expect }),
+            (path.clone(), guess.clone()).prop_map(|(path, expect)| Op::Discard { path, expect }),
             (path.clone(), guess.clone())
                 .prop_map(|(path, expect)| Op::RemoveCreated { path, expect }),
             (path.clone(), guess.clone())

@@ -321,3 +321,63 @@ fn an_update_after_a_crashed_clean_over_a_swapped_package_list() {
         Transition::Run(Command::Update),
     ]);
 }
+
+#[test]
+fn a_repair_after_an_update_crashed_and_the_local_directory_was_swapped() {
+    replay(vec![
+        Transition::Faulted(Command::Update, 1, FaultKind::CrashBefore),
+        Transition::Damage(Breakage {
+            path: "/home/alice/.local".into(),
+            damage: Damage::Swapped,
+        }),
+        Transition::Run(Command::Repair),
+    ]);
+}
+
+#[test]
+fn a_repair_over_missing_heads_in_an_unreadable_refs_directory() {
+    replay(vec![
+        Transition::Damage(Breakage {
+            path: "/home/alice/.local/state/mix/.git/refs/heads".into(),
+            damage: Damage::Removed,
+        }),
+        Transition::Damage(Breakage {
+            path: "/home/alice/.local/state/mix/.git/refs".into(),
+            damage: Damage::Unreadable,
+        }),
+    ]);
+}
+
+#[test]
+fn a_repair_over_a_swapped_commit_and_missing_heads() {
+    let commit = healthy()
+        .world
+        .branch_object(&alice())
+        .expect("mix records a commit");
+    replay(vec![
+        Transition::Damage(Breakage {
+            path: commit,
+            damage: Damage::Swapped,
+        }),
+        Transition::Damage(Breakage {
+            path: "/home/alice/.local/state/mix/.git/refs/heads".into(),
+            damage: Damage::Removed,
+        }),
+        Transition::Run(Command::Repair),
+    ]);
+}
+
+#[test]
+fn unreadable_objects_after_a_failed_repair_of_a_removed_local_directory() {
+    replay(vec![
+        Transition::Damage(Breakage {
+            path: "/home/alice/.local".into(),
+            damage: Damage::Removed,
+        }),
+        Transition::Faulted(Command::Repair, 4, FaultKind::Fail),
+        Transition::Damage(Breakage {
+            path: "/home/alice/.local/state/mix/.git/objects".into(),
+            damage: Damage::Unreadable,
+        }),
+    ]);
+}

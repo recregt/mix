@@ -59,20 +59,50 @@ pub enum Op {
 }
 
 pub fn known() -> Vec<Vec<Op>> {
-    vec![vec![
-        Op::Write {
-            file: FLAKE_NIX,
-            contents: 0,
-        },
-        Op::Record,
-        Op::Write {
-            file: FLAKE_NIX,
-            contents: 1,
-        },
-        Op::Record,
-        Op::Damage(Target::Commit, Kind::Missing),
-        Op::Record,
-    ]]
+    vec![
+        vec![
+            Op::Write {
+                file: FLAKE_NIX,
+                contents: 0,
+            },
+            Op::Record,
+            Op::Write {
+                file: FLAKE_NIX,
+                contents: 1,
+            },
+            Op::Record,
+            Op::Damage(Target::Commit, Kind::Missing),
+            Op::Record,
+        ],
+        vec![
+            Op::Write {
+                file: FLAKE_NIX,
+                contents: 2,
+            },
+            Op::Record,
+            Op::Damage(Target::Content(1), Kind::Directory),
+            Op::Write {
+                file: FLAKE_NIX,
+                contents: 1,
+            },
+            Op::Damage(Target::Index, Kind::Junk),
+        ],
+        vec![
+            Op::Record,
+            Op::Write {
+                file: FLAKE_NIX,
+                contents: 2,
+            },
+            Op::Record,
+            Op::Damage(Target::Commit, Kind::Junk),
+            Op::Record,
+            Op::Discard,
+            Op::Remove(HOME_NIX),
+            Op::Discard,
+            Op::Record,
+            Op::Damage(Target::Commit, Kind::Other),
+        ],
+    ]
 }
 
 fn user() -> InvokingUser {
@@ -280,6 +310,7 @@ impl ReferenceStateMachine for Git {
             Op::Discard => {
                 let found = state.world.files.contains_key(&repository());
                 state.remove(&repository());
+                state.commits.clear();
                 if found { "discarded" } else { "absent" }.to_string()
             }
             Op::Lock => {
@@ -665,12 +696,15 @@ impl StateMachineTest for Git {
             }
             Op::Record => real.record(&Action::RecordState { user: user() }),
             Op::Create => real.record(&Action::CreateRepository { user: user() }),
-            Op::Discard => if remove(&repository()) {
-                "discarded"
-            } else {
-                "absent"
+            Op::Discard => {
+                real.commits.clear();
+                if remove(&repository()) {
+                    "discarded"
+                } else {
+                    "absent"
+                }
+                .to_string()
             }
-            .to_string(),
             Op::Lock => {
                 if repository().is_dir() {
                     write(&repository().join(INDEX_LOCK), b"");

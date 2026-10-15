@@ -623,6 +623,8 @@ impl Files {
                 | Action::SetMode { .. }
                 | Action::SetOwner { .. }
                 | Action::SetAside { .. }
+                | Action::Discard { .. }
+                | Action::Keep { .. }
                 | Action::RemoveCreated { .. }
                 | Action::RemoveCreatedTree { .. }
                 | Action::Restore { .. }
@@ -668,6 +670,11 @@ impl Files {
                 expect,
             } => self.set_owner(path, *owner, *expect, prepared),
             Action::SetAside { path, expect } => self.set_aside(path, *expect, prepared),
+            Action::Discard { path, .. } => self.discard(path, prepared),
+            Action::Keep { path } => {
+                self.pending.retain(|pending| pending != path);
+                done(Vec::new())
+            }
             Action::RemoveCreated { path, expect } => self.remove_created(path, *expect),
             Action::RemoveCreatedTree { path, expect } => self.remove_created_tree(path, *expect),
             Action::Restore { path, from, expect } => self.restore(path, from, *expect),
@@ -908,6 +915,15 @@ impl Files {
         }
         Self::sync(&place)?;
         self.pending.push(path.with_file_name(&aside));
+        done(undo)
+    }
+
+    fn discard(&mut self, path: &Path, prepared: &mut Prepared<'_>) -> Outcome {
+        let undo = vec![Action::Keep {
+            path: path.to_path_buf(),
+        }];
+        prepared(&undo)?;
+        self.pending.push(path.to_path_buf());
         done(undo)
     }
 

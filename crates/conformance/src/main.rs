@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use mix_conformance::contract::accounts::Accounts;
 use mix_conformance::contract::files::FileTree;
 use mix_conformance::contract::git::{GIT, Git, known};
-use mix_conformance::contract::units::Units;
+use mix_conformance::contract::units::{self, Units};
 use proptest::strategy::{Strategy, ValueTree};
 use proptest::test_runner::{
     Config, FailurePersistence, FileFailurePersistence, TestError, TestRunner,
@@ -142,7 +142,7 @@ fn main() -> ExitCode {
         let result = match name.as_str() {
             "files" => suite::<FileTree>(seeds.as_deref(), name, Vec::new()),
             "accounts" => suite::<Accounts>(seeds.as_deref(), name, Vec::new()),
-            "units" => suite::<Units>(seeds.as_deref(), name, Vec::new()),
+            "units" => suite::<Units>(seeds.as_deref(), name, units::known()),
             "git" => suite::<Git>(seeds.as_deref(), name, known()),
             "nix" => mix_conformance::contract::nix::user(user.as_deref().unwrap_or_default())
                 .and_then(|user| {
