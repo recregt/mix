@@ -16,8 +16,8 @@ use super::{class, comparable, observe, perform, runtime};
 
 pub const UNITS: [&str; 2] = ["mixc-a.service", "mixc-b.service"];
 const CONTENTS: [&[u8]; 2] = [
-    b"[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n",
-    b"[Unit]\nDescription=mix contract\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n",
+    b"[Unit]\nStartLimitIntervalSec=0\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n",
+    b"[Unit]\nDescription=mix contract\nStartLimitIntervalSec=0\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +34,24 @@ pub enum Op {
     Stop(&'static str),
     Restart(&'static str),
     Drain(&'static str),
+}
+
+pub fn known() -> Vec<Vec<Op>> {
+    let unit = UNITS[0];
+    vec![vec![
+        Op::Install {
+            unit,
+            contents: 0,
+            expect: Guess::Current,
+        },
+        Op::Start(unit),
+        Op::Enable(unit),
+        Op::Restart(unit),
+        Op::Restart(unit),
+        Op::Stop(unit),
+        Op::Start(unit),
+        Op::Stop(unit),
+    ]]
 }
 
 fn file(unit: &str) -> PathBuf {
