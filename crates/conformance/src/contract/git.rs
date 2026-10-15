@@ -59,20 +59,35 @@ pub enum Op {
 }
 
 pub fn known() -> Vec<Vec<Op>> {
-    vec![vec![
-        Op::Write {
-            file: FLAKE_NIX,
-            contents: 0,
-        },
-        Op::Record,
-        Op::Write {
-            file: FLAKE_NIX,
-            contents: 1,
-        },
-        Op::Record,
-        Op::Damage(Target::Commit, Kind::Missing),
-        Op::Record,
-    ]]
+    vec![
+        vec![
+            Op::Write {
+                file: FLAKE_NIX,
+                contents: 0,
+            },
+            Op::Record,
+            Op::Write {
+                file: FLAKE_NIX,
+                contents: 1,
+            },
+            Op::Record,
+            Op::Damage(Target::Commit, Kind::Missing),
+            Op::Record,
+        ],
+        vec![
+            Op::Write {
+                file: FLAKE_NIX,
+                contents: 2,
+            },
+            Op::Record,
+            Op::Damage(Target::Content(1), Kind::Directory),
+            Op::Write {
+                file: FLAKE_NIX,
+                contents: 1,
+            },
+            Op::Damage(Target::Index, Kind::Junk),
+        ],
+    ]
 }
 
 fn user() -> InvokingUser {

@@ -898,13 +898,18 @@ impl Performer {
                     true => git.unrecorded(user, &state_dir, scope).await.ok(),
                     false => None,
                 };
-                let reusable = match &unrecorded {
-                    Some(files) if !files.is_empty() => git
-                        .reusable(user, &mut home, &state_dir, files, scope)
+                let changed = match verified {
+                    true => git
+                        .changed(user, &mut home, &state_dir, scope)
                         .await
                         .map_err(core_failure)?,
-                    _ => true,
+                    false => Vec::new(),
                 };
+                let reusable = changed.is_empty()
+                    || git
+                        .reusable(user, &mut home, &state_dir, &changed, scope)
+                        .await
+                        .map_err(core_failure)?;
                 let intact = verified && reusable;
                 Fact::Repository {
                     intact,
