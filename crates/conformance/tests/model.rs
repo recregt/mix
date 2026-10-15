@@ -366,3 +366,18 @@ fn a_repair_over_a_swapped_commit_and_missing_heads() {
         Transition::Run(Command::Repair),
     ]);
 }
+
+#[test]
+fn unreadable_objects_after_a_failed_repair_of_a_removed_local_directory() {
+    replay(vec![
+        Transition::Damage(Breakage {
+            path: "/home/alice/.local".into(),
+            damage: Damage::Removed,
+        }),
+        Transition::Faulted(Command::Repair, 4, FaultKind::Fail),
+        Transition::Damage(Breakage {
+            path: "/home/alice/.local/state/mix/.git/objects".into(),
+            damage: Damage::Unreadable,
+        }),
+    ]);
+}
