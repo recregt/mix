@@ -367,7 +367,7 @@ fn a_discarded_tree_stays_in_place_until_commit_deletes_it_or_undo_keeps_it() {
 }
 
 #[test]
-fn a_commit_asked_to_stop_keeps_what_remains_and_a_second_commit_finishes_it() {
+fn a_reclaim_asked_to_stop_keeps_its_trees_and_a_later_commit_finishes_them() {
     let mut root = root();
     for store_path in 0..20 {
         let dir = root.real(&format!("/nix/store/path{store_path}"));
@@ -381,39 +381,18 @@ fn a_commit_asked_to_stop_keeps_what_remains_and_a_second_commit_finishes_it() {
     })
     .unwrap();
 
-    let stopped = root.files.commit_stoppable(&AtomicBool::new(true));
+    let mut reclaim = root.files.detach_trees().unwrap();
+    assert!(root.files.pending().is_empty());
+    let stopped = reclaim.commit_until(&AtomicBool::new(true));
+    root.files.reattach(reclaim);
 
     assert_eq!(stopped, Err(Failure::Cancelled));
     assert_eq!(root.files.pending(), [PathBuf::from("/nix")]);
     assert!(root.real("/nix/store/path0/bin").exists());
 
-    root.apply(Action::Commit).unwrap();
-
-    assert!(!root.real("/nix").exists());
-    assert!(root.files.pending().is_empty());
-}
-
-#[test]
-fn a_detached_commit_deletes_on_its_own_and_gives_back_what_it_left() {
-    let mut root = root();
-    std::fs::create_dir_all(root.real("/nix/store/abc")).unwrap();
-    let id = root.id("/nix");
-    root.apply(Action::Discard {
-        path: "/nix".into(),
-        expect: id,
-    })
-    .unwrap();
-
-    let mut detached = root.files.detach_trees().unwrap();
-    assert!(root.files.pending().is_empty());
-    let stopped = detached.commit_stoppable(&AtomicBool::new(true));
-    assert_eq!(stopped, Err(Failure::Cancelled));
-    root.files.reattach(detached);
-    assert_eq!(root.files.pending(), [PathBuf::from("/nix")]);
-
-    let mut detached = root.files.detach_trees().unwrap();
-    detached.commit_stoppable(&AtomicBool::new(false)).unwrap();
-    root.files.reattach(detached);
+    let mut reclaim = root.files.detach_trees().unwrap();
+    reclaim.commit_until(&AtomicBool::new(false)).unwrap();
+    root.files.reattach(reclaim);
 
     assert!(!root.real("/nix").exists());
     assert!(root.files.pending().is_empty());
@@ -434,9 +413,9 @@ fn only_trees_are_detached_for_a_commit_because_a_file_costs_one_unlink() {
         .unwrap();
     }
 
-    let detached = root.files.detach_trees().unwrap();
+    let reclaim = root.files.detach_trees().unwrap();
 
-    assert_eq!(detached.pending(), [PathBuf::from("/nix")]);
+    assert_eq!(reclaim.trees, [PathBuf::from("/nix")]);
     assert_eq!(root.files.pending(), [PathBuf::from("/etc/old")]);
 }
 

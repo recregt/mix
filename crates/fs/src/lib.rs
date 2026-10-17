@@ -424,46 +424,7 @@ impl Files {
     }
 
     fn place_with(&self, path: &Path, resolve: ResolveFlags) -> Result<Place, Failure> {
-        let mut parts = Vec::new();
-        for component in path.components() {
-            match component {
-                Component::RootDir => {}
-                Component::Normal(part) => parts.push(part),
-                _ => {
-                    return Err(conflict(
-                        path,
-                        "an absolute, normalised path",
-                        "a relative one",
-                    ));
-                }
-            }
-        }
-        let name = parts
-            .pop()
-            .ok_or_else(|| conflict(path, "a path below the root", "the root itself"))?;
-        let parent: PathBuf = parts.iter().collect();
-        let parent = if parent.as_os_str().is_empty() {
-            PathBuf::from(".")
-        } else {
-            parent
-        };
-        let dir = sys::openat2(
-            &self.root,
-            &parent,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
-            Mode::empty(),
-            resolve,
-        )
-        .map_err(|errno| match errno {
-            Errno::LOOP => conflict(path, "no symbolic link on the way", "a symbolic link"),
-            errno => io(path, errno),
-        })?;
-        Ok(Place {
-            path: path.to_path_buf(),
-            dir,
-            name: name.to_os_string(),
-            held: None,
-        })
+        place_at(&self.root, path, resolve)
     }
 
     fn sibling(&mut self, place: &Place, purpose: &str) -> OsString {
@@ -703,15 +664,15 @@ impl Files {
         let place = self.take(top)?;
         let staged = self.sibling(&place, "new");
         let built = build_chain(&place.dir, &staged, top, path, mode, owner);
-        let discard = |files: &Self| {
-            let _ = files.remove_tree(&place, &staged);
+        let discard = || {
+            let _ = remove_tree(&place, &staged, &NEVER);
         };
         let created = match built.and_then(|()| {
             Self::stat(&place, &staged)?.ok_or_else(|| conflict(top, "the staged tree", "nothing"))
         }) {
             Ok(stat) => id(&stat),
             Err(failure) => {
-                discard(self);
+                discard();
                 return Err(failure);
             }
         };
@@ -720,11 +681,11 @@ impl Files {
             expect: created,
         }];
         if let Err(failure) = prepared(&undo) {
-            discard(self);
+            discard();
             return Err(failure);
         }
         if let Err(errno) = Self::rename(&place, &staged, &place.name, RenameFlags::NOREPLACE) {
-            discard(self);
+            discard();
             return Err(match errno {
                 Errno::EXIST => conflict(top, "nothing", "something already there"),
                 errno => io(top, errno),
@@ -996,7 +957,7 @@ impl Files {
             let _ = Self::rename(&place, &doomed, &place.name, RenameFlags::NOREPLACE);
             return Err(failure);
         }
-        self.remove_tree(&place, &doomed)?;
+        remove_tree(&place, &doomed, &NEVER)?;
         Self::sync(&place)?;
         done(Vec::new())
     }
@@ -1043,19 +1004,19 @@ impl Files {
         let source = self.take(from)?;
         let place = self.take(to)?;
         let staged = self.sibling(&place, "new");
-        let discard = |files: &Self| {
-            let _ = files.remove_tree(&place, &staged);
+        let discard = || {
+            let _ = remove_tree(&place, &staged, &NEVER);
         };
         if let Err(errno) = copy_tree_at(&source.dir, &source.name, &place.dir, &staged, Some(mode))
         {
-            discard(self);
+            discard();
             return Err(io(from, errno));
         }
         let copied = match Self::stat(&place, &staged) {
             Ok(Some(stat)) => id(&stat),
             Ok(None) => return Err(conflict(to, "the copy", "nothing")),
             Err(failure) => {
-                discard(self);
+                discard();
                 return Err(failure);
             }
         };
@@ -1064,11 +1025,11 @@ impl Files {
             expect: copied,
         }];
         if let Err(failure) = prepared(&undo) {
-            discard(self);
+            discard();
             return Err(failure);
         }
         if let Err(errno) = Self::rename(&place, &staged, &place.name, RenameFlags::NOREPLACE) {
-            discard(self);
+            discard();
             return Err(io(to, errno));
         }
         Self::sync(&place)?;
@@ -1108,7 +1069,7 @@ impl Files {
                     let _ = Self::rename(&place, &from_name, &place.name, RenameFlags::EXCHANGE);
                     return Err(failure);
                 }
-                self.remove_tree(&place, &from_name)?;
+                remove_tree(&place, &from_name, &NEVER)?;
             }
         }
         Self::sync(&place)?;
@@ -1126,18 +1087,18 @@ impl Files {
         let mut place = self.place_holding(path, expect)?;
         let pinned = Self::pinned(&mut place, expect)?;
         let staged = self.sibling(&place, "reclaim");
-        let discard = |files: &Self| {
-            let _ = files.remove_tree(&place, &staged);
+        let discard = || {
+            let _ = remove_tree(&place, &staged, &NEVER);
         };
         if let Err(errno) = copy_tree_at(&place.dir, &place.name, &place.dir, &staged, Some(mode)) {
-            discard(self);
+            discard();
             return Err(io(path, errno));
         }
         let copied = match Self::stat(&place, &staged) {
             Ok(Some(stat)) => id(&stat),
             Ok(None) => return Err(conflict(path, "the copy", "nothing")),
             Err(failure) => {
-                discard(self);
+                discard();
                 return Err(failure);
             }
         };
@@ -1154,21 +1115,21 @@ impl Files {
             },
         ];
         if let Err(failure) = prepared(&undo) {
-            discard(self);
+            discard();
             return Err(failure);
         }
         if let Err(errno) = Self::rename(&place, &place.name, &aside, RenameFlags::NOREPLACE) {
-            discard(self);
+            discard();
             return Err(io(path, errno));
         }
         if let Err(failure) = Self::holds(&place, &aside, &pinned) {
             let _ = Self::rename(&place, &aside, &place.name, RenameFlags::NOREPLACE);
-            discard(self);
+            discard();
             return Err(failure);
         }
         if let Err(errno) = Self::rename(&place, &staged, &place.name, RenameFlags::NOREPLACE) {
             let _ = Self::rename(&place, &aside, &place.name, RenameFlags::NOREPLACE);
-            discard(self);
+            discard();
             return Err(io(path, errno));
         }
         Self::sync(&place)?;
@@ -1184,99 +1145,22 @@ impl Files {
     }
 
     fn commit(&mut self) -> Outcome {
-        self.commit_until(&NEVER)
-    }
-
-    fn commit_until(&mut self, stop: &AtomicBool) -> Outcome {
-        let mut first = None;
-        let mut kept = Vec::new();
-        let running = running().0;
-        let mut queue = std::mem::take(&mut self.pending).into_iter();
-        while let Some(pending) = queue.next() {
-            let removed = self.place(&pending).and_then(|place| {
-                match Self::stat(&place, &place.name)? {
-                    Some(stat) if stat.stx_uid != running => {
-                        return Err(conflict(
-                            &pending,
-                            format!("something owned by uid {running}"),
-                            format!("something owned by uid {}", stat.stx_uid),
-                        ));
-                    }
-                    _ => {}
-                }
-                self.remove_tree_until(&place, &place.name, stop)?;
-                Self::sync(&place)
-            });
-            match removed {
-                Ok(()) => {}
-                Err(Failure::Cancelled) => {
-                    kept.push(pending);
-                    kept.extend(queue);
-                    self.pending = kept;
-                    return Err(Failure::Cancelled);
-                }
-                Err(failure) => {
-                    first.get_or_insert(failure);
-                    kept.push(pending);
-                }
-            }
-        }
+        let (kept, outcome) = commit_paths(&self.root, std::mem::take(&mut self.pending), &NEVER);
         self.pending = kept;
-        match first {
-            None => done(Vec::new()),
-            Some(failure) => Err(failure),
-        }
+        outcome
     }
 
-    fn is_tree(&self, path: &Path) -> bool {
-        self.place(path)
-            .ok()
-            .and_then(|place| Self::stat(&place, &place.name).ok().flatten())
-            .is_some_and(|stat| kind(&stat) == Kind::Directory)
-    }
-
-    pub fn detach_trees(&mut self) -> std::io::Result<Files> {
+    pub fn detach_trees(&mut self) -> std::io::Result<Reclaim> {
         let root = self.root.try_clone()?;
-        let (trees, rest): (Vec<PathBuf>, Vec<PathBuf>) = std::mem::take(&mut self.pending)
+        let (trees, rest) = std::mem::take(&mut self.pending)
             .into_iter()
-            .partition(|path| self.is_tree(path));
+            .partition(|path| is_tree(&self.root, path));
         self.pending = rest;
-        Ok(Files {
-            root,
-            trusted: self.trusted,
-            request: self.request.clone(),
-            pending: trees,
-            next: self.next,
-            seen: std::sync::Mutex::new(Seen::default()),
-            placed: Vec::new(),
-        })
+        Ok(Reclaim { root, trees })
     }
 
-    pub fn reattach(&mut self, detached: Files) {
-        self.pending.extend(detached.pending);
-    }
-
-    pub fn commit_stoppable(&mut self, stop: &AtomicBool) -> Outcome {
-        self.commit_until(stop)
-    }
-
-    fn remove_tree(&self, place: &Place, name: &OsStr) -> Result<(), Failure> {
-        remove_tree_at(&place.dir, name, &NEVER).map_err(|errno| io(&place.path, errno))
-    }
-
-    fn remove_tree_until(
-        &self,
-        place: &Place,
-        name: &OsStr,
-        stop: &AtomicBool,
-    ) -> Result<(), Failure> {
-        remove_tree_at(&place.dir, name, stop).map_err(|errno| {
-            if errno == Errno::INTR && stop.load(Ordering::Relaxed) {
-                Failure::Cancelled
-            } else {
-                io(&place.path, errno)
-            }
-        })
+    pub fn reattach(&mut self, reclaim: Reclaim) {
+        self.pending.extend(reclaim.trees);
     }
 
     pub fn observe(&self, query: &Query) -> Option<Fact> {
@@ -1581,6 +1465,136 @@ fn walk(root: &OwnedFd, path: &Path, within: bool) -> Option<u32> {
         );
     }
     None
+}
+
+fn place_at(root: &OwnedFd, path: &Path, resolve: ResolveFlags) -> Result<Place, Failure> {
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::RootDir => {}
+            Component::Normal(part) => parts.push(part),
+            _ => {
+                return Err(conflict(
+                    path,
+                    "an absolute, normalised path",
+                    "a relative one",
+                ));
+            }
+        }
+    }
+    let name = parts
+        .pop()
+        .ok_or_else(|| conflict(path, "a path below the root", "the root itself"))?;
+    let parent: PathBuf = parts.iter().collect();
+    let parent = if parent.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        parent
+    };
+    let dir = sys::openat2(
+        root,
+        &parent,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+        resolve,
+    )
+    .map_err(|errno| match errno {
+        Errno::LOOP => conflict(path, "no symbolic link on the way", "a symbolic link"),
+        errno => io(path, errno),
+    })?;
+    Ok(Place {
+        path: path.to_path_buf(),
+        dir,
+        name: name.to_os_string(),
+        held: None,
+    })
+}
+
+pub struct Reclaim {
+    root: OwnedFd,
+    trees: Vec<PathBuf>,
+}
+
+impl Reclaim {
+    pub fn is_empty(&self) -> bool {
+        self.trees.is_empty()
+    }
+
+    pub fn commit_until(&mut self, stop: &AtomicBool) -> Outcome {
+        let (kept, outcome) = commit_paths(&self.root, std::mem::take(&mut self.trees), stop);
+        self.trees = kept;
+        outcome
+    }
+}
+
+fn is_tree(root: &OwnedFd, path: &Path) -> bool {
+    place_at(
+        root,
+        path,
+        ResolveFlags::NO_SYMLINKS | ResolveFlags::BENEATH,
+    )
+    .ok()
+    .and_then(|place| Files::stat(&place, &place.name).ok().flatten())
+    .is_some_and(|stat| kind(&stat) == Kind::Directory)
+}
+
+fn commit_paths(
+    root: &OwnedFd,
+    pending: Vec<PathBuf>,
+    stop: &AtomicBool,
+) -> (Vec<PathBuf>, Outcome) {
+    let mut first = None;
+    let mut kept = Vec::new();
+    let running = running().0;
+    let mut queue = pending.into_iter();
+    while let Some(path) = queue.next() {
+        let removed = place_at(
+            root,
+            &path,
+            ResolveFlags::NO_SYMLINKS | ResolveFlags::BENEATH,
+        )
+        .and_then(|place| {
+            match Files::stat(&place, &place.name)? {
+                Some(stat) if stat.stx_uid != running => {
+                    return Err(conflict(
+                        &path,
+                        format!("something owned by uid {running}"),
+                        format!("something owned by uid {}", stat.stx_uid),
+                    ));
+                }
+                _ => {}
+            }
+            remove_tree(&place, &place.name, stop)?;
+            Files::sync(&place)
+        });
+        match removed {
+            Ok(()) => {}
+            Err(Failure::Cancelled) => {
+                kept.push(path);
+                kept.extend(queue);
+                return (kept, Err(Failure::Cancelled));
+            }
+            Err(failure) => {
+                first.get_or_insert(failure);
+                kept.push(path);
+            }
+        }
+    }
+    let outcome = match first {
+        None => done(Vec::new()),
+        Some(failure) => Err(failure),
+    };
+    (kept, outcome)
+}
+
+fn remove_tree(place: &Place, name: &OsStr, stop: &AtomicBool) -> Result<(), Failure> {
+    remove_tree_at(&place.dir, name, stop).map_err(|errno| {
+        if errno == Errno::INTR && stop.load(Ordering::Relaxed) {
+            Failure::Cancelled
+        } else {
+            io(&place.path, errno)
+        }
+    })
 }
 
 fn remove_tree_at(dir: &OwnedFd, name: &OsStr, stop: &AtomicBool) -> Result<(), Errno> {
