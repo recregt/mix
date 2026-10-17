@@ -1029,7 +1029,7 @@ fn a_warning_without_words_of_its_own_is_a_bug_and_its_producers_words_are_the_c
     );
 }
 
-fn purged(request: Request) -> Vec<Envelope> {
+fn committed(reclaims: bool) -> Vec<Envelope> {
     let outbox = Arc::new(Outbox::new("01920000-0000-7000-8000-000000000007", || {}));
     let mut tree = Tree::new(
         Arc::clone(&outbox),
@@ -1040,31 +1040,29 @@ fn purged(request: Request) -> Vec<Envelope> {
                 mix_version: "0.1.0".into(),
                 schema_minor: mix_events::SCHEMA_MINOR,
                 dry_run: false,
-                request: Some(request),
+                request: Some(Request::Purge(mix_events::v1::PurgeRequest::default())),
             },
         ),
     );
     let plan = tree
         .start(ROOT, start(Kind::Plan(Plan::default()), "plan"))
         .unwrap();
-    let removing = tree
-        .start(
-            plan,
-            start(step(Verb::Removing, "build users and groups"), "step"),
-        )
-        .unwrap();
-    let delete = tree
-        .start(
-            removing,
-            start(action(Operation::DeleteGroup, "nixbld"), "delete"),
-        )
-        .unwrap();
-    tree.finish(delete, Ending::succeeded()).unwrap();
-    tree.finish(removing, Ending::succeeded()).unwrap();
+    let parent = if reclaims {
+        tree.start(plan, start(step(Verb::Reclaiming, "disk space"), "reclaim"))
+            .unwrap()
+    } else {
+        plan
+    };
     let commit = tree
-        .start(plan, start(action(Operation::Commit, "changes"), "commit"))
+        .start(
+            parent,
+            start(action(Operation::Commit, "changes"), "commit"),
+        )
         .unwrap();
     tree.finish(commit, Ending::succeeded()).unwrap();
+    if reclaims {
+        tree.finish(parent, Ending::succeeded()).unwrap();
+    }
     tree.finish(plan, Ending::succeeded()).unwrap();
     tree.finish(ROOT, Ending::succeeded()).unwrap();
     drop(tree);
@@ -1072,17 +1070,17 @@ fn purged(request: Request) -> Vec<Envelope> {
 }
 
 #[test]
-fn only_a_purge_shows_the_final_deletion_because_it_is_the_one_that_takes_long() {
-    let purge = purged(Request::Purge(mix_events::v1::PurgeRequest::default()));
-    let install = purged(Request::Install(InstallRequest::default()));
-    for envelopes in [&purge, &install] {
+fn a_reclaim_step_is_shown_and_a_bare_commit_is_not() {
+    let reclaimed = committed(true);
+    let bare = committed(false);
+    for envelopes in [&reclaimed, &bare] {
         mix_events::validate(envelopes.iter()).unwrap();
     }
 
-    let purge = rendered(&captured(&purge).1, Detail::Step);
-    let install = rendered(&captured(&install).1, Detail::Step);
+    let reclaimed = rendered(&captured(&reclaimed).1, Detail::Step);
+    let bare = rendered(&captured(&bare).1, Detail::Step);
 
-    assert!(purge.contains("Reclaiming disk space"), "{purge}");
-    assert!(!install.contains("Reclaiming"), "{install}");
-    assert!(!install.contains("Committing"), "{install}");
+    assert!(reclaimed.contains("Reclaiming disk space"), "{reclaimed}");
+    assert!(!bare.contains("Reclaiming"), "{bare}");
+    assert!(!bare.contains("Committing"), "{bare}");
 }

@@ -112,6 +112,7 @@ enum Verb {
   VERB_REPAIRING = 9;
   VERB_RECOVERING = 10;
   VERB_UPDATING = 11;
+  VERB_RECLAIMING = 12;
 }
 
 message Rollback {
