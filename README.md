@@ -75,6 +75,7 @@ You need a Linux machine with systemd, on x86_64 or aarch64, and `sudo` for the 
    ```sh
    sha256sum -c mix-x86_64-linux.tar.gz.sha256
    tar -xzf mix-x86_64-linux.tar.gz
+   cd mix-x86_64-linux
    ```
 
 2. See what setup would do, then do it. The setup asks for administrator rights once.
