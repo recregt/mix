@@ -27,7 +27,7 @@ NixOS avoids all of that by making Nix the whole system, but most people can't o
 
 ## What using it looks like
 
-You run one setup command as an administrator. After that, everything happens as your own user and no `sudo` is involved:
+Setting up and removing `mix` need administrator rights. Day-to-day commands run as your own user and never ask for `sudo`:
 
 - `mix install` and `mix remove` change your package list.
 - `mix list` shows what you have.
@@ -38,7 +38,7 @@ Your packages belong to you alone. Another user on the same machine has their ow
 
 ### You can see what changed
 
-Your configuration is a small git repository at `~/.local/state/mix`. Every `mix` command that changes it leaves a commit, so `git log` there tells you what changed and when. You never have to edit it, but you can read it.
+Your configuration is a small git repository at `~/.local/state/mix`. Every `mix` command that changes it leaves a commit, so `git log -p` there shows what changed and when. You never have to edit it, but you can read it.
 
 ### It recovers from failure
 
@@ -78,14 +78,20 @@ You need a Linux machine with systemd, on x86_64 or aarch64, and `sudo` for the 
    cd mix-x86_64-linux
    ```
 
-2. See what setup would do, then do it. The setup asks for administrator rights once.
+2. Put both programs on your `PATH`. `mix` finds `mix-daemon` next to itself, so they go in the same directory.
 
    ```sh
-   ./mix bootstrap --dry-run
-   ./mix bootstrap
+   sudo install -m 0755 mix mix-daemon /usr/local/bin/
    ```
 
-3. Bootstrap ends by printing one command that makes your installed packages visible in the shell you are already in. Run it, then install something.
+3. See what setup would do, then do it. The setup asks for administrator rights once. It downloads Nix, so on a clean machine it can take several minutes.
+
+   ```sh
+   mix bootstrap --dry-run
+   mix bootstrap
+   ```
+
+4. Bootstrap ends by printing one command that makes your installed packages visible in the shell you are already in. Run it, then install something.
 
    ```sh
    source /etc/profile.d/mix-nix.sh
@@ -95,7 +101,7 @@ You need a Linux machine with systemd, on x86_64 or aarch64, and `sudo` for the 
 
    New terminal sessions pick the packages up on their own. The `source` line is only for the session you ran `bootstrap` in.
 
-4. When you are done looking around:
+5. When you are done looking around:
 
    ```sh
    mix self remove
@@ -132,7 +138,7 @@ The privileged part stays small on purpose, and it is the part [SECURITY.md](SEC
 
 | Path | What it holds |
 |---|---|
-| `/usr/local/bin/mix`, `/usr/local/bin/mix-daemon` | The programs. |
+| `/usr/local/bin/mix`, `/usr/local/bin/mix-daemon` | The programs, where you installed them. |
 | `/nix` | The Nix store and its state. |
 | `/etc/mix/policy.json` | Machine-wide settings, such as the mirror. |
 | `/etc/nix/nix.conf`, `/etc/profile.d/mix-nix.sh` | Nix configuration and the shell setup that puts your profile on `PATH`. |
