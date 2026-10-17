@@ -1084,3 +1084,81 @@ fn a_reclaim_step_is_shown_and_a_bare_commit_is_not() {
     assert!(!bare.contains("Reclaiming"), "{bare}");
     assert!(!bare.contains("Committing"), "{bare}");
 }
+
+fn left(others: &[&str]) -> Vec<Envelope> {
+    let outbox = Arc::new(Outbox::new("01920000-0000-7000-8000-000000000008", || {}));
+    let mut tree = Tree::new(
+        Arc::clone(&outbox),
+        Arc::new(|| None),
+        Start::command(
+            "user remove",
+            Command {
+                mix_version: "0.1.0".into(),
+                schema_minor: mix_events::SCHEMA_MINOR,
+                dry_run: false,
+                request: Some(Request::UserRemove(
+                    mix_events::v1::UserRemoveRequest::default(),
+                )),
+            },
+        ),
+    );
+    tree.finish(
+        ROOT,
+        Ending::succeeded().with_result(node_finished::Result::UserRemove(
+            mix_events::v1::UserRemoveResult {
+                user: "alice".into(),
+                others: others.iter().map(|name| (*name).to_string()).collect(),
+            },
+        )),
+    )
+    .unwrap();
+    drop(tree);
+    outbox.drain()
+}
+
+#[test]
+fn a_user_who_leaves_learns_who_still_uses_mix_and_how_to_remove_it_for_everyone() {
+    let shared = rendered(&captured(&left(&["bob", "carol"])).1, Detail::Step);
+    let alone = rendered(&captured(&left(&[])).1, Detail::Step);
+
+    assert!(shared.contains("bob, carol still use `mix`"), "{shared}");
+    assert!(shared.contains("`sudo mix purge`"), "{shared}");
+    assert!(
+        alone.contains("no one else on this machine uses `mix`"),
+        "{alone}"
+    );
+    assert!(alone.contains("`sudo mix purge`"), "{alone}");
+    assert_eq!(rendered(&captured(&left(&[])).1, Detail::Outcome), "");
+}
+
+#[test]
+fn a_purge_reminds_that_open_terminals_still_load_nix() {
+    let outbox = Arc::new(Outbox::new("01920000-0000-7000-8000-000000000009", || {}));
+    let mut tree = Tree::new(
+        Arc::clone(&outbox),
+        Arc::new(|| None),
+        Start::command(
+            "purge",
+            Command {
+                mix_version: "0.1.0".into(),
+                schema_minor: mix_events::SCHEMA_MINOR,
+                dry_run: false,
+                request: Some(Request::Purge(mix_events::v1::PurgeRequest::default())),
+            },
+        ),
+    );
+    tree.finish(
+        ROOT,
+        Ending::succeeded().with_result(node_finished::Result::Purge(
+            mix_events::v1::PurgeResult {
+                users: vec!["alice".into()],
+            },
+        )),
+    )
+    .unwrap();
+    drop(tree);
+
+    let text = rendered(&captured(&outbox.drain()).1, Detail::Step);
+
+    assert!(text.contains("exec $SHELL -l"), "{text}");
+}
