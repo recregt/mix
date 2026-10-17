@@ -302,12 +302,26 @@ impl Real {
     }
 }
 
+fn ours(fact: Fact) -> Vec<(String, UserFacts)> {
+    let Fact::Accounts(mut found) = fact else {
+        panic!("an accounts query answered {fact:?}");
+    };
+    found.retain(|(name, _)| USERS.contains(&name.as_str()));
+    found.sort_by(|a, b| a.0.cmp(&b.0));
+    found
+}
+
 fn same(world: &World, real: &mut Real, after: &str) {
     for query in queries() {
         let expected = comparable(world.observe(&query));
         let found = real.ask(&query);
         assert_eq!(expected, found, "{query:?} after {after}");
     }
+    assert_eq!(
+        ours(world.observe(&Query::Accounts)),
+        ours(real.ask(&Query::Accounts)),
+        "the accounts after {after}"
+    );
 }
 
 impl StateMachineTest for Accounts {

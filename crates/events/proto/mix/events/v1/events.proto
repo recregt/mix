@@ -245,6 +245,7 @@ message Observation {
     string clobbered = 25;
     string program = 26;
     string linked = 27;
+    bool accounts = 28;
   }
   oneof fact {
     PathFact path_fact = 10;
@@ -261,6 +262,7 @@ message Observation {
     PathsFact clobbered_fact = 21;
     ProgramFact program_fact = 30;
     PathsFact linked_fact = 31;
+    AccountsFact accounts_fact = 32;
   }
 }
 
@@ -283,6 +285,10 @@ message PathFact {
   optional FileIdentity id = 6;
   bytes digest = 7;
   optional google.protobuf.Timestamp changed = 8;
+}
+
+message AccountsFact {
+  repeated string names = 1;
 }
 
 message FileIdentity {

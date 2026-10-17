@@ -238,6 +238,10 @@ impl Prediction {
                 self.touched.contains(&Subject::Profile(user.clone()))
             }
             Query::Linked(user) => near(&user.home),
+            Query::Accounts => self
+                .touched
+                .iter()
+                .any(|subject| matches!(subject, Subject::User(_))),
             Query::Journals(_) => false,
         }
     }
@@ -899,6 +903,7 @@ impl Performer {
     async fn observe_one(&mut self, query: &Query, scope: &Scope) -> Result<Fact, Failure> {
         Ok(match query {
             Query::Unit(unit) => Fact::Unit(self.units().await?.observe(unit).await?),
+            Query::Accounts => Fact::Accounts(identity::accounts(scope).await?),
             Query::Repository(user) => {
                 let repository = repository_dir(&user.home);
                 let config = self

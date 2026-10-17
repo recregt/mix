@@ -1224,6 +1224,12 @@ impl World {
             Query::Contents(path) => Fact::Contents(self.contents(path).map(Arc::from)),
             Query::Group(name) => Fact::Group(self.groups.get(name).cloned()),
             Query::User(name) => Fact::User(self.users.get(name).cloned()),
+            Query::Accounts => Fact::Accounts(
+                self.users
+                    .iter()
+                    .map(|(name, user)| (name.clone(), user.clone()))
+                    .collect(),
+            ),
             Query::TreeOwner(path) => Fact::TreeOwner(self.tree_owner(path).map(|owner| owner.0)),
             Query::Repository(user) => Fact::Repository {
                 intact: self.usable(user) && self.verifies(user) && self.reusable(user),

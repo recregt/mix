@@ -85,6 +85,7 @@ fn query_of(query: &Query) -> observation::Query {
         Query::Clobbered(user) => Wire::Clobbered(user.name.clone()),
         Query::Program { path: at, .. } => Wire::Program(path(at)),
         Query::Linked(user) => Wire::Linked(user.name.clone()),
+        Query::Accounts => Wire::Accounts(true),
     }
 }
 
@@ -194,6 +195,9 @@ fn fact_of(fact: &Fact) -> observation::Fact {
                 .iter()
                 .map(|(at, _)| at.display().to_string())
                 .collect(),
+        }),
+        Fact::Accounts(found) => Wire::AccountsFact(mix_events::v1::AccountsFact {
+            names: found.iter().map(|(name, _)| name.clone()).collect(),
         }),
     }
 }
