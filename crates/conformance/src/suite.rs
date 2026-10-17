@@ -16,7 +16,7 @@ use proptest::sample::select;
 use proptest_state_machine::{ReferenceStateMachine, StateMachineTest};
 use serde_json::Value;
 
-use crate::model::Model;
+use crate::model::{Model, alice, bob, pristine_for};
 
 pub const PACKAGES: [&str; 3] = ["hello", "jq", "ripgrep"];
 
@@ -28,8 +28,30 @@ pub enum Command {
     Repair,
     Update,
     List,
-    Leave,
+    Leave(Who),
     Purge,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Who {
+    Alice,
+    Bob,
+}
+
+impl Who {
+    pub fn user(self) -> InvokingUser {
+        match self {
+            Who::Alice => alice(),
+            Who::Bob => bob(),
+        }
+    }
+
+    fn other(self) -> Who {
+        match self {
+            Who::Alice => Who::Bob,
+            Who::Bob => Who::Alice,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,17 +96,24 @@ impl Command {
             Command::Repair => (repair(), true),
             Command::Update => (update(), false),
             Command::List => (list(), false),
-            Command::Leave => (Request::UserRemove(UserRemoveRequest {}), false),
+            Command::Leave(_) => (Request::UserRemove(UserRemoveRequest {}), false),
             Command::Purge => (purge(), true),
         }
     }
 
     fn transactional(self) -> bool {
-        self.atomic() || self.ends()
+        self.atomic() || matches!(self, Command::Leave(_) | Command::Purge)
     }
 
     pub fn ends(self) -> bool {
-        matches!(self, Command::Leave | Command::Purge)
+        matches!(self, Command::Leave(Who::Alice) | Command::Purge)
+    }
+
+    fn who(self) -> InvokingUser {
+        match self {
+            Command::Leave(who) => who.user(),
+            _ => alice(),
+        }
     }
 
     fn effectful(self) -> bool {
@@ -304,10 +333,17 @@ pub fn healthy() -> &'static Healthy {
     static HEALTHY: OnceLock<Healthy> = OnceLock::new();
     HEALTHY.get_or_init(|| {
         runtime().block_on(async {
-            let model = Model::new();
+            let model = Model::on(
+                pristine_for(&[alice(), bob()]),
+                alice(),
+                mix_core::declared::policy::Policy::new(None, None)
+                    .expect("the default policy is valid"),
+            );
             let pristine = model.snapshot();
-            let bootstrapped = model.run(bootstrap(), false, true).await;
-            assert!(succeeded(&bootstrapped), "{bootstrapped:#}");
+            for user in [alice(), bob()] {
+                let bootstrapped = model.run_as(bootstrap(), false, true, &user).await;
+                assert!(succeeded(&bootstrapped), "{bootstrapped:#}");
+            }
             let world = model.snapshot();
             Healthy {
                 owned: owned(&pristine, &world).into(),
@@ -370,6 +406,10 @@ fn stale_units(world: &World) -> Vec<String> {
                 _ => None,
             };
             unit.loaded.as_ref() != on_disk
+                || unit
+                    .running
+                    .as_ref()
+                    .is_some_and(|running| Some(running) != unit.loaded.as_ref())
         })
         .map(|(name, _)| name.clone())
         .collect()
@@ -388,7 +428,10 @@ fn without_units(mut world: World, stale: &[String]) -> World {
 async fn faulted(model: &Model, command: Command, at: usize, kind: FaultKind) -> Vec<String> {
     let (request, as_root) = command.request();
     let before = model.snapshot();
-    let Some(done) = model.faulted(request, as_root, at, kind).await else {
+    let Some(done) = model
+        .faulted_as(request, as_root, &command.who(), at, kind)
+        .await
+    else {
         return Vec::new();
     };
     let mut found = Vec::new();
@@ -423,13 +466,29 @@ async fn ran(model: &Model, command: Command) -> Vec<String> {
     let mut found = Vec::new();
     let before = (command == Command::List).then(|| model.snapshot());
     let store = Path::new(mix_core::declared::paths::NIX_STORE);
-    let had_store = model.snapshot().files.contains_key(store);
+    let had_store = {
+        let world = model.snapshot();
+        world.logs.is_empty() && world.files.contains_key(store)
+    };
     let listed_before = match command {
         Command::Update => Some(model.run(list(), false, false).await),
         _ => None,
     };
-    let predicted = model.run(request.clone(), true, as_root).await;
-    let done = model.run(request, false, as_root).await;
+    let other = match command {
+        Command::Leave(who) => Some(who.other().user()),
+        _ => None,
+    };
+    let other_before = other.as_ref().and_then(|other| {
+        let world = model.snapshot();
+        world
+            .logs
+            .is_empty()
+            .then(|| (enrolled(&world, other), has_state(&world, other)))
+    });
+    let predicted = model
+        .run_as(request.clone(), true, as_root, &command.who())
+        .await;
+    let done = model.run_as(request, false, as_root, &command.who()).await;
     if changes(&predicted) != changes(&done) {
         found.push(format!(
             "predicted {:?} but made {:?}",
@@ -529,15 +588,26 @@ async fn ran(model: &Model, command: Command) -> Vec<String> {
             }
         }
     }
-    if command == Command::Leave && succeeded(&done) {
-        if enrolled(&world, model.user()) {
+    if let Command::Leave(who) = command
+        && succeeded(&done)
+    {
+        if enrolled(&world, &who.user()) {
             found.push("a user who left is still in mix-users".to_string());
         }
-        if has_state(&world, model.user()) {
+        if has_state(&world, &who.user()) {
             found.push("a user who left still has a mix state".to_string());
         }
         if had_store && !world.files.contains_key(store) {
             found.push("a user leaving took the store with them".to_string());
+        }
+    }
+    if let (Some(other), Some(before)) = (&other, other_before) {
+        let after = (enrolled(&world, other), has_state(&world, other));
+        if after != before {
+            found.push(format!(
+                "a user leaving changed {} from {before:?} to {after:?}",
+                other.name
+            ));
         }
     }
     if command == Command::Purge && succeeded(&done) {
@@ -575,7 +645,7 @@ async fn departed(model: &Model, command: Command) -> Vec<String> {
         }
     }
     let world = model.snapshot();
-    if command == Command::Leave && enrolled(&world, model.user()) {
+    if command == Command::Leave(Who::Alice) && enrolled(&world, model.user()) {
         let again = model
             .run(Request::UserRemove(UserRemoveRequest {}), false, false)
             .await;
@@ -597,7 +667,7 @@ async fn departed(model: &Model, command: Command) -> Vec<String> {
         found.push(format!("left pending {:?}", world.pending()));
     }
     match command {
-        Command::Leave => {
+        Command::Leave(_) => {
             if enrolled(&world, model.user()) || has_state(&world, model.user()) {
                 found.push("the user could not leave".to_string());
             }
@@ -630,6 +700,28 @@ async fn finale(model: &Model) -> Vec<String> {
     found
 }
 
+type Standing = (bool, bool);
+
+fn standing(world: &World, user: &InvokingUser) -> Standing {
+    (enrolled(world, user), has_state(world, user))
+}
+
+fn interrupted_leave(model: &Model, interrupted: &[(InvokingUser, Standing)]) -> Vec<String> {
+    let world = model.snapshot();
+    interrupted
+        .iter()
+        .filter_map(|(user, before)| {
+            let now = standing(&world, user);
+            (now != *before && now != (false, false)).then(|| {
+                format!(
+                    "an interrupted leave left {} at {now:?}, neither as before {before:?} nor gone",
+                    user.name
+                )
+            })
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone)]
 pub struct Spec {
     pub owned: Arc<[PathBuf]>,
@@ -646,7 +738,8 @@ fn command() -> impl Strategy<Value = Command> {
         Just(Command::Repair),
         Just(Command::Update),
         Just(Command::List),
-        Just(Command::Leave),
+        Just(Command::Leave(Who::Alice)),
+        Just(Command::Leave(Who::Bob)),
         Just(Command::Purge),
     ]
 }
@@ -693,6 +786,10 @@ impl ReferenceStateMachine for Mix {
         .boxed()
     }
 
+    fn preconditions(state: &Spec, transition: &Transition) -> bool {
+        !state.ended || *transition == Transition::Run(Command::List)
+    }
+
     fn apply(mut state: Spec, transition: &Transition) -> Spec {
         state.ended |= ending(transition).is_some();
         state
@@ -704,6 +801,7 @@ pub struct System {
     model: Model,
     found: Vec<String>,
     ended: Option<Command>,
+    interrupted: Vec<(InvokingUser, Standing)>,
 }
 
 impl StateMachineTest for Mix {
@@ -718,6 +816,7 @@ impl StateMachineTest for Mix {
             model,
             found: Vec::new(),
             ended: None,
+            interrupted: Vec::new(),
         }
     }
 
@@ -728,10 +827,24 @@ impl StateMachineTest for Mix {
                 Transition::Run(command) => ran(model, *command).await,
                 Transition::Damage(breakage) => {
                     breakage.apply(&mut model.world.lock().unwrap_or_else(|e| e.into_inner()));
+                    system
+                        .interrupted
+                        .retain(|(user, _)| !breakage.path.starts_with(&user.home));
                     Vec::new()
                 }
                 Transition::Faulted(command, at, kind) => {
-                    faulted(model, *command, *at, *kind).await
+                    system.interrupted.clear();
+                    let world = model.snapshot();
+                    let before = standing(&world, &command.who());
+                    let settled = world.logs.is_empty();
+                    let found = faulted(model, *command, *at, *kind).await;
+                    if matches!(command, Command::Leave(_))
+                        && settled
+                        && !model.snapshot().logs.is_empty()
+                    {
+                        system.interrupted.push((command.who(), before));
+                    }
+                    found
                 }
                 Transition::Advance => {
                     model.upstream().advance();
@@ -744,6 +857,15 @@ impl StateMachineTest for Mix {
                 .into_iter()
                 .map(|found| format!("{transition:?}: {found}")),
         );
+        if !system.interrupted.is_empty() && system.model.snapshot().logs.is_empty() {
+            let recovered = interrupted_leave(&system.model, &system.interrupted);
+            system.found.extend(
+                recovered
+                    .into_iter()
+                    .map(|found| format!("{transition:?}: {found}")),
+            );
+            system.interrupted.clear();
+        }
         if system.ended.is_none() {
             system.ended = ending(&transition);
         }
@@ -756,10 +878,12 @@ impl StateMachineTest for Mix {
 
     fn teardown(system: System, _: Spec) {
         let found = system.runtime.block_on(async {
-            match system.ended {
+            let mut found = match system.ended {
                 Some(command) => departed(&system.model, command).await,
                 None => finale(&system.model).await,
-            }
+            };
+            found.extend(interrupted_leave(&system.model, &system.interrupted));
+            found
         });
         assert!(found.is_empty(), "{}", found.join("\n"));
     }
