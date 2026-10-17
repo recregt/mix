@@ -34,6 +34,54 @@ fn user(name: &str) -> Option<UserFacts> {
     })
 }
 
+pub async fn accounts(scope: &Scope) -> Result<Vec<(String, UserFacts)>, Failure> {
+    let output = root_command("getent")?
+        .arg("passwd")
+        .output(scope)
+        .await
+        .map_err(|error| match error {
+            mix_exec::Error::Cancelled { .. } => Failure::Cancelled,
+            _ => Failure::SpawnFailed {
+                program: "getent".to_string(),
+                kind: std::io::ErrorKind::Other,
+            },
+        })?;
+    if !output.status.success() {
+        return Err(Failure::CommandFailed {
+            program: "getent".to_string(),
+            status: output.status.code(),
+            output_tail: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        });
+    }
+    Ok(passwd(&String::from_utf8_lossy(&output.stdout)))
+}
+
+fn passwd(listing: &str) -> Vec<(String, UserFacts)> {
+    listing
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split(':');
+            let name = fields.next()?.to_string();
+            let _password = fields.next()?;
+            let uid = fields.next()?.parse().ok()?;
+            let gid = fields.next()?.parse().ok()?;
+            let comment = fields.next()?.to_string();
+            let home = fields.next()?.into();
+            let shell = fields.next()?.into();
+            Some((
+                name,
+                UserFacts {
+                    uid,
+                    gid,
+                    home,
+                    shell,
+                    comment,
+                },
+            ))
+        })
+        .collect()
+}
+
 struct System;
 
 impl Accounts for System {

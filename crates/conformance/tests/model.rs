@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use mix_conformance::model::{Model, alice};
 use mix_conformance::suite::{
-    Command, FaultKind, Mix, Spec, Transition, bootstrap, doctor, findings, healthy, install,
+    Command, FaultKind, Mix, Spec, Transition, Who, bootstrap, doctor, findings, healthy, install,
     repair, succeeded, violations,
 };
 use mix_core::model::World;
@@ -165,6 +165,7 @@ fn replay(transitions: Vec<Transition>) {
         ProptestConfig::default(),
         Spec {
             owned: Arc::clone(owned),
+            ended: false,
         },
         transitions,
         None,
@@ -379,5 +380,55 @@ fn unreadable_objects_after_a_failed_repair_of_a_removed_local_directory() {
             path: "/home/alice/.local/state/mix/.git/objects".into(),
             damage: Damage::Unreadable,
         }),
+    ]);
+}
+
+#[test]
+fn a_failed_purge_over_an_emptied_unit_is_rolled_back() {
+    replay(vec![
+        Transition::Damage(Breakage {
+            path: "/etc/systemd/system/mix-daemon.service".into(),
+            damage: Damage::Emptied,
+        }),
+        Transition::Faulted(Command::Purge, 5, FaultKind::Fail),
+    ]);
+}
+
+#[test]
+fn a_purge_after_a_purge_it_cannot_roll_back_leaves_no_journal() {
+    replay(vec![
+        Transition::Damage(Breakage {
+            path: "/etc/systemd/system/mix-daemon.socket".into(),
+            damage: Damage::Removed,
+        }),
+        Transition::Faulted(Command::Purge, 4, FaultKind::CrashBefore),
+    ]);
+}
+
+#[test]
+fn a_purge_after_an_interrupted_leave_removes_the_user_recovery_restores() {
+    replay(vec![
+        Transition::Faulted(Command::Leave(Who::Bob), 2, FaultKind::CrashAfter),
+        Transition::Run(Command::Purge),
+    ]);
+}
+
+#[test]
+fn a_failed_purge_after_a_failed_repair_of_an_emptied_runtime_unit_is_rolled_back() {
+    replay(vec![
+        Transition::Damage(Breakage {
+            path: "/nix/var/nix/profiles/default/lib/systemd/system/nix-daemon.socket".into(),
+            damage: Damage::Emptied,
+        }),
+        Transition::Faulted(Command::Repair, 2, FaultKind::Fail),
+        Transition::Faulted(Command::Purge, 9, FaultKind::Fail),
+    ]);
+}
+
+#[test]
+fn a_purge_clears_a_user_whose_failed_recovery_lost_their_membership() {
+    replay(vec![
+        Transition::Faulted(Command::Leave(Who::Bob), 2, FaultKind::CrashAfter),
+        Transition::Faulted(Command::Purge, 0, FaultKind::Fail),
     ]);
 }

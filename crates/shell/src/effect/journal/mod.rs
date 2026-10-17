@@ -27,6 +27,7 @@ fn io(path: &Path, error: std::io::Error) -> Failure {
 pub struct FileJournal {
     file: Flock<File>,
     path: PathBuf,
+    ended: bool,
 }
 
 impl FileJournal {
@@ -46,7 +47,11 @@ impl FileJournal {
             .map_err(|error| io(&path, error))?;
         let file = Flock::lock(file, FlockArg::LockExclusiveNonblock)
             .map_err(|(_, errno)| io(&path, errno.into()))?;
-        let mut journal = Self { file, path };
+        let mut journal = Self {
+            file,
+            path,
+            ended: false,
+        };
         journal.append(&Record::Began {
             request: request.to_string(),
         })?;
@@ -55,6 +60,9 @@ impl FileJournal {
 
     #[allow(clippy::disallowed_methods)]
     pub fn finish(self) -> Result<(), Failure> {
+        if !self.ended {
+            return Ok(());
+        }
         std::fs::remove_file(&self.path).map_err(|error| io(&self.path, error))
     }
 }
@@ -66,7 +74,9 @@ impl Journal for FileJournal {
         self.file
             .write_all(&line)
             .and_then(|()| self.file.sync_data())
-            .map_err(|error| io(&self.path, error))
+            .map_err(|error| io(&self.path, error))?;
+        self.ended = *record == Record::Ended;
+        Ok(())
     }
 }
 
@@ -364,7 +374,14 @@ impl RequestJournal {
         match self {
             RequestJournal::File(journal) => journal.finish(),
             RequestJournal::Model(journal) => {
-                lock(&journal.world).logs.remove(&journal.request);
+                let mut world = lock(&journal.world);
+                if world
+                    .logs
+                    .get(&journal.request)
+                    .is_none_or(|log| log.last() == Some(&Record::Ended))
+                {
+                    world.logs.remove(&journal.request);
+                }
                 Ok(())
             }
         }

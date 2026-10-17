@@ -166,6 +166,7 @@ enum Phase {
     },
     Committing {
         awaiting: bool,
+        reclaim: Option<NodeId>,
     },
     Closing,
     Closed,
@@ -322,7 +323,7 @@ impl Runner {
 
     fn shielded(&self) -> bool {
         match &self.phase {
-            Phase::RollingBack { .. } | Phase::Committing { .. } => true,
+            Phase::RollingBack { .. } | Phase::Committing { reclaim: None, .. } => true,
             Phase::Executing { step, .. } => self.steps[*step].shielded(),
             _ => false,
         }
@@ -599,20 +600,62 @@ impl Runner {
                         awaiting: false,
                     };
                 }
-                Phase::Committing { awaiting: false } => {
-                    self.phase = Phase::Committing { awaiting: true };
-                    return self.act(tree, self.plan, Action::Commit);
+                Phase::Committing {
+                    awaiting: false, ..
+                } => {
+                    let reclaim = self.reclaims().then(|| {
+                        tree.start(
+                            self.plan,
+                            Start::new(
+                                "reclaim",
+                                Kind::Step(Step {
+                                    verb: Verb::Reclaiming as i32,
+                                    subject: "disk space".to_string(),
+                                }),
+                            ),
+                        )
+                        .expect("the plan is running")
+                    });
+                    self.phase = Phase::Committing {
+                        awaiting: true,
+                        reclaim,
+                    };
+                    return self.act(tree, reclaim.unwrap_or(self.plan), Action::Commit);
                 }
-                Phase::Committing { awaiting: true } => {
+                Phase::Committing {
+                    awaiting: true,
+                    reclaim,
+                } => {
                     let Some(Input::Done(outcome)) = input.take() else {
                         panic!("the commit is answered with its outcome");
                     };
                     self.acted(tree, &outcome, self.stop);
-                    if let Err(failure) = outcome {
-                        tree.warn(self.plan, diagnostic(&failure))
-                            .expect("the plan is running");
+                    if let Some(node) = reclaim {
+                        let ending = match &outcome {
+                            Ok(_) => Ending::succeeded(),
+                            Err(Failure::Cancelled) => {
+                                Ending::cancelled(self.stop.unwrap_or(Cancellation::Interrupted))
+                            }
+                            Err(failure) => Ending::failed(diagnostic(failure)),
+                        };
+                        finish(tree, node, ending);
                     }
-                    self.verdict.get_or_insert(Verdict::Succeeded);
+                    match outcome {
+                        Err(Failure::Cancelled) => {
+                            let cause = *self.stop.get_or_insert(Cancellation::Interrupted);
+                            if matches!(self.verdict, None | Some(Verdict::Succeeded)) {
+                                self.verdict = Some(Verdict::Cancelled(cause));
+                            }
+                        }
+                        Err(failure) => {
+                            tree.warn(self.plan, diagnostic(&failure))
+                                .expect("the plan is running");
+                            self.verdict.get_or_insert(Verdict::Succeeded);
+                        }
+                        Ok(_) => {
+                            self.verdict.get_or_insert(Verdict::Succeeded);
+                        }
+                    }
                     self.phase = Phase::Closing;
                 }
                 Phase::Closing => {
@@ -656,11 +699,22 @@ impl Runner {
         }
     }
 
+    fn reclaims(&self) -> bool {
+        self.journal
+            .iter()
+            .flatten()
+            .flatten()
+            .any(|undo| matches!(undo, Action::Keep { .. }))
+    }
+
     fn finish_or_commit(&mut self) {
         self.phase = if self.journal.iter().all(Vec::is_empty) {
             Phase::Closing
         } else {
-            Phase::Committing { awaiting: false }
+            Phase::Committing {
+                awaiting: false,
+                reclaim: None,
+            }
         };
     }
 

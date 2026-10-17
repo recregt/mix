@@ -138,7 +138,8 @@ impl Shape {
             | node_finished::Result::Explain(_)
             | node_finished::Result::List(_)
             | node_finished::Result::Update(_)
-            | node_finished::Result::SelfRemove(_) => self == Shape::Command,
+            | node_finished::Result::UserRemove(_)
+            | node_finished::Result::Purge(_) => self == Shape::Command,
         }
     }
 }

@@ -7,13 +7,13 @@ mod session;
 
 use std::process::ExitCode;
 
-use args::{Args, Color};
+use args::{Args, Color, Command};
 
 pub async fn run() -> ExitCode {
     let args = Args::parse_with_color();
     let environment = env::Environment::read();
     let command = request::command_of(&args.command, args.dry_run(), &environment);
-    let view = mix_render::View {
+    let view = |preview| mix_render::View {
         json: if args.json {
             mix_render::Json::Stdout
         } else {
@@ -22,6 +22,8 @@ pub async fn run() -> ExitCode {
         verbose: args.verbose,
         quiet: args.quiet,
         exit: mix_render::Exit::default(),
+        departure: mix_render::Departure::default(),
+        preview,
     };
     mix_render::start(
         match args.color {
@@ -31,16 +33,39 @@ pub async fn run() -> ExitCode {
         },
         args.draws_progress(environment.ci),
     );
-    let unconfirmed = request::unconfirmed(
-        &args.command,
-        !args.json && mix_render::interactive(),
-        || mix_render::confirm("This removes `mix`, Nix and every user's `mix` state. Continue?"),
-    );
-    session::run(
-        command,
-        &view,
-        std::path::Path::new(mix_rpc::SOCKET_PATH),
-        unconfirmed,
-    )
-    .await
+    let interactive = !args.json && mix_render::interactive();
+    let socket = std::path::Path::new(mix_rpc::SOCKET_PATH);
+    let first = view(false);
+    let exit = match request::confirmation(&args.command, interactive, mix_render::confirm) {
+        request::Confirmation::Given => session::run(command, &first, socket, None).await,
+        request::Confirmation::Refused(fault) => {
+            session::run(command, &first, socket, Some(fault)).await
+        }
+        request::Confirmation::AfterThePlan => {
+            let plan = request::command_of(&args.command, true, &environment);
+            let planned = session::run(plan, &view(true), socket, None).await;
+            if planned != ExitCode::SUCCESS {
+                return planned;
+            }
+            let answer = (!mix_render::confirm(request::PURGE_QUESTION))
+                .then(|| request::refusal("the answer was not yes"));
+            session::run(command, &first, socket, answer).await
+        }
+    };
+    if exit == ExitCode::SUCCESS
+        && interactive
+        && request::leaves_the_machine(&args.command, first.departure.others())
+        && mix_render::confirm("Remove Nix from this machine as well?")
+    {
+        let purge = request::command_of(
+            &Command::Purge {
+                yes: true,
+                dry_run: false,
+            },
+            false,
+            &environment,
+        );
+        return session::run(purge, &view(false), socket, None).await;
+    }
+    exit
 }

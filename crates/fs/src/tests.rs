@@ -367,6 +367,59 @@ fn a_discarded_tree_stays_in_place_until_commit_deletes_it_or_undo_keeps_it() {
 }
 
 #[test]
+fn a_reclaim_asked_to_stop_keeps_its_trees_and_a_later_commit_finishes_them() {
+    let mut root = root();
+    for store_path in 0..20 {
+        let dir = root.real(&format!("/nix/store/path{store_path}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("bin"), "x").unwrap();
+    }
+    let id = root.id("/nix");
+    root.apply(Action::Discard {
+        path: "/nix".into(),
+        expect: id,
+    })
+    .unwrap();
+
+    let mut reclaim = root.files.detach_trees().unwrap();
+    assert!(root.files.pending().is_empty());
+    let stopped = reclaim.commit_until(&AtomicBool::new(true));
+    root.files.reattach(reclaim);
+
+    assert_eq!(stopped, Err(Failure::Cancelled));
+    assert_eq!(root.files.pending(), [PathBuf::from("/nix")]);
+    assert!(root.real("/nix/store/path0/bin").exists());
+
+    let mut reclaim = root.files.detach_trees().unwrap();
+    reclaim.commit_until(&AtomicBool::new(false)).unwrap();
+    root.files.reattach(reclaim);
+
+    assert!(!root.real("/nix").exists());
+    assert!(root.files.pending().is_empty());
+}
+
+#[test]
+fn only_trees_are_detached_for_a_commit_because_a_file_costs_one_unlink() {
+    let mut root = root();
+    std::fs::create_dir_all(root.real("/nix/store/abc")).unwrap();
+    std::fs::write(root.real("/etc/old"), "x").unwrap();
+    let tree = root.id("/nix");
+    let file = root.id("/etc/old");
+    for (path, id) in [("/nix", tree), ("/etc/old", file)] {
+        root.apply(Action::Discard {
+            path: path.into(),
+            expect: id,
+        })
+        .unwrap();
+    }
+
+    let reclaim = root.files.detach_trees().unwrap();
+
+    assert_eq!(reclaim.trees, [PathBuf::from("/nix")]);
+    assert_eq!(root.files.pending(), [PathBuf::from("/etc/old")]);
+}
+
+#[test]
 fn a_tree_that_changed_since_it_was_seen_is_not_discarded() {
     let mut root = root();
     std::fs::create_dir(root.real("/var/old")).unwrap();

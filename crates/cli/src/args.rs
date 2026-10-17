@@ -141,14 +141,25 @@ pub enum Command {
         list: bool,
     },
 
-    /// Manage `mix` itself
-    #[command(name = "self", subcommand)]
-    Itself(Itself),
+    /// Remove `mix` and Nix from this machine, for every user
+    Purge {
+        /// Remove without asking first
+        #[arg(short, long)]
+        yes: bool,
+
+        /// Show what would change without changing it
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+    },
+
+    /// Manage `mix` for your own account
+    #[command(subcommand)]
+    User(User),
 }
 
 #[derive(Subcommand)]
-pub enum Itself {
-    /// Remove `mix`, Nix and every user's `mix` state from this machine
+pub enum User {
+    /// Remove `mix` and Nix from your account
     Remove {
         /// Remove without asking first
         #[arg(short, long)]
@@ -272,7 +283,8 @@ impl Args {
             | Command::Clean { dry_run, .. }
             | Command::Update { dry_run }
             | Command::Repair { dry_run }
-            | Command::Itself(Itself::Remove { dry_run, .. }) => dry_run,
+            | Command::Purge { dry_run, .. }
+            | Command::User(User::Remove { dry_run, .. }) => dry_run,
             Command::Doctor | Command::Explain { .. } | Command::List => false,
         }
     }
@@ -348,8 +360,8 @@ mod tests {
             (&["mix", "update"], false),
             (&["mix", "repair", "-n"], true),
             (&["mix", "bootstrap", "-n"], true),
-            (&["mix", "self", "remove", "-n"], true),
-            (&["mix", "self", "remove", "--yes"], false),
+            (&["mix", "user", "remove", "-n"], true),
+            (&["mix", "user", "remove", "--yes"], false),
             (&["mix", "install", "hello"], false),
         ] {
             assert_eq!(parse(args).dry_run(), dry_run, "{args:?}");

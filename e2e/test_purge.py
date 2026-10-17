@@ -33,7 +33,7 @@ def _links_into_nix(container, user: str) -> str:
 
 
 @pytest.mark.bootstrapped
-def test_a_removal_leaves_no_trace_of_mix_on_the_machine_or_in_any_home(
+def test_a_purge_leaves_no_trace_of_mix_on_the_machine_or_in_any_home(
     container, mock_nix_server, mirror_cache
 ):
     create_user(container, SECOND_USER, sudo=True)
@@ -43,11 +43,11 @@ def test_a_removal_leaves_no_trace_of_mix_on_the_machine_or_in_any_home(
         assert installed.succeeded(), installed
         assert _links_into_nix(container, user), f"{user} has nothing linked into /nix"
 
-    removed = container.mix("self", "remove", "--yes", user=FIRST_USER)
+    removed = container.mix("purge", "--yes", user=FIRST_USER)
 
     assert removed.succeeded(), removed
-    assert removed.document["command"] == "self remove"
-    assert sorted(removed.result("selfRemove")["users"]) == sorted([FIRST_USER, SECOND_USER])
+    assert removed.document["command"] == "purge"
+    assert sorted(removed.result("purge")["users"]) == sorted([FIRST_USER, SECOND_USER])
     assert set(removed.warnings) <= {"CODE_CLEANUP_INCOMPLETE"}, removed.warnings
     left = [path for path in MACHINE_PATHS if _exists(container, path)]
     assert left == [], left
@@ -64,8 +64,8 @@ def test_a_removal_leaves_no_trace_of_mix_on_the_machine_or_in_any_home(
 
 
 @pytest.mark.bootstrapped
-def test_a_removal_without_a_terminal_or_yes_is_refused_and_changes_nothing(container):
-    refused = container.mix("self", "remove", user=FIRST_USER)
+def test_a_purge_without_a_terminal_or_yes_is_refused_and_changes_nothing(container):
+    refused = container.mix("purge", user=FIRST_USER)
 
     assert refused.returncode == 2, refused
     assert refused.code == "CODE_CONFIRMATION_REQUIRED", refused
@@ -75,8 +75,8 @@ def test_a_removal_without_a_terminal_or_yes_is_refused_and_changes_nothing(cont
 
 
 @pytest.mark.bootstrapped
-def test_a_dry_run_of_a_removal_lists_the_changes_and_makes_none(container):
-    planned = container.mix("self", "remove", "--dry-run", user=FIRST_USER)
+def test_a_dry_run_of_a_purge_lists_the_changes_and_makes_none(container):
+    planned = container.mix("purge", "--dry-run", user=FIRST_USER)
 
     assert planned.succeeded(), planned
     assert planned.document["dryRun"], planned
@@ -99,3 +99,49 @@ def test_a_dry_run_of_a_removal_lists_the_changes_and_makes_none(container):
         assert _exists(container, path), path
     doctor = container.mix("doctor", user=FIRST_USER)
     assert doctor.succeeded(), doctor
+
+
+@pytest.mark.bootstrapped
+def test_a_purge_on_a_terminal_shows_the_daemons_plan_with_every_home_before_asking(
+    container, mock_nix_server, mirror_cache
+):
+    create_user(container, SECOND_USER, sudo=True)
+    bootstrap_as(container, SECOND_USER, mock_nix_server, mirror_cache)
+
+    run = container.exec(
+        "sh",
+        "-c",
+        "printf 'n\\n' | script -qec 'sudo mix purge' /dev/null",
+        user=FIRST_USER,
+    )
+
+    asked = run.stdout.index("Make these changes to this machine? [y/N]")
+    planned = run.stdout[:asked]
+    assert f"/home/{FIRST_USER}" in planned, run
+    assert f"/home/{SECOND_USER}" in planned, run
+    assert "without `--dry-run`" not in planned, run
+    assert run.returncode != 0, run
+    for path in ("/nix/store", NIX_CONF_DEST, *UNIT_FILES):
+        assert _exists(container, path), path
+
+
+@pytest.mark.bootstrapped
+def test_a_purge_stopped_while_reclaiming_is_finished_by_the_next_purge(container):
+    purge = container.mix_background("purge", "--yes", user=FIRST_USER)
+    client = purge.pid()
+    container.exec(
+        "sh",
+        "-c",
+        "until grep -qs committing /var/lib/mix/journal/*.ndjson "
+        f"|| ! kill -0 {client} 2>/dev/null; do :; done; kill -INT {client}",
+        check=True,
+    )
+
+    stopped = purge.wait()
+
+    assert stopped.status == "STATUS_CANCELLED", stopped
+    assert _exists(container, "/var/lib/mix/journal"), stopped
+    finished = container.mix("purge", "--yes", user=FIRST_USER)
+    assert finished.succeeded(), finished
+    left = [path for path in MACHINE_PATHS if _exists(container, path)]
+    assert left == [], left

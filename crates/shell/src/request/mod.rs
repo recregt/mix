@@ -339,7 +339,8 @@ fn changes_the_profile(request: &command::Request) -> bool {
         command::Request::Doctor(_)
         | command::Request::Explain(_)
         | command::Request::List(_)
-        | command::Request::SelfRemove(_) => false,
+        | command::Request::UserRemove(_)
+        | command::Request::Purge(_) => false,
     }
 }
 
@@ -502,9 +503,15 @@ pub async fn run(session: &Session, command: Command) {
             })
             .await
         }
-        command::Request::SelfRemove(_) => {
+        command::Request::UserRemove(_) => {
             host(session, &request, dry_run, None, async |ctx, root| {
-                crate::ops::self_remove::self_remove(ctx, root).await
+                crate::ops::user_remove::user_remove(ctx, root).await
+            })
+            .await
+        }
+        command::Request::Purge(_) => {
+            host(session, &request, dry_run, None, async |ctx, root| {
+                crate::ops::purge::purge(ctx, root).await
             })
             .await
         }
@@ -529,6 +536,45 @@ pub(crate) mod ran {
         fn detail(&self) -> mix_events::Detail {
             mix_events::Detail::Trace
         }
+    }
+
+    pub(crate) fn machine_of(
+        users: &[mix_core::declared::identity::InvokingUser],
+    ) -> Arc<Mutex<mix_core::model::World>> {
+        let mut world = mix_core::model::World::default();
+        for user in users {
+            world.with_dir(&user.home, 0o700, (user.uid, user.gid));
+            world.users.insert(
+                user.name.clone(),
+                mix_core::effect::UserFacts {
+                    uid: user.uid,
+                    gid: user.gid,
+                    home: user.home.clone(),
+                    shell: "/bin/sh".into(),
+                    comment: String::new(),
+                },
+            );
+        }
+        world.with_file(
+            mix_core::declared::paths::RUNNING_PROGRAM,
+            b"mix-daemon",
+            0o755,
+            (0, 0),
+        );
+        Arc::new(Mutex::new(world))
+    }
+
+    pub(crate) fn caller(
+        world: &Arc<Mutex<mix_core::model::World>>,
+        peer_is_root: bool,
+        account: Option<mix_core::declared::identity::InvokingUser>,
+    ) -> crate::Session {
+        crate::Session::new(mix_exec::Scope::root())
+            .with_host(crate::request::context::Host::Model(Arc::clone(world)))
+            .with_caller(crate::Caller::Account {
+                peer_is_root,
+                account,
+            })
     }
 
     pub(crate) struct Ran(pub(crate) Vec<Envelope>);

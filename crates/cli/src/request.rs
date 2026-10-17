@@ -3,10 +3,10 @@ use mix_events::mirror::Mirror;
 use mix_events::v1::command::Request;
 use mix_events::v1::{
     BootstrapRequest, CleanRequest, Code, DoctorRequest, ExplainRequest, InstallRequest,
-    ListRequest, RemoveRequest, RepairRequest, SelfRemoveRequest, UpdateRequest,
+    ListRequest, PurgeRequest, RemoveRequest, RepairRequest, UpdateRequest, UserRemoveRequest,
 };
 
-use crate::args::{Command, Itself};
+use crate::args::{Command, User};
 use crate::env::Environment;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,13 +63,14 @@ pub fn from_args(command: &Command, environment: &Environment) -> Request {
             code: code.map(|code| code as i32),
         }),
         Command::List => Request::List(ListRequest {}),
-        Command::Itself(Itself::Remove { .. }) => Request::SelfRemove(SelfRemoveRequest {}),
+        Command::Purge { .. } => Request::Purge(PurgeRequest {}),
+        Command::User(User::Remove { .. }) => Request::UserRemove(UserRemoveRequest {}),
     }
 }
 
 pub fn route(request: &Request) -> Route {
     match request {
-        Request::Bootstrap(_) | Request::SelfRemove(_) => Route::OneShot,
+        Request::Bootstrap(_) | Request::Purge(_) => Route::OneShot,
         Request::Install(_)
         | Request::Remove(_)
         | Request::Clean(_)
@@ -77,7 +78,8 @@ pub fn route(request: &Request) -> Route {
         | Request::Update(_)
         | Request::Doctor(_)
         | Request::Explain(_)
-        | Request::List(_) => Route::Socket,
+        | Request::List(_)
+        | Request::UserRemove(_) => Route::Socket,
     }
 }
 
@@ -96,27 +98,52 @@ pub fn refused(request: &Request) -> Option<Fault> {
         | Request::Doctor(_)
         | Request::Explain(_)
         | Request::List(_)
-        | Request::SelfRemove(_) => None,
+        | Request::UserRemove(_)
+        | Request::Purge(_) => None,
     }
 }
 
-pub fn unconfirmed(
+pub enum Confirmation {
+    Given,
+    Refused(Fault),
+    AfterThePlan,
+}
+
+pub const PURGE_QUESTION: &str = "Make these changes to this machine?";
+
+pub fn confirmation(
     command: &Command,
     interactive: bool,
-    ask: impl FnOnce() -> bool,
-) -> Option<Fault> {
-    let Command::Itself(Itself::Remove { yes, dry_run }) = command else {
-        return None;
+    ask: impl FnOnce(&str) -> bool,
+) -> Confirmation {
+    let (yes, dry_run) = match command {
+        Command::User(User::Remove { yes, dry_run }) | Command::Purge { yes, dry_run } => {
+            (*yes, *dry_run)
+        }
+        _ => return Confirmation::Given,
     };
-    if *yes || *dry_run {
-        return None;
+    if yes || dry_run {
+        return Confirmation::Given;
     }
-    let message = match interactive {
-        false => "there is no terminal to ask on and `--yes` was not given",
-        true if ask() => return None,
-        true => "the answer was not yes",
-    };
-    Some(Fault::failed(Code::ConfirmationRequired, message, None))
+    if !interactive {
+        return Confirmation::Refused(refusal(
+            "there is no terminal to ask on and `--yes` was not given",
+        ));
+    }
+    match command {
+        Command::Purge { .. } => Confirmation::AfterThePlan,
+        _ if ask("This removes `mix` and Nix from your account. Continue?") => Confirmation::Given,
+        _ => Confirmation::Refused(refusal("the answer was not yes")),
+    }
+}
+
+pub fn refusal(message: &str) -> Fault {
+    Fault::failed(Code::ConfirmationRequired, message, None)
+}
+
+pub fn leaves_the_machine(command: &Command, others: Option<Vec<String>>) -> bool {
+    matches!(command, Command::User(User::Remove { dry_run: false, .. }))
+        && others.is_some_and(|others| others.is_empty())
 }
 
 #[cfg(test)]
@@ -188,10 +215,22 @@ mod tests {
     }
 
     #[test]
-    fn only_bootstrap_asks_for_sudo() {
+    fn only_bootstrap_and_purge_ask_for_sudo() {
         let bootstrap = from_args(&bootstrap(None, None), &Environment::default());
         assert_eq!(route(&bootstrap), Route::OneShot);
+        let purge = from_args(
+            &Command::Purge {
+                yes: true,
+                dry_run: false,
+            },
+            &Environment::default(),
+        );
+        assert_eq!(route(&purge), Route::OneShot);
         for command in [
+            Command::User(User::Remove {
+                yes: true,
+                dry_run: false,
+            }),
             Command::Doctor,
             Command::Repair { dry_run: false },
             Command::Update { dry_run: false },
@@ -298,44 +337,96 @@ mod tests {
             ),
             (Command::List, Request::List(ListRequest {})),
             (
-                Command::Itself(Itself::Remove {
+                Command::User(User::Remove {
                     yes: true,
                     dry_run: false,
                 }),
-                Request::SelfRemove(SelfRemoveRequest {}),
+                Request::UserRemove(UserRemoveRequest {}),
+            ),
+            (
+                Command::Purge {
+                    yes: true,
+                    dry_run: false,
+                },
+                Request::Purge(PurgeRequest {}),
             ),
         ] {
             assert_eq!(from_args(&command, &Environment::default()), request);
         }
     }
 
+    fn refusal_code(confirmation: Confirmation) -> Option<Code> {
+        match confirmation {
+            Confirmation::Refused(fault) => fault.code(),
+            Confirmation::Given | Confirmation::AfterThePlan => None,
+        }
+    }
+
     #[test]
     fn a_removal_asks_on_a_terminal_and_refuses_without_one() {
-        let remove = |yes, dry_run| Command::Itself(Itself::Remove { yes, dry_run });
-        let refused = |fault: Option<Fault>| fault.and_then(|fault| fault.code());
+        let remove = |yes, dry_run| Command::User(User::Remove { yes, dry_run });
 
         assert_eq!(
-            refused(unconfirmed(&remove(true, false), false, || false)),
+            refusal_code(confirmation(&remove(true, false), false, |_| false)),
             None
         );
         assert_eq!(
-            refused(unconfirmed(&remove(false, true), false, || false)),
+            refusal_code(confirmation(&remove(false, true), false, |_| false)),
             None
         );
         assert_eq!(
-            refused(unconfirmed(&remove(false, false), true, || true)),
+            refusal_code(confirmation(&remove(false, false), true, |_| true)),
             None
         );
         assert_eq!(
-            refused(unconfirmed(&remove(false, false), true, || false)),
+            refusal_code(confirmation(&remove(false, false), true, |_| false)),
             Some(Code::ConfirmationRequired)
         );
         assert_eq!(
-            refused(unconfirmed(&remove(false, false), false, || panic!(
+            refusal_code(confirmation(&remove(false, false), false, |_| panic!(
                 "asked"
             ))),
             Some(Code::ConfirmationRequired)
         );
-        assert_eq!(refused(unconfirmed(&Command::List, false, || false)), None);
+        assert_eq!(
+            refusal_code(confirmation(&Command::List, false, |_| false)),
+            None
+        );
+    }
+
+    #[test]
+    fn a_purge_shows_the_daemons_plan_before_it_asks_and_never_asks_by_itself() {
+        let purge = |yes, dry_run| Command::Purge { yes, dry_run };
+        let asked = |_: &str| -> bool { panic!("the client must not ask before the plan") };
+
+        assert!(matches!(
+            confirmation(&purge(false, false), true, asked),
+            Confirmation::AfterThePlan
+        ));
+        assert!(matches!(
+            confirmation(&purge(true, false), true, asked),
+            Confirmation::Given
+        ));
+        assert!(matches!(
+            confirmation(&purge(false, true), true, asked),
+            Confirmation::Given
+        ));
+        assert_eq!(
+            refusal_code(confirmation(&purge(false, false), false, asked)),
+            Some(Code::ConfirmationRequired)
+        );
+    }
+
+    #[test]
+    fn only_the_last_user_to_leave_is_offered_the_machine() {
+        let remove = |dry_run| Command::User(User::Remove { yes: true, dry_run });
+        let alone = Some(Vec::new());
+        let shared = Some(vec!["bob".to_string()]);
+
+        assert!(leaves_the_machine(&remove(false), alone.clone()));
+        assert!(!leaves_the_machine(&remove(false), shared));
+        assert!(!leaves_the_machine(&remove(false), None));
+        assert!(!leaves_the_machine(&remove(true), alone));
+        assert!(!leaves_the_machine(&Command::List, None));
     }
 }

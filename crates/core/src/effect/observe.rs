@@ -24,6 +24,7 @@ pub enum Query {
     Clobbered(InvokingUser),
     Program { path: PathBuf, source: PathBuf },
     Linked(InvokingUser),
+    Accounts,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,6 +106,7 @@ pub enum Fact {
     Clobbered(Vec<PathBuf>),
     Program(ProgramFacts),
     Linked(Vec<(PathBuf, FileId)>),
+    Accounts(Vec<(String, UserFacts)>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

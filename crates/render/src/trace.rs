@@ -22,6 +22,7 @@ fn query(query: &observation::Query) -> (&'static str, &str) {
         Query::Clobbered(name) => ("files in the way for", name),
         Query::Program(path) => ("running program against", path),
         Query::Linked(name) => ("files mix linked into the home of", name),
+        Query::Accounts(_) => ("accounts on", "this machine"),
     }
 }
 
@@ -114,6 +115,8 @@ fn fact(out: &mut String, fact: &observation::Fact) {
             Some(path) => write!(out, "{path} owned by {}:{}", stranger.uid, stranger.gid),
             None => write!(out, "none"),
         },
+        Fact::AccountsFact(found) if found.names.is_empty() => write!(out, "none"),
+        Fact::AccountsFact(found) => write!(out, "{}", found.names.join(", ")),
     };
 }
 

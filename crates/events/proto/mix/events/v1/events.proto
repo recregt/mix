@@ -51,7 +51,8 @@ message Command {
     ExplainRequest explain = 16;
     ListRequest list = 17;
     UpdateRequest update = 18;
-    SelfRemoveRequest self_remove = 19;
+    UserRemoveRequest user_remove = 19;
+    PurgeRequest purge = 20;
   }
 }
 
@@ -63,7 +64,9 @@ message ListRequest {}
 
 message UpdateRequest {}
 
-message SelfRemoveRequest {}
+message UserRemoveRequest {}
+
+message PurgeRequest {}
 
 message BootstrapRequest {
   bool force = 1;
@@ -109,6 +112,7 @@ enum Verb {
   VERB_REPAIRING = 9;
   VERB_RECOVERING = 10;
   VERB_UPDATING = 11;
+  VERB_RECLAIMING = 12;
 }
 
 message Rollback {
@@ -241,6 +245,7 @@ message Observation {
     string clobbered = 25;
     string program = 26;
     string linked = 27;
+    bool accounts = 28;
   }
   oneof fact {
     PathFact path_fact = 10;
@@ -257,6 +262,7 @@ message Observation {
     PathsFact clobbered_fact = 21;
     ProgramFact program_fact = 30;
     PathsFact linked_fact = 31;
+    AccountsFact accounts_fact = 32;
   }
 }
 
@@ -279,6 +285,10 @@ message PathFact {
   optional FileIdentity id = 6;
   bytes digest = 7;
   optional google.protobuf.Timestamp changed = 8;
+}
+
+message AccountsFact {
+  repeated string names = 1;
 }
 
 message FileIdentity {
@@ -448,7 +458,8 @@ message NodeFinished {
     ExplainResult explain = 18;
     ListResult list = 19;
     UpdateResult update = 20;
-    SelfRemoveResult self_remove = 21;
+    UserRemoveResult user_remove = 21;
+    PurgeResult purge = 22;
   }
 }
 
@@ -548,7 +559,12 @@ message UpdateResult {
   optional ActiveGeneration active = 4;
 }
 
-message SelfRemoveResult {
+message UserRemoveResult {
+  string user = 1;
+  repeated string others = 2;
+}
+
+message PurgeResult {
   repeated string users = 1;
 }
 

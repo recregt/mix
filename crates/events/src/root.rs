@@ -21,7 +21,8 @@ pub fn key_of(request: Option<&Request>) -> &'static str {
         Some(Request::Explain(_)) => "explain",
         Some(Request::List(_)) => "list",
         Some(Request::Update(_)) => "update",
-        Some(Request::SelfRemove(_)) => "self remove",
+        Some(Request::UserRemove(_)) => "user remove",
+        Some(Request::Purge(_)) => "purge",
         None => "command",
     }
 }

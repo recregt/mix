@@ -27,7 +27,7 @@ NixOS avoids all of that by making Nix the whole system, but most people can't o
 
 ## What using it looks like
 
-Setting up and removing `mix` need administrator rights. Day-to-day commands run as your own user and never ask for `sudo`:
+Setting up `mix` and removing it from the whole machine need administrator rights. Everything else, including leaving on your own, runs as your own user and never asks for `sudo`:
 
 - `mix install` and `mix remove` change your package list.
 - `mix list` shows what you have.
@@ -58,13 +58,21 @@ mix explain --list
 ### It leaves when you ask
 
 ```sh
-mix self remove
+mix user remove
 ```
 
-This removes `mix`, Nix and every user's `mix` state, and asks for confirmation first. The point of the tool is that trying it is not a one-way decision.
+This removes `mix` from your account and leaves everyone else's alone. It needs no `sudo` and asks for confirmation first. When you are the last user on the machine, it then offers to remove Nix from the machine as well.
+
+To remove `mix` and Nix for everyone, an administrator runs:
+
+```sh
+sudo mix purge
+```
+
+The point of the tool is that trying it is not a one-way decision.
 
 > [!CAUTION]
-> `mix self remove` removes the `mix` state of every user on the machine, not only yours. Run it with `--dry-run` first to see what goes.
+> `mix purge` removes the `mix` state of every user on the machine, not only yours. The confirmation names each enrolled user. It also clears `mix` state left in the home of a former user, and `--dry-run` shows everything that goes before anything does.
 
 ## Try it
 
@@ -101,10 +109,10 @@ You need a Linux machine with systemd, on x86_64 or aarch64, and `sudo` for the 
 
    New terminal sessions pick the packages up on their own. The `source` line is only for the session you ran `bootstrap` in.
 
-5. When you are done looking around:
+5. When you are done looking around, leave. If you are the only user, it offers to remove Nix from the machine too.
 
    ```sh
-   mix self remove
+   mix user remove
    ```
 
    Terminal sessions opened before the removal still load Nix. `exec $SHELL -l` starts one without it.
@@ -175,7 +183,8 @@ mix bootstrap --mirror https://mirror.example.com --mirror-key <public key>
 | `mix doctor` | Check the health of the system. |
 | `mix repair` | Repair configuration drift. |
 | `mix explain [code]` | Describe a failure code, or list them all with `--list`. |
-| `mix self remove` | Remove `mix`, Nix and every user's state. |
+| `mix user remove` | Remove `mix` from your account, with no `sudo`. |
+| `mix purge` | Remove `mix`, Nix and every user's state from the machine. |
 
 Every command accepts `-v`, `-q`, `--json`, `--no-progress` and `--color`. Commands that change something also accept `--dry-run`. Package commands can't run as root. Run them as your own user.
 

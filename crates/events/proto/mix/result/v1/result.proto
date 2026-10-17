@@ -22,13 +22,14 @@ message Result {
     mix.events.v1.ExplainResult explain = 16;
     mix.events.v1.ListResult list = 17;
     mix.events.v1.UpdateResult update = 18;
-    mix.events.v1.SelfRemoveResult self_remove = 19;
+    mix.events.v1.UserRemoveResult user_remove = 19;
+    mix.events.v1.PurgeResult purge = 20;
   }
-  repeated Change changes = 20;
-  repeated Problem problems = 21;
-  repeated Problem warnings = 22;
-  repeated StepResult steps = 23;
-  repeated mix.events.v1.LockWait waits = 24;
+  repeated Change changes = 30;
+  repeated Problem problems = 31;
+  repeated Problem warnings = 32;
+  repeated StepResult steps = 33;
+  repeated mix.events.v1.LockWait waits = 34;
 }
 
 message StepResult {

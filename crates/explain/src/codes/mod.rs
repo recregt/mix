@@ -295,9 +295,9 @@ pub fn explanation(code: Code) -> Explanation {
         ),
         Code::ConfirmationRequired => explained!(
             "The command needs a confirmation.",
-            "`mix self remove` deletes mix, Nix and every user's mix state, so it asks before it starts. There was no terminal to ask on and `--yes` was not given, so nothing was changed.",
+            "`mix user remove` deletes your mix state, and `mix purge` deletes mix, Nix and every user's mix state, so both ask before they start. There was no terminal to ask on and `--yes` was not given, so nothing was changed.",
             [
-                "run `mix self remove --dry-run` to see what it would delete",
+                "run it with `--dry-run` to see what it would delete",
                 "run it again with `--yes` to confirm"
             ]
         ),

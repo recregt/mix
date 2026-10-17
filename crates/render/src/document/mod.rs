@@ -180,7 +180,8 @@ fn result_of(found: node_finished::Result) -> Option<result::Result> {
         node_finished::Result::Explain(found) => result::Result::Explain(found),
         node_finished::Result::List(found) => result::Result::List(found),
         node_finished::Result::Update(found) => result::Result::Update(found),
-        node_finished::Result::SelfRemove(found) => result::Result::SelfRemove(found),
+        node_finished::Result::UserRemove(found) => result::Result::UserRemove(found),
+        node_finished::Result::Purge(found) => result::Result::Purge(found),
         node_finished::Result::Inspection(_) | node_finished::Result::Process(_) => return None,
     })
 }

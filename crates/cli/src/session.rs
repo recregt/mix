@@ -166,6 +166,8 @@ mod tests {
                 verbose: 0,
                 quiet: true,
                 exit: Exit::default(),
+                departure: mix_render::Departure::default(),
+                preview: false,
             }
         }
 
@@ -268,7 +270,7 @@ mod tests {
     async fn an_unconfirmed_removal_is_refused_before_any_daemon_is_asked() {
         let directory = tempfile::tempdir().unwrap();
         let command =
-            mix_events::command(Request::SelfRemove(mix_events::v1::SelfRemoveRequest {}));
+            mix_events::command(Request::UserRemove(mix_events::v1::UserRemoveRequest {}));
         let unconfirmed = mix_events::Fault::failed(
             Code::ConfirmationRequired,
             "there is no terminal to ask on and `--yes` was not given",
@@ -286,7 +288,7 @@ mod tests {
 
         assert_eq!(exit, ExitCode::from(2));
         let document = recorded.document();
-        assert_eq!(document.command, "self remove");
+        assert_eq!(document.command, "user remove");
         assert_eq!(document.exit, mix_events::exit::USAGE);
         assert_eq!(document.problems[0].code(), Code::ConfirmationRequired);
         assert_eq!(
@@ -300,12 +302,14 @@ mod tests {
     async fn an_unconfirmed_removal_exits_as_a_usage_error_without_json_too() {
         let directory = tempfile::tempdir().unwrap();
         let command =
-            mix_events::command(Request::SelfRemove(mix_events::v1::SelfRemoveRequest {}));
+            mix_events::command(Request::UserRemove(mix_events::v1::UserRemoveRequest {}));
         let view = View {
             json: Json::Off,
             verbose: 0,
             quiet: true,
             exit: Exit::default(),
+            departure: mix_render::Departure::default(),
+            preview: false,
         };
 
         let exit = run(

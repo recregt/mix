@@ -54,7 +54,7 @@ pub(super) fn finished(
                 );
             }
         }
-        Result::SelfRemove(_) => {
+        Result::Purge(_) => {
             if chatty {
                 mix_ui::status_to(
                     out,
@@ -68,6 +68,31 @@ pub(super) fn finished(
                         "run `exec $SHELL -l` to start one without it"
                     )),
                 );
+            }
+        }
+        Result::UserRemove(removed) => {
+            if chatty {
+                mix_ui::status_to(
+                    out,
+                    Status::Finished,
+                    &format!("removal in {}", took(elapsed)),
+                );
+                match removed.others.as_slice() {
+                    [] => mix_ui::note_to(
+                        out,
+                        &mix_ui::note!("no one else on this machine uses `mix`"),
+                        Some(&mix_ui::help!(
+                            "run `sudo mix purge` to remove Nix from the machine too"
+                        )),
+                    ),
+                    others => mix_ui::note_to(
+                        out,
+                        &mix_ui::note!("{} still use `mix` on this machine", others.join(", ")),
+                        Some(&mix_ui::help!(
+                            "run `sudo mix purge` to remove it for everyone, after asking"
+                        )),
+                    ),
+                }
             }
         }
         Result::Repair(repair) => repaired(
@@ -258,7 +283,8 @@ fn explained(explain: &ExplainResult, request: Option<&Request>) -> String {
             | Request::Doctor(_)
             | Request::List(_)
             | Request::Update(_)
-            | Request::SelfRemove(_),
+            | Request::UserRemove(_)
+            | Request::Purge(_),
         )
         | None => mix_explain::codes::list_text(codes),
     }

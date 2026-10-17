@@ -46,20 +46,35 @@ pub fn alice() -> InvokingUser {
     }
 }
 
+pub fn bob() -> InvokingUser {
+    InvokingUser {
+        uid: 1001,
+        gid: 1001,
+        name: "bob".into(),
+        home: "/home/bob".into(),
+    }
+}
+
 pub fn pristine(user: &InvokingUser) -> World {
+    pristine_for(std::slice::from_ref(user))
+}
+
+pub fn pristine_for(users: &[InvokingUser]) -> World {
     let mut world = World::default();
     world.with_dir("/home", 0o755, (0, 0));
-    world.with_dir(&user.home, 0o700, (user.uid, user.gid));
-    world.users.insert(
-        user.name.clone(),
-        UserFacts {
-            uid: user.uid,
-            gid: user.gid,
-            home: user.home.clone(),
-            shell: "/bin/sh".into(),
-            comment: String::new(),
-        },
-    );
+    for user in users {
+        world.with_dir(&user.home, 0o700, (user.uid, user.gid));
+        world.users.insert(
+            user.name.clone(),
+            UserFacts {
+                uid: user.uid,
+                gid: user.gid,
+                home: user.home.clone(),
+                shell: "/bin/sh".into(),
+                comment: String::new(),
+            },
+        );
+    }
     if let Ok(running) = std::env::current_exe() {
         world.with_file(running, b"mix-daemon", 0o755, (0, 0));
     }
@@ -215,7 +230,17 @@ impl Model {
     }
 
     pub async fn run(&self, request: Request, dry_run: bool, as_root: bool) -> Value {
-        self.request(request, dry_run, as_root, None)
+        self.run_as(request, dry_run, as_root, &self.user).await
+    }
+
+    pub async fn run_as(
+        &self,
+        request: Request,
+        dry_run: bool,
+        as_root: bool,
+        user: &InvokingUser,
+    ) -> Value {
+        self.request(request, dry_run, as_root, user, None)
             .await
             .expect("only an armed fault crashes a request")
     }
@@ -227,10 +252,22 @@ impl Model {
         at: usize,
         kind: FaultKind,
     ) -> Option<Value> {
+        self.faulted_as(request, as_root, &self.user, at, kind)
+            .await
+    }
+
+    pub async fn faulted_as(
+        &self,
+        request: Request,
+        as_root: bool,
+        user: &InvokingUser,
+        at: usize,
+        kind: FaultKind,
+    ) -> Option<Value> {
         let faults = Arc::new(Faults::default());
         faults.arm(at, kind.fault());
         let done = self
-            .request(request, false, as_root, Some(Arc::clone(&faults)))
+            .request(request, false, as_root, user, Some(Arc::clone(&faults)))
             .await;
         faults.disarm();
         done
@@ -246,6 +283,7 @@ impl Model {
         request: Request,
         dry_run: bool,
         as_root: bool,
+        user: &InvokingUser,
         faults: Option<Arc<Faults>>,
     ) -> Option<Value> {
         let recorded: Arc<Mutex<Vec<Envelope>>> = Arc::default();
@@ -256,7 +294,7 @@ impl Model {
             .with_policy(self.policy.clone())
             .with_caller(Caller::Account {
                 peer_is_root: as_root,
-                account: Some(self.user.clone()),
+                account: Some(user.clone()),
             })
             .with_render(Recorded(Arc::clone(&recorded)));
         if let Some(faults) = &faults {

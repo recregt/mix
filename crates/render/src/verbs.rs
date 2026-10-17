@@ -16,6 +16,7 @@ pub(crate) fn step(verb: Verb) -> Status {
         Verb::Repairing => Status::Repairing,
         Verb::Recovering => Status::Recovering,
         Verb::Updating => Status::Updating,
+        Verb::Reclaiming => Status::Reclaiming,
         Verb::Unspecified => Status::Changing,
     }
 }
@@ -33,6 +34,7 @@ pub(crate) fn undone(verb: Verb, subject: &str) -> String {
         | Verb::Writing
         | Verb::Configuring
         | Verb::Recording
+        | Verb::Reclaiming
         | Verb::Unspecified => subject.to_string(),
     }
 }

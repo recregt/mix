@@ -197,6 +197,7 @@ impl Host {
                 for path in crate::effect::removal::leftovers() {
                     world.files.remove(path);
                 }
+                world.logs.clear();
                 Vec::new()
             }
         }

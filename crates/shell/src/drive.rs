@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use std::sync::Mutex;
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use mix_core::declared::identity::InvokingUser;
 use mix_core::declared::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
@@ -54,6 +54,18 @@ fn announce(announced: &mut bool, tree: &mut Tree, cause: Option<Cancellation>) 
                 cause: cause as i32,
             }),
         );
+    }
+}
+
+fn done() -> Outcome {
+    Ok(Performed { undo: Vec::new() })
+}
+
+fn settle(earlier: Outcome, later: Outcome) -> Outcome {
+    match (earlier, later) {
+        (_, Err(Failure::Cancelled)) => Err(Failure::Cancelled),
+        (Err(failure), _) => Err(failure),
+        (Ok(_), later) => later,
     }
 }
 
@@ -226,6 +238,10 @@ impl Prediction {
                 self.touched.contains(&Subject::Profile(user.clone()))
             }
             Query::Linked(user) => near(&user.home),
+            Query::Accounts => self
+                .touched
+                .iter()
+                .any(|subject| matches!(subject, Subject::User(_))),
             Query::Journals(_) => false,
         }
     }
@@ -485,21 +501,47 @@ impl Performer {
         })
     }
 
-    async fn commit(&mut self, prepared: &mut Prepared<'_>) -> Outcome {
+    async fn commit(&mut self, prepared: &mut Prepared<'_>, scope: &Scope) -> Outcome {
         let mut first = None;
         for agent in self.agents.values_mut() {
             if let Err(failure) = agent.perform(&Action::Commit, prepared).await {
                 first.get_or_insert(failure);
             }
         }
-        let root = self
+        let files = self.commit_files(prepared, scope).await;
+        settle(first.map_or(done(), Err), files)
+    }
+
+    async fn commit_files(&mut self, prepared: &mut Prepared<'_>, scope: &Scope) -> Outcome {
+        let trees = self.files.detach_trees();
+        let rest = self
             .files
             .perform(&Action::Commit, prepared)
             .expect("a file action");
-        match first {
-            Some(failure) => Err(failure),
-            None => root,
+        let Ok(mut reclaim) = trees else {
+            return rest;
+        };
+        if reclaim.is_empty() {
+            return rest;
         }
+        let stop = std::sync::Arc::new(AtomicBool::new(scope.reason().is_some()));
+        let asked = std::sync::Arc::clone(&stop);
+        let mut job = tokio::task::spawn_blocking(move || {
+            let outcome = reclaim.commit_until(&asked);
+            (reclaim, outcome)
+        });
+        let mut stopping = false;
+        let (reclaim, outcome) = loop {
+            tokio::select! {
+                joined = &mut job => break joined.expect("the reclaim does not panic"),
+                _ = scope.stopped(), if !stopping => {
+                    stopping = true;
+                    stop.store(true, Ordering::Relaxed);
+                }
+            }
+        };
+        self.files.reattach(reclaim);
+        settle(rest, outcome)
     }
 
     pub fn with_profile(mut self, profile: ProfileContext) -> Self {
@@ -861,6 +903,7 @@ impl Performer {
     async fn observe_one(&mut self, query: &Query, scope: &Scope) -> Result<Fact, Failure> {
         Ok(match query {
             Query::Unit(unit) => Fact::Unit(self.units().await?.observe(unit).await?),
+            Query::Accounts => Fact::Accounts(identity::accounts(scope).await?),
             Query::Repository(user) => {
                 let repository = repository_dir(&user.home);
                 let config = self
@@ -1016,7 +1059,7 @@ impl Performer {
             Action::CreateRepository { user } => {
                 return Box::pin(self.create_repository(user, prepared, scope)).await;
             }
-            Action::Commit => return Box::pin(self.commit(prepared)).await,
+            Action::Commit => return Box::pin(self.commit(prepared, scope)).await,
             _ => {}
         }
         if let Some(path) = mix_home::path_of(action) {
@@ -1199,6 +1242,7 @@ pub async fn drive<'r>(
     let mut input = None;
     let mut seq = 0;
     let mut ended = false;
+    let mut unfinished = false;
     loop {
         if let Some(cause) = stopped() {
             announce(&mut stopping, tree, Some(cause));
@@ -1300,13 +1344,14 @@ pub async fn drive<'r>(
                         }
                         seq += 1;
                     }
+                    (Err(Failure::Cancelled), false, true) => unfinished = true,
                     (Err(_), _, _) => {}
                 }
                 input = Some(Input::Done(outcome));
             }
             Next::Finished(closed) => {
                 performer.listening = Some(receiver);
-                if !ended {
+                if !ended && !unfinished {
                     keep(journal, &Record::Ended, tree, ROOT, traced);
                 }
                 return runner.report(closed);
@@ -1538,6 +1583,164 @@ mod tests {
         drop(tree);
         let report = report.clone();
         (report, outbox.drain())
+    }
+
+    struct DiscardTree(PathBuf);
+
+    impl StepSpec for DiscardTree {
+        fn key(&self) -> Cow<'static, str> {
+            "discard".into()
+        }
+
+        fn title(&self) -> mix_core::run::Title {
+            mix_core::run::Title::new(mix_events::v1::Verb::Removing, "a tree")
+        }
+
+        fn queries(&self) -> Vec<Query> {
+            vec![Query::Path(self.0.clone())]
+        }
+
+        fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
+            let Fact::Path(facts) = &facts[0] else {
+                unreachable!()
+            };
+            Ok(facts
+                .id
+                .map(|expect| Action::Discard {
+                    path: self.0.clone(),
+                    expect,
+                })
+                .into_iter()
+                .collect())
+        }
+    }
+
+    struct StopsAtCommit {
+        records: Vec<Record>,
+        scope: Scope,
+    }
+
+    impl Journal for StopsAtCommit {
+        fn append(&mut self, record: &Record) -> Result<(), Failure> {
+            if *record == Record::Committing {
+                self.scope.cancel(mix_exec::Reason::Interrupted);
+            }
+            self.records.push(record.clone());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn a_stop_while_reclaiming_ends_cancelled_and_leaves_the_journal_open_to_resume() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("old/a/b")).unwrap();
+        let files =
+            Files::open_trusting(root.path(), "r1", nix::unistd::Uid::current().as_raw()).unwrap();
+        let mut performer = Performer::new(files);
+        let scope = Scope::root();
+        let stopped = stopped_by(&scope);
+        let outbox = Arc::new(Outbox::new("request", || {}));
+        let mut tree = Tree::new(
+            outbox,
+            stopped.clone(),
+            Start::command("install", Command::default()),
+        );
+        let mut runner = Runner::new(ROOT, vec![Box::new(DiscardTree("/old".into()))]);
+        let mut journal = StopsAtCommit {
+            records: Vec::new(),
+            scope: scope.clone(),
+        };
+
+        let report = drive(
+            &mut runner,
+            &mut tree,
+            &mut performer,
+            &scope,
+            &stopped,
+            &mut journal,
+            &mut (),
+        )
+        .await;
+
+        assert!(
+            matches!(report.verdict, Verdict::Cancelled(_)),
+            "{:?}",
+            report.verdict
+        );
+        assert!(journal.records.contains(&Record::Committing));
+        assert_ne!(journal.records.last(), Some(&Record::Ended));
+        assert!(root.path().join("old/a/b").exists());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn a_stop_during_a_commit_that_reclaims_nothing_waits_for_the_commit() {
+        let root = tempfile::tempdir().unwrap();
+        let mut performer = Performer::new(Files::open(root.path(), "r1").unwrap());
+        let scope = Scope::root();
+        let stopped = stopped_by(&scope);
+        let outbox = Arc::new(Outbox::new("request", || {}));
+        let mut tree = Tree::new(
+            outbox,
+            stopped.clone(),
+            Start::command("install", Command::default()),
+        );
+        let mut runner = Runner::new(ROOT, steps("/nix/.mix-managed"));
+        let mut journal = StopsAtCommit {
+            records: Vec::new(),
+            scope: scope.clone(),
+        };
+
+        let report = drive(
+            &mut runner,
+            &mut tree,
+            &mut performer,
+            &scope,
+            &stopped,
+            &mut journal,
+            &mut (),
+        )
+        .await;
+
+        assert_eq!(report.verdict, Verdict::Succeeded);
+        assert_eq!(journal.records.last(), Some(&Record::Ended));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn a_commit_begun_after_a_stop_deletes_nothing_and_a_later_commit_finishes_it() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("nix/store/abc")).unwrap();
+        std::fs::write(root.path().join("nix/store/abc/bin"), "x").unwrap();
+        let mut files =
+            Files::open_trusting(root.path(), "r1", nix::unistd::Uid::current().as_raw()).unwrap();
+        files.adopt([PathBuf::from("/nix")]);
+        let mut performer = Performer::new(files);
+        let stopped = Scope::root();
+        stopped.cancel(mix_exec::Reason::Interrupted);
+
+        let cancelled = performer
+            .perform(&Action::Commit, &stopped, &mut |_| {}, &mut |_| Ok(()))
+            .await;
+
+        assert!(
+            matches!(cancelled, Err(Failure::Cancelled)),
+            "{cancelled:?}"
+        );
+        assert!(root.path().join("nix/store/abc/bin").exists());
+
+        let finished = performer
+            .perform(
+                &Action::Commit,
+                &Scope::root(),
+                &mut |_| {},
+                &mut |_| Ok(()),
+            )
+            .await;
+
+        assert!(finished.is_ok(), "{finished:?}");
+        assert!(!root.path().join("nix").exists());
     }
 
     #[tokio::test]

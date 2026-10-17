@@ -1028,3 +1028,182 @@ fn a_warning_without_words_of_its_own_is_a_bug_and_its_producers_words_are_the_c
         "warning: something went wrong inside `mix`\n\nhelp: report this bug at https://github.com/recregt/mix/issues\n\nCaused by:\n  Mix.\n"
     );
 }
+
+fn committed(reclaims: bool) -> Vec<Envelope> {
+    let outbox = Arc::new(Outbox::new("01920000-0000-7000-8000-000000000007", || {}));
+    let mut tree = Tree::new(
+        Arc::clone(&outbox),
+        Arc::new(|| None),
+        Start::command(
+            "purge",
+            Command {
+                mix_version: "0.1.0".into(),
+                schema_minor: mix_events::SCHEMA_MINOR,
+                dry_run: false,
+                request: Some(Request::Purge(mix_events::v1::PurgeRequest::default())),
+            },
+        ),
+    );
+    let plan = tree
+        .start(ROOT, start(Kind::Plan(Plan::default()), "plan"))
+        .unwrap();
+    let parent = if reclaims {
+        tree.start(plan, start(step(Verb::Reclaiming, "disk space"), "reclaim"))
+            .unwrap()
+    } else {
+        plan
+    };
+    let commit = tree
+        .start(
+            parent,
+            start(action(Operation::Commit, "changes"), "commit"),
+        )
+        .unwrap();
+    tree.finish(commit, Ending::succeeded()).unwrap();
+    if reclaims {
+        tree.finish(parent, Ending::succeeded()).unwrap();
+    }
+    tree.finish(plan, Ending::succeeded()).unwrap();
+    tree.finish(ROOT, Ending::succeeded()).unwrap();
+    drop(tree);
+    outbox.drain()
+}
+
+#[test]
+fn a_reclaim_step_is_shown_and_a_bare_commit_is_not() {
+    let reclaimed = committed(true);
+    let bare = committed(false);
+    for envelopes in [&reclaimed, &bare] {
+        mix_events::validate(envelopes.iter()).unwrap();
+    }
+
+    let reclaimed = rendered(&captured(&reclaimed).1, Detail::Step);
+    let bare = rendered(&captured(&bare).1, Detail::Step);
+
+    assert!(reclaimed.contains("Reclaiming disk space"), "{reclaimed}");
+    assert!(!bare.contains("Reclaiming"), "{bare}");
+    assert!(!bare.contains("Committing"), "{bare}");
+}
+
+fn left(others: &[&str]) -> Vec<Envelope> {
+    let outbox = Arc::new(Outbox::new("01920000-0000-7000-8000-000000000008", || {}));
+    let mut tree = Tree::new(
+        Arc::clone(&outbox),
+        Arc::new(|| None),
+        Start::command(
+            "user remove",
+            Command {
+                mix_version: "0.1.0".into(),
+                schema_minor: mix_events::SCHEMA_MINOR,
+                dry_run: false,
+                request: Some(Request::UserRemove(
+                    mix_events::v1::UserRemoveRequest::default(),
+                )),
+            },
+        ),
+    );
+    tree.finish(
+        ROOT,
+        Ending::succeeded().with_result(node_finished::Result::UserRemove(
+            mix_events::v1::UserRemoveResult {
+                user: "alice".into(),
+                others: others.iter().map(|name| (*name).to_string()).collect(),
+            },
+        )),
+    )
+    .unwrap();
+    drop(tree);
+    outbox.drain()
+}
+
+#[test]
+fn a_user_who_leaves_learns_who_still_uses_mix_and_how_to_remove_it_for_everyone() {
+    let shared = rendered(&captured(&left(&["bob", "carol"])).1, Detail::Step);
+    let alone = rendered(&captured(&left(&[])).1, Detail::Step);
+
+    assert!(shared.contains("bob, carol still use `mix`"), "{shared}");
+    assert!(shared.contains("`sudo mix purge`"), "{shared}");
+    assert!(
+        alone.contains("no one else on this machine uses `mix`"),
+        "{alone}"
+    );
+    assert!(alone.contains("`sudo mix purge`"), "{alone}");
+    assert_eq!(rendered(&captured(&left(&[])).1, Detail::Outcome), "");
+}
+
+#[test]
+fn a_purge_reminds_that_open_terminals_still_load_nix() {
+    let outbox = Arc::new(Outbox::new("01920000-0000-7000-8000-000000000009", || {}));
+    let mut tree = Tree::new(
+        Arc::clone(&outbox),
+        Arc::new(|| None),
+        Start::command(
+            "purge",
+            Command {
+                mix_version: "0.1.0".into(),
+                schema_minor: mix_events::SCHEMA_MINOR,
+                dry_run: false,
+                request: Some(Request::Purge(mix_events::v1::PurgeRequest::default())),
+            },
+        ),
+    );
+    tree.finish(
+        ROOT,
+        Ending::succeeded().with_result(node_finished::Result::Purge(
+            mix_events::v1::PurgeResult {
+                users: vec!["alice".into()],
+            },
+        )),
+    )
+    .unwrap();
+    drop(tree);
+
+    let text = rendered(&captured(&outbox.drain()).1, Detail::Step);
+
+    assert!(text.contains("exec $SHELL -l"), "{text}");
+}
+
+#[test]
+fn a_plan_shown_before_a_question_does_not_tell_the_reader_to_run_it_again() {
+    let outbox = Arc::new(Outbox::new("01920000-0000-7000-8000-000000000010", || {}));
+    let mut tree = Tree::new(
+        Arc::clone(&outbox),
+        Arc::new(|| None),
+        Start::command(
+            "purge",
+            Command {
+                mix_version: "0.1.0".into(),
+                schema_minor: mix_events::SCHEMA_MINOR,
+                dry_run: true,
+                request: Some(Request::Purge(mix_events::v1::PurgeRequest::default())),
+            },
+        ),
+    );
+    tree.finish(ROOT, Ending::succeeded()).unwrap();
+    drop(tree);
+    let captured = captured(&outbox.drain()).1;
+    let render = |preview: bool| {
+        let out = Arc::new(Buffer(Mutex::new(Vec::new())));
+        let mut human = Human::new(Arc::new(mix_ui::Silent))
+            .level(Detail::Step)
+            .preview(preview)
+            .to(out.clone());
+        for (envelope, offset) in captured.envelopes.iter().zip(&captured.offsets) {
+            human.at(*offset);
+            human.envelope(envelope.clone());
+        }
+        out.0.lock().unwrap().concat()
+    };
+
+    assert!(
+        render(false).contains("without `--dry-run`"),
+        "{}",
+        render(false)
+    );
+    assert!(
+        !render(true).contains("without `--dry-run`"),
+        "{}",
+        render(true)
+    );
+    assert!(render(true).contains("a dry run"), "{}", render(true));
+}

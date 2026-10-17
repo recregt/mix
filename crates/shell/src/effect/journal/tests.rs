@@ -275,3 +275,23 @@ async fn a_journal_recovery_could_not_put_back_is_kept_for_the_next_try() {
         }]
     );
 }
+
+#[test]
+fn a_journal_that_never_ended_survives_finish_so_the_request_can_be_resumed() {
+    let journals = tempfile::tempdir().unwrap();
+    let mut journal = FileJournal::create(journals.path(), "r1").unwrap();
+    journal.append(&Record::Committing).unwrap();
+    let path = journals.path().join("r1.ndjson");
+
+    journal.finish().unwrap();
+
+    assert!(path.exists());
+
+    let mut journal = FileJournal::create(journals.path(), "r2").unwrap();
+    journal.append(&Record::Committing).unwrap();
+    journal.append(&Record::Ended).unwrap();
+
+    journal.finish().unwrap();
+
+    assert!(!journals.path().join("r2.ndjson").exists());
+}

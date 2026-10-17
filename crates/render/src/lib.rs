@@ -13,7 +13,7 @@ pub mod words;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use mix_events::result::v1::Result as Document;
-use mix_events::v1::{Command, Envelope, envelope};
+use mix_events::v1::{Command, Envelope, envelope, node_finished};
 use mix_events::{Detail, Fault, ROOT, Render};
 
 use human::Human;
@@ -55,7 +55,7 @@ impl Json {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 struct Seen {
     started: bool,
     exit: Option<u32>,
@@ -85,11 +85,31 @@ impl Exit {
     }
 }
 
+#[derive(Clone, Default)]
+pub struct Departure(Arc<Mutex<Option<Vec<String>>>>);
+
+impl Departure {
+    pub fn others(&self) -> Option<Vec<String>> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn saw(&self, envelope: &Envelope) {
+        if let Some(others) = root_departure(envelope) {
+            *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(others);
+        }
+    }
+}
+
 pub struct View {
     pub json: Json,
     pub verbose: u8,
     pub quiet: bool,
     pub exit: Exit,
+    pub departure: Departure,
+    pub preview: bool,
 }
 
 impl View {
@@ -101,12 +121,14 @@ impl View {
         Sinks {
             human: Human::new(display)
                 .level(self.level())
-                .data(!self.json.on()),
+                .data(!self.json.on())
+                .preview(self.preview),
             document: self
                 .json
                 .on()
                 .then(|| (document::Builder::default(), self.json.clone())),
             exit: self.exit.clone(),
+            departure: self.departure.clone(),
         }
     }
 
@@ -176,6 +198,7 @@ pub struct Sinks {
     human: Human,
     document: Option<(document::Builder, Json)>,
     exit: Exit,
+    departure: Departure,
 }
 
 fn root_exit(envelope: &Envelope) -> Option<u32> {
@@ -192,6 +215,16 @@ fn root_exit(envelope: &Envelope) -> Option<u32> {
         )
         | None => None,
     }
+}
+
+fn root_departure(envelope: &Envelope) -> Option<Vec<String>> {
+    if let Some(envelope::Event::NodeFinished(finished)) = &envelope.event
+        && finished.id == ROOT
+        && let Some(node_finished::Result::UserRemove(found)) = &finished.result
+    {
+        return Some(found.others.clone());
+    }
+    None
 }
 
 struct Documented {
@@ -224,6 +257,7 @@ impl Render for Sinks {
 
     fn envelope(&mut self, envelope: Envelope) {
         self.exit.saw(root_exit(&envelope));
+        self.departure.saw(&envelope);
         if let Some((builder, json)) = &mut self.document
             && let Some(document) = builder.envelope(&envelope)
         {
@@ -247,6 +281,8 @@ mod tests {
             verbose: 0,
             quiet: true,
             exit: Exit::default(),
+            departure: Departure::default(),
+            preview: false,
         };
         (view, documents)
     }

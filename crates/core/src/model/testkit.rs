@@ -280,6 +280,16 @@ impl Run {
     }
 
     #[cfg(test)]
+    pub fn step_keys(&self) -> Vec<String> {
+        self.document()["steps"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|step| step["key"].as_str().map(str::to_string))
+            .collect()
+    }
+
+    #[cfg(test)]
     pub fn document(&self) -> Value {
         let document =
             mix_render::document::of(&self.stream).expect("a driven run always ends its root");
@@ -687,4 +697,65 @@ pub fn breakages(paths: &[PathBuf]) -> Vec<Breakage> {
             })
         })
         .collect()
+}
+
+pub fn account(name: &str, uid: u32) -> crate::declared::identity::InvokingUser {
+    crate::declared::identity::InvokingUser {
+        uid,
+        gid: uid,
+        name: name.into(),
+        home: format!("/home/{name}").into(),
+    }
+}
+
+#[cfg(test)]
+pub fn enrolled(users: &[crate::declared::identity::InvokingUser]) -> World {
+    use crate::declared::paths::RUNNING_PROGRAM;
+    use crate::declared::policy::Policy;
+    use crate::declared::targets::{Runtime, UserConfig};
+    use crate::ops::bootstrap;
+
+    let mut world = World::default();
+    world.with_file(RUNNING_PROGRAM, b"mix-daemon", 0o755, (0, 0));
+    for user in users {
+        world.with_dir(&user.home, 0o700, (user.uid, user.gid));
+        world.users.insert(
+            user.name.clone(),
+            crate::effect::UserFacts {
+                uid: user.uid,
+                gid: user.gid,
+                home: user.home.clone(),
+                shell: "/bin/sh".into(),
+                comment: String::new(),
+            },
+        );
+    }
+    for user in users {
+        let settings = bootstrap::Settings {
+            policy: Policy::default(),
+            user: Some(UserConfig {
+                user: user.clone(),
+                pins: mix_nixgen::lock::EMBEDDED,
+                flake: "flake".into(),
+                lock: mix_nixgen::lock::render(mix_nixgen::lock::EMBEDDED),
+                home: "home".into(),
+                restored_state: None,
+            }),
+            force: false,
+            runtime: Runtime {
+                url: "https://mirror.internal/nix-2.35.2-x86_64-linux.tar.xz".into(),
+                sha256: crate::effect::Digest([7; 32]),
+                size: 27_131_728,
+            },
+            request: "request-0".into(),
+        };
+        let ran = drive(
+            &mut world,
+            Runner::new(ROOT, bootstrap::steps(&settings)),
+            requested(Request::Bootstrap(Box::default())),
+            &Script::default(),
+        );
+        assert_eq!(ran.report().verdict, Verdict::Succeeded);
+    }
+    world
 }

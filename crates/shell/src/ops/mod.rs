@@ -4,10 +4,12 @@ pub mod doctor;
 pub mod explain;
 pub mod install;
 pub mod list;
+pub mod purge;
+mod removal;
 pub mod remove;
 pub mod repair;
-pub mod self_remove;
 pub mod update;
+pub mod user_remove;
 
 pub(crate) async fn recover_interrupted(
     ctx: &crate::Context,

@@ -577,6 +577,33 @@ fn a_commit_that_fails_still_succeeds_and_warns() {
 }
 
 #[test]
+fn a_commit_that_is_cancelled_ends_cancelled_without_a_warning() {
+    let mut world = World::default();
+    world.with_file("/etc/nix.conf", b"legacy", 0o644, (0, 0));
+
+    let run = drive(
+        &mut world,
+        bootstrap_like(),
+        Script {
+            fail_commit: true,
+            failure: Failure::Cancelled,
+            ..Script::default()
+        },
+    );
+
+    assert!(
+        matches!(run.report().verdict, Verdict::Cancelled(_)),
+        "{:?}",
+        run.report().verdict
+    );
+    assert!(
+        run.document()["warnings"]
+            .as_array()
+            .is_none_or(Vec::is_empty)
+    );
+}
+
+#[test]
 fn a_shielded_step_finishes_before_a_stop_takes_effect() {
     let mut world = World::default();
     let steps: Vec<Box<dyn StepSpec>> = vec![
