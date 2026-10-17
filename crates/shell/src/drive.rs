@@ -1627,7 +1627,7 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::disallowed_methods)]
-    async fn a_stop_during_any_commit_ends_cancelled_and_leaves_the_journal_open_to_resume() {
+    async fn a_stop_while_reclaiming_ends_cancelled_and_leaves_the_journal_open_to_resume() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("old/a/b")).unwrap();
         let files =
@@ -1666,6 +1666,40 @@ mod tests {
         assert!(journal.records.contains(&Record::Committing));
         assert_ne!(journal.records.last(), Some(&Record::Ended));
         assert!(root.path().join("old/a/b").exists());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn a_stop_during_a_commit_that_reclaims_nothing_waits_for_the_commit() {
+        let root = tempfile::tempdir().unwrap();
+        let mut performer = Performer::new(Files::open(root.path(), "r1").unwrap());
+        let scope = Scope::root();
+        let stopped = stopped_by(&scope);
+        let outbox = Arc::new(Outbox::new("request", || {}));
+        let mut tree = Tree::new(
+            outbox,
+            stopped.clone(),
+            Start::command("install", Command::default()),
+        );
+        let mut runner = Runner::new(ROOT, steps("/nix/.mix-managed"));
+        let mut journal = StopsAtCommit {
+            records: Vec::new(),
+            scope: scope.clone(),
+        };
+
+        let report = drive(
+            &mut runner,
+            &mut tree,
+            &mut performer,
+            &scope,
+            &stopped,
+            &mut journal,
+            &mut (),
+        )
+        .await;
+
+        assert_eq!(report.verdict, Verdict::Succeeded);
+        assert_eq!(journal.records.last(), Some(&Record::Ended));
     }
 
     #[tokio::test]

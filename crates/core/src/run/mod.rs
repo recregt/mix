@@ -323,7 +323,7 @@ impl Runner {
 
     fn shielded(&self) -> bool {
         match &self.phase {
-            Phase::RollingBack { .. } => true,
+            Phase::RollingBack { .. } | Phase::Committing { reclaim: None, .. } => true,
             Phase::Executing { step, .. } => self.steps[*step].shielded(),
             _ => false,
         }
