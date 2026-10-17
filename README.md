@@ -2,6 +2,8 @@
 
 Reproducible systems, made effortless.
 
+![A terminal session: mix installs a package, previews a change, repairs a hand-edited file and rolls back an interrupted install](docs/demo.gif)
+
 `mix` lets you install packages on an ordinary Linux machine and get the guarantees Nix is known for: the same package list gives the same result, upgrades don't break what you have, and every change can be traced. You get this without installing Nix by hand and without writing any Nix.
 
 ```sh
