@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use std::sync::Mutex;
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use mix_core::declared::identity::InvokingUser;
 use mix_core::declared::paths::SYSTEMD_UNIT_DIR as UNIT_DIR;
@@ -54,6 +54,18 @@ fn announce(announced: &mut bool, tree: &mut Tree, cause: Option<Cancellation>) 
                 cause: cause as i32,
             }),
         );
+    }
+}
+
+fn done() -> Outcome {
+    Ok(Performed { undo: Vec::new() })
+}
+
+fn settle(earlier: Outcome, later: Outcome) -> Outcome {
+    match (earlier, later) {
+        (_, Err(Failure::Cancelled)) => Err(Failure::Cancelled),
+        (Err(failure), _) => Err(failure),
+        (Ok(_), later) => later,
     }
 }
 
@@ -492,12 +504,8 @@ impl Performer {
                 first.get_or_insert(failure);
             }
         }
-        let root = self.commit_files(prepared, scope).await;
-        match (first, root) {
-            (_, Err(Failure::Cancelled)) => Err(Failure::Cancelled),
-            (Some(failure), _) => Err(failure),
-            (None, root) => root,
-        }
+        let files = self.commit_files(prepared, scope).await;
+        settle(first.map_or(done(), Err), files)
     }
 
     async fn commit_files(&mut self, prepared: &mut Prepared<'_>, scope: &Scope) -> Outcome {
@@ -506,35 +514,30 @@ impl Performer {
             .files
             .perform(&Action::Commit, prepared)
             .expect("a file action");
-        let Ok(mut detached) = trees else {
+        let Ok(mut reclaim) = trees else {
             return rest;
         };
-        if detached.pending().is_empty() {
+        if reclaim.is_empty() {
             return rest;
         }
-        let stop =
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(scope.reason().is_some()));
+        let stop = std::sync::Arc::new(AtomicBool::new(scope.reason().is_some()));
         let asked = std::sync::Arc::clone(&stop);
         let mut job = tokio::task::spawn_blocking(move || {
-            let outcome = detached.commit_stoppable(&asked);
-            (detached, outcome)
+            let outcome = reclaim.commit_until(&asked);
+            (reclaim, outcome)
         });
         let mut stopping = false;
-        let (detached, outcome) = loop {
+        let (reclaim, outcome) = loop {
             tokio::select! {
-                joined = &mut job => break joined.expect("the commit does not panic"),
+                joined = &mut job => break joined.expect("the reclaim does not panic"),
                 _ = scope.stopped(), if !stopping => {
                     stopping = true;
-                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                    stop.store(true, Ordering::Relaxed);
                 }
             }
         };
-        self.files.reattach(detached);
-        match (rest, outcome) {
-            (_, Err(Failure::Cancelled)) => Err(Failure::Cancelled),
-            (Err(failure), _) => Err(failure),
-            (Ok(_), outcome) => outcome,
-        }
+        self.files.reattach(reclaim);
+        settle(rest, outcome)
     }
 
     pub fn with_profile(mut self, profile: ProfileContext) -> Self {
@@ -1575,6 +1578,94 @@ mod tests {
         drop(tree);
         let report = report.clone();
         (report, outbox.drain())
+    }
+
+    struct DiscardTree(PathBuf);
+
+    impl StepSpec for DiscardTree {
+        fn key(&self) -> Cow<'static, str> {
+            "discard".into()
+        }
+
+        fn title(&self) -> mix_core::run::Title {
+            mix_core::run::Title::new(mix_events::v1::Verb::Removing, "a tree")
+        }
+
+        fn queries(&self) -> Vec<Query> {
+            vec![Query::Path(self.0.clone())]
+        }
+
+        fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
+            let Fact::Path(facts) = &facts[0] else {
+                unreachable!()
+            };
+            Ok(facts
+                .id
+                .map(|expect| Action::Discard {
+                    path: self.0.clone(),
+                    expect,
+                })
+                .into_iter()
+                .collect())
+        }
+    }
+
+    struct StopsAtCommit {
+        records: Vec<Record>,
+        scope: Scope,
+    }
+
+    impl Journal for StopsAtCommit {
+        fn append(&mut self, record: &Record) -> Result<(), Failure> {
+            if *record == Record::Committing {
+                self.scope.cancel(mix_exec::Reason::Interrupted);
+            }
+            self.records.push(record.clone());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn a_stop_during_any_commit_ends_cancelled_and_leaves_the_journal_open_to_resume() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("old/a/b")).unwrap();
+        let files =
+            Files::open_trusting(root.path(), "r1", nix::unistd::Uid::current().as_raw()).unwrap();
+        let mut performer = Performer::new(files);
+        let scope = Scope::root();
+        let stopped = stopped_by(&scope);
+        let outbox = Arc::new(Outbox::new("request", || {}));
+        let mut tree = Tree::new(
+            outbox,
+            stopped.clone(),
+            Start::command("install", Command::default()),
+        );
+        let mut runner = Runner::new(ROOT, vec![Box::new(DiscardTree("/old".into()))]);
+        let mut journal = StopsAtCommit {
+            records: Vec::new(),
+            scope: scope.clone(),
+        };
+
+        let report = drive(
+            &mut runner,
+            &mut tree,
+            &mut performer,
+            &scope,
+            &stopped,
+            &mut journal,
+            &mut (),
+        )
+        .await;
+
+        assert!(
+            matches!(report.verdict, Verdict::Cancelled(_)),
+            "{:?}",
+            report.verdict
+        );
+        assert!(journal.records.contains(&Record::Committing));
+        assert_ne!(journal.records.last(), Some(&Record::Ended));
+        assert!(root.path().join("old/a/b").exists());
     }
 
     #[tokio::test]
