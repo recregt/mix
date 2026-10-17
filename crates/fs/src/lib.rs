@@ -4,6 +4,7 @@ use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use mix_core::declared::paths::is_leftover;
 use mix_core::effect::{
@@ -26,6 +27,8 @@ use Unrenamed::{AlreadyGone, Other};
 pub type Prepared<'a> = dyn FnMut(&[Action]) -> Result<(), Failure> + Send + 'a;
 
 const MAXSYMLINKS: usize = 40;
+
+static NEVER: AtomicBool = AtomicBool::new(false);
 
 pub struct Files {
     root: OwnedFd,
@@ -1021,7 +1024,7 @@ impl Files {
             .filter(|entry| entry != "." && entry != "..")
             .collect();
         for name in names {
-            remove_tree_at(&top, &name).map_err(|errno| io(&place.path, errno))?;
+            remove_tree_at(&top, &name, &NEVER).map_err(|errno| io(&place.path, errno))?;
         }
         sys::unlinkat(&place.dir, &place.name, AtFlags::REMOVEDIR)
             .map_err(|errno| io(&place.path, errno))?;
@@ -1181,10 +1184,15 @@ impl Files {
     }
 
     fn commit(&mut self) -> Outcome {
+        self.commit_until(&NEVER)
+    }
+
+    fn commit_until(&mut self, stop: &AtomicBool) -> Outcome {
         let mut first = None;
         let mut kept = Vec::new();
         let running = running().0;
-        for pending in std::mem::take(&mut self.pending) {
+        let mut queue = std::mem::take(&mut self.pending).into_iter();
+        while let Some(pending) = queue.next() {
             let removed = self.place(&pending).and_then(|place| {
                 match Self::stat(&place, &place.name)? {
                     Some(stat) if stat.stx_uid != running => {
@@ -1196,12 +1204,21 @@ impl Files {
                     }
                     _ => {}
                 }
-                self.remove_tree(&place, &place.name)?;
+                self.remove_tree_until(&place, &place.name, stop)?;
                 Self::sync(&place)
             });
-            if let Err(failure) = removed {
-                first.get_or_insert(failure);
-                kept.push(pending);
+            match removed {
+                Ok(()) => {}
+                Err(Failure::Cancelled) => {
+                    kept.push(pending);
+                    kept.extend(queue);
+                    self.pending = kept;
+                    return Err(Failure::Cancelled);
+                }
+                Err(failure) => {
+                    first.get_or_insert(failure);
+                    kept.push(pending);
+                }
             }
         }
         self.pending = kept;
@@ -1211,8 +1228,44 @@ impl Files {
         }
     }
 
+    pub fn detach_pending(&mut self) -> std::io::Result<Files> {
+        let root = self.root.try_clone()?;
+        Ok(Files {
+            root,
+            trusted: self.trusted,
+            request: self.request.clone(),
+            pending: std::mem::take(&mut self.pending),
+            next: self.next,
+            seen: std::sync::Mutex::new(Seen::default()),
+            placed: Vec::new(),
+        })
+    }
+
+    pub fn reattach(&mut self, detached: Files) {
+        self.pending.extend(detached.pending);
+    }
+
+    pub fn commit_stoppable(&mut self, stop: &AtomicBool) -> Outcome {
+        self.commit_until(stop)
+    }
+
     fn remove_tree(&self, place: &Place, name: &OsStr) -> Result<(), Failure> {
-        remove_tree_at(&place.dir, name).map_err(|errno| io(&place.path, errno))
+        remove_tree_at(&place.dir, name, &NEVER).map_err(|errno| io(&place.path, errno))
+    }
+
+    fn remove_tree_until(
+        &self,
+        place: &Place,
+        name: &OsStr,
+        stop: &AtomicBool,
+    ) -> Result<(), Failure> {
+        remove_tree_at(&place.dir, name, stop).map_err(|errno| {
+            if errno == Errno::INTR && stop.load(Ordering::Relaxed) {
+                Failure::Cancelled
+            } else {
+                io(&place.path, errno)
+            }
+        })
     }
 
     pub fn observe(&self, query: &Query) -> Option<Fact> {
@@ -1519,7 +1572,7 @@ fn walk(root: &OwnedFd, path: &Path, within: bool) -> Option<u32> {
     None
 }
 
-fn remove_tree_at(dir: &OwnedFd, name: &OsStr) -> Result<(), Errno> {
+fn remove_tree_at(dir: &OwnedFd, name: &OsStr, stop: &AtomicBool) -> Result<(), Errno> {
     let stat = match sys::statx(dir, name, AtFlags::SYMLINK_NOFOLLOW, WANTED) {
         Ok(stat) => stat,
         Err(Errno::NOENT) => return Ok(()),
@@ -1540,7 +1593,10 @@ fn remove_tree_at(dir: &OwnedFd, name: &OsStr) -> Result<(), Errno> {
         .filter(|entry| entry != "." && entry != "..")
         .collect();
     for entry in names {
-        remove_tree_at(&child, &entry)?;
+        if stop.load(Ordering::Relaxed) {
+            return Err(Errno::INTR);
+        }
+        remove_tree_at(&child, &entry, stop)?;
     }
     sys::unlinkat(dir, name, AtFlags::REMOVEDIR)
 }

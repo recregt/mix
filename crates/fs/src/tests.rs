@@ -367,6 +367,59 @@ fn a_discarded_tree_stays_in_place_until_commit_deletes_it_or_undo_keeps_it() {
 }
 
 #[test]
+fn a_commit_asked_to_stop_keeps_what_remains_and_a_second_commit_finishes_it() {
+    let mut root = root();
+    for store_path in 0..20 {
+        let dir = root.real(&format!("/nix/store/path{store_path}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("bin"), "x").unwrap();
+    }
+    let id = root.id("/nix");
+    root.apply(Action::Discard {
+        path: "/nix".into(),
+        expect: id,
+    })
+    .unwrap();
+
+    let stopped = root.files.commit_stoppable(&AtomicBool::new(true));
+
+    assert_eq!(stopped, Err(Failure::Cancelled));
+    assert_eq!(root.files.pending(), [PathBuf::from("/nix")]);
+    assert!(root.real("/nix/store/path0/bin").exists());
+
+    root.apply(Action::Commit).unwrap();
+
+    assert!(!root.real("/nix").exists());
+    assert!(root.files.pending().is_empty());
+}
+
+#[test]
+fn a_detached_commit_deletes_on_its_own_and_gives_back_what_it_left() {
+    let mut root = root();
+    std::fs::create_dir_all(root.real("/nix/store/abc")).unwrap();
+    let id = root.id("/nix");
+    root.apply(Action::Discard {
+        path: "/nix".into(),
+        expect: id,
+    })
+    .unwrap();
+
+    let mut detached = root.files.detach_pending().unwrap();
+    assert!(root.files.pending().is_empty());
+    let stopped = detached.commit_stoppable(&AtomicBool::new(true));
+    assert_eq!(stopped, Err(Failure::Cancelled));
+    root.files.reattach(detached);
+    assert_eq!(root.files.pending(), [PathBuf::from("/nix")]);
+
+    let mut detached = root.files.detach_pending().unwrap();
+    detached.commit_stoppable(&AtomicBool::new(false)).unwrap();
+    root.files.reattach(detached);
+
+    assert!(!root.real("/nix").exists());
+    assert!(root.files.pending().is_empty());
+}
+
+#[test]
 fn a_tree_that_changed_since_it_was_seen_is_not_discarded() {
     let mut root = root();
     std::fs::create_dir(root.real("/var/old")).unwrap();

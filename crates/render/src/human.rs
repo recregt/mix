@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 use mix_events::Render;
 use mix_events::v1::command::Request;
 use mix_events::v1::{
-    Envelope, NodeFinished, NodeProgress, Status as Ended, envelope::Event, node_progress,
-    node_started,
+    Envelope, NodeFinished, NodeProgress, Operation, Status as Ended, envelope::Event,
+    node_progress, node_started,
 };
 use mix_events::{Detail, Fault, NodeId, ROOT};
 use mix_ui::{Display, Out, Severity, Status, StepLine};
@@ -191,6 +191,12 @@ impl Human {
                         .cloned()
                         .unwrap_or_default();
                     self.announce(node.id, Status::RollingBack, &subject);
+                }
+                Some(node_started::Kind::Action(action))
+                    if action.operation() == Operation::Commit
+                        && matches!(self.request, Some(Request::Purge(_))) =>
+                {
+                    self.announce(node.id, Status::Reclaiming, "disk space");
                 }
                 Some(node_started::Kind::Action(action)) => {
                     if let Some(status) = self.pending.remove(&node.parent) {

@@ -322,7 +322,7 @@ impl Runner {
 
     fn shielded(&self) -> bool {
         match &self.phase {
-            Phase::RollingBack { .. } | Phase::Committing { .. } => true,
+            Phase::RollingBack { .. } => true,
             Phase::Executing { step, .. } => self.steps[*step].shielded(),
             _ => false,
         }
@@ -608,11 +608,22 @@ impl Runner {
                         panic!("the commit is answered with its outcome");
                     };
                     self.acted(tree, &outcome, self.stop);
-                    if let Err(failure) = outcome {
-                        tree.warn(self.plan, diagnostic(&failure))
-                            .expect("the plan is running");
+                    match outcome {
+                        Err(Failure::Cancelled) => {
+                            let cause = *self.stop.get_or_insert(Cancellation::Interrupted);
+                            if matches!(self.verdict, None | Some(Verdict::Succeeded)) {
+                                self.verdict = Some(Verdict::Cancelled(cause));
+                            }
+                        }
+                        Err(failure) => {
+                            tree.warn(self.plan, diagnostic(&failure))
+                                .expect("the plan is running");
+                            self.verdict.get_or_insert(Verdict::Succeeded);
+                        }
+                        Ok(_) => {
+                            self.verdict.get_or_insert(Verdict::Succeeded);
+                        }
                     }
-                    self.verdict.get_or_insert(Verdict::Succeeded);
                     self.phase = Phase::Closing;
                 }
                 Phase::Closing => {
