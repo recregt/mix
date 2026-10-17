@@ -3,8 +3,7 @@ use mix_core::effect::{
     Action, Failure, Outcome, Performed, UnitFacts, UnitFailure, UnitOperation,
 };
 use mix_exec::Scope;
-use zbus::zvariant::OwnedObjectPath;
-use zbus::{Connection, Proxy};
+use zbus::{Connection, OwnedObjectPath, Proxy};
 
 use mix_fs::Prepared;
 

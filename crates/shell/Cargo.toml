@@ -34,7 +34,7 @@ tar = "0.4.46"
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
+zbus = { version = "6.0.0", default-features = false, features = ["proxy", "tokio"] }
 
 [build-dependencies]
 mix-pins = { workspace = true }
