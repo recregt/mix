@@ -24,7 +24,7 @@ You will get an acknowledgement. After that we will confirm the problem, work on
 
 Knowing the design helps decide what counts as a vulnerability.
 
-- **Privilege separation.** Only `mix bootstrap` asks for `sudo`. After setup, privileged work runs in `mix-daemon`, which systemd starts on demand from a socket. Commands that work on packages refuse to run as root, and reads and writes inside a user's home happen as that user.
+- **Privilege separation.** Only `mix bootstrap` and `mix self remove` ask for `sudo`. After setup, privileged work runs in `mix-daemon`, which systemd starts on demand from a socket. Commands that work on packages refuse to run as root, and reads and writes inside a user's home happen as that user.
 - **Pinned downloads.** The Nix runtime that `mix` downloads is checked against a checksum and size pinned in the source at build time. A mismatch stops the setup with the `integrity` failure code.
 - **Mirrors.** A mirror is chosen by the administrator at bootstrap. Its signing key is trusted machine-wide, so only point `mix` at a mirror you control or trust.
 - **Crash safety.** Every request is journaled. An interrupted request is rolled back or completed before the next one runs.
