@@ -125,7 +125,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "mix-nixgen"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "mix-pins",
  "thiserror",
@@ -144,7 +144,7 @@ dependencies = [
 
 [[package]]
 name = "mix-pins"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 
 [[package]]
 name = "once_cell"

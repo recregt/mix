@@ -30,6 +30,7 @@
             overlays = [ (import rust-overlay) ];
           };
           inherit (pkgs) lib;
+          version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package.version;
           craneLib = (crane.mkLib pkgs.pkgsStatic).overrideToolchain (
             p: p.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml
           );
@@ -52,10 +53,23 @@
             CARGO_PROFILE = "release";
             cargoExtraArgs = "--locked --workspace";
             pname = "mix";
-            version = "0.1.0";
+            inherit version;
           };
           cargoArtifacts = craneLib.buildDepsOnly common;
           distArtifacts = craneLib.buildDepsOnly (common // { CARGO_PROFILE = "dist"; });
+          mix = craneLib.buildPackage (
+            common
+            // {
+              CARGO_PROFILE = "dist";
+              cargoArtifacts = distArtifacts;
+              preBuild = ''
+                export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="$CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS --remap-path-prefix=$NIX_BUILD_TOP=/build"
+                export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="$CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS --remap-path-prefix=$NIX_BUILD_TOP=/build"
+              '';
+              cargoExtraArgs = "--locked --package mix-cli --package mix-daemon";
+              doCheck = false;
+            }
+          );
           fuzzManifests = [
             "crates/nixgen/fuzz"
             "crates/render/fuzz"
@@ -86,19 +100,25 @@
             ];
           };
 
-          packages.default = craneLib.buildPackage (
-            common
-            // {
-              CARGO_PROFILE = "dist";
-              cargoArtifacts = distArtifacts;
-              preBuild = ''
-                export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="$CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS --remap-path-prefix=$NIX_BUILD_TOP=/build"
-                export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="$CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS --remap-path-prefix=$NIX_BUILD_TOP=/build"
+          packages.default = mix;
+
+          packages.release =
+            pkgs.runCommand "mix-${version}-${system}"
+              {
+                nativeBuildInputs = [
+                  pkgs.gnutar
+                  pkgs.gzip
+                ];
+              }
+              ''
+                name=mix-${system}
+                mkdir -p $name $out
+                cp ${mix}/bin/mix ${mix}/bin/mix-daemon $name/
+                cp ${./LICENSE} $name/LICENSE
+                tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - $name | gzip -n > $out/$name.tar.gz
+                cd $out
+                sha256sum $name.tar.gz > $name.tar.gz.sha256
               '';
-              cargoExtraArgs = "--locked --package mix-cli --package mix-daemon";
-              doCheck = false;
-            }
-          );
 
           checks = {
             tests = craneLib.cargoNextest (
@@ -224,7 +244,7 @@
     in
     {
       packages = nixpkgs.lib.mapAttrs (_: outputs: {
-        default = outputs.packages.default;
+        inherit (outputs.packages) default release;
       }) perSystem;
 
       checks = nixpkgs.lib.mapAttrs (_: outputs: outputs.checks) perSystem;
