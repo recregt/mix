@@ -6,65 +6,19 @@ use mix_events::v1::command::Request;
 
 use super::*;
 use crate::declared::identity::NIXBLD_USER_COUNT;
-use crate::declared::paths::{
-    INSTALLED_PROGRAMS, MIX_STATE_DIR, NIX_STORE, RUNNING_PROGRAM, mix_state_dir,
-};
-use crate::declared::policy::Policy;
-use crate::declared::targets::{Runtime, UserConfig};
-use crate::effect::Digest;
+use crate::declared::paths::{INSTALLED_PROGRAMS, MIX_STATE_DIR, NIX_STORE, mix_state_dir};
 use crate::model::World;
-use crate::model::testkit::{Run, Script, difference, drive, recover, requested};
-use crate::ops::bootstrap;
+use crate::model::testkit::{
+    Run, Script, account, difference, drive, enrolled, recover, requested,
+};
 use crate::run::{Runner, Verdict};
 
 fn alice() -> InvokingUser {
-    InvokingUser {
-        uid: 1000,
-        gid: 1000,
-        name: "alice".into(),
-        home: "/home/alice".into(),
-    }
+    account("alice", 1000)
 }
 
 fn bootstrapped() -> World {
-    let mut world = World::default();
-    world.with_dir("/home/alice", 0o700, (1000, 1000));
-    world.users.insert(
-        "alice".into(),
-        crate::effect::UserFacts {
-            uid: 1000,
-            gid: 1000,
-            home: "/home/alice".into(),
-            shell: "/bin/sh".into(),
-            comment: String::new(),
-        },
-    );
-    world.with_file(RUNNING_PROGRAM, b"mix-daemon", 0o755, (0, 0));
-    let settings = bootstrap::Settings {
-        policy: Policy::default(),
-        user: Some(UserConfig {
-            user: alice(),
-            pins: mix_nixgen::lock::EMBEDDED,
-            flake: "flake".into(),
-            lock: mix_nixgen::lock::render(mix_nixgen::lock::EMBEDDED),
-            home: "home".into(),
-            restored_state: None,
-        }),
-        force: false,
-        runtime: Runtime {
-            url: "https://mirror.internal/nix-2.35.2-x86_64-linux.tar.xz".into(),
-            sha256: Digest([7; 32]),
-            size: 27_131_728,
-        },
-        request: "request-0".into(),
-    };
-    let ran = drive(
-        &mut world,
-        Runner::new(ROOT, bootstrap::steps(&settings)),
-        requested(Request::Bootstrap(Box::default())),
-        &Script::default(),
-    );
-    assert_eq!(ran.report().verdict, Verdict::Succeeded);
+    let mut world = enrolled(&[alice()]);
     world.with_file("/home/alice/.bashrc", b"linked", 0o644, (1000, 1000));
     world.with_file("/home/alice/notes", b"mine", 0o644, (1000, 1000));
     world
@@ -268,4 +222,14 @@ fn a_crash_at_any_action_ends_as_either_the_old_machine_or_a_finished_removal() 
         crash_at += 1;
     }
     assert!(crash_at > 40, "too few actions to crash in: {crash_at}");
+}
+
+#[test]
+fn deleting_the_store_is_its_own_step_so_the_wait_is_visible() {
+    let mut world = bootstrapped();
+
+    let run = remove(&mut world, &Script::default());
+
+    assert_eq!(run.report().verdict, Verdict::Succeeded);
+    assert_eq!(run.step_keys().last().map(String::as_str), Some("reclaim"));
 }

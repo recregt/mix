@@ -1,22 +1,27 @@
 use mix_core::declared::identity::InvokingUser;
 use mix_core::ops::user_remove::{Settings, steps};
-use mix_core::report::diagnose::{diagnostic, warning};
-use mix_core::run::{Runner, Verdict};
-use mix_events::v1::{Code, UserRemoveResult, node_finished};
-use mix_events::{Ending, ROOT};
+use mix_core::report::diagnose::diagnostic;
+use mix_core::run::Verdict;
+use mix_events::Ending;
+use mix_events::v1::{UserRemoveResult, node_finished};
 
 use crate::Context;
-use crate::drive::drive;
-use crate::ops::bootstrap::{Error, error_from};
+use crate::ops::removal::removal;
 use crate::profile::change::profile_user;
 use crate::request::{Concluded, Root};
 
-fn ending_of(verdict: &Verdict, user: &InvokingUser, others: Vec<String>) -> Ending {
+fn ending_of(verdict: &Verdict, ctx: &Context, user: &InvokingUser) -> Ending {
     match verdict {
         Verdict::Succeeded => {
             Ending::succeeded().with_result(node_finished::Result::UserRemove(UserRemoveResult {
                 user: user.name.clone(),
-                others,
+                others: ctx
+                    .host
+                    .enrolled()
+                    .into_iter()
+                    .map(|enrolled| enrolled.name)
+                    .filter(|name| *name != user.name)
+                    .collect(),
             }))
         }
         Verdict::Failed { failure, .. } => Ending::failed(diagnostic(failure)),
@@ -24,76 +29,16 @@ fn ending_of(verdict: &Verdict, user: &InvokingUser, others: Vec<String>) -> End
     }
 }
 
-fn others_than(ctx: &Context, user: &InvokingUser) -> Vec<String> {
-    ctx.host
-        .enrolled()
-        .into_iter()
-        .map(|enrolled| enrolled.name)
-        .filter(|name| *name != user.name)
-        .collect()
-}
-
 pub(crate) async fn user_remove(ctx: &Context, root: &mut Root) -> Concluded {
     let user = match profile_user(ctx) {
         Ok(config) => config.user.clone(),
         Err(error) => return root.refuse(error),
     };
-    let mut performer = match ctx.performer() {
-        Ok(performer) => performer,
-        Err(source) => {
-            return root.refuse(Error::Core(mix_core::Error::Io {
-                path: "/".into(),
-                source,
-            }));
-        }
-    };
     let settings = Settings { user: user.clone() };
-    let scope = &ctx.scope;
-    crate::ops::recover_interrupted(ctx, &mut root.tree, &mut performer, true).await;
-    let mut runner = Runner::new(ROOT, steps(&settings));
-    if ctx.dry_run {
-        let report = drive(
-            &mut runner,
-            &mut root.tree,
-            &mut performer,
-            scope,
-            &root.stopped,
-            &mut Vec::new(),
-            &mut ctx.relay(),
-        )
-        .await;
-        let others = others_than(ctx, &user);
-        return root.conclude(ending_of(&report.verdict, &user, others));
+    match removal(ctx, root, steps(&settings)).await {
+        Ok(verdict) => root.conclude(ending_of(&verdict, ctx, &user)),
+        Err(refused) => *refused,
     }
-    let mut journal = match ctx.journal(ctx.journals.as_path()) {
-        Ok(journal) => journal,
-        Err(failure) => return root.refuse(error_from(failure)),
-    };
-    let report = drive(
-        &mut runner,
-        &mut root.tree,
-        &mut performer,
-        scope,
-        &root.stopped,
-        &mut journal,
-        &mut ctx.relay(),
-    )
-    .await;
-    if !report.rollback_failures.is_empty() {
-        return root.conclude(ending_of(&report.verdict, &user, Vec::new()));
-    }
-    if let Err(failure) = journal.finish() {
-        let _ = root.tree.warn(
-            ROOT,
-            warning(
-                Code::CleanupIncomplete,
-                "could not remove the finished journal",
-                &failure,
-            ),
-        );
-    }
-    let others = others_than(ctx, &user);
-    root.conclude(ending_of(&report.verdict, &user, others))
 }
 
 #[cfg(test)]
@@ -102,59 +47,25 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use mix_core::declared::identity::InvokingUser;
-    use mix_core::declared::paths::{RUNNING_PROGRAM, mix_state_dir};
+    use mix_core::declared::paths::mix_state_dir;
     use mix_core::model::World;
-    use mix_events::v1::UserRemoveRequest;
+    use mix_core::model::testkit::account;
     use mix_events::v1::command::Request;
+    use mix_events::v1::{Code, UserRemoveRequest};
 
     use super::*;
-    use crate::request::context::Host;
-    use crate::request::ran::ran;
-
-    fn account(name: &str, uid: u32) -> InvokingUser {
-        InvokingUser {
-            uid,
-            gid: uid,
-            name: name.into(),
-            home: format!("/home/{name}").into(),
-        }
-    }
+    use crate::request::ran::{caller, machine_of, ran};
 
     fn machine() -> Arc<Mutex<World>> {
-        let mut world = World::default();
-        for user in [account("alice", 1000), account("bob", 1001)] {
-            world.with_dir(&user.home, 0o700, (user.uid, user.gid));
-            world.users.insert(
-                user.name.clone(),
-                mix_core::effect::UserFacts {
-                    uid: user.uid,
-                    gid: user.gid,
-                    home: user.home.clone(),
-                    shell: "/bin/sh".into(),
-                    comment: String::new(),
-                },
-            );
-        }
-        world.with_file(RUNNING_PROGRAM, b"mix-daemon", 0o755, (0, 0));
-        Arc::new(Mutex::new(world))
+        machine_of(&[account("alice", 1000), account("bob", 1001)])
     }
 
     fn as_user(world: &Arc<Mutex<World>>, user: &InvokingUser) -> crate::Session {
-        crate::Session::new(mix_exec::Scope::root())
-            .with_host(Host::Model(Arc::clone(world)))
-            .with_caller(crate::Caller::Account {
-                peer_is_root: false,
-                account: Some(user.clone()),
-            })
+        caller(world, false, Some(user.clone()))
     }
 
     fn as_root(world: &Arc<Mutex<World>>) -> crate::Session {
-        crate::Session::new(mix_exec::Scope::root())
-            .with_host(Host::Model(Arc::clone(world)))
-            .with_caller(crate::Caller::Account {
-                peer_is_root: true,
-                account: None,
-            })
+        caller(world, true, None)
     }
 
     async fn enrolled(world: &Arc<Mutex<World>>) {

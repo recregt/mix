@@ -5,23 +5,12 @@ use mix_events::v1::UserRemoveRequest;
 use mix_events::v1::command::Request;
 
 use super::*;
-use crate::declared::paths::{MIX_STATE_DIR, NIX_STORE, RUNNING_PROGRAM, mix_state_dir};
-use crate::declared::policy::Policy;
-use crate::declared::targets::{Runtime, UserConfig};
-use crate::effect::Digest;
+use crate::declared::paths::{MIX_STATE_DIR, NIX_STORE, mix_state_dir};
 use crate::model::World;
-use crate::model::testkit::{Run, Script, difference, drive, recover, requested};
-use crate::ops::bootstrap;
+use crate::model::testkit::{
+    Run, Script, account, difference, drive, enrolled, recover, requested,
+};
 use crate::run::{Runner, Verdict};
-
-fn account(name: &str, uid: u32) -> InvokingUser {
-    InvokingUser {
-        uid,
-        gid: uid,
-        name: name.into(),
-        home: format!("/home/{name}").into(),
-    }
-}
 
 fn alice() -> InvokingUser {
     account("alice", 1000)
@@ -31,53 +20,9 @@ fn bob() -> InvokingUser {
     account("bob", 1001)
 }
 
-fn enroll(world: &mut World, user: &InvokingUser) {
-    let settings = bootstrap::Settings {
-        policy: Policy::default(),
-        user: Some(UserConfig {
-            user: user.clone(),
-            pins: mix_nixgen::lock::EMBEDDED,
-            flake: "flake".into(),
-            lock: mix_nixgen::lock::render(mix_nixgen::lock::EMBEDDED),
-            home: "home".into(),
-            restored_state: None,
-        }),
-        force: false,
-        runtime: Runtime {
-            url: "https://mirror.internal/nix-2.35.2-x86_64-linux.tar.xz".into(),
-            sha256: Digest([7; 32]),
-            size: 27_131_728,
-        },
-        request: "request-0".into(),
-    };
-    let ran = drive(
-        world,
-        Runner::new(ROOT, bootstrap::steps(&settings)),
-        requested(Request::Bootstrap(Box::default())),
-        &Script::default(),
-    );
-    assert_eq!(ran.report().verdict, Verdict::Succeeded);
-}
-
 fn machine_of(users: &[InvokingUser]) -> World {
-    let mut world = World::default();
-    world.with_file(RUNNING_PROGRAM, b"mix-daemon", 0o755, (0, 0));
+    let mut world = enrolled(users);
     for user in users {
-        let home = user.home.to_string_lossy().into_owned();
-        world.with_dir(&home, 0o700, (user.uid, user.gid));
-        world.users.insert(
-            user.name.clone(),
-            crate::effect::UserFacts {
-                uid: user.uid,
-                gid: user.gid,
-                home: user.home.clone(),
-                shell: "/bin/sh".into(),
-                comment: String::new(),
-            },
-        );
-    }
-    for user in users {
-        enroll(&mut world, user);
         world.with_file(
             format!("{}/notes", user.home.display()),
             b"mine",
@@ -204,4 +149,14 @@ fn a_crash_at_any_action_ends_as_either_the_old_state_or_a_finished_removal() {
         crash_at += 1;
     }
     assert!(crash_at > 3, "too few actions to crash in: {crash_at}");
+}
+
+#[test]
+fn a_user_removal_discards_no_tree_so_it_shows_no_reclaim_step() {
+    let mut world = machine_of(&[alice()]);
+
+    let run = remove(&mut world, &alice(), &Script::default());
+
+    let keys = run.step_keys();
+    assert!(!keys.iter().any(|key| key == "reclaim"), "{keys:?}");
 }

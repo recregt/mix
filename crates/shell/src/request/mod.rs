@@ -538,6 +538,45 @@ pub(crate) mod ran {
         }
     }
 
+    pub(crate) fn machine_of(
+        users: &[mix_core::declared::identity::InvokingUser],
+    ) -> Arc<Mutex<mix_core::model::World>> {
+        let mut world = mix_core::model::World::default();
+        for user in users {
+            world.with_dir(&user.home, 0o700, (user.uid, user.gid));
+            world.users.insert(
+                user.name.clone(),
+                mix_core::effect::UserFacts {
+                    uid: user.uid,
+                    gid: user.gid,
+                    home: user.home.clone(),
+                    shell: "/bin/sh".into(),
+                    comment: String::new(),
+                },
+            );
+        }
+        world.with_file(
+            mix_core::declared::paths::RUNNING_PROGRAM,
+            b"mix-daemon",
+            0o755,
+            (0, 0),
+        );
+        Arc::new(Mutex::new(world))
+    }
+
+    pub(crate) fn caller(
+        world: &Arc<Mutex<mix_core::model::World>>,
+        peer_is_root: bool,
+        account: Option<mix_core::declared::identity::InvokingUser>,
+    ) -> crate::Session {
+        crate::Session::new(mix_exec::Scope::root())
+            .with_host(crate::request::context::Host::Model(Arc::clone(world)))
+            .with_caller(crate::Caller::Account {
+                peer_is_root,
+                account,
+            })
+    }
+
     pub(crate) struct Ran(pub(crate) Vec<Envelope>);
 
     impl Ran {

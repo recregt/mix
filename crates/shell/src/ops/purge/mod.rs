@@ -1,13 +1,13 @@
 use mix_core::effect::Failure;
 use mix_core::ops::purge::{Settings, steps};
 use mix_core::report::diagnose::{diagnostic, warning};
-use mix_core::run::{Runner, Verdict};
+use mix_core::run::Verdict;
 use mix_events::v1::{Code, PurgeResult, node_finished};
 use mix_events::{Ending, ROOT};
 
 use crate::Context;
-use crate::drive::drive;
-use crate::ops::bootstrap::{Error, error_from};
+use crate::ops::bootstrap::Error;
+use crate::ops::removal::removal;
 use crate::request::{Concluded, Root};
 
 fn ending_of(verdict: &Verdict, settings: &Settings) -> Ending {
@@ -30,68 +30,19 @@ pub(crate) async fn purge(ctx: &Context, root: &mut Root) -> Concluded {
     if !ctx.host.is_root() {
         return root.refuse(Error::NotRoot("remove `mix`"));
     }
-    let mut performer = match ctx.performer() {
-        Ok(performer) => performer,
-        Err(source) => {
-            return root.refuse(Error::Core(mix_core::Error::Io {
-                path: "/".into(),
-                source,
-            }));
-        }
-    };
     let settings = Settings {
         users: ctx.host.enrolled(),
     };
-    let scope = &ctx.scope;
-    crate::ops::recover_interrupted(ctx, &mut root.tree, &mut performer, true).await;
-    if ctx.dry_run {
-        let mut runner = Runner::new(ROOT, steps(&settings));
-        let report = drive(
-            &mut runner,
-            &mut root.tree,
-            &mut performer,
-            scope,
-            &root.stopped,
-            &mut Vec::new(),
-            &mut ctx.relay(),
-        )
-        .await;
-        return root.conclude(ending_of(&report.verdict, &settings));
-    }
-    let mut journal = match ctx.journal(ctx.journals.as_path()) {
-        Ok(journal) => journal,
-        Err(failure) => return root.refuse(error_from(failure)),
+    let verdict = match removal(ctx, root, steps(&settings)).await {
+        Ok(verdict) => verdict,
+        Err(refused) => return *refused,
     };
-    let mut runner = Runner::new(ROOT, steps(&settings));
-    let report = drive(
-        &mut runner,
-        &mut root.tree,
-        &mut performer,
-        scope,
-        &root.stopped,
-        &mut journal,
-        &mut ctx.relay(),
-    )
-    .await;
-    if !report.rollback_failures.is_empty() {
-        return root.conclude(ending_of(&report.verdict, &settings));
-    }
-    if let Err(failure) = journal.finish() {
-        let _ = root.tree.warn(
-            ROOT,
-            warning(
-                Code::CleanupIncomplete,
-                "could not remove the finished journal",
-                &failure,
-            ),
-        );
-    }
-    if report.verdict == Verdict::Succeeded {
+    if !ctx.dry_run && verdict == Verdict::Succeeded {
         for left in ctx.host.finish_removal() {
             let _ = root.tree.warn(ROOT, left_behind(&left));
         }
     }
-    root.conclude(ending_of(&report.verdict, &settings))
+    root.conclude(ending_of(&verdict, &settings))
 }
 
 fn left_behind(failure: &Failure) -> mix_events::v1::Diagnostic {
@@ -112,52 +63,29 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use mix_core::declared::identity::InvokingUser;
-    use mix_core::declared::paths::{LOCK_FILE, RUNNING_PROGRAM};
+    use mix_core::declared::paths::LOCK_FILE;
     use mix_core::model::World;
+    use mix_core::model::testkit::account;
     use mix_events::v1::PurgeRequest;
     use mix_events::v1::command::Request;
 
     use super::*;
-    use crate::request::context::Host;
-    use crate::request::ran::ran;
+    use crate::request::ran::{caller, machine_of, ran};
 
     fn alice() -> InvokingUser {
-        InvokingUser {
-            uid: 1000,
-            gid: 1000,
-            name: "alice".into(),
-            home: "/home/alice".into(),
-        }
+        account("alice", 1000)
     }
 
     fn machine() -> Arc<Mutex<World>> {
-        let mut world = World::default();
-        world.with_dir("/home/alice", 0o700, (1000, 1000));
-        world.users.insert(
-            "alice".into(),
-            mix_core::effect::UserFacts {
-                uid: 1000,
-                gid: 1000,
-                home: "/home/alice".into(),
-                shell: "/bin/sh".into(),
-                comment: String::new(),
-            },
-        );
-        world.with_file(RUNNING_PROGRAM, b"mix-daemon", 0o755, (0, 0));
-        Arc::new(Mutex::new(world))
+        machine_of(&[alice()])
     }
 
     fn session(world: &Arc<Mutex<World>>) -> crate::Session {
-        as_caller(world, Some(alice()))
+        caller(world, true, Some(alice()))
     }
 
     fn as_caller(world: &Arc<Mutex<World>>, account: Option<InvokingUser>) -> crate::Session {
-        crate::Session::new(mix_exec::Scope::root())
-            .with_host(Host::Model(Arc::clone(world)))
-            .with_caller(crate::Caller::Account {
-                peer_is_root: true,
-                account,
-            })
+        caller(world, true, account)
     }
 
     fn users(ran: &crate::request::ran::Ran) -> Vec<String> {
