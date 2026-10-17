@@ -1228,13 +1228,24 @@ impl Files {
         }
     }
 
-    pub fn detach_pending(&mut self) -> std::io::Result<Files> {
+    fn is_tree(&self, path: &Path) -> bool {
+        self.place(path)
+            .ok()
+            .and_then(|place| Self::stat(&place, &place.name).ok().flatten())
+            .is_some_and(|stat| kind(&stat) == Kind::Directory)
+    }
+
+    pub fn detach_trees(&mut self) -> std::io::Result<Files> {
         let root = self.root.try_clone()?;
+        let (trees, rest): (Vec<PathBuf>, Vec<PathBuf>) = std::mem::take(&mut self.pending)
+            .into_iter()
+            .partition(|path| self.is_tree(path));
+        self.pending = rest;
         Ok(Files {
             root,
             trusted: self.trusted,
             request: self.request.clone(),
-            pending: std::mem::take(&mut self.pending),
+            pending: trees,
             next: self.next,
             seen: std::sync::Mutex::new(Seen::default()),
             placed: Vec::new(),

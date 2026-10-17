@@ -501,12 +501,17 @@ impl Performer {
     }
 
     async fn commit_files(&mut self, prepared: &mut Prepared<'_>, scope: &Scope) -> Outcome {
-        let Ok(mut detached) = self.files.detach_pending() else {
-            return self
-                .files
-                .perform(&Action::Commit, prepared)
-                .expect("a file action");
+        let trees = self.files.detach_trees();
+        let rest = self
+            .files
+            .perform(&Action::Commit, prepared)
+            .expect("a file action");
+        let Ok(mut detached) = trees else {
+            return rest;
         };
+        if detached.pending().is_empty() {
+            return rest;
+        }
         let stop =
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(scope.reason().is_some()));
         let asked = std::sync::Arc::clone(&stop);
@@ -525,7 +530,11 @@ impl Performer {
             }
         };
         self.files.reattach(detached);
-        outcome
+        match (rest, outcome) {
+            (_, Err(Failure::Cancelled)) => Err(Failure::Cancelled),
+            (Err(failure), _) => Err(failure),
+            (Ok(_), outcome) => outcome,
+        }
     }
 
     pub fn with_profile(mut self, profile: ProfileContext) -> Self {

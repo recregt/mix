@@ -404,19 +404,40 @@ fn a_detached_commit_deletes_on_its_own_and_gives_back_what_it_left() {
     })
     .unwrap();
 
-    let mut detached = root.files.detach_pending().unwrap();
+    let mut detached = root.files.detach_trees().unwrap();
     assert!(root.files.pending().is_empty());
     let stopped = detached.commit_stoppable(&AtomicBool::new(true));
     assert_eq!(stopped, Err(Failure::Cancelled));
     root.files.reattach(detached);
     assert_eq!(root.files.pending(), [PathBuf::from("/nix")]);
 
-    let mut detached = root.files.detach_pending().unwrap();
+    let mut detached = root.files.detach_trees().unwrap();
     detached.commit_stoppable(&AtomicBool::new(false)).unwrap();
     root.files.reattach(detached);
 
     assert!(!root.real("/nix").exists());
     assert!(root.files.pending().is_empty());
+}
+
+#[test]
+fn only_trees_are_detached_for_a_commit_because_a_file_costs_one_unlink() {
+    let mut root = root();
+    std::fs::create_dir_all(root.real("/nix/store/abc")).unwrap();
+    std::fs::write(root.real("/etc/old"), "x").unwrap();
+    let tree = root.id("/nix");
+    let file = root.id("/etc/old");
+    for (path, id) in [("/nix", tree), ("/etc/old", file)] {
+        root.apply(Action::Discard {
+            path: path.into(),
+            expect: id,
+        })
+        .unwrap();
+    }
+
+    let detached = root.files.detach_trees().unwrap();
+
+    assert_eq!(detached.pending(), [PathBuf::from("/nix")]);
+    assert_eq!(root.files.pending(), [PathBuf::from("/etc/old")]);
 }
 
 #[test]
