@@ -1,5 +1,5 @@
 use mix_core::effect::Failure;
-use mix_core::ops::purge::{Settings, steps};
+use mix_core::ops::purge::{Candidates, Settings, discovery, steps};
 use mix_core::report::diagnose::{diagnostic, warning};
 use mix_core::run::Verdict;
 use mix_events::v1::{Code, PurgeResult, node_finished};
@@ -30,9 +30,14 @@ pub(crate) async fn purge(ctx: &Context, root: &mut Root) -> Concluded {
     if !ctx.host.is_root() {
         return root.refuse(Error::NotRoot("remove `mix`"));
     }
-    let planned = removal(ctx, root, |users| {
-        let settings = Settings { users };
-        (steps(&settings), settings)
+    let planned = removal(ctx, root, async |performer, scope| {
+        let discovered = performer.observe(&discovery(), scope).await?;
+        let candidates = Candidates::of(&discovered);
+        let states = performer.observe(&candidates.queries(), scope).await?;
+        let settings = Settings {
+            users: candidates.holders(&states),
+        };
+        Ok((steps(&settings), settings))
     })
     .await;
     let (verdict, settings) = match planned {

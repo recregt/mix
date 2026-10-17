@@ -5,9 +5,10 @@ use crate::declared::identity::{
     InvokingUser, MIX_USERS_GROUP, NIXBLD_GROUP, NIXBLD_USER_COUNT, user_name,
 };
 use crate::declared::paths::{
-    MIX_BIN_DIR, MIX_DAEMON_SERVICE_DEST, MIX_DAEMON_SERVICE_UNIT, MIX_DAEMON_SOCKET_DEST,
-    MIX_DAEMON_SOCKET_UNIT, NIX_CONF_DEST, NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_UNIT,
-    NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_UNIT, NIX_ENTRIES, POLICY_FILE, PROFILE_SNIPPET_DEST,
+    LOGIN_DEFS, MIX_BIN_DIR, MIX_DAEMON_SERVICE_DEST, MIX_DAEMON_SERVICE_UNIT,
+    MIX_DAEMON_SOCKET_DEST, MIX_DAEMON_SOCKET_UNIT, NIX_CONF_DEST, NIX_DAEMON_SERVICE_DEST,
+    NIX_DAEMON_SERVICE_UNIT, NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_UNIT, NIX_ENTRIES,
+    POLICY_FILE, PROFILE_SNIPPET_DEST, mix_state_dir,
 };
 use crate::effect::{Action, Fact, Failure, Query, UnitFacts};
 use crate::ops::removal::{RemoveHome, path, set_aside_each};
@@ -174,6 +175,101 @@ impl StepSpec for RemoveAccounts {
         }
         Ok(actions)
     }
+}
+
+pub fn discovery() -> Vec<Query> {
+    vec![
+        Query::Group(MIX_USERS_GROUP.to_string()),
+        Query::Group(NIXBLD_GROUP.to_string()),
+        Query::Accounts,
+        Query::Contents(LOGIN_DEFS.into()),
+    ]
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Candidates {
+    members: Vec<InvokingUser>,
+    others: Vec<InvokingUser>,
+}
+
+impl Candidates {
+    pub fn of(facts: &[Fact]) -> Self {
+        let [
+            Fact::Group(members),
+            Fact::Group(builders),
+            Fact::Accounts(accounts),
+            Fact::Contents(login_defs),
+        ] = facts
+        else {
+            unreachable!("the discovery queries are answered in order: {facts:?}")
+        };
+        let account = |name: &str, found: &crate::effect::UserFacts| InvokingUser {
+            uid: found.uid,
+            gid: found.gid,
+            name: name.to_string(),
+            home: found.home.clone(),
+        };
+        let usable = |name: &str, found: &crate::effect::UserFacts| {
+            !name.contains('"') && found.home.is_absolute() && found.home.to_str().is_some()
+        };
+        let members: Vec<InvokingUser> = members
+            .iter()
+            .flat_map(|group| &group.members)
+            .filter_map(|member| {
+                accounts
+                    .iter()
+                    .find(|(name, _)| name == member)
+                    .filter(|(name, found)| usable(name, found))
+                    .map(|(name, found)| account(name, found))
+            })
+            .collect();
+        let regular = uid_range(&String::from_utf8_lossy(
+            login_defs.as_deref().unwrap_or_default(),
+        ));
+        let builders = builders.as_ref().map(|group| group.gid);
+        let others = accounts
+            .iter()
+            .filter(|(name, found)| {
+                regular.contains(&found.uid)
+                    && Some(found.gid) != builders
+                    && usable(name, found)
+                    && !members.iter().any(|member| member.name == *name)
+            })
+            .map(|(name, found)| account(name, found))
+            .collect();
+        Self { members, others }
+    }
+
+    pub fn queries(&self) -> Vec<Query> {
+        self.others
+            .iter()
+            .map(|other| Query::Path(mix_state_dir(&other.home)))
+            .collect()
+    }
+
+    pub fn holders(self, states: &[Fact]) -> Vec<InvokingUser> {
+        let mut holders = self.members;
+        holders.extend(
+            self.others
+                .into_iter()
+                .zip(states)
+                .filter(|(_, state)| matches!(state, Fact::Path(found) if found.id.is_some()))
+                .map(|(other, _)| other),
+        );
+        holders
+    }
+}
+
+fn uid_range(login_defs: &str) -> std::ops::RangeInclusive<u32> {
+    let setting = |key: &str| {
+        login_defs.lines().find_map(|line| {
+            let mut words = line.split_whitespace();
+            (words.next() == Some(key))
+                .then(|| words.next()?.parse::<u32>().ok())
+                .flatten()
+        })
+    };
+    setting("UID_MIN").unwrap_or(1000)..=setting("UID_MAX").unwrap_or(60000)
 }
 
 pub fn steps(settings: &Settings) -> Vec<Box<dyn StepSpec>> {

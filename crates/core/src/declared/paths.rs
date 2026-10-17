@@ -39,6 +39,7 @@ pub const DEFAULT_PROFILE_NIX_STORE: &str = "/nix/var/nix/profiles/default/bin/n
 
 pub const NIX_CONF_DEST: &str = "/etc/nix/nix.conf";
 pub const PROFILE_SNIPPET_DEST: &str = "/etc/profile.d/mix-nix.sh";
+pub const LOGIN_DEFS: &str = "/etc/login.defs";
 pub const POLICY_FILE: &str = "/etc/mix/policy.json";
 
 pub const LOCK_FILE: &str = "/var/lib/mix/lock";

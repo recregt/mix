@@ -233,3 +233,110 @@ fn deleting_the_store_is_its_own_step_so_the_wait_is_visible() {
     assert_eq!(run.report().verdict, Verdict::Succeeded);
     assert_eq!(run.step_keys().last().map(String::as_str), Some("reclaim"));
 }
+
+fn facts(members: &[&str], accounts: &[(&str, u32, u32)], login_defs: Option<&str>) -> Vec<Fact> {
+    let accounts = accounts
+        .iter()
+        .map(|(name, uid, gid)| {
+            (
+                (*name).to_string(),
+                crate::effect::UserFacts {
+                    uid: *uid,
+                    gid: *gid,
+                    home: format!("/home/{name}").into(),
+                    shell: "/bin/sh".into(),
+                    comment: String::new(),
+                },
+            )
+        })
+        .collect();
+    vec![
+        Fact::Group(Some(crate::effect::GroupFacts {
+            gid: 990,
+            members: members.iter().map(|name| (*name).to_string()).collect(),
+        })),
+        Fact::Group(Some(crate::effect::GroupFacts {
+            gid: 30000,
+            members: Vec::new(),
+        })),
+        Fact::Accounts(accounts),
+        Fact::Contents(login_defs.map(|text| std::sync::Arc::from(text.as_bytes()))),
+    ]
+}
+
+fn names(users: &[InvokingUser]) -> Vec<&str> {
+    users.iter().map(|user| user.name.as_str()).collect()
+}
+
+fn state(id: Option<crate::effect::FileId>) -> Fact {
+    Fact::Path(crate::effect::PathFacts {
+        kind: if id.is_some() {
+            crate::effect::Kind::Directory
+        } else {
+            crate::effect::Kind::Missing
+        },
+        mode: 0o700,
+        owner: (1001, 1001),
+        id,
+        digest: None,
+        changed: None,
+    })
+}
+
+fn kept() -> Fact {
+    state(Some(crate::effect::FileId {
+        dev: 1,
+        ino: 1,
+        born: None,
+    }))
+}
+
+fn gone() -> Fact {
+    state(None)
+}
+
+#[test]
+fn members_always_hold_and_a_former_user_holds_only_while_their_state_is_there() {
+    let candidates = Candidates::of(&facts(
+        &["alice"],
+        &[
+            ("root", 0, 0),
+            ("alice", 1000, 1000),
+            ("bob", 1001, 1001),
+            ("carol", 1002, 1002),
+            ("nixbld1", 30001, 30000),
+            ("nobody", 65534, 65534),
+        ],
+        None,
+    ));
+
+    assert_eq!(
+        candidates.queries(),
+        [
+            Query::Path(mix_state_dir(Path::new("/home/bob"))),
+            Query::Path(mix_state_dir(Path::new("/home/carol"))),
+        ]
+    );
+    assert_eq!(
+        names(&candidates.holders(&[kept(), gone()])),
+        ["alice", "bob"]
+    );
+}
+
+#[test]
+fn the_regular_range_comes_from_login_defs_and_otherwise_the_shadow_defaults() {
+    let accounts = [("old", 500, 500), ("alice", 1000, 1000)];
+
+    let defaults = Candidates::of(&facts(&[], &accounts, None));
+    let widened = Candidates::of(&facts(&[], &accounts, Some("# shadow\nUID_MIN\t 500\n")));
+
+    assert_eq!(defaults.queries().len(), 1);
+    assert_eq!(widened.queries().len(), 2);
+}
+
+#[test]
+fn a_member_with_no_account_left_is_not_a_holder() {
+    let candidates = Candidates::of(&facts(&["ghost"], &[("alice", 1000, 1000)], None));
+
+    assert_eq!(names(&candidates.holders(&[gone()])), Vec::<&str>::new());
+}
