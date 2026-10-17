@@ -30,11 +30,13 @@ pub(crate) async fn purge(ctx: &Context, root: &mut Root) -> Concluded {
     if !ctx.host.is_root() {
         return root.refuse(Error::NotRoot("remove `mix`"));
     }
-    let settings = Settings {
-        users: ctx.host.enrolled(),
-    };
-    let verdict = match removal(ctx, root, steps(&settings)).await {
-        Ok(verdict) => verdict,
+    let planned = removal(ctx, root, |users| {
+        let settings = Settings { users };
+        (steps(&settings), settings)
+    })
+    .await;
+    let (verdict, settings) = match planned {
+        Ok(planned) => planned,
         Err(refused) => return *refused,
     };
     if !ctx.dry_run && verdict == Verdict::Succeeded {

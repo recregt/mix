@@ -35,8 +35,8 @@ pub(crate) async fn user_remove(ctx: &Context, root: &mut Root) -> Concluded {
         Err(error) => return root.refuse(error),
     };
     let settings = Settings { user: user.clone() };
-    match removal(ctx, root, steps(&settings)).await {
-        Ok(verdict) => root.conclude(ending_of(&verdict, ctx, &user)),
+    match removal(ctx, root, |_| (steps(&settings), ())).await {
+        Ok((verdict, ())) => root.conclude(ending_of(&verdict, ctx, &user)),
         Err(refused) => *refused,
     }
 }
