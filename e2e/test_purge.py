@@ -119,6 +119,7 @@ def test_a_purge_on_a_terminal_shows_the_daemons_plan_with_every_home_before_ask
     planned = run.stdout[:asked]
     assert f"/home/{FIRST_USER}" in planned, run
     assert f"/home/{SECOND_USER}" in planned, run
+    assert "without `--dry-run`" not in planned, run
     assert run.returncode != 0, run
     for path in ("/nix/store", NIX_CONF_DEST, *UNIT_FILES):
         assert _exists(container, path), path

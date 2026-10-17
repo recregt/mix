@@ -13,7 +13,7 @@ pub async fn run() -> ExitCode {
     let args = Args::parse_with_color();
     let environment = env::Environment::read();
     let command = request::command_of(&args.command, args.dry_run(), &environment);
-    let view = || mix_render::View {
+    let view = |preview| mix_render::View {
         json: if args.json {
             mix_render::Json::Stdout
         } else {
@@ -23,6 +23,7 @@ pub async fn run() -> ExitCode {
         quiet: args.quiet,
         exit: mix_render::Exit::default(),
         departure: mix_render::Departure::default(),
+        preview,
     };
     mix_render::start(
         match args.color {
@@ -34,7 +35,7 @@ pub async fn run() -> ExitCode {
     );
     let interactive = !args.json && mix_render::interactive();
     let socket = std::path::Path::new(mix_rpc::SOCKET_PATH);
-    let first = view();
+    let first = view(false);
     let exit = match request::confirmation(&args.command, interactive, mix_render::confirm) {
         request::Confirmation::Given => session::run(command, &first, socket, None).await,
         request::Confirmation::Refused(fault) => {
@@ -42,7 +43,7 @@ pub async fn run() -> ExitCode {
         }
         request::Confirmation::AfterThePlan => {
             let plan = request::command_of(&args.command, true, &environment);
-            let planned = session::run(plan, &view(), socket, None).await;
+            let planned = session::run(plan, &view(true), socket, None).await;
             if planned != ExitCode::SUCCESS {
                 return planned;
             }
@@ -64,7 +65,7 @@ pub async fn run() -> ExitCode {
             false,
             &environment,
         );
-        return session::run(purge, &view(), socket, None).await;
+        return session::run(purge, &view(false), socket, None).await;
     }
     exit
 }

@@ -72,6 +72,7 @@ pub struct Human {
     recorded: Option<Duration>,
     level: Detail,
     data: bool,
+    preview: bool,
     started: Instant,
     stop_noticed: bool,
     request: Option<Request>,
@@ -91,6 +92,7 @@ impl Human {
             recorded: None,
             level: Detail::Step,
             data: true,
+            preview: false,
             started: Instant::now(),
             stop_noticed: false,
             request: None,
@@ -105,6 +107,11 @@ impl Human {
 
     pub fn level(mut self, level: Detail) -> Self {
         self.level = level;
+        self
+    }
+
+    pub fn preview(mut self, preview: bool) -> Self {
+        self.preview = preview;
         self
     }
 
@@ -229,6 +236,7 @@ impl Human {
                 let elapsed = self.recorded.unwrap_or_else(|| self.started.elapsed());
                 if self.dry_run {
                     if self.shows(Detail::Step)
+                        && !self.preview
                         && node.status() == mix_events::v1::Status::Succeeded
                     {
                         mix_ui::note_to(

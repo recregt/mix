@@ -109,6 +109,7 @@ pub struct View {
     pub quiet: bool,
     pub exit: Exit,
     pub departure: Departure,
+    pub preview: bool,
 }
 
 impl View {
@@ -120,7 +121,8 @@ impl View {
         Sinks {
             human: Human::new(display)
                 .level(self.level())
-                .data(!self.json.on()),
+                .data(!self.json.on())
+                .preview(self.preview),
             document: self
                 .json
                 .on()
@@ -280,6 +282,7 @@ mod tests {
             quiet: true,
             exit: Exit::default(),
             departure: Departure::default(),
+            preview: false,
         };
         (view, documents)
     }

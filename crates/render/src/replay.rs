@@ -1162,3 +1162,48 @@ fn a_purge_reminds_that_open_terminals_still_load_nix() {
 
     assert!(text.contains("exec $SHELL -l"), "{text}");
 }
+
+#[test]
+fn a_plan_shown_before_a_question_does_not_tell_the_reader_to_run_it_again() {
+    let outbox = Arc::new(Outbox::new("01920000-0000-7000-8000-000000000010", || {}));
+    let mut tree = Tree::new(
+        Arc::clone(&outbox),
+        Arc::new(|| None),
+        Start::command(
+            "purge",
+            Command {
+                mix_version: "0.1.0".into(),
+                schema_minor: mix_events::SCHEMA_MINOR,
+                dry_run: true,
+                request: Some(Request::Purge(mix_events::v1::PurgeRequest::default())),
+            },
+        ),
+    );
+    tree.finish(ROOT, Ending::succeeded()).unwrap();
+    drop(tree);
+    let captured = captured(&outbox.drain()).1;
+    let render = |preview: bool| {
+        let out = Arc::new(Buffer(Mutex::new(Vec::new())));
+        let mut human = Human::new(Arc::new(mix_ui::Silent))
+            .level(Detail::Step)
+            .preview(preview)
+            .to(out.clone());
+        for (envelope, offset) in captured.envelopes.iter().zip(&captured.offsets) {
+            human.at(*offset);
+            human.envelope(envelope.clone());
+        }
+        out.0.lock().unwrap().concat()
+    };
+
+    assert!(
+        render(false).contains("without `--dry-run`"),
+        "{}",
+        render(false)
+    );
+    assert!(
+        !render(true).contains("without `--dry-run`"),
+        "{}",
+        render(true)
+    );
+    assert!(render(true).contains("a dry run"), "{}", render(true));
+}
