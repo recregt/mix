@@ -33,7 +33,7 @@ def _links_into_nix(container, user: str) -> str:
 
 
 @pytest.mark.bootstrapped
-def test_a_removal_leaves_no_trace_of_mix_on_the_machine_or_in_any_home(
+def test_a_purge_leaves_no_trace_of_mix_on_the_machine_or_in_any_home(
     container, mock_nix_server, mirror_cache
 ):
     create_user(container, SECOND_USER, sudo=True)
@@ -43,11 +43,12 @@ def test_a_removal_leaves_no_trace_of_mix_on_the_machine_or_in_any_home(
         assert installed.succeeded(), installed
         assert _links_into_nix(container, user), f"{user} has nothing linked into /nix"
 
-    removed = container.mix("self", "remove", "--yes", user=FIRST_USER)
+    removed = container.mix("purge", "--yes", user=FIRST_USER)
 
     assert removed.succeeded(), removed
-    assert removed.document["command"] == "self remove"
+    assert removed.document["command"] == "purge"
     assert sorted(removed.result("selfRemove")["users"]) == sorted([FIRST_USER, SECOND_USER])
+    assert removed.result("selfRemove")["machine"] is True
     assert set(removed.warnings) <= {"CODE_CLEANUP_INCOMPLETE"}, removed.warnings
     left = [path for path in MACHINE_PATHS if _exists(container, path)]
     assert left == [], left
@@ -64,8 +65,8 @@ def test_a_removal_leaves_no_trace_of_mix_on_the_machine_or_in_any_home(
 
 
 @pytest.mark.bootstrapped
-def test_a_removal_without_a_terminal_or_yes_is_refused_and_changes_nothing(container):
-    refused = container.mix("self", "remove", user=FIRST_USER)
+def test_a_purge_without_a_terminal_or_yes_is_refused_and_changes_nothing(container):
+    refused = container.mix("purge", user=FIRST_USER)
 
     assert refused.returncode == 2, refused
     assert refused.code == "CODE_CONFIRMATION_REQUIRED", refused
@@ -75,8 +76,8 @@ def test_a_removal_without_a_terminal_or_yes_is_refused_and_changes_nothing(cont
 
 
 @pytest.mark.bootstrapped
-def test_a_dry_run_of_a_removal_lists_the_changes_and_makes_none(container):
-    planned = container.mix("self", "remove", "--dry-run", user=FIRST_USER)
+def test_a_dry_run_of_a_purge_lists_the_changes_and_makes_none(container):
+    planned = container.mix("purge", "--dry-run", user=FIRST_USER)
 
     assert planned.succeeded(), planned
     assert planned.document["dryRun"], planned
