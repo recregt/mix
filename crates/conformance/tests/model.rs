@@ -165,6 +165,7 @@ fn replay(transitions: Vec<Transition>) {
         ProptestConfig::default(),
         Spec {
             owned: Arc::clone(owned),
+            ended: false,
         },
         transitions,
         None,
@@ -379,5 +380,27 @@ fn unreadable_objects_after_a_failed_repair_of_a_removed_local_directory() {
             path: "/home/alice/.local/state/mix/.git/objects".into(),
             damage: Damage::Unreadable,
         }),
+    ]);
+}
+
+#[test]
+fn a_failed_purge_over_an_emptied_unit_is_rolled_back() {
+    replay(vec![
+        Transition::Damage(Breakage {
+            path: "/etc/systemd/system/mix-daemon.service".into(),
+            damage: Damage::Emptied,
+        }),
+        Transition::Faulted(Command::Purge, 5, FaultKind::Fail),
+    ]);
+}
+
+#[test]
+fn a_purge_after_a_purge_it_cannot_roll_back_leaves_no_journal() {
+    replay(vec![
+        Transition::Damage(Breakage {
+            path: "/etc/systemd/system/mix-daemon.socket".into(),
+            damage: Damage::Removed,
+        }),
+        Transition::Faulted(Command::Purge, 4, FaultKind::CrashBefore),
     ]);
 }
