@@ -286,7 +286,7 @@ mod tests {
 
         assert_eq!(exit, ExitCode::from(2));
         let document = recorded.document();
-        assert_eq!(document.command, "self remove");
+        assert_eq!(document.command, "user remove");
         assert_eq!(document.exit, mix_events::exit::USAGE);
         assert_eq!(document.problems[0].code(), Code::ConfirmationRequired);
         assert_eq!(

@@ -6,7 +6,7 @@ use mix_events::v1::{
     ListRequest, PurgeRequest, RemoveRequest, RepairRequest, SelfRemoveRequest, UpdateRequest,
 };
 
-use crate::args::{Command, Itself};
+use crate::args::{Command, User};
 use crate::env::Environment;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,7 +64,7 @@ pub fn from_args(command: &Command, environment: &Environment) -> Request {
         }),
         Command::List => Request::List(ListRequest {}),
         Command::Purge { .. } => Request::Purge(PurgeRequest {}),
-        Command::Itself(Itself::Remove { .. }) => Request::SelfRemove(SelfRemoveRequest {}),
+        Command::User(User::Remove { .. }) => Request::SelfRemove(SelfRemoveRequest {}),
     }
 }
 
@@ -110,7 +110,7 @@ pub fn unconfirmed(
     ask: impl FnOnce(&str) -> bool,
 ) -> Option<Fault> {
     let (yes, dry_run, question) = match command {
-        Command::Itself(Itself::Remove { yes, dry_run }) => (
+        Command::User(User::Remove { yes, dry_run }) => (
             *yes,
             *dry_run,
             "This removes `mix` and Nix from your account. Continue?".to_string(),
@@ -130,10 +130,8 @@ pub fn unconfirmed(
 }
 
 pub fn leaves_the_machine(command: &Command, removal: Option<mix_render::Removal>) -> bool {
-    matches!(
-        command,
-        Command::Itself(Itself::Remove { dry_run: false, .. })
-    ) && removal.is_some_and(|removal| removal.others.is_empty() && !removal.machine)
+    matches!(command, Command::User(User::Remove { dry_run: false, .. }))
+        && removal.is_some_and(|removal| removal.others.is_empty() && !removal.machine)
 }
 
 fn purge_question(users: &[String]) -> String {
@@ -227,7 +225,7 @@ mod tests {
         );
         assert_eq!(route(&purge), Route::OneShot);
         for command in [
-            Command::Itself(Itself::Remove {
+            Command::User(User::Remove {
                 yes: true,
                 dry_run: false,
             }),
@@ -337,7 +335,7 @@ mod tests {
             ),
             (Command::List, Request::List(ListRequest {})),
             (
-                Command::Itself(Itself::Remove {
+                Command::User(User::Remove {
                     yes: true,
                     dry_run: false,
                 }),
@@ -357,7 +355,7 @@ mod tests {
 
     #[test]
     fn a_removal_asks_on_a_terminal_and_refuses_without_one() {
-        let remove = |yes, dry_run| Command::Itself(Itself::Remove { yes, dry_run });
+        let remove = |yes, dry_run| Command::User(User::Remove { yes, dry_run });
         let purge = |yes, dry_run| Command::Purge { yes, dry_run };
         let refused = |fault: Option<Fault>| fault.and_then(|fault| fault.code());
         let nobody = Vec::new;
@@ -394,7 +392,7 @@ mod tests {
 
     #[test]
     fn only_the_last_user_to_leave_is_offered_the_machine() {
-        let remove = |dry_run| Command::Itself(Itself::Remove { yes: true, dry_run });
+        let remove = |dry_run| Command::User(User::Remove { yes: true, dry_run });
         let alone = Some(mix_render::Removal {
             others: Vec::new(),
             machine: false,
@@ -441,7 +439,7 @@ mod tests {
 
     #[test]
     fn a_removal_never_names_other_users() {
-        let remove = Command::Itself(Itself::Remove {
+        let remove = Command::User(User::Remove {
             yes: false,
             dry_run: false,
         });

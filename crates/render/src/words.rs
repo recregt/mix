@@ -16,7 +16,7 @@ pub fn name(request: &Request) -> &'static str {
         Request::Explain(_) => "mix explain",
         Request::List(_) => "mix list",
         Request::Update(_) => "mix update",
-        Request::SelfRemove(_) => "mix self remove",
+        Request::SelfRemove(_) => "mix user remove",
         Request::Purge(_) => "mix purge",
     }
 }
