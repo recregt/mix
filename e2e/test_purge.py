@@ -99,3 +99,47 @@ def test_a_dry_run_of_a_purge_lists_the_changes_and_makes_none(container):
         assert _exists(container, path), path
     doctor = container.mix("doctor", user=FIRST_USER)
     assert doctor.succeeded(), doctor
+
+
+@pytest.mark.bootstrapped
+def test_a_purge_on_a_terminal_names_every_user_it_would_remove(
+    container, mock_nix_server, mirror_cache
+):
+    create_user(container, SECOND_USER, sudo=True)
+    bootstrap_as(container, SECOND_USER, mock_nix_server, mirror_cache)
+
+    run = container.exec(
+        "sh",
+        "-c",
+        "printf 'n\\n' | script -qec 'sudo mix purge' /dev/null",
+        user=FIRST_USER,
+    )
+
+    question = next(line for line in run.stdout.splitlines() if "Continue?" in line)
+    assert FIRST_USER in question, question
+    assert SECOND_USER in question, question
+    assert run.returncode != 0, run
+    for path in ("/nix/store", NIX_CONF_DEST, *UNIT_FILES):
+        assert _exists(container, path), path
+
+
+@pytest.mark.bootstrapped
+def test_a_purge_stopped_while_reclaiming_is_finished_by_the_next_purge(container):
+    purge = container.mix_background("purge", "--yes", user=FIRST_USER)
+    client = purge.pid()
+    container.exec(
+        "sh",
+        "-c",
+        "until grep -qs committing /var/lib/mix/journal/*.ndjson "
+        f"|| ! kill -0 {client} 2>/dev/null; do :; done; kill -INT {client}",
+        check=True,
+    )
+
+    stopped = purge.wait()
+
+    assert stopped.status == "STATUS_CANCELLED", stopped
+    assert _exists(container, "/var/lib/mix/journal"), stopped
+    finished = container.mix("purge", "--yes", user=FIRST_USER)
+    assert finished.succeeded(), finished
+    left = [path for path in MACHINE_PATHS if _exists(container, path)]
+    assert left == [], left
