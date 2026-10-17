@@ -109,9 +109,8 @@ impl<W: Worker> Service<W> {
             Ok(caller)
         } else {
             Err(Status::permission_denied(format!(
-                "uid {} is not root and not a member of {}",
-                caller.uid,
-                mix_events::MIX_USERS_GROUP
+                "uid {} is not root and not a member of mix-users",
+                caller.uid
             )))
         }
     }

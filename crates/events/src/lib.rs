@@ -41,5 +41,3 @@ pub use tree::{Ending, Misuse, Node, NodeId, ROOT, Start, Stopped, Tree, exit, o
 pub use validate::{Entry, Outcome, Validated, Validator, Violation, validate};
 
 pub const SCHEMA_MINOR: u32 = 13;
-
-pub const MIX_USERS_GROUP: &str = "mix-users";

@@ -161,7 +161,7 @@ pub fn purge() -> Request {
 fn enrolled(world: &World, user: &InvokingUser) -> bool {
     world
         .groups
-        .get(mix_events::MIX_USERS_GROUP)
+        .get(mix_core::declared::identity::MIX_USERS_GROUP)
         .is_some_and(|group| group.members.contains(&user.name))
 }
 
