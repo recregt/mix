@@ -166,6 +166,7 @@ mod tests {
                 verbose: 0,
                 quiet: true,
                 exit: Exit::default(),
+                departure: mix_render::Departure::default(),
             }
         }
 
@@ -306,6 +307,7 @@ mod tests {
             verbose: 0,
             quiet: true,
             exit: Exit::default(),
+            departure: mix_render::Departure::default(),
         };
 
         let exit = run(

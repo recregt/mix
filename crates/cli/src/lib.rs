@@ -23,6 +23,7 @@ pub async fn run() -> ExitCode {
         verbose: args.verbose,
         quiet: args.quiet,
         exit: mix_render::Exit::default(),
+        departure: mix_render::Departure::default(),
     };
     mix_render::start(
         match args.color {
@@ -40,11 +41,11 @@ pub async fn run() -> ExitCode {
         mix_render::confirm,
     );
     let socket = std::path::Path::new(mix_rpc::SOCKET_PATH);
-    let removal = view();
-    let exit = session::run(command, &removal, socket, unconfirmed).await;
+    let first = view();
+    let exit = session::run(command, &first, socket, unconfirmed).await;
     if exit == ExitCode::SUCCESS
         && interactive
-        && request::leaves_the_machine(&args.command, removal.exit.others_after_departure())
+        && request::leaves_the_machine(&args.command, first.departure.others())
         && mix_render::confirm("Remove Nix from this machine as well?")
     {
         let purge = request::command_of(

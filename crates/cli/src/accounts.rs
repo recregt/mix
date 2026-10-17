@@ -1,5 +1,3 @@
-const GROUP: &str = "mix-users";
-
 #[allow(clippy::disallowed_methods)]
 pub fn enrolled() -> Vec<String> {
     members(&std::fs::read_to_string("/etc/group").unwrap_or_default())
@@ -12,7 +10,7 @@ fn members(group_file: &str) -> Vec<String> {
             let mut fields = line.split(':');
             let name = fields.next()?;
             let members = fields.nth(2)?;
-            (name == GROUP).then_some(members)
+            (name == mix_events::MIX_USERS_GROUP).then_some(members)
         })
         .flat_map(|members| members.split(',').filter(|member| !member.is_empty()))
         .map(str::to_string)
@@ -22,11 +20,6 @@ fn members(group_file: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_group_is_the_one_the_daemon_admits() {
-        assert_eq!(GROUP, mix_core::declared::identity::MIX_USERS_GROUP);
-    }
 
     #[test]
     fn the_members_of_the_group_are_listed_and_no_other_group() {

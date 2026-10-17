@@ -59,7 +59,6 @@ impl Json {
 struct Seen {
     started: bool,
     exit: Option<u32>,
-    departed: Option<Vec<String>>,
 }
 
 #[derive(Clone, Default)]
@@ -77,24 +76,29 @@ impl Exit {
             .started
     }
 
-    pub fn others_after_departure(&self) -> Option<Vec<String>> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .departed
-            .clone()
-    }
-
-    fn saw(&self, envelope: &Envelope) {
-        let exit = root_exit(envelope);
-        let departed = root_departure(envelope);
+    fn saw(&self, exit: Option<u32>) {
         let mut seen = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         seen.started = true;
         if exit.is_some() {
             seen.exit = exit;
         }
-        if departed.is_some() {
-            seen.departed = departed;
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct Departure(Arc<Mutex<Option<Vec<String>>>>);
+
+impl Departure {
+    pub fn others(&self) -> Option<Vec<String>> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn saw(&self, envelope: &Envelope) {
+        if let Some(others) = root_departure(envelope) {
+            *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(others);
         }
     }
 }
@@ -104,6 +108,7 @@ pub struct View {
     pub verbose: u8,
     pub quiet: bool,
     pub exit: Exit,
+    pub departure: Departure,
 }
 
 impl View {
@@ -121,6 +126,7 @@ impl View {
                 .on()
                 .then(|| (document::Builder::default(), self.json.clone())),
             exit: self.exit.clone(),
+            departure: self.departure.clone(),
         }
     }
 
@@ -190,6 +196,7 @@ pub struct Sinks {
     human: Human,
     document: Option<(document::Builder, Json)>,
     exit: Exit,
+    departure: Departure,
 }
 
 fn root_exit(envelope: &Envelope) -> Option<u32> {
@@ -230,7 +237,7 @@ impl Render for Documented {
     }
 
     fn envelope(&mut self, envelope: Envelope) {
-        self.exit.saw(&envelope);
+        self.exit.saw(root_exit(&envelope));
         if let Some(document) = self.builder.envelope(&envelope) {
             self.json.write(document);
         }
@@ -247,7 +254,8 @@ impl Render for Sinks {
     }
 
     fn envelope(&mut self, envelope: Envelope) {
-        self.exit.saw(&envelope);
+        self.exit.saw(root_exit(&envelope));
+        self.departure.saw(&envelope);
         if let Some((builder, json)) = &mut self.document
             && let Some(document) = builder.envelope(&envelope)
         {
@@ -271,6 +279,7 @@ mod tests {
             verbose: 0,
             quiet: true,
             exit: Exit::default(),
+            departure: Departure::default(),
         };
         (view, documents)
     }

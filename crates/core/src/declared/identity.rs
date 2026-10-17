@@ -5,7 +5,7 @@ pub const NIXBLD_UID_BASE: u32 = 30_000;
 pub const NIXBLD_HOME: &str = "/var/empty";
 pub const NIXBLD_SHELL: &str = "/usr/sbin/nologin";
 
-pub const MIX_USERS_GROUP: &str = "mix-users";
+pub const MIX_USERS_GROUP: &str = mix_events::MIX_USERS_GROUP;
 pub const MIX_USERS_GID: u32 = 30_100;
 
 const NIXBLD_USER_NAMES: [&str; NIXBLD_USER_COUNT as usize] = [
