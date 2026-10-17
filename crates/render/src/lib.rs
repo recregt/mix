@@ -13,7 +13,7 @@ pub mod words;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use mix_events::result::v1::Result as Document;
-use mix_events::v1::{Command, Envelope, envelope};
+use mix_events::v1::{Command, Envelope, envelope, node_finished};
 use mix_events::{Detail, Fault, ROOT, Render};
 
 use human::Human;
@@ -55,10 +55,17 @@ impl Json {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Removal {
+    pub others: Vec<String>,
+    pub machine: bool,
+}
+
+#[derive(Debug, Clone, Default)]
 struct Seen {
     started: bool,
     exit: Option<u32>,
+    removal: Option<Removal>,
 }
 
 #[derive(Clone, Default)]
@@ -76,11 +83,24 @@ impl Exit {
             .started
     }
 
-    fn saw(&self, exit: Option<u32>) {
+    pub fn removal(&self) -> Option<Removal> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .removal
+            .clone()
+    }
+
+    fn saw(&self, envelope: &Envelope) {
+        let exit = root_exit(envelope);
+        let removal = root_removal(envelope);
         let mut seen = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         seen.started = true;
         if exit.is_some() {
             seen.exit = exit;
+        }
+        if removal.is_some() {
+            seen.removal = removal;
         }
     }
 }
@@ -194,6 +214,19 @@ fn root_exit(envelope: &Envelope) -> Option<u32> {
     }
 }
 
+fn root_removal(envelope: &Envelope) -> Option<Removal> {
+    if let Some(envelope::Event::NodeFinished(finished)) = &envelope.event
+        && finished.id == ROOT
+        && let Some(node_finished::Result::SelfRemove(found)) = &finished.result
+    {
+        return Some(Removal {
+            others: found.others.clone(),
+            machine: found.machine,
+        });
+    }
+    None
+}
+
 struct Documented {
     builder: document::Builder,
     json: Json,
@@ -206,7 +239,7 @@ impl Render for Documented {
     }
 
     fn envelope(&mut self, envelope: Envelope) {
-        self.exit.saw(root_exit(&envelope));
+        self.exit.saw(&envelope);
         if let Some(document) = self.builder.envelope(&envelope) {
             self.json.write(document);
         }
@@ -223,7 +256,7 @@ impl Render for Sinks {
     }
 
     fn envelope(&mut self, envelope: Envelope) {
-        self.exit.saw(root_exit(&envelope));
+        self.exit.saw(&envelope);
         if let Some((builder, json)) = &mut self.document
             && let Some(document) = builder.envelope(&envelope)
         {

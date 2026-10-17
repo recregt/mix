@@ -141,6 +141,17 @@ pub enum Command {
         list: bool,
     },
 
+    /// Remove `mix` and Nix from this machine, for every user
+    Purge {
+        /// Remove without asking first
+        #[arg(short, long)]
+        yes: bool,
+
+        /// Show what would change without changing it
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+    },
+
     /// Manage `mix` itself
     #[command(name = "self", subcommand)]
     Itself(Itself),
@@ -148,7 +159,7 @@ pub enum Command {
 
 #[derive(Subcommand)]
 pub enum Itself {
-    /// Remove `mix`, Nix and every user's `mix` state from this machine
+    /// Remove `mix` and Nix from your account
     Remove {
         /// Remove without asking first
         #[arg(short, long)]
@@ -272,6 +283,7 @@ impl Args {
             | Command::Clean { dry_run, .. }
             | Command::Update { dry_run }
             | Command::Repair { dry_run }
+            | Command::Purge { dry_run, .. }
             | Command::Itself(Itself::Remove { dry_run, .. }) => dry_run,
             Command::Doctor | Command::Explain { .. } | Command::List => false,
         }

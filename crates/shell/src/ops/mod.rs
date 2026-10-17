@@ -4,6 +4,7 @@ pub mod doctor;
 pub mod explain;
 pub mod install;
 pub mod list;
+pub mod purge;
 pub mod remove;
 pub mod repair;
 pub mod self_remove;

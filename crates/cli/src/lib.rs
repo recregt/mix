@@ -1,3 +1,4 @@
+mod accounts;
 mod args;
 mod client;
 mod controls;
@@ -7,13 +8,13 @@ mod session;
 
 use std::process::ExitCode;
 
-use args::{Args, Color};
+use args::{Args, Color, Command};
 
 pub async fn run() -> ExitCode {
     let args = Args::parse_with_color();
     let environment = env::Environment::read();
     let command = request::command_of(&args.command, args.dry_run(), &environment);
-    let view = mix_render::View {
+    let view = || mix_render::View {
         json: if args.json {
             mix_render::Json::Stdout
         } else {
@@ -31,16 +32,30 @@ pub async fn run() -> ExitCode {
         },
         args.draws_progress(environment.ci),
     );
+    let interactive = !args.json && mix_render::interactive();
     let unconfirmed = request::unconfirmed(
         &args.command,
-        !args.json && mix_render::interactive(),
-        || mix_render::confirm("This removes `mix`, Nix and every user's `mix` state. Continue?"),
+        interactive,
+        accounts::enrolled,
+        mix_render::confirm,
     );
-    session::run(
-        command,
-        &view,
-        std::path::Path::new(mix_rpc::SOCKET_PATH),
-        unconfirmed,
-    )
-    .await
+    let socket = std::path::Path::new(mix_rpc::SOCKET_PATH);
+    let removal = view();
+    let exit = session::run(command, &removal, socket, unconfirmed).await;
+    if exit == ExitCode::SUCCESS
+        && interactive
+        && request::leaves_the_machine(&args.command, removal.exit.removal())
+        && mix_render::confirm("Remove Nix from this machine as well?")
+    {
+        let purge = request::command_of(
+            &Command::Purge {
+                yes: true,
+                dry_run: false,
+            },
+            false,
+            &environment,
+        );
+        return session::run(purge, &view(), socket, None).await;
+    }
+    exit
 }

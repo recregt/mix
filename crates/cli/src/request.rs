@@ -3,7 +3,7 @@ use mix_events::mirror::Mirror;
 use mix_events::v1::command::Request;
 use mix_events::v1::{
     BootstrapRequest, CleanRequest, Code, DoctorRequest, ExplainRequest, InstallRequest,
-    ListRequest, RemoveRequest, RepairRequest, SelfRemoveRequest, UpdateRequest,
+    ListRequest, PurgeRequest, RemoveRequest, RepairRequest, SelfRemoveRequest, UpdateRequest,
 };
 
 use crate::args::{Command, Itself};
@@ -63,13 +63,14 @@ pub fn from_args(command: &Command, environment: &Environment) -> Request {
             code: code.map(|code| code as i32),
         }),
         Command::List => Request::List(ListRequest {}),
+        Command::Purge { .. } => Request::Purge(PurgeRequest {}),
         Command::Itself(Itself::Remove { .. }) => Request::SelfRemove(SelfRemoveRequest {}),
     }
 }
 
 pub fn route(request: &Request) -> Route {
     match request {
-        Request::Bootstrap(_) | Request::SelfRemove(_) => Route::OneShot,
+        Request::Bootstrap(_) | Request::Purge(_) => Route::OneShot,
         Request::Install(_)
         | Request::Remove(_)
         | Request::Clean(_)
@@ -77,7 +78,8 @@ pub fn route(request: &Request) -> Route {
         | Request::Update(_)
         | Request::Doctor(_)
         | Request::Explain(_)
-        | Request::List(_) => Route::Socket,
+        | Request::List(_)
+        | Request::SelfRemove(_) => Route::Socket,
     }
 }
 
@@ -96,27 +98,52 @@ pub fn refused(request: &Request) -> Option<Fault> {
         | Request::Doctor(_)
         | Request::Explain(_)
         | Request::List(_)
-        | Request::SelfRemove(_) => None,
+        | Request::SelfRemove(_)
+        | Request::Purge(_) => None,
     }
 }
 
 pub fn unconfirmed(
     command: &Command,
     interactive: bool,
-    ask: impl FnOnce() -> bool,
+    others: impl FnOnce() -> Vec<String>,
+    ask: impl FnOnce(&str) -> bool,
 ) -> Option<Fault> {
-    let Command::Itself(Itself::Remove { yes, dry_run }) = command else {
-        return None;
+    let (yes, dry_run, question) = match command {
+        Command::Itself(Itself::Remove { yes, dry_run }) => (
+            *yes,
+            *dry_run,
+            "This removes `mix` and Nix from your account. Continue?".to_string(),
+        ),
+        Command::Purge { yes, dry_run } => (*yes, *dry_run, purge_question(&others())),
+        _ => return None,
     };
-    if *yes || *dry_run {
+    if yes || dry_run {
         return None;
     }
     let message = match interactive {
         false => "there is no terminal to ask on and `--yes` was not given",
-        true if ask() => return None,
+        true if ask(&question) => return None,
         true => "the answer was not yes",
     };
     Some(Fault::failed(Code::ConfirmationRequired, message, None))
+}
+
+pub fn leaves_the_machine(command: &Command, removal: Option<mix_render::Removal>) -> bool {
+    matches!(
+        command,
+        Command::Itself(Itself::Remove { dry_run: false, .. })
+    ) && removal.is_some_and(|removal| removal.others.is_empty() && !removal.machine)
+}
+
+fn purge_question(users: &[String]) -> String {
+    match users {
+        [] => "This removes `mix` and Nix from this machine. Continue?".to_string(),
+        users => format!(
+            "This removes `mix`, Nix and the `mix` state of {} from this machine. Continue?",
+            users.join(", ")
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -188,10 +215,22 @@ mod tests {
     }
 
     #[test]
-    fn only_bootstrap_asks_for_sudo() {
+    fn only_bootstrap_and_purge_ask_for_sudo() {
         let bootstrap = from_args(&bootstrap(None, None), &Environment::default());
         assert_eq!(route(&bootstrap), Route::OneShot);
+        let purge = from_args(
+            &Command::Purge {
+                yes: true,
+                dry_run: false,
+            },
+            &Environment::default(),
+        );
+        assert_eq!(route(&purge), Route::OneShot);
         for command in [
+            Command::Itself(Itself::Remove {
+                yes: true,
+                dry_run: false,
+            }),
             Command::Doctor,
             Command::Repair { dry_run: false },
             Command::Update { dry_run: false },
@@ -304,6 +343,13 @@ mod tests {
                 }),
                 Request::SelfRemove(SelfRemoveRequest {}),
             ),
+            (
+                Command::Purge {
+                    yes: true,
+                    dry_run: false,
+                },
+                Request::Purge(PurgeRequest {}),
+            ),
         ] {
             assert_eq!(from_args(&command, &Environment::default()), request);
         }
@@ -312,30 +358,102 @@ mod tests {
     #[test]
     fn a_removal_asks_on_a_terminal_and_refuses_without_one() {
         let remove = |yes, dry_run| Command::Itself(Itself::Remove { yes, dry_run });
+        let purge = |yes, dry_run| Command::Purge { yes, dry_run };
         let refused = |fault: Option<Fault>| fault.and_then(|fault| fault.code());
+        let nobody = Vec::new;
 
+        for command in [remove, purge] {
+            assert_eq!(
+                refused(unconfirmed(&command(true, false), false, nobody, |_| false)),
+                None
+            );
+            assert_eq!(
+                refused(unconfirmed(&command(false, true), false, nobody, |_| false)),
+                None
+            );
+            assert_eq!(
+                refused(unconfirmed(&command(false, false), true, nobody, |_| true)),
+                None
+            );
+            assert_eq!(
+                refused(unconfirmed(&command(false, false), true, nobody, |_| false)),
+                Some(Code::ConfirmationRequired)
+            );
+            assert_eq!(
+                refused(unconfirmed(&command(false, false), false, nobody, |_| {
+                    panic!("asked")
+                })),
+                Some(Code::ConfirmationRequired)
+            );
+        }
         assert_eq!(
-            refused(unconfirmed(&remove(true, false), false, || false)),
+            refused(unconfirmed(&Command::List, false, nobody, |_| false)),
             None
         );
-        assert_eq!(
-            refused(unconfirmed(&remove(false, true), false, || false)),
-            None
+    }
+
+    #[test]
+    fn only_the_last_user_to_leave_is_offered_the_machine() {
+        let remove = |dry_run| Command::Itself(Itself::Remove { yes: true, dry_run });
+        let alone = Some(mix_render::Removal {
+            others: Vec::new(),
+            machine: false,
+        });
+        let shared = Some(mix_render::Removal {
+            others: vec!["bob".to_string()],
+            machine: false,
+        });
+        let purged = Some(mix_render::Removal {
+            others: Vec::new(),
+            machine: true,
+        });
+
+        assert!(leaves_the_machine(&remove(false), alone.clone()));
+        assert!(!leaves_the_machine(&remove(false), shared));
+        assert!(!leaves_the_machine(&remove(false), purged));
+        assert!(!leaves_the_machine(&remove(false), None));
+        assert!(!leaves_the_machine(&remove(true), alone));
+        assert!(!leaves_the_machine(&Command::List, None));
+    }
+
+    #[test]
+    fn a_purge_names_every_user_it_removes_in_its_question() {
+        let asked = std::cell::RefCell::new(String::new());
+        let purge = Command::Purge {
+            yes: false,
+            dry_run: false,
+        };
+
+        let users = || vec!["alice".to_string(), "bob".to_string()];
+        unconfirmed(&purge, true, users, |question| {
+            *asked.borrow_mut() = question.to_string();
+            true
+        });
+
+        assert!(asked.borrow().contains("alice, bob"), "{}", asked.borrow());
+        let alone = std::cell::RefCell::new(String::new());
+        unconfirmed(&purge, true, Vec::new, |question| {
+            *alone.borrow_mut() = question.to_string();
+            true
+        });
+        assert!(!alone.borrow().contains("state of"), "{}", alone.borrow());
+    }
+
+    #[test]
+    fn a_removal_never_names_other_users() {
+        let remove = Command::Itself(Itself::Remove {
+            yes: false,
+            dry_run: false,
+        });
+
+        unconfirmed(
+            &remove,
+            true,
+            || panic!("a user removal must not look up other users"),
+            |question| {
+                assert!(question.contains("your account"));
+                true
+            },
         );
-        assert_eq!(
-            refused(unconfirmed(&remove(false, false), true, || true)),
-            None
-        );
-        assert_eq!(
-            refused(unconfirmed(&remove(false, false), true, || false)),
-            Some(Code::ConfirmationRequired)
-        );
-        assert_eq!(
-            refused(unconfirmed(&remove(false, false), false, || panic!(
-                "asked"
-            ))),
-            Some(Code::ConfirmationRequired)
-        );
-        assert_eq!(refused(unconfirmed(&Command::List, false, || false)), None);
     }
 }

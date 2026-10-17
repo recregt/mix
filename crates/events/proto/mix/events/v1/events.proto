@@ -52,6 +52,7 @@ message Command {
     ListRequest list = 17;
     UpdateRequest update = 18;
     SelfRemoveRequest self_remove = 19;
+    PurgeRequest purge = 20;
   }
 }
 
@@ -64,6 +65,8 @@ message ListRequest {}
 message UpdateRequest {}
 
 message SelfRemoveRequest {}
+
+message PurgeRequest {}
 
 message BootstrapRequest {
   bool force = 1;
@@ -550,6 +553,8 @@ message UpdateResult {
 
 message SelfRemoveResult {
   repeated string users = 1;
+  repeated string others = 2;
+  bool machine = 3;
 }
 
 message CleanResult {
