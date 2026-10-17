@@ -189,6 +189,32 @@ impl Host {
         }
     }
 
+    pub fn regular_accounts(&self) -> Vec<InvokingUser> {
+        match self {
+            Host::Machine => crate::effect::accounts::regular_accounts(),
+            Host::Model(world) => {
+                let range = crate::effect::accounts::uid_range("");
+                let world = Self::world(world);
+                let builders = world
+                    .groups
+                    .get(mix_core::declared::identity::NIXBLD_GROUP)
+                    .map(|group| group.gid);
+                world
+                    .users
+                    .iter()
+                    .filter(|(_, found)| range.contains(&found.uid))
+                    .filter(|(_, found)| Some(found.gid) != builders)
+                    .map(|(name, found)| InvokingUser {
+                        uid: found.uid,
+                        gid: found.gid,
+                        name: name.clone(),
+                        home: found.home.clone(),
+                    })
+                    .collect()
+            }
+        }
+    }
+
     pub fn finish_removal(&self) -> Vec<Failure> {
         match self {
             Host::Machine => crate::effect::removal::finish(),

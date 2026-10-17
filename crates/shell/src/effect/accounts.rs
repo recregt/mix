@@ -179,3 +179,56 @@ mod tests {
         assert!(!group_has_member("mix-test-nonexistent-group-xyz", "root"));
     }
 }
+
+#[allow(clippy::disallowed_methods)]
+pub fn regular_accounts() -> Vec<InvokingUser> {
+    let defs = std::fs::read_to_string("/etc/login.defs").unwrap_or_default();
+    let passwd = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
+    regular_uids(&passwd, &uid_range(&defs))
+        .into_iter()
+        .filter_map(user_by_uid)
+        .filter(|user| !user_in_group(mix_core::declared::identity::NIXBLD_GROUP, user))
+        .collect()
+}
+
+pub fn uid_range(login_defs: &str) -> std::ops::RangeInclusive<u32> {
+    let setting = |key: &str| {
+        login_defs.lines().find_map(|line| {
+            let mut words = line.split_whitespace();
+            (words.next() == Some(key))
+                .then(|| words.next()?.parse::<u32>().ok())
+                .flatten()
+        })
+    };
+    setting("UID_MIN").unwrap_or(1000)..=setting("UID_MAX").unwrap_or(60000)
+}
+
+fn regular_uids(passwd: &str, range: &std::ops::RangeInclusive<u32>) -> Vec<u32> {
+    passwd
+        .lines()
+        .filter_map(|line| line.split(':').nth(2)?.parse::<u32>().ok())
+        .filter(|uid| range.contains(uid))
+        .collect()
+}
+
+#[cfg(test)]
+mod regular {
+    use super::*;
+
+    #[test]
+    fn the_regular_range_comes_from_login_defs_with_the_shadow_defaults() {
+        assert_eq!(uid_range(""), 1000..=60000);
+        assert_eq!(
+            uid_range("# a comment\nUID_MIN\t 500\nUID_MAX 999999\n"),
+            500..=999_999
+        );
+        assert_eq!(uid_range("UID_MIN not-a-number\n"), 1000..=60000);
+    }
+
+    #[test]
+    fn every_account_inside_the_range_is_a_candidate_before_build_users_are_dropped() {
+        let passwd = "root:x:0:0::/root:/bin/sh\nnixbld1:x:30001:30000::/var/empty:/sbin/nologin\nalice:x:1000:1000::/home/alice:/bin/sh\nnobody:x:65534:65534::/nonexistent:/usr/sbin/nologin\n";
+
+        assert_eq!(regular_uids(passwd, &(1000..=60000)), [30001, 1000]);
+    }
+}

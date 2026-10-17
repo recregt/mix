@@ -1,4 +1,5 @@
 use mix_core::declared::identity::{InvokingUser, MIX_USERS_GROUP};
+use mix_core::declared::paths::mix_state_dir;
 use mix_core::effect::{Fact, Failure, Query};
 use mix_core::report::diagnose::warning;
 use mix_core::run::{Runner, StepSpec, Verdict};
@@ -23,10 +24,10 @@ pub(crate) async fn removal<T>(
         })))
     })?;
     crate::ops::recover_interrupted(ctx, &mut root.tree, &mut performer, true).await;
-    let enrolled = enrolled(&mut performer, &ctx.scope)
+    let holders = holders(ctx, &mut performer)
         .await
         .map_err(|failure| Box::new(root.refuse(error_from(failure))))?;
-    let (steps, planned) = plan(enrolled);
+    let (steps, planned) = plan(holders);
     let mut runner = Runner::new(ROOT, steps);
     if ctx.dry_run {
         let report = drive(
@@ -68,6 +69,29 @@ pub(crate) async fn removal<T>(
         );
     }
     Ok((verdict, planned))
+}
+
+async fn holders(ctx: &Context, performer: &mut Performer) -> Result<Vec<InvokingUser>, Failure> {
+    let mut holders = enrolled(performer, &ctx.scope).await?;
+    let others: Vec<InvokingUser> = ctx
+        .host
+        .regular_accounts()
+        .into_iter()
+        .filter(|account| !holders.iter().any(|holder| holder.name == account.name))
+        .collect();
+    let states: Vec<Query> = others
+        .iter()
+        .map(|account| Query::Path(mix_state_dir(&account.home)))
+        .collect();
+    let found = performer.observe(&states, &ctx.scope).await?;
+    holders.extend(
+        others
+            .into_iter()
+            .zip(found)
+            .filter(|(_, fact)| matches!(fact, Fact::Path(facts) if facts.id.is_some()))
+            .map(|(account, _)| account),
+    );
+    Ok(holders)
 }
 
 async fn enrolled(performer: &mut Performer, scope: &Scope) -> Result<Vec<InvokingUser>, Failure> {

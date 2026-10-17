@@ -197,4 +197,43 @@ mod tests {
         );
         assert!(!world.files.contains_key(Path::new("/nix/store")));
     }
+
+    #[tokio::test]
+    async fn a_purge_also_clears_leftover_state_of_someone_no_longer_enrolled() {
+        let bob = account("bob", 1001);
+        let carol = account("carol", 1002);
+        let world = machine_of(&[alice(), bob.clone(), carol.clone()]);
+        let booted = ran(session(&world), Request::Bootstrap(Box::default())).await;
+        assert_eq!(booted.code(), None);
+        let left = mix_core::declared::paths::mix_state_dir(&bob.home);
+        {
+            let mut world = world.lock().unwrap();
+            world.with_dir(bob.home.join(".local"), 0o755, (1001, 1001));
+            world.with_dir(bob.home.join(".local/state"), 0o755, (1001, 1001));
+            world.with_dir(&left, 0o700, (1001, 1001));
+            world.with_file(left.join("state"), b"{}", 0o644, (1001, 1001));
+        }
+        let carol_before: Vec<_> = world
+            .lock()
+            .unwrap()
+            .files
+            .keys()
+            .filter(|path| path.starts_with(&carol.home))
+            .cloned()
+            .collect();
+
+        let removed = ran(as_caller(&world, None), Request::Purge(PurgeRequest {})).await;
+
+        assert_eq!(removed.code(), None);
+        assert_eq!(users(&removed), ["alice", "bob"]);
+        let world = world.lock().unwrap();
+        assert!(!world.files.contains_key(&left));
+        let carol_after: Vec<_> = world
+            .files
+            .keys()
+            .filter(|path| path.starts_with(&carol.home))
+            .cloned()
+            .collect();
+        assert_eq!(carol_before, carol_after);
+    }
 }
