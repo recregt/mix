@@ -2,7 +2,7 @@ use mix_core::effect::Failure;
 use mix_core::ops::purge::{Settings, steps};
 use mix_core::report::diagnose::{diagnostic, warning};
 use mix_core::run::{Runner, Verdict};
-use mix_events::v1::{Code, SelfRemoveResult, node_finished};
+use mix_events::v1::{Code, PurgeResult, node_finished};
 use mix_events::{Ending, ROOT};
 
 use crate::Context;
@@ -13,14 +13,12 @@ use crate::request::{Concluded, Root};
 fn ending_of(verdict: &Verdict, settings: &Settings) -> Ending {
     match verdict {
         Verdict::Succeeded => {
-            Ending::succeeded().with_result(node_finished::Result::SelfRemove(SelfRemoveResult {
+            Ending::succeeded().with_result(node_finished::Result::Purge(PurgeResult {
                 users: settings
                     .users
                     .iter()
                     .map(|user| user.name.clone())
                     .collect(),
-                others: Vec::new(),
-                machine: true,
             }))
         }
         Verdict::Failed { failure, .. } => Ending::failed(diagnostic(failure)),
@@ -164,7 +162,7 @@ mod tests {
 
     fn users(ran: &crate::request::ran::Ran) -> Vec<String> {
         match ran.result() {
-            Some(node_finished::Result::SelfRemove(removed)) => removed.users.clone(),
+            Some(node_finished::Result::Purge(purged)) => purged.users.clone(),
             other => panic!("expected a removal result, got {other:?}"),
         }
     }
@@ -185,10 +183,8 @@ mod tests {
         assert!(removed.warnings().is_empty(), "{:?}", removed.warnings());
         assert_eq!(
             removed.result(),
-            Some(&node_finished::Result::SelfRemove(SelfRemoveResult {
+            Some(&node_finished::Result::Purge(PurgeResult {
                 users: vec!["alice".into()],
-                others: Vec::new(),
-                machine: true,
             }))
         );
         let world = world.lock().unwrap();

@@ -54,7 +54,7 @@ pub(super) fn finished(
                 );
             }
         }
-        Result::SelfRemove(removed) if removed.machine => {
+        Result::Purge(_) => {
             if chatty {
                 mix_ui::status_to(
                     out,
@@ -70,7 +70,7 @@ pub(super) fn finished(
                 );
             }
         }
-        Result::SelfRemove(removed) => {
+        Result::UserRemove(removed) => {
             if chatty {
                 mix_ui::status_to(
                     out,
@@ -283,7 +283,7 @@ fn explained(explain: &ExplainResult, request: Option<&Request>) -> String {
             | Request::Doctor(_)
             | Request::List(_)
             | Request::Update(_)
-            | Request::SelfRemove(_)
+            | Request::UserRemove(_)
             | Request::Purge(_),
         )
         | None => mix_explain::codes::list_text(codes),

@@ -7,8 +7,8 @@ pub mod list;
 pub mod purge;
 pub mod remove;
 pub mod repair;
-pub mod self_remove;
 pub mod update;
+pub mod user_remove;
 
 pub(crate) async fn recover_interrupted(
     ctx: &crate::Context,

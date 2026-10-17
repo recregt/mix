@@ -55,17 +55,11 @@ impl Json {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Removal {
-    pub others: Vec<String>,
-    pub machine: bool,
-}
-
 #[derive(Debug, Clone, Default)]
 struct Seen {
     started: bool,
     exit: Option<u32>,
-    removal: Option<Removal>,
+    departed: Option<Vec<String>>,
 }
 
 #[derive(Clone, Default)]
@@ -83,24 +77,24 @@ impl Exit {
             .started
     }
 
-    pub fn removal(&self) -> Option<Removal> {
+    pub fn others_after_departure(&self) -> Option<Vec<String>> {
         self.0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .removal
+            .departed
             .clone()
     }
 
     fn saw(&self, envelope: &Envelope) {
         let exit = root_exit(envelope);
-        let removal = root_removal(envelope);
+        let departed = root_departure(envelope);
         let mut seen = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         seen.started = true;
         if exit.is_some() {
             seen.exit = exit;
         }
-        if removal.is_some() {
-            seen.removal = removal;
+        if departed.is_some() {
+            seen.departed = departed;
         }
     }
 }
@@ -214,15 +208,12 @@ fn root_exit(envelope: &Envelope) -> Option<u32> {
     }
 }
 
-fn root_removal(envelope: &Envelope) -> Option<Removal> {
+fn root_departure(envelope: &Envelope) -> Option<Vec<String>> {
     if let Some(envelope::Event::NodeFinished(finished)) = &envelope.event
         && finished.id == ROOT
-        && let Some(node_finished::Result::SelfRemove(found)) = &finished.result
+        && let Some(node_finished::Result::UserRemove(found)) = &finished.result
     {
-        return Some(Removal {
-            others: found.others.clone(),
-            machine: found.machine,
-        });
+        return Some(found.others.clone());
     }
     None
 }

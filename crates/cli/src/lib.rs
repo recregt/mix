@@ -44,7 +44,7 @@ pub async fn run() -> ExitCode {
     let exit = session::run(command, &removal, socket, unconfirmed).await;
     if exit == ExitCode::SUCCESS
         && interactive
-        && request::leaves_the_machine(&args.command, removal.exit.removal())
+        && request::leaves_the_machine(&args.command, removal.exit.others_after_departure())
         && mix_render::confirm("Remove Nix from this machine as well?")
     {
         let purge = request::command_of(

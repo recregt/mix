@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use mix_events::ROOT;
-use mix_events::v1::SelfRemoveRequest;
+use mix_events::v1::UserRemoveRequest;
 use mix_events::v1::command::Request;
 
 use super::*;
@@ -92,7 +92,7 @@ fn remove(world: &mut World, user: &InvokingUser, script: &Script) -> Run {
     drive(
         world,
         Runner::new(ROOT, steps(&Settings { user: user.clone() })),
-        requested(Request::SelfRemove(SelfRemoveRequest {})),
+        requested(Request::UserRemove(UserRemoveRequest {})),
         script,
     )
 }

@@ -339,7 +339,7 @@ fn changes_the_profile(request: &command::Request) -> bool {
         command::Request::Doctor(_)
         | command::Request::Explain(_)
         | command::Request::List(_)
-        | command::Request::SelfRemove(_)
+        | command::Request::UserRemove(_)
         | command::Request::Purge(_) => false,
     }
 }
@@ -503,9 +503,9 @@ pub async fn run(session: &Session, command: Command) {
             })
             .await
         }
-        command::Request::SelfRemove(_) => {
+        command::Request::UserRemove(_) => {
             host(session, &request, dry_run, None, async |ctx, root| {
-                crate::ops::self_remove::self_remove(ctx, root).await
+                crate::ops::user_remove::user_remove(ctx, root).await
             })
             .await
         }

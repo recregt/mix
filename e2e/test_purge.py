@@ -47,8 +47,7 @@ def test_a_purge_leaves_no_trace_of_mix_on_the_machine_or_in_any_home(
 
     assert removed.succeeded(), removed
     assert removed.document["command"] == "purge"
-    assert sorted(removed.result("selfRemove")["users"]) == sorted([FIRST_USER, SECOND_USER])
-    assert removed.result("selfRemove")["machine"] is True
+    assert sorted(removed.result("purge")["users"]) == sorted([FIRST_USER, SECOND_USER])
     assert set(removed.warnings) <= {"CODE_CLEANUP_INCOMPLETE"}, removed.warnings
     left = [path for path in MACHINE_PATHS if _exists(container, path)]
     assert left == [], left

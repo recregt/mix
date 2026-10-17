@@ -51,7 +51,7 @@ message Command {
     ExplainRequest explain = 16;
     ListRequest list = 17;
     UpdateRequest update = 18;
-    SelfRemoveRequest self_remove = 19;
+    UserRemoveRequest user_remove = 19;
     PurgeRequest purge = 20;
   }
 }
@@ -64,7 +64,7 @@ message ListRequest {}
 
 message UpdateRequest {}
 
-message SelfRemoveRequest {}
+message UserRemoveRequest {}
 
 message PurgeRequest {}
 
@@ -451,7 +451,8 @@ message NodeFinished {
     ExplainResult explain = 18;
     ListResult list = 19;
     UpdateResult update = 20;
-    SelfRemoveResult self_remove = 21;
+    UserRemoveResult user_remove = 21;
+    PurgeResult purge = 22;
   }
 }
 
@@ -551,10 +552,13 @@ message UpdateResult {
   optional ActiveGeneration active = 4;
 }
 
-message SelfRemoveResult {
-  repeated string users = 1;
+message UserRemoveResult {
+  string user = 1;
   repeated string others = 2;
-  bool machine = 3;
+}
+
+message PurgeResult {
+  repeated string users = 1;
 }
 
 message CleanResult {

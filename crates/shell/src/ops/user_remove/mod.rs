@@ -1,8 +1,8 @@
 use mix_core::declared::identity::InvokingUser;
-use mix_core::ops::self_remove::{Settings, steps};
+use mix_core::ops::user_remove::{Settings, steps};
 use mix_core::report::diagnose::{diagnostic, warning};
 use mix_core::run::{Runner, Verdict};
-use mix_events::v1::{Code, SelfRemoveResult, node_finished};
+use mix_events::v1::{Code, UserRemoveResult, node_finished};
 use mix_events::{Ending, ROOT};
 
 use crate::Context;
@@ -14,10 +14,9 @@ use crate::request::{Concluded, Root};
 fn ending_of(verdict: &Verdict, user: &InvokingUser, others: Vec<String>) -> Ending {
     match verdict {
         Verdict::Succeeded => {
-            Ending::succeeded().with_result(node_finished::Result::SelfRemove(SelfRemoveResult {
-                users: vec![user.name.clone()],
+            Ending::succeeded().with_result(node_finished::Result::UserRemove(UserRemoveResult {
+                user: user.name.clone(),
                 others,
-                machine: false,
             }))
         }
         Verdict::Failed { failure, .. } => Ending::failed(diagnostic(failure)),
@@ -34,7 +33,7 @@ fn others_than(ctx: &Context, user: &InvokingUser) -> Vec<String> {
         .collect()
 }
 
-pub(crate) async fn self_remove(ctx: &Context, root: &mut Root) -> Concluded {
+pub(crate) async fn user_remove(ctx: &Context, root: &mut Root) -> Concluded {
     let user = match profile_user(ctx) {
         Ok(config) => config.user.clone(),
         Err(error) => return root.refuse(error),
@@ -105,7 +104,7 @@ mod tests {
     use mix_core::declared::identity::InvokingUser;
     use mix_core::declared::paths::{RUNNING_PROGRAM, mix_state_dir};
     use mix_core::model::World;
-    use mix_events::v1::SelfRemoveRequest;
+    use mix_events::v1::UserRemoveRequest;
     use mix_events::v1::command::Request;
 
     use super::*;
@@ -172,17 +171,16 @@ mod tests {
 
         let removed = ran(
             as_user(&world, &account("alice", 1000)),
-            Request::SelfRemove(SelfRemoveRequest {}),
+            Request::UserRemove(UserRemoveRequest {}),
         )
         .await;
 
         assert_eq!(removed.code(), None);
         assert_eq!(
             removed.result(),
-            Some(&node_finished::Result::SelfRemove(SelfRemoveResult {
-                users: vec!["alice".into()],
+            Some(&node_finished::Result::UserRemove(UserRemoveResult {
+                user: "alice".into(),
                 others: vec!["bob".into()],
-                machine: false,
             }))
         );
         let world = world.lock().unwrap();
@@ -207,17 +205,16 @@ mod tests {
         for user in [account("alice", 1000), account("bob", 1001)] {
             let removed = ran(
                 as_user(&world, &user),
-                Request::SelfRemove(SelfRemoveRequest {}),
+                Request::UserRemove(UserRemoveRequest {}),
             )
             .await;
             assert_eq!(removed.code(), None);
             if user.name == "bob" {
                 assert_eq!(
                     removed.result(),
-                    Some(&node_finished::Result::SelfRemove(SelfRemoveResult {
-                        users: vec!["bob".into()],
+                    Some(&node_finished::Result::UserRemove(UserRemoveResult {
+                        user: "bob".into(),
                         others: Vec::new(),
-                        machine: false,
                     }))
                 );
             }
@@ -237,7 +234,7 @@ mod tests {
         enrolled(&world).await;
         let before = world.lock().unwrap().clone();
 
-        let removed = ran(as_root(&world), Request::SelfRemove(SelfRemoveRequest {})).await;
+        let removed = ran(as_root(&world), Request::UserRemove(UserRemoveRequest {})).await;
 
         assert_eq!(removed.code(), Some(Code::RootNotAllowed));
         assert_eq!(*world.lock().unwrap(), before);
@@ -251,7 +248,7 @@ mod tests {
 
         let command = mix_events::v1::Command {
             dry_run: true,
-            ..mix_events::command(Request::SelfRemove(SelfRemoveRequest {}))
+            ..mix_events::command(Request::UserRemove(UserRemoveRequest {}))
         };
         let removed =
             crate::request::ran::ran_command(as_user(&world, &account("alice", 1000)), command)

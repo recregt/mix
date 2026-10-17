@@ -22,7 +22,8 @@ message Result {
     mix.events.v1.ExplainResult explain = 16;
     mix.events.v1.ListResult list = 17;
     mix.events.v1.UpdateResult update = 18;
-    mix.events.v1.SelfRemoveResult self_remove = 19;
+    mix.events.v1.UserRemoveResult user_remove = 19;
+    mix.events.v1.PurgeResult purge = 25;
   }
   repeated Change changes = 20;
   repeated Problem problems = 21;

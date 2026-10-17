@@ -3,7 +3,7 @@ use mix_events::mirror::Mirror;
 use mix_events::v1::command::Request;
 use mix_events::v1::{
     BootstrapRequest, CleanRequest, Code, DoctorRequest, ExplainRequest, InstallRequest,
-    ListRequest, PurgeRequest, RemoveRequest, RepairRequest, SelfRemoveRequest, UpdateRequest,
+    ListRequest, PurgeRequest, RemoveRequest, RepairRequest, UpdateRequest, UserRemoveRequest,
 };
 
 use crate::args::{Command, User};
@@ -64,7 +64,7 @@ pub fn from_args(command: &Command, environment: &Environment) -> Request {
         }),
         Command::List => Request::List(ListRequest {}),
         Command::Purge { .. } => Request::Purge(PurgeRequest {}),
-        Command::User(User::Remove { .. }) => Request::SelfRemove(SelfRemoveRequest {}),
+        Command::User(User::Remove { .. }) => Request::UserRemove(UserRemoveRequest {}),
     }
 }
 
@@ -79,7 +79,7 @@ pub fn route(request: &Request) -> Route {
         | Request::Doctor(_)
         | Request::Explain(_)
         | Request::List(_)
-        | Request::SelfRemove(_) => Route::Socket,
+        | Request::UserRemove(_) => Route::Socket,
     }
 }
 
@@ -98,7 +98,7 @@ pub fn refused(request: &Request) -> Option<Fault> {
         | Request::Doctor(_)
         | Request::Explain(_)
         | Request::List(_)
-        | Request::SelfRemove(_)
+        | Request::UserRemove(_)
         | Request::Purge(_) => None,
     }
 }
@@ -129,9 +129,9 @@ pub fn unconfirmed(
     Some(Fault::failed(Code::ConfirmationRequired, message, None))
 }
 
-pub fn leaves_the_machine(command: &Command, removal: Option<mix_render::Removal>) -> bool {
+pub fn leaves_the_machine(command: &Command, others: Option<Vec<String>>) -> bool {
     matches!(command, Command::User(User::Remove { dry_run: false, .. }))
-        && removal.is_some_and(|removal| removal.others.is_empty() && !removal.machine)
+        && others.is_some_and(|others| others.is_empty())
 }
 
 fn purge_question(users: &[String]) -> String {
@@ -339,7 +339,7 @@ mod tests {
                     yes: true,
                     dry_run: false,
                 }),
-                Request::SelfRemove(SelfRemoveRequest {}),
+                Request::UserRemove(UserRemoveRequest {}),
             ),
             (
                 Command::Purge {
@@ -393,22 +393,11 @@ mod tests {
     #[test]
     fn only_the_last_user_to_leave_is_offered_the_machine() {
         let remove = |dry_run| Command::User(User::Remove { yes: true, dry_run });
-        let alone = Some(mix_render::Removal {
-            others: Vec::new(),
-            machine: false,
-        });
-        let shared = Some(mix_render::Removal {
-            others: vec!["bob".to_string()],
-            machine: false,
-        });
-        let purged = Some(mix_render::Removal {
-            others: Vec::new(),
-            machine: true,
-        });
+        let alone = Some(Vec::new());
+        let shared = Some(vec!["bob".to_string()]);
 
         assert!(leaves_the_machine(&remove(false), alone.clone()));
         assert!(!leaves_the_machine(&remove(false), shared));
-        assert!(!leaves_the_machine(&remove(false), purged));
         assert!(!leaves_the_machine(&remove(false), None));
         assert!(!leaves_the_machine(&remove(true), alone));
         assert!(!leaves_the_machine(&Command::List, None));

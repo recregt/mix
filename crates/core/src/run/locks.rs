@@ -13,7 +13,7 @@ pub fn locks_for(request: &Request, dry_run: bool) -> Need {
         return match request {
             Request::Explain(_) | Request::List(_) => Need::Nothing,
             Request::Bootstrap(_)
-            | Request::SelfRemove(_)
+            | Request::UserRemove(_)
             | Request::Purge(_)
             | Request::Repair(_)
             | Request::Clean(_)
@@ -30,7 +30,7 @@ pub fn locks_for(request: &Request, dry_run: bool) -> Need {
         | Request::Remove(_)
         | Request::Update(_)
         | Request::Doctor(_)
-        | Request::SelfRemove(_)
+        | Request::UserRemove(_)
         | Request::Clean(_) => Need::SharedForUser,
         Request::Explain(_) | Request::List(_) => Need::Nothing,
     }

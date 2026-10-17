@@ -29,10 +29,9 @@ def test_a_user_removal_takes_that_user_and_leaves_the_machine_and_the_others(
 
     assert removed.succeeded(), removed
     assert removed.document["command"] == "user remove"
-    result = removed.result("selfRemove")
-    assert result["users"] == [FIRST_USER], result
+    result = removed.result("userRemove")
+    assert result["user"] == FIRST_USER, result
     assert result["others"] == [SECOND_USER], result
-    assert not result.get("machine"), result
     assert group_members(container, MIX_USERS_GROUP) == [SECOND_USER]
     assert not _exists(container, _state(FIRST_USER))
     assert not _exists(container, f"/home/{FIRST_USER}/.nix-profile")
@@ -52,8 +51,8 @@ def test_the_last_user_to_leave_sees_that_nobody_else_remains_and_a_purge_finish
     removed = container.mix("user", "remove", "--yes", user=FIRST_USER)
 
     assert removed.succeeded(), removed
-    result = removed.result("selfRemove")
-    assert result["users"] == [FIRST_USER], result
+    result = removed.result("userRemove")
+    assert result["user"] == FIRST_USER, result
     assert not result.get("others"), result
     assert group_members(container, MIX_USERS_GROUP) == []
     for path in MACHINE_PATHS:
