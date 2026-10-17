@@ -103,45 +103,47 @@ pub fn refused(request: &Request) -> Option<Fault> {
     }
 }
 
-pub fn unconfirmed(
+pub enum Confirmation {
+    Given,
+    Refused(Fault),
+    AfterThePlan,
+}
+
+pub const PURGE_QUESTION: &str = "Make these changes to this machine?";
+
+pub fn confirmation(
     command: &Command,
     interactive: bool,
-    others: impl FnOnce() -> Vec<String>,
     ask: impl FnOnce(&str) -> bool,
-) -> Option<Fault> {
-    let (yes, dry_run, question) = match command {
-        Command::User(User::Remove { yes, dry_run }) => (
-            *yes,
-            *dry_run,
-            "This removes `mix` and Nix from your account. Continue?".to_string(),
-        ),
-        Command::Purge { yes, dry_run } => (*yes, *dry_run, purge_question(&others())),
-        _ => return None,
+) -> Confirmation {
+    let (yes, dry_run) = match command {
+        Command::User(User::Remove { yes, dry_run }) | Command::Purge { yes, dry_run } => {
+            (*yes, *dry_run)
+        }
+        _ => return Confirmation::Given,
     };
     if yes || dry_run {
-        return None;
+        return Confirmation::Given;
     }
-    let message = match interactive {
-        false => "there is no terminal to ask on and `--yes` was not given",
-        true if ask(&question) => return None,
-        true => "the answer was not yes",
-    };
-    Some(Fault::failed(Code::ConfirmationRequired, message, None))
+    if !interactive {
+        return Confirmation::Refused(refusal(
+            "there is no terminal to ask on and `--yes` was not given",
+        ));
+    }
+    match command {
+        Command::Purge { .. } => Confirmation::AfterThePlan,
+        _ if ask("This removes `mix` and Nix from your account. Continue?") => Confirmation::Given,
+        _ => Confirmation::Refused(refusal("the answer was not yes")),
+    }
+}
+
+pub fn refusal(message: &str) -> Fault {
+    Fault::failed(Code::ConfirmationRequired, message, None)
 }
 
 pub fn leaves_the_machine(command: &Command, others: Option<Vec<String>>) -> bool {
     matches!(command, Command::User(User::Remove { dry_run: false, .. }))
         && others.is_some_and(|others| others.is_empty())
-}
-
-fn purge_question(users: &[String]) -> String {
-    match users {
-        [] => "This removes `mix` and Nix from this machine. Continue?".to_string(),
-        users => format!(
-            "This removes `mix`, Nix and the `mix` state of {} from this machine. Continue?",
-            users.join(", ")
-        ),
-    }
 }
 
 #[cfg(test)]
@@ -353,40 +355,65 @@ mod tests {
         }
     }
 
+    fn refusal_code(confirmation: Confirmation) -> Option<Code> {
+        match confirmation {
+            Confirmation::Refused(fault) => fault.code(),
+            Confirmation::Given | Confirmation::AfterThePlan => None,
+        }
+    }
+
     #[test]
     fn a_removal_asks_on_a_terminal_and_refuses_without_one() {
         let remove = |yes, dry_run| Command::User(User::Remove { yes, dry_run });
-        let purge = |yes, dry_run| Command::Purge { yes, dry_run };
-        let refused = |fault: Option<Fault>| fault.and_then(|fault| fault.code());
-        let nobody = Vec::new;
 
-        for command in [remove, purge] {
-            assert_eq!(
-                refused(unconfirmed(&command(true, false), false, nobody, |_| false)),
-                None
-            );
-            assert_eq!(
-                refused(unconfirmed(&command(false, true), false, nobody, |_| false)),
-                None
-            );
-            assert_eq!(
-                refused(unconfirmed(&command(false, false), true, nobody, |_| true)),
-                None
-            );
-            assert_eq!(
-                refused(unconfirmed(&command(false, false), true, nobody, |_| false)),
-                Some(Code::ConfirmationRequired)
-            );
-            assert_eq!(
-                refused(unconfirmed(&command(false, false), false, nobody, |_| {
-                    panic!("asked")
-                })),
-                Some(Code::ConfirmationRequired)
-            );
-        }
         assert_eq!(
-            refused(unconfirmed(&Command::List, false, nobody, |_| false)),
+            refusal_code(confirmation(&remove(true, false), false, |_| false)),
             None
+        );
+        assert_eq!(
+            refusal_code(confirmation(&remove(false, true), false, |_| false)),
+            None
+        );
+        assert_eq!(
+            refusal_code(confirmation(&remove(false, false), true, |_| true)),
+            None
+        );
+        assert_eq!(
+            refusal_code(confirmation(&remove(false, false), true, |_| false)),
+            Some(Code::ConfirmationRequired)
+        );
+        assert_eq!(
+            refusal_code(confirmation(&remove(false, false), false, |_| panic!(
+                "asked"
+            ))),
+            Some(Code::ConfirmationRequired)
+        );
+        assert_eq!(
+            refusal_code(confirmation(&Command::List, false, |_| false)),
+            None
+        );
+    }
+
+    #[test]
+    fn a_purge_shows_the_daemons_plan_before_it_asks_and_never_asks_by_itself() {
+        let purge = |yes, dry_run| Command::Purge { yes, dry_run };
+        let asked = |_: &str| -> bool { panic!("the client must not ask before the plan") };
+
+        assert!(matches!(
+            confirmation(&purge(false, false), true, asked),
+            Confirmation::AfterThePlan
+        ));
+        assert!(matches!(
+            confirmation(&purge(true, false), true, asked),
+            Confirmation::Given
+        ));
+        assert!(matches!(
+            confirmation(&purge(false, true), true, asked),
+            Confirmation::Given
+        ));
+        assert_eq!(
+            refusal_code(confirmation(&purge(false, false), false, asked)),
+            Some(Code::ConfirmationRequired)
         );
     }
 
@@ -401,46 +428,5 @@ mod tests {
         assert!(!leaves_the_machine(&remove(false), None));
         assert!(!leaves_the_machine(&remove(true), alone));
         assert!(!leaves_the_machine(&Command::List, None));
-    }
-
-    #[test]
-    fn a_purge_names_every_user_it_removes_in_its_question() {
-        let asked = std::cell::RefCell::new(String::new());
-        let purge = Command::Purge {
-            yes: false,
-            dry_run: false,
-        };
-
-        let users = || vec!["alice".to_string(), "bob".to_string()];
-        unconfirmed(&purge, true, users, |question| {
-            *asked.borrow_mut() = question.to_string();
-            true
-        });
-
-        assert!(asked.borrow().contains("alice, bob"), "{}", asked.borrow());
-        let alone = std::cell::RefCell::new(String::new());
-        unconfirmed(&purge, true, Vec::new, |question| {
-            *alone.borrow_mut() = question.to_string();
-            true
-        });
-        assert!(!alone.borrow().contains("state of"), "{}", alone.borrow());
-    }
-
-    #[test]
-    fn a_removal_never_names_other_users() {
-        let remove = Command::User(User::Remove {
-            yes: false,
-            dry_run: false,
-        });
-
-        unconfirmed(
-            &remove,
-            true,
-            || panic!("a user removal must not look up other users"),
-            |question| {
-                assert!(question.contains("your account"));
-                true
-            },
-        );
     }
 }

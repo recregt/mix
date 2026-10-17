@@ -153,7 +153,7 @@ pub enum Command {
     },
 
     /// Manage `mix` for your own account
-    #[command(name = "user", subcommand)]
+    #[command(subcommand)]
     User(User),
 }
 

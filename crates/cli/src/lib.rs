@@ -1,4 +1,3 @@
-mod accounts;
 mod args;
 mod client;
 mod controls;
@@ -34,15 +33,24 @@ pub async fn run() -> ExitCode {
         args.draws_progress(environment.ci),
     );
     let interactive = !args.json && mix_render::interactive();
-    let unconfirmed = request::unconfirmed(
-        &args.command,
-        interactive,
-        accounts::enrolled,
-        mix_render::confirm,
-    );
     let socket = std::path::Path::new(mix_rpc::SOCKET_PATH);
     let first = view();
-    let exit = session::run(command, &first, socket, unconfirmed).await;
+    let exit = match request::confirmation(&args.command, interactive, mix_render::confirm) {
+        request::Confirmation::Given => session::run(command, &first, socket, None).await,
+        request::Confirmation::Refused(fault) => {
+            session::run(command, &first, socket, Some(fault)).await
+        }
+        request::Confirmation::AfterThePlan => {
+            let plan = request::command_of(&args.command, true, &environment);
+            let planned = session::run(plan, &view(), socket, None).await;
+            if planned != ExitCode::SUCCESS {
+                return planned;
+            }
+            let answer = (!mix_render::confirm(request::PURGE_QUESTION))
+                .then(|| request::refusal("the answer was not yes"));
+            session::run(command, &first, socket, answer).await
+        }
+    };
     if exit == ExitCode::SUCCESS
         && interactive
         && request::leaves_the_machine(&args.command, first.departure.others())
