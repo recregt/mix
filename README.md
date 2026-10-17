@@ -72,7 +72,7 @@ sudo mix purge
 The point of the tool is that trying it is not a one-way decision.
 
 > [!CAUTION]
-> `mix purge` removes the `mix` state of every user on the machine, not only yours. The confirmation names each user, and `--dry-run` shows what goes before anything does.
+> `mix purge` removes the `mix` state of every user on the machine, not only yours. The confirmation names each enrolled user. It also clears `mix` state left in the home of a former user, and `--dry-run` shows everything that goes before anything does.
 
 ## Try it
 
