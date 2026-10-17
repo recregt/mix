@@ -102,7 +102,7 @@ def test_a_dry_run_of_a_purge_lists_the_changes_and_makes_none(container):
 
 
 @pytest.mark.bootstrapped
-def test_a_purge_on_a_terminal_names_every_user_it_would_remove(
+def test_a_purge_on_a_terminal_shows_the_daemons_plan_with_every_home_before_asking(
     container, mock_nix_server, mirror_cache
 ):
     create_user(container, SECOND_USER, sudo=True)
@@ -115,9 +115,10 @@ def test_a_purge_on_a_terminal_names_every_user_it_would_remove(
         user=FIRST_USER,
     )
 
-    question = next(line for line in run.stdout.splitlines() if "Continue?" in line)
-    assert FIRST_USER in question, question
-    assert SECOND_USER in question, question
+    asked = run.stdout.index("Make these changes to this machine? [y/N]")
+    planned = run.stdout[:asked]
+    assert f"/home/{FIRST_USER}" in planned, run
+    assert f"/home/{SECOND_USER}" in planned, run
     assert run.returncode != 0, run
     for path in ("/nix/store", NIX_CONF_DEST, *UNIT_FILES):
         assert _exists(container, path), path
