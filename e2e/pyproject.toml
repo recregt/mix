@@ -15,6 +15,7 @@ addopts = ["-p", "no:cacheprovider", "-rfE"]
 verbosity_assertions = 2
 markers = [
     "bootstrapped: start from a container where ciuser already ran `mix bootstrap`",
+    "unmounted: start a container without the built mix binaries mounted into /usr/local/bin",
 ]
 
 [dependency-groups]

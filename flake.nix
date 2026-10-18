@@ -192,6 +192,27 @@
                   touch $out
                 '';
 
+            shellcheck =
+              pkgs.runCommand "mix-shellcheck"
+                {
+                  nativeBuildInputs = [ pkgs.shellcheck ];
+                  scripts = lib.fileset.toSource {
+                    root = ./.;
+                    fileset = lib.fileset.unions (
+                      map (lib.fileset.fileFilter (file: file.hasExt "sh")) [
+                        ./scripts
+                        ./e2e
+                        ./crates/pins/scripts
+                      ]
+                    );
+                  };
+                }
+                ''
+                  cd $scripts
+                  find . -name '*.sh' -print0 | xargs -0 shellcheck
+                  touch $out
+                '';
+
             machete = pkgs.runCommand "mix-machete" { nativeBuildInputs = [ pkgs.cargo-machete ]; } ''
               cd ${src}
               cargo-machete
