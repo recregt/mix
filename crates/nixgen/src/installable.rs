@@ -65,6 +65,12 @@ impl FlakeRef {
         })
     }
 
+    pub fn render(&self) -> String {
+        let mut out = String::new();
+        self.write(&mut out);
+        out
+    }
+
     fn write(&self, out: &mut String) {
         match self {
             Self::Path { dir } => {
@@ -253,6 +259,15 @@ mod tests {
             AttrPath::new(["x"]).unwrap(),
         );
         assert_eq!(installable.render(), "git+file:///s#x");
+    }
+
+    #[test]
+    fn renders_a_flake_on_its_own_as_it_renders_before_an_attribute_path() {
+        let flake = FlakeRef::git_file("/s t", None).unwrap();
+        let installable = Installable::new(flake.clone(), AttrPath::new(["x"]).unwrap());
+
+        assert_eq!(flake.render(), "git+file:///s%20t");
+        assert_eq!(installable.render(), format!("{}#x", flake.render()));
     }
 
     #[test]

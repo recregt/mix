@@ -101,6 +101,34 @@ fn unreadable(command: &str, error: impl std::fmt::Display) -> Error {
     }
 }
 
+pub fn parse_locked(metadata: &str) -> Option<Pins<LockedInput>> {
+    let metadata: serde_json::Value = serde_json::from_str(metadata).ok()?;
+    mix_core::declared::pins::read(&metadata.get("locks")?.to_string())
+}
+
+pub async fn locked_pins(user: &InvokingUser, scope: &Scope) -> Result<Option<Pins<LockedInput>>> {
+    let flake = activation::flake(user, FlakeSource::Git).render();
+    let args = [
+        "flake",
+        "metadata",
+        "--json",
+        "--no-update-lock-file",
+        &flake,
+    ];
+    match run_as(user, DEFAULT_PROFILE_NIX, &args, scope).await {
+        Ok(answer) => Ok(parse_locked(&answer)),
+        Err(cancelled @ Error::Cancelled { .. }) => Err(cancelled),
+        Err(_) => Ok(None),
+    }
+}
+
+fn overriding<'a>(
+    wanted: Option<&'a Pins<LockedInput>>,
+    locked: Option<&Pins<LockedInput>>,
+) -> Option<&'a Pins<LockedInput>> {
+    wanted.filter(|wanted| Some(*wanted) != locked)
+}
+
 async fn described(
     user: &InvokingUser,
     mirror: Option<&str>,
@@ -108,6 +136,11 @@ async fn described(
     pins: Option<&Pins<LockedInput>>,
     scope: &Scope,
 ) -> Result<Vec<Described>> {
+    let locked = match pins {
+        Some(_) => locked_pins(user, scope).await?,
+        None => None,
+    };
+    let pins = overriding(pins, locked.as_ref());
     let installable = Installable::new(
         activation::flake(user, FlakeSource::Git),
         AttrPath::new(["homeConfigurations", &user.name, "pkgs"])
@@ -410,6 +443,41 @@ mod tests {
             args.iter()
                 .any(|arg| arg.starts_with("tarball+http://mirror.internal"))
         );
+    }
+
+    const METADATA: &str = include_str!("../../fixtures/nix/flake-metadata.json");
+
+    #[test]
+    fn what_nix_flake_metadata_prints_is_read_as_the_pins_the_flake_is_locked_to() {
+        assert_eq!(parse_locked(METADATA), Some(mix_nixgen::lock::EMBEDDED));
+    }
+
+    #[test]
+    fn metadata_without_a_lock_holds_no_pins() {
+        assert_eq!(parse_locked("not json"), None);
+        assert_eq!(parse_locked(r#"{"locked":{}}"#), None);
+        assert_eq!(
+            parse_locked(r#"{"locks":{"nodes":{},"root":"root"}}"#),
+            None
+        );
+    }
+
+    #[test]
+    fn pins_the_profile_flake_is_already_locked_to_are_not_overridden() {
+        let pins = mix_nixgen::lock::EMBEDDED;
+
+        assert_eq!(overriding(Some(&pins), Some(&pins)), None);
+    }
+
+    #[test]
+    fn pins_the_profile_flake_is_not_locked_to_are_overridden() {
+        let pins = mix_nixgen::lock::EMBEDDED;
+        let mut other = pins.clone();
+        other.nixpkgs.rev = pins.home_manager.rev.clone();
+
+        assert_eq!(overriding(Some(&pins), Some(&other)), Some(&pins));
+        assert_eq!(overriding(Some(&pins), None), Some(&pins));
+        assert_eq!(overriding(None, Some(&pins)), None);
     }
 
     #[test]
