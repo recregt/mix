@@ -39,9 +39,17 @@ pub fn command_failure(
             ..Diagnostic::default()
         };
     };
-    let (code, package) = match error.failure {
-        Some(NixFailure::Build { package }) => (Code::BuildFailed, package),
-        Some(NixFailure::UnknownPackage { name }) => (Code::UnknownPackage, name),
+    let (code, message, package) = match error.failure {
+        Some(NixFailure::Build { package }) => (
+            Code::BuildFailed,
+            format!("couldn't build {package}"),
+            package,
+        ),
+        Some(NixFailure::UnknownPackage { name }) => (
+            Code::UnknownPackage,
+            format!("`{name}` isn't a package `mix` can find"),
+            name,
+        ),
         None => {
             return Diagnostic {
                 code: Code::CommandFailed as i32,

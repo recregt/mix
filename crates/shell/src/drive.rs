@@ -245,6 +245,28 @@ impl Prediction {
             Query::Journals(_) => false,
         }
     }
+
+    fn changes_worktree(&self, query: &Query) -> bool {
+        let Query::Repository(user) = query else {
+            return false;
+        };
+        let worktree = mix_state_dir(&user.home);
+        let repository = repository_dir(&user.home);
+        self.touched.iter().any(|subject| {
+            matches!(subject, Subject::Path(touched)
+                if touched.starts_with(&worktree) && !touched.starts_with(&repository))
+        })
+    }
+}
+
+fn unrecorded(fact: Fact) -> Fact {
+    match fact {
+        Fact::Repository { intact, .. } => Fact::Repository {
+            intact,
+            recorded: false,
+        },
+        other => other,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -761,6 +783,9 @@ impl Performer {
             }
             let fact = match &self.prediction {
                 Some(prediction) if prediction.answers(query) => prediction.world.observe(query),
+                Some(prediction) if prediction.changes_worktree(query) => {
+                    unrecorded(self.observe_one(query, scope).await?)
+                }
                 _ => self.observe_one(query, scope).await?,
             };
             facts.push(fact);
@@ -2097,5 +2122,52 @@ mod tests {
             matches!(refused, Err(Failure::Conflict { .. })),
             "{refused:?}"
         );
+    }
+
+    fn alice() -> InvokingUser {
+        InvokingUser {
+            uid: 1000,
+            gid: 1000,
+            name: "alice".to_string(),
+            home: "/home/alice".into(),
+        }
+    }
+
+    #[test]
+    fn a_predicted_change_to_a_profile_file_leaves_the_repository_unrecorded() {
+        let user = alice();
+        let mut prediction = Prediction::default();
+        let query = Query::Repository(user.clone());
+        assert!(!prediction.changes_worktree(&query));
+
+        prediction
+            .touched
+            .push(Subject::Path(mix_state_dir(&user.home).join("home.nix")));
+
+        assert!(prediction.changes_worktree(&query));
+        assert_eq!(
+            unrecorded(Fact::Repository {
+                intact: true,
+                recorded: true
+            }),
+            Fact::Repository {
+                intact: true,
+                recorded: false
+            }
+        );
+    }
+
+    #[test]
+    fn a_predicted_change_outside_the_worktree_or_inside_git_does_not_count() {
+        let user = alice();
+        let mut prediction = Prediction::default();
+        prediction
+            .touched
+            .push(Subject::Path(repository_dir(&user.home).join("index")));
+        prediction
+            .touched
+            .push(Subject::Path("/home/alice/.nix-profile".into()));
+
+        assert!(!prediction.changes_worktree(&Query::Repository(user)));
     }
 }

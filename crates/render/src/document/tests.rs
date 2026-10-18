@@ -143,7 +143,7 @@ fn every_action_of_a_step_is_a_change_under_that_step() {
             ],
             problems: Vec::new(),
             warnings: Vec::new(),
-            cancellation: 0,
+            cancellation: None,
             steps: vec![StepResult {
                 key: "write-config".into(),
                 verb: Verb::Writing as i32,
@@ -277,6 +277,45 @@ fn a_successful_run_still_states_its_exit_and_that_it_was_no_dry_run() {
     assert_eq!(json["exit"], 0);
     assert_eq!(json["dryRun"], false);
     assert_eq!(json["problems"], serde_json::json!([]));
+    assert!(json.get("cancellation").is_none(), "{json}");
+}
+
+#[test]
+fn a_cancelled_run_states_what_cancelled_it() {
+    let document = document_of(false, |tree| {
+        tree.finish(
+            ROOT,
+            Ending::cancelled(mix_events::v1::Cancellation::Interrupted).for_root(false),
+        )
+        .unwrap();
+    });
+
+    let json = serde_json::to_value(&document).unwrap();
+
+    assert_eq!(json["status"], "STATUS_CANCELLED");
+    assert_eq!(json["cancellation"], "CANCELLATION_INTERRUPTED");
+}
+
+#[test]
+fn a_result_writes_its_fields_even_at_their_default() {
+    let document = document_of(false, |tree| {
+        let result = mix_events::v1::InstallResult {
+            added: vec!["jq".into()],
+            ..mix_events::v1::InstallResult::default()
+        };
+        tree.finish(
+            ROOT,
+            Ending::succeeded()
+                .with_result(mix_events::v1::node_finished::Result::Install(result))
+                .for_root(false),
+        )
+        .unwrap();
+    });
+
+    let json = serde_json::to_value(&document).unwrap();
+
+    assert_eq!(json["install"]["skipped"], serde_json::json!([]));
+    assert_eq!(json["install"]["restored"], false);
 }
 
 #[test]

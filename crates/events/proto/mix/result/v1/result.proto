@@ -11,7 +11,7 @@ message Result {
   bool dry_run = 4;
   mix.events.v1.Status status = 5;
   uint32 exit = 6;
-  mix.events.v1.Cancellation cancellation = 7;
+  optional mix.events.v1.Cancellation cancellation = 7;
   oneof result {
     mix.events.v1.BootstrapResult bootstrap = 10;
     mix.events.v1.InstallResult install = 11;

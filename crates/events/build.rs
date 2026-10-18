@@ -202,14 +202,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .register_descriptors(&encoded)?
         .ignore_unknown_fields()
         .ignore_unknown_enum_variants()
-        .build(&[".mix.events.v1", ".mix.capture.v1"])?;
-
-    pbjson_build::Builder::new()
-        .register_descriptors(&encoded)?
-        .ignore_unknown_fields()
-        .ignore_unknown_enum_variants()
         .emit_fields()
-        .build(&[".mix.result.v1"])?;
+        .build(&[".mix.events.v1", ".mix.capture.v1", ".mix.result.v1"])?;
 
     Ok(())
 }
