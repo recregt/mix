@@ -146,11 +146,17 @@ fn main() -> ExitCode {
             "git" => suite::<Git>(seeds.as_deref(), name, known()),
             "nix" => mix_conformance::contract::nix::user(user.as_deref().unwrap_or_default())
                 .and_then(|user| {
-                    mix_conformance::contract::nix::versions_agree_with_the_listing(
-                        &mix_conformance::contract::runtime(),
+                    let runtime = mix_conformance::contract::runtime();
+                    let locked =
+                        mix_conformance::contract::nix::the_profile_flake_is_locked_to_the_generations_pins(
+                            &runtime, &user,
+                        )?;
+                    let listed = mix_conformance::contract::nix::versions_agree_with_the_listing(
+                        &runtime,
                         &user,
                         mirror.as_deref(),
-                    )
+                    )?;
+                    Ok(locked + listed)
                 }),
             _ => unreachable!("only known suites are chosen"),
         };
