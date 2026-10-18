@@ -139,15 +139,21 @@ def test_an_altered_daemon_binary_is_replaced_by_the_running_one(container):
     assert found.exit_code == 3, found
     assert _findings(found) == {DAEMON_BIN: {"contentDrift": {}}}
 
+    def service():
+        shown = container.exec(
+            "systemctl", "show", "-p", "MainPID", "-p", "SubState", "mix-daemon.service", check=True
+        ).stdout
+        return dict(line.split("=", 1) for line in shown.splitlines() if "=" in line)
+
+    before = service()["MainPID"]
     assert container.mix("repair", user=USER).succeeded()
 
-    def main_pid():
-        pid = container.exec(
-            "systemctl", "show", "-P", "MainPID", "mix-daemon.service", check=True
-        ).stdout.strip()
-        return pid if pid != "0" else None
+    def restarted():
+        now = service()
+        running = now["SubState"] == "running" and now["MainPID"] not in ("0", before)
+        return now["MainPID"] if running else None
 
-    pid = until(main_pid, "the daemon restarting after its drain")
+    pid = until(restarted, "the daemon running again after its drain")
     same = container.exec("cmp", DAEMON_BIN, f"/proc/{pid}/exe")
     assert same.returncode == 0, same.stdout
     _healthy(container)
