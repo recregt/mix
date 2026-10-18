@@ -88,27 +88,33 @@ fn a_purge_leaves_nothing_mix_made_and_keeps_the_users_own_files() {
 }
 
 #[test]
-fn every_home_is_set_aside_before_anything_on_the_machine_changes() {
+fn the_services_stop_before_any_home_and_every_home_goes_before_the_machine() {
     let mut world = bootstrapped();
 
     let run = remove(&mut world, &Script::default());
 
-    let last_home = run
+    let home = |action: &Action| matches!(action, Action::SetAside { path, .. } if path.starts_with("/home/alice"));
+    let first_home = run
         .performed
         .iter()
-        .rposition(|action| {
-            matches!(action, Action::SetAside { path, .. } if path.starts_with("/home/alice"))
-        })
+        .position(home)
         .expect("alice's home was cleaned");
+    let last_home = run.performed.iter().rposition(home).unwrap();
+    let last_stop = run
+        .performed
+        .iter()
+        .rposition(|action| matches!(action, Action::StopUnit { .. }))
+        .expect("the services were stopped");
     let first_machine = run
         .performed
         .iter()
         .position(|action| match action {
             Action::SetAside { path, .. } => !path.starts_with("/home"),
-            Action::StopUnit { .. } | Action::DisableUnit { .. } => true,
+            Action::Discard { .. } => true,
             _ => false,
         })
         .expect("the machine was cleaned");
+    assert!(last_stop < first_home, "{:#?}", run.performed);
     assert!(last_home < first_machine, "{:#?}", run.performed);
 }
 
