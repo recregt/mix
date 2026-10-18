@@ -74,6 +74,22 @@
             "crates/nixgen/fuzz"
             "crates/render/fuzz"
           ];
+          codspeed = lib.findFirst (package: package.name == "codspeed") (throw "Cargo.lock has no codspeed") (
+            builtins.fromTOML (builtins.readFile ./Cargo.lock)
+          ).package;
+          cargoCodspeed = pkgs.cargo-codspeed.overrideAttrs (
+            final: previous: {
+              inherit (codspeed) version;
+              src = previous.src.override {
+                tag = "v${codspeed.version}";
+                hash = "sha256-M2dqibNz7tiiEu2ioiOIyOgNfoS8xlZy11vqUU2pKRU=";
+              };
+              cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
+                inherit (final) src;
+                hash = "sha256-NLu5je+8JDEy+jMg8FotuQu6THVH49Sb1Xd4488FmAo=";
+              };
+            }
+          );
           nightly = pkgs.rust-bin.selectLatestNightlyWith (
             toolchain: toolchain.minimal.override { extensions = [ "llvm-tools-preview" ]; }
           );
@@ -90,6 +106,13 @@
         {
           devShells.default = pkgs.mkShell {
             packages = [ (pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml) ];
+          };
+
+          devShells.bench = pkgs.mkShell {
+            packages = [
+              (pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml)
+              cargoCodspeed
+            ];
           };
 
           devShells.fuzz = pkgs.mkShell {

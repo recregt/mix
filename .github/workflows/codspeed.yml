@@ -29,18 +29,17 @@ jobs:
         with:
           persist-credentials: false
 
-      - run: rustup toolchain install
+      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+
+      - name: Put the bench shell's tools on the path
+        run: nix develop .#bench --command printenv PATH | tr ':' '\n' | grep '^/nix/store' >> "$GITHUB_PATH"
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
-        with:
-          tool: cargo-codspeed
-
       - name: Build the benchmark targets
-        run: cargo codspeed build --locked --measurement-mode simulation
+        run: nix develop .#bench --command cargo codspeed build --locked --measurement-mode simulation
 
       - name: Run the benchmarks
         uses: CodSpeedHQ/action@821a40cd6c80e3cfe387caf55668287addd808da # v5.5.0
