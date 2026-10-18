@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{Digest, Expect, FileId, Owner};
 use crate::declared::identity::InvokingUser;
+use crate::declared::paths::{
+    NIX_STORE, generation_link, mix_state_dir, profile_path, repository_dir,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserSpec {
@@ -332,49 +335,95 @@ impl Action {
             Action::StopUnit { unit } => (Operation::StopUnit, unit.clone()),
             Action::RestartUnit { unit } => (Operation::RestartUnit, unit.clone()),
             Action::DrainService { unit } => (Operation::DrainService, unit.clone()),
-            Action::DaemonReload => (Operation::DaemonReload, String::new()),
+            Action::DaemonReload => (Operation::DaemonReload, "systemd".to_string()),
             Action::InstallRuntime { url, .. } => (Operation::InstallRuntime, url.clone()),
-            Action::RemoveRuntime { .. } => (Operation::RemoveRuntime, String::new()),
-            Action::ActivateProfile { user, .. } => (
-                Operation::ActivateProfile,
-                format!("{}'s profile", user.name),
+            Action::RemoveRuntime { created, kept } => (
+                Operation::RemoveRuntime,
+                created
+                    .iter()
+                    .chain(kept)
+                    .map(|at| path(at))
+                    .collect::<Vec<_>>()
+                    .join(", "),
             ),
+            Action::ActivateProfile { user, .. } => {
+                (Operation::ActivateProfile, path(&profile_path(&user.home)))
+            }
             Action::SwitchGeneration {
                 user,
                 generation: Some(generation),
                 ..
             } => (
                 Operation::SwitchGeneration,
-                format!("{}'s profile to generation {generation}", user.name),
+                path(&generation_link(&user.home, *generation)),
             ),
             Action::SwitchGeneration {
                 user,
                 generation: None,
                 ..
-            } => (
-                Operation::SwitchGeneration,
-                format!("{}'s profile to no generation", user.name),
-            ),
+            } => (Operation::SwitchGeneration, path(&profile_path(&user.home))),
             Action::DeleteGeneration { user, generation } => (
                 Operation::DeleteGeneration,
-                format!("generation {generation} of {}'s profile", user.name),
+                path(&generation_link(&user.home, *generation)),
             ),
-            Action::RecordState { user } => (
-                Operation::RecordState,
-                format!("{}'s package list", user.name),
-            ),
+            Action::RecordState { user } => {
+                (Operation::RecordState, path(&mix_state_dir(&user.home)))
+            }
             Action::CreateRepository { user } => (
                 Operation::CreateRepository,
-                format!("{}'s config history", user.name),
+                path(&repository_dir(&user.home)),
             ),
-            Action::ApplyGeneration { user } => (
-                Operation::ApplyGeneration,
-                format!("{}'s current generation", user.name),
-            ),
-            Action::CollectGarbage { .. } => {
-                (Operation::CollectGarbage, "unused store paths".to_string())
+            Action::ApplyGeneration { user } => {
+                (Operation::ApplyGeneration, path(&profile_path(&user.home)))
             }
+            Action::CollectGarbage { .. } => (Operation::CollectGarbage, NIX_STORE.to_string()),
             Action::Commit => (Operation::Commit, "changes".to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn user() -> InvokingUser {
+        InvokingUser {
+            uid: 1000,
+            gid: 1000,
+            name: "alice".to_string(),
+            home: "/home/alice".into(),
+        }
+    }
+
+    #[test]
+    fn a_change_names_what_it_changes_by_its_path_or_name() {
+        let described = |action: Action| action.describe().1;
+
+        assert_eq!(described(Action::DaemonReload), "systemd");
+        assert_eq!(
+            described(Action::RemoveRuntime {
+                created: vec!["/nix/store".into(), "/nix/var".into()],
+                kept: vec!["/nix".into()],
+            }),
+            "/nix/store, /nix/var, /nix"
+        );
+        assert_eq!(
+            described(Action::ActivateProfile {
+                user: user(),
+                source: FlakeSource::Git,
+            }),
+            "/home/alice/.local/state/nix/profiles/home-manager"
+        );
+        assert_eq!(
+            described(Action::DeleteGeneration {
+                user: user(),
+                generation: 3,
+            }),
+            "/home/alice/.local/state/nix/profiles/home-manager-3-link"
+        );
+        assert_eq!(
+            described(Action::RecordState { user: user() }),
+            "/home/alice/.local/state/mix"
+        );
     }
 }

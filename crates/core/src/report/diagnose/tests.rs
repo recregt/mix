@@ -240,6 +240,7 @@ fn a_failed_build_names_its_package_and_keeps_nixs_message_as_the_cause() {
         panic!("a failed command is a failure");
     };
     assert_eq!(diagnostic.code(), Code::BuildFailed);
+    assert_eq!(diagnostic.message, "couldn't build hello-2.12");
     assert_eq!(
         diagnostic.detail,
         Some(Detail::Packages(mix_events::v1::PackagesDetail {
@@ -251,6 +252,33 @@ fn a_failed_build_names_its_package_and_keeps_nixs_message_as_the_cause() {
     };
     assert!(command.output_tail.starts_with("error: Cannot build"));
     assert!(!command.output_tail.contains("copying"));
+}
+
+#[test]
+fn an_unknown_package_is_named_in_the_message_and_the_command_is_the_cause() {
+    let error = Error::Command {
+        command: "/nix/var/nix/profiles/default/bin/nix build".into(),
+        detail: "error: attribute 'no-such-package-xyz' missing\n       at /home/alice/.local/state/mix/home.nix:13:7:".into(),
+    };
+
+    let Fault::Failed(diagnostic) = error.fault() else {
+        panic!("a failed command is a failure");
+    };
+    assert_eq!(diagnostic.code(), Code::UnknownPackage);
+    assert_eq!(
+        diagnostic.message,
+        "`no-such-package-xyz` isn't a package `mix` can find"
+    );
+    assert_eq!(
+        diagnostic.detail,
+        Some(Detail::Packages(mix_events::v1::PackagesDetail {
+            packages: vec!["no-such-package-xyz".into()]
+        }))
+    );
+    assert!(matches!(
+        &diagnostic.causes[0].detail,
+        Some(Detail::Command(command)) if command.command.ends_with("nix build")
+    ));
 }
 
 #[test]

@@ -5,8 +5,8 @@ use mix_events::result::v1::{
     Change, ChangeAction, Problem, Result as Document, StepResult, problem, result,
 };
 use mix_events::v1::{
-    Diagnostic, Envelope, NodeFinished, Operation, Severity, Status, diagnostic, envelope,
-    node_finished, node_progress, node_started,
+    Cancellation, Diagnostic, Envelope, NodeFinished, Operation, Severity, Status, diagnostic,
+    envelope, node_finished, node_progress, node_started,
 };
 use mix_events::{NodeId, ROOT};
 
@@ -139,7 +139,8 @@ impl Builder {
         document.format_version = FORMAT_VERSION.to_string();
         document.status = root.status;
         document.exit = root.exit_code;
-        document.cancellation = root.cancellation;
+        document.cancellation =
+            (root.cancellation() != Cancellation::Unspecified).then_some(root.cancellation);
         document.result = root.result.clone().and_then(result_of);
         if let Some(found) = &root.diagnostic {
             document.problems.push(problem_of(found));
@@ -302,9 +303,10 @@ pub(crate) fn problem_of(found: &Diagnostic) -> Problem {
         Some(diagnostic::Detail::Path(detail)) => {
             (detail.path.clone(), Some(problem::Metadata::Path(detail)))
         }
-        Some(diagnostic::Detail::Packages(detail)) => {
-            (String::new(), Some(problem::Metadata::Packages(detail)))
-        }
+        Some(diagnostic::Detail::Packages(detail)) => (
+            detail.packages.join(", "),
+            Some(problem::Metadata::Packages(detail)),
+        ),
         Some(diagnostic::Detail::Format(detail)) => {
             (String::new(), Some(problem::Metadata::Format(detail)))
         }

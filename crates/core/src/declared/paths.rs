@@ -140,6 +140,14 @@ pub fn repository_dir(home: &std::path::Path) -> std::path::PathBuf {
     join(&mix_state_dir(home), GIT_DIR)
 }
 
+pub fn profile_path(home: &std::path::Path) -> std::path::PathBuf {
+    nix_profiles_dir(home).join(HOME_MANAGER_PROFILE_NAME)
+}
+
+pub fn generation_link(home: &std::path::Path, generation: u64) -> std::path::PathBuf {
+    nix_profiles_dir(home).join(format!("{HOME_MANAGER_PROFILE_NAME}-{generation}-link"))
+}
+
 pub fn active_list_path(home: &std::path::Path) -> std::path::PathBuf {
     nix_profiles_dir(home)
         .join(HOME_MANAGER_PROFILE_NAME)

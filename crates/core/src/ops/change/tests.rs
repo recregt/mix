@@ -477,8 +477,11 @@ fn an_install_writes_the_list_activates_it_and_records_it() {
         [
             format!("PutFile {}", home_nix_path().display()),
             format!("PutFile {}", state_path().display()),
-            "ActivateProfile mix-user's profile".to_string(),
-            "RecordState mix-user's package list".to_string(),
+            format!(
+                "ActivateProfile {}",
+                crate::declared::paths::profile_path(&user().home).display()
+            ),
+            format!("RecordState {}", mix_state_dir(&user().home).display()),
             "Commit changes".to_string(),
         ],
         "the list is written, then activated, then recorded"
@@ -1003,7 +1006,7 @@ fn a_clean_with_all_also_collects_the_store() {
     assert_eq!(run.report().verdict, Verdict::Succeeded);
     assert_eq!(
         run.performed(),
-        ["CollectGarbage unused store paths", "Commit changes"]
+        ["CollectGarbage /nix/store", "Commit changes"]
     );
 }
 
