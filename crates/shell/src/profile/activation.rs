@@ -15,7 +15,7 @@ use mix_core::declared::paths::{
 };
 use mix_exec::Scope;
 use mix_home::Home;
-use mix_nixgen::{AttrPath, FlakeRef, Installable};
+use mix_nixgen::{AttrPath, FlakeRef, GitAt, Installable};
 
 use crate::effect::exec::run_as_reporting;
 use crate::effect::git;
@@ -65,6 +65,11 @@ pub fn flake(user: &InvokingUser, source: FlakeSource) -> FlakeRef {
         FlakeSource::Git => FlakeRef::git_file(dir, None),
     }
     .expect("an invoking user always has an absolute home")
+}
+
+pub fn flake_at(user: &InvokingUser, at: GitAt) -> FlakeRef {
+    FlakeRef::git_at(mix_state_dir(&user.home), at)
+        .expect("an invoking user always has an absolute home")
 }
 
 pub async fn switch(

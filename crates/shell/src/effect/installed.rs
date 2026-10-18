@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use mix_core::declared::identity::InvokingUser;
-use mix_core::declared::paths::{DEFAULT_PROFILE_NIX, DEFAULT_PROFILE_NIX_STORE};
+use mix_core::declared::paths::{
+    DEFAULT_PROFILE_NIX, DEFAULT_PROFILE_NIX_STORE, REPOSITORY_BRANCH,
+};
 use mix_core::effect::FlakeSource;
 use mix_core::ops::list::{Described, Stored, join};
 use mix_core::ops::update::Versions;
@@ -11,7 +13,7 @@ use mix_events::v1::InstalledPackage;
 use mix_exec::Scope;
 use mix_home::Active;
 use mix_nixgen::lock::LockedInput;
-use mix_nixgen::{AttrPath, INPUTS, Installable, Pins};
+use mix_nixgen::{AttrPath, GitAt, INPUTS, Installable, Pins, Rev};
 use serde::Deserialize;
 
 use crate::effect::exec::run_as;
@@ -101,13 +103,22 @@ fn unreadable(command: &str, error: impl std::fmt::Display) -> Error {
     }
 }
 
-pub fn parse_locked(metadata: &str) -> Option<Pins<LockedInput>> {
-    let metadata: serde_json::Value = serde_json::from_str(metadata).ok()?;
-    mix_core::declared::pins::read(&metadata.get("locks")?.to_string())
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Locked {
+    pub rev: Rev,
+    pub pins: Pins<LockedInput>,
 }
 
-pub async fn locked_pins(user: &InvokingUser, scope: &Scope) -> Result<Option<Pins<LockedInput>>> {
-    let flake = activation::flake(user, FlakeSource::Git).render();
+fn parse_locked(metadata: &str) -> Option<Locked> {
+    let metadata: serde_json::Value = serde_json::from_str(metadata).ok()?;
+    Some(Locked {
+        rev: Rev::parse(metadata.get("locked")?.get("rev")?.as_str()?).ok()?,
+        pins: mix_core::declared::pins::from_lock(metadata.get("locks")?)?,
+    })
+}
+
+pub async fn locked(user: &InvokingUser, scope: &Scope) -> Result<Option<Locked>> {
+    let flake = activation::flake_at(user, GitAt::Branch(REPOSITORY_BRANCH)).render();
     let args = [
         "flake",
         "metadata",
@@ -122,11 +133,19 @@ pub async fn locked_pins(user: &InvokingUser, scope: &Scope) -> Result<Option<Pi
     }
 }
 
-fn overriding<'a>(
-    wanted: Option<&'a Pins<LockedInput>>,
-    locked: Option<&Pins<LockedInput>>,
-) -> Option<&'a Pins<LockedInput>> {
-    wanted.filter(|wanted| Some(*wanted) != locked)
+#[derive(Debug, PartialEq, Eq)]
+enum Evaluation<'a> {
+    AsItStands,
+    AtCommit(Rev),
+    Overridden(&'a Pins<LockedInput>),
+}
+
+fn evaluation<'a>(wanted: Option<&'a Pins<LockedInput>>, locked: Option<Locked>) -> Evaluation<'a> {
+    match (wanted, locked) {
+        (None, _) => Evaluation::AsItStands,
+        (Some(wanted), Some(locked)) if locked.pins == *wanted => Evaluation::AtCommit(locked.rev),
+        (Some(wanted), _) => Evaluation::Overridden(wanted),
+    }
 }
 
 async fn described(
@@ -137,30 +156,35 @@ async fn described(
     scope: &Scope,
 ) -> Result<Vec<Described>> {
     let locked = match pins {
-        Some(_) => locked_pins(user, scope).await?,
+        Some(_) => locked(user, scope).await?,
         None => None,
     };
-    let pins = overriding(pins, locked.as_ref());
-    let installable = Installable::new(
-        activation::flake(user, FlakeSource::Git),
-        AttrPath::new(["homeConfigurations", &user.name, "pkgs"])
-            .expect("an invoking user's name never holds a quote"),
-    )
-    .render();
     let apply = mix_nixgen::package_facts(names.iter().map(String::as_str))
         .map_err(|error| unreadable("nix eval", error))?;
-    let args = eval_args(installable, apply, pins, mirror);
+    let args = eval_args(user, apply, &evaluation(pins, locked), mirror);
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let answer = run_as(user, DEFAULT_PROFILE_NIX, &args, scope).await?;
     parse_facts(&answer).map_err(|error| unreadable("nix eval", error))
 }
 
 fn eval_args(
-    installable: String,
+    user: &InvokingUser,
     apply: String,
-    pins: Option<&Pins<LockedInput>>,
+    evaluation: &Evaluation,
     mirror: Option<&str>,
 ) -> Vec<String> {
+    let flake = match evaluation {
+        Evaluation::AtCommit(rev) => activation::flake_at(user, GitAt::Commit(rev.clone())),
+        Evaluation::AsItStands | Evaluation::Overridden(_) => {
+            activation::flake(user, FlakeSource::Git)
+        }
+    };
+    let installable = Installable::new(
+        flake,
+        AttrPath::new(["homeConfigurations", &user.name, "pkgs"])
+            .expect("an invoking user's name never holds a quote"),
+    )
+    .render();
     let mut args = vec![
         "eval".to_string(),
         "--json".to_string(),
@@ -169,7 +193,7 @@ fn eval_args(
         apply,
         "--no-write-lock-file".to_string(),
     ];
-    if let Some(pins) = pins {
+    if let Evaluation::Overridden(pins) = evaluation {
         args.extend(overrides(pins));
     }
     args.extend(activation::nix_options(mirror));
@@ -398,16 +422,35 @@ mod tests {
         assert_eq!(evaluated_at(&built_at(Some("{".into())), None), None);
     }
 
+    fn user() -> InvokingUser {
+        InvokingUser {
+            uid: 1000,
+            gid: 1000,
+            name: "alice".to_string(),
+            home: "/home/alice".into(),
+        }
+    }
+
+    const COMMIT: Rev = Rev::new_static("8f02d2b8397a3e8e5945017b8ca33ee91ef67eb0");
+
+    fn locked_at(pins: Pins<LockedInput>) -> Locked {
+        Locked { rev: COMMIT, pins }
+    }
+
     #[test]
     fn the_pins_an_evaluation_holds_override_each_input_with_its_hash() {
+        let pins = mix_nixgen::lock::EMBEDDED;
         let args = eval_args(
-            "flake#pkgs".into(),
+            &user(),
             "pkgs: pkgs".into(),
-            Some(&mix_nixgen::lock::EMBEDDED),
+            &Evaluation::Overridden(&pins),
             None,
         );
 
-        let pins = mix_nixgen::lock::EMBEDDED;
+        assert_eq!(
+            args[2],
+            "git+file:///home/alice/.local/state/mix#homeConfigurations.alice.pkgs"
+        );
         for input in &INPUTS {
             let pin = pins.of(input.pin);
             let at = args
@@ -427,10 +470,13 @@ mod tests {
 
     #[test]
     fn a_mirrored_evaluation_overrides_the_inputs_only_with_the_mirror() {
+        let wanted = evaluated_at(&embedded(), Some("http://mirror.internal"));
+        let evaluation = evaluation(wanted.as_ref(), Some(locked_at(mix_nixgen::lock::EMBEDDED)));
+        assert_eq!(evaluation, Evaluation::AsItStands);
         let args = eval_args(
-            "flake#pkgs".into(),
+            &user(),
             "pkgs: pkgs".into(),
-            evaluated_at(&embedded(), Some("http://mirror.internal")).as_ref(),
+            &evaluation,
             Some("http://mirror.internal"),
         );
 
@@ -448,36 +494,78 @@ mod tests {
     const METADATA: &str = include_str!("../../fixtures/nix/flake-metadata.json");
 
     #[test]
-    fn what_nix_flake_metadata_prints_is_read_as_the_pins_the_flake_is_locked_to() {
-        assert_eq!(parse_locked(METADATA), Some(mix_nixgen::lock::EMBEDDED));
+    fn what_nix_flake_metadata_prints_is_read_as_the_commit_and_the_pins_it_locks() {
+        assert_eq!(
+            parse_locked(METADATA),
+            Some(locked_at(mix_nixgen::lock::EMBEDDED))
+        );
+    }
+
+    #[test]
+    fn a_flake_with_uncommitted_changes_has_no_commit_to_evaluate_at() {
+        let mut metadata: serde_json::Value = serde_json::from_str(METADATA).unwrap();
+        let root = metadata["locked"].as_object_mut().unwrap();
+        root.remove("rev");
+        root.insert(
+            "dirtyRev".to_string(),
+            format!("{}-dirty", COMMIT.as_str()).into(),
+        );
+
+        assert_eq!(parse_locked(&metadata.to_string()), None);
     }
 
     #[test]
     fn metadata_without_a_lock_holds_no_pins() {
         assert_eq!(parse_locked("not json"), None);
-        assert_eq!(parse_locked(r#"{"locked":{}}"#), None);
-        assert_eq!(
-            parse_locked(r#"{"locks":{"nodes":{},"root":"root"}}"#),
-            None
-        );
+        let mut metadata: serde_json::Value = serde_json::from_str(METADATA).unwrap();
+        metadata.as_object_mut().unwrap().remove("locks");
+        assert_eq!(parse_locked(&metadata.to_string()), None);
     }
 
     #[test]
-    fn pins_the_profile_flake_is_already_locked_to_are_not_overridden() {
+    fn pins_the_profile_flake_is_committed_at_are_evaluated_at_that_commit() {
         let pins = mix_nixgen::lock::EMBEDDED;
+        let evaluation = evaluation(Some(&pins), Some(locked_at(pins.clone())));
+        assert_eq!(evaluation, Evaluation::AtCommit(COMMIT));
 
-        assert_eq!(overriding(Some(&pins), Some(&pins)), None);
+        let args = eval_args(&user(), "pkgs: pkgs".into(), &evaluation, None);
+
+        assert_eq!(
+            args[2],
+            format!(
+                "git+file:///home/alice/.local/state/mix?rev={}#homeConfigurations.alice.pkgs",
+                COMMIT.as_str()
+            )
+        );
+        assert!(!args.iter().any(|arg| arg == "--override-input"));
     }
 
     #[test]
-    fn pins_the_profile_flake_is_not_locked_to_are_overridden() {
+    fn pins_the_profile_flake_is_not_committed_at_are_overridden() {
         let pins = mix_nixgen::lock::EMBEDDED;
         let mut other = pins.clone();
         other.nixpkgs.rev = pins.home_manager.rev.clone();
 
-        assert_eq!(overriding(Some(&pins), Some(&other)), Some(&pins));
-        assert_eq!(overriding(Some(&pins), None), Some(&pins));
-        assert_eq!(overriding(None, Some(&pins)), None);
+        assert_eq!(
+            evaluation(Some(&pins), Some(locked_at(other))),
+            Evaluation::Overridden(&pins)
+        );
+        assert_eq!(evaluation(Some(&pins), None), Evaluation::Overridden(&pins));
+    }
+
+    #[test]
+    fn without_pins_to_hold_the_flake_is_evaluated_as_it_stands() {
+        let pins = mix_nixgen::lock::EMBEDDED;
+        let evaluation = evaluation(None, Some(locked_at(pins)));
+        assert_eq!(evaluation, Evaluation::AsItStands);
+
+        let args = eval_args(&user(), "pkgs: pkgs".into(), &evaluation, None);
+
+        assert_eq!(
+            args[2],
+            "git+file:///home/alice/.local/state/mix#homeConfigurations.alice.pkgs"
+        );
+        assert!(!args.iter().any(|arg| arg == "--override-input"));
     }
 
     #[test]

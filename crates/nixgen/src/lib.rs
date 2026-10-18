@@ -22,4 +22,4 @@ pub(crate) use header::GENERATED_HEADER;
 pub use home::{CopyIntoGeneration, HomeModule, InvalidInput, StateVersion};
 pub use ident::{FileName, Ident, InvalidIdent, is_identifier};
 pub use inputs::{INPUTS, Input, Pin, Pins};
-pub use installable::{AttrPath, FlakeRef, Installable, InvalidInstallable, PublicKey};
+pub use installable::{AttrPath, FlakeRef, GitAt, Installable, InvalidInstallable, PublicKey};

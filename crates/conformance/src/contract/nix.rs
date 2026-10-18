@@ -34,15 +34,14 @@ pub fn the_profile_flake_is_locked_to_the_generations_pins(
 ) -> Result<u32, String> {
     let pins = generation_pins(user)?;
     let locked = runtime
-        .block_on(mix_shell::effect::installed::locked_pins(
-            user,
-            &Scope::root(),
-        ))
+        .block_on(mix_shell::effect::installed::locked(user, &Scope::root()))
         .map_err(|error| format!("reading the profile flake's lock: {error}"))?
-        .ok_or("nix flake metadata reported no pins for the profile flake")?;
-    if locked != pins {
+        .ok_or("nix flake metadata reported no commit and pins for the profile flake")?;
+    if locked.pins != pins {
         return Err(format!(
-            "the profile flake is locked to {locked:?}, the active generation was built at {pins:?}"
+            "the profile flake at {} is locked to {:?}, the active generation was built at {pins:?}",
+            locked.rev.as_str(),
+            locked.pins
         ));
     }
     Ok(1)

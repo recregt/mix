@@ -18,7 +18,10 @@ pub fn locked(input: &Input, locked: &Value) -> Option<LockedInput> {
 }
 
 pub fn read(lock: &str) -> Option<Pins<LockedInput>> {
-    let lock: Value = serde_json::from_str(lock).ok()?;
+    from_lock(&serde_json::from_str(lock).ok()?)
+}
+
+pub fn from_lock(lock: &Value) -> Option<Pins<LockedInput>> {
     let nodes = lock.get("nodes")?;
     let root = nodes.get(lock.get("root")?.as_str()?)?.get("inputs")?;
     let pinned = |pin: Pin| {

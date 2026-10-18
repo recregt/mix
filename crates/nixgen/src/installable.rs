@@ -1,6 +1,7 @@
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
+use crate::flake::Rev;
 use crate::ident::is_identifier;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -38,6 +39,12 @@ impl PublicKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitAt {
+    Branch(&'static str),
+    Commit(Rev),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FlakeRef {
     Path {
         dir: PathBuf,
@@ -45,6 +52,7 @@ pub enum FlakeRef {
     GitFile {
         dir: PathBuf,
         signer: Option<PublicKey>,
+        at: Option<GitAt>,
     },
 }
 
@@ -62,6 +70,15 @@ impl FlakeRef {
         Ok(Self::GitFile {
             dir: absolute(dir.into())?,
             signer,
+            at: None,
+        })
+    }
+
+    pub fn git_at(dir: impl Into<PathBuf>, at: GitAt) -> Result<Self, InvalidInstallable> {
+        Ok(Self::GitFile {
+            dir: absolute(dir.into())?,
+            signer: None,
+            at: Some(at),
         })
     }
 
@@ -77,11 +94,23 @@ impl FlakeRef {
                 out.push_str("path:");
                 write_path(dir, out);
             }
-            Self::GitFile { dir, signer } => {
+            Self::GitFile { dir, signer, at } => {
                 out.push_str("git+file://");
                 write_path(dir, out);
+                let mut separator = '?';
+                if let Some(at) = at {
+                    out.push(separator);
+                    let (key, value) = match at {
+                        GitAt::Branch(branch) => ("ref=", *branch),
+                        GitAt::Commit(rev) => ("rev=", rev.as_str()),
+                    };
+                    out.push_str(key);
+                    percent_encode(value.as_bytes(), is_unreserved, out);
+                    separator = '&';
+                }
                 if let Some(key) = signer {
-                    out.push_str("?verifyCommit=1&keytype=ssh-ed25519&publicKey=");
+                    out.push(separator);
+                    out.push_str("verifyCommit=1&keytype=ssh-ed25519&publicKey=");
                     percent_encode(key.as_str().as_bytes(), is_unreserved, out);
                 }
             }
@@ -268,6 +297,26 @@ mod tests {
 
         assert_eq!(flake.render(), "git+file:///s%20t");
         assert_eq!(installable.render(), format!("{}#x", flake.render()));
+    }
+
+    #[test]
+    fn renders_a_git_flake_at_a_commit() {
+        let rev = Rev::new_static("8f02d2b8397a3e8e5945017b8ca33ee91ef67eb0");
+        let installable = Installable::new(
+            FlakeRef::git_at("/s", GitAt::Commit(rev)).unwrap(),
+            AttrPath::new(["x"]).unwrap(),
+        );
+        assert_eq!(
+            installable.render(),
+            "git+file:///s?rev=8f02d2b8397a3e8e5945017b8ca33ee91ef67eb0#x"
+        );
+    }
+
+    #[test]
+    fn renders_a_git_flake_at_a_branch_with_its_slashes_encoded() {
+        let flake = FlakeRef::git_at("/s", GitAt::Branch("refs/heads/main")).unwrap();
+
+        assert_eq!(flake.render(), "git+file:///s?ref=refs%2Fheads%2Fmain");
     }
 
     #[test]
