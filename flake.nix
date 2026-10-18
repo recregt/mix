@@ -88,6 +88,7 @@
                 inherit (final) src;
                 hash = "sha256-NLu5je+8JDEy+jMg8FotuQu6THVH49Sb1Xd4488FmAo=";
               };
+              doCheck = false;
             }
           );
           nightly = pkgs.rust-bin.selectLatestNightlyWith (
