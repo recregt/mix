@@ -21,6 +21,15 @@ pub(crate) async fn removal<T>(
             source,
         })))
     })?;
+    let _paused = match ctx.dry_run {
+        true => None,
+        false => Some(
+            ctx.installed
+                .pause(&ctx.scope)
+                .await
+                .map_err(|_| Box::new(root.refuse(error_from(Failure::Cancelled))))?,
+        ),
+    };
     crate::ops::recover_interrupted(ctx, &mut root.tree, &mut performer, true).await;
     let (steps, planned) = plan(&mut performer, &ctx.scope)
         .await

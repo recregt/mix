@@ -63,9 +63,12 @@ pub struct Listed {
 
 type Slot = Arc<tokio::sync::Mutex<Option<Listed>>>;
 
+pub type Paused = tokio::sync::OwnedRwLockWriteGuard<()>;
+
 pub struct Installed {
     source: Arc<dyn Source>,
     users: Mutex<HashMap<u32, Slot>>,
+    running: Arc<tokio::sync::RwLock<()>>,
 }
 
 fn requested(generation: &Active) -> change::Result<Vec<String>> {
@@ -98,7 +101,15 @@ impl Installed {
         Self {
             source,
             users: Mutex::new(HashMap::new()),
+            running: Arc::new(tokio::sync::RwLock::new(())),
         }
+    }
+
+    pub async fn pause(&self, scope: &Scope) -> std::result::Result<Paused, Error> {
+        scope
+            .guard(Arc::clone(&self.running).write_owned())
+            .await
+            .map_err(|_| Error::Stopped)
     }
 
     fn slot(&self, uid: u32) -> Slot {
@@ -118,6 +129,10 @@ impl Installed {
         mirror: Option<&str>,
         scope: &Scope,
     ) -> std::result::Result<Option<Listed>, Error> {
+        let _running = scope
+            .guard(self.running.read())
+            .await
+            .map_err(|_| Error::Stopped)?;
         let slot = self.slot(user.uid);
         let mut held = scope.guard(slot.lock()).await.map_err(|_| Error::Stopped)?;
         let found = host
@@ -459,6 +474,91 @@ mod tests {
         assert!(matches!(stopped, Err(Error::Stopped)));
         gate.notify_one();
         assert!(first.await.unwrap().unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn a_pause_waits_for_a_running_listing_and_holds_back_the_next_one() {
+        let (world, host) = hosted();
+        activate(&world, &user(1000), 1, &list(&[]));
+        activate(&world, &user(1001), 1, &list(&[]));
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let source = Arc::new(Counted {
+            gate: Some(Arc::clone(&gate)),
+            ..Counted::default()
+        });
+        let installed = Arc::new(Installed::with_source(
+            Arc::clone(&source) as Arc<dyn Source>
+        ));
+        let listing = |uid: u32| {
+            let installed = Arc::clone(&installed);
+            let host = host.clone();
+            tokio::spawn(async move {
+                installed
+                    .listing(&host, &user(uid), None, &Scope::root())
+                    .await
+            })
+        };
+        let running = listing(1000);
+        while source.gathered.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        let pausing = {
+            let installed = Arc::clone(&installed);
+            tokio::spawn(async move { installed.pause(&Scope::root()).await })
+        };
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            !pausing.is_finished(),
+            "a pause waits for the running listing"
+        );
+
+        gate.notify_one();
+        assert!(running.await.unwrap().unwrap().is_some());
+        let paused = pausing.await.unwrap().unwrap();
+        let held_back = listing(1001);
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(source.gathered.load(Ordering::SeqCst), 1);
+
+        drop(paused);
+        gate.notify_one();
+        assert!(held_back.await.unwrap().unwrap().is_some());
+        assert_eq!(source.gathered.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_pause_stopped_while_a_listing_runs_ends_stopped() {
+        let (world, host) = hosted();
+        activate(&world, &user(1000), 1, &list(&[]));
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let source = Arc::new(Counted {
+            gate: Some(Arc::clone(&gate)),
+            ..Counted::default()
+        });
+        let installed = Arc::new(Installed::with_source(
+            Arc::clone(&source) as Arc<dyn Source>
+        ));
+        let running = {
+            let installed = Arc::clone(&installed);
+            let host = host.clone();
+            tokio::spawn(async move {
+                installed
+                    .listing(&host, &user(1000), None, &Scope::root())
+                    .await
+            })
+        };
+        while source.gathered.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        let scope = Scope::root();
+        scope.cancel(mix_exec::Reason::Interrupted);
+
+        assert!(matches!(installed.pause(&scope).await, Err(Error::Stopped)));
+        gate.notify_one();
+        assert!(running.await.unwrap().unwrap().is_some());
     }
 
     #[tokio::test]
