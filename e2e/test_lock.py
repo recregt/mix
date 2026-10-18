@@ -70,7 +70,11 @@ def test_the_same_users_next_command_waits_and_names_the_one_it_waits_for(
     assert installed.succeeded(), installed
     queued = second.wait()
     assert queued.succeeded(), queued
-    assert queued.result("install") == {"skipped": [INSTALL_TEST_PACKAGE]}, queued
+    assert queued.result("install") == {
+        "added": [],
+        "skipped": [INSTALL_TEST_PACKAGE],
+        "restored": False,
+    }, queued
     assert queued.waits == [{"lock": f"user {USER}", "holder": USER, "command": "install"}], queued
 
 
