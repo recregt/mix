@@ -34,6 +34,17 @@ pub struct Settings {
     pub users: Vec<InvokingUser>,
 }
 
+fn unit_facts(fact: &Fact) -> &UnitFacts {
+    match fact {
+        Fact::Unit(state) => state,
+        other => unreachable!("a unit query was answered with {other:?}"),
+    }
+}
+
+fn unit_queries() -> impl Iterator<Item = Query> {
+    UNITS.iter().map(|unit| Query::Unit((*unit).to_string()))
+}
+
 struct StopServices;
 
 impl StepSpec for StopServices {
@@ -46,9 +57,34 @@ impl StepSpec for StopServices {
     }
 
     fn queries(&self) -> Vec<Query> {
-        UNITS
+        unit_queries().collect()
+    }
+
+    fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
+        Ok(UNITS
             .iter()
-            .map(|unit| Query::Unit((*unit).to_string()))
+            .zip(facts)
+            .filter(|(_, fact)| unit_facts(fact).active_state == "active")
+            .map(|(unit, _)| Action::StopUnit {
+                unit: (*unit).to_string(),
+            })
+            .collect())
+    }
+}
+
+struct RemoveUnits;
+
+impl StepSpec for RemoveUnits {
+    fn key(&self) -> Cow<'static, str> {
+        "remove-units".into()
+    }
+
+    fn title(&self) -> Title {
+        Title::new(Verb::Removing, "mix and Nix unit files")
+    }
+
+    fn queries(&self) -> Vec<Query> {
+        unit_queries()
             .chain(UNIT_FILES.iter().map(|file| Query::Path(file.into())))
             .collect()
     }
@@ -56,10 +92,7 @@ impl StepSpec for StopServices {
     fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
         let mut actions = Vec::new();
         for (unit, fact) in UNITS.iter().zip(facts) {
-            let state: &UnitFacts = match fact {
-                Fact::Unit(state) => state,
-                other => unreachable!("a unit query was answered with {other:?}"),
-            };
+            let state = unit_facts(fact);
             if state.active_state == "active" {
                 actions.push(Action::StopUnit {
                     unit: (*unit).to_string(),
@@ -273,12 +306,14 @@ fn uid_range(login_defs: &str) -> std::ops::RangeInclusive<u32> {
 }
 
 pub fn steps(settings: &Settings) -> Vec<Box<dyn StepSpec>> {
-    let mut steps: Vec<Box<dyn StepSpec>> = settings
-        .users
-        .iter()
-        .map(|user| Box::new(RemoveHome::new(user.clone())) as Box<dyn StepSpec>)
-        .collect();
-    steps.push(Box::new(StopServices));
+    let mut steps: Vec<Box<dyn StepSpec>> = vec![Box::new(StopServices)];
+    steps.extend(
+        settings
+            .users
+            .iter()
+            .map(|user| Box::new(RemoveHome::new(user.clone())) as Box<dyn StepSpec>),
+    );
+    steps.push(Box::new(RemoveUnits));
     steps.push(Box::new(RemoveMachine));
     steps.push(Box::new(RemoveAccounts));
     steps
