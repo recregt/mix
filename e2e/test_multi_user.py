@@ -51,7 +51,7 @@ def test_no_enrolled_user_is_trusted_and_every_one_installs_from_the_policy(
 
     repair = container.mix("repair", user=SECOND_USER)
     assert repair.succeeded(), repair
-    assert "reports" not in repair.result("repair"), repair
+    assert repair.result("repair") == {"reports": []}, repair
 
     assert _nix_conf(container) == expected
     assert group_members(container, MIX_USERS_GROUP) == sorted([FIRST_USER, SECOND_USER])

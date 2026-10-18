@@ -53,7 +53,9 @@ def test_repair_works_when_sudo_only_allows_mix(container, mock_nix_server, mirr
     run = container.mix("repair", user=USER)
 
     assert run.succeeded(), run
-    assert {"target": "nixbld", "fixed": True} in run.result("repair")["reports"], run
+    assert {"target": "nixbld", "fixed": True, "blockedBy": ""} in run.result("repair")[
+        "reports"
+    ], run
     assert container.exec("getent", "group", "nixbld").stdout.split(":")[2] == "30000"
 
 
@@ -143,4 +145,8 @@ def test_json_output_is_one_document_on_stdout_even_when_verbose(
 
     assert run.succeeded(), run
     assert run.document["formatVersion"] == "1.0", run
-    assert {"target": "/etc/profile.d/mix-nix.sh", "fixed": True} in run.result("repair")["reports"]
+    assert {
+        "target": "/etc/profile.d/mix-nix.sh",
+        "fixed": True,
+        "blockedBy": "",
+    } in run.result("repair")["reports"]

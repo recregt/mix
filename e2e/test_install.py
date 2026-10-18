@@ -34,7 +34,11 @@ def test_install_adds_a_package_as_a_regular_user_with_no_sudo(
 
     again = container.mix("install", INSTALL_TEST_PACKAGE, user=USER)
     assert again.succeeded(), again
-    assert again.result("install") == {"skipped": [INSTALL_TEST_PACKAGE]}
+    assert again.result("install") == {
+        "added": [],
+        "skipped": [INSTALL_TEST_PACKAGE],
+        "restored": False,
+    }
     assert container.exec("cat", f"{state_dir}/state", check=True).stdout == state
 
 

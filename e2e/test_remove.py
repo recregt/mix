@@ -45,5 +45,9 @@ def test_remove_drops_a_package_as_a_regular_user_with_no_sudo(
 
     again = container.mix("remove", INSTALL_TEST_PACKAGE, user=USER)
     assert again.succeeded(), again
-    assert again.result("remove") == {"skipped": [INSTALL_TEST_PACKAGE]}
+    assert again.result("remove") == {
+        "removed": [],
+        "skipped": [INSTALL_TEST_PACKAGE],
+        "restored": False,
+    }
     assert _read(container, "state") == state
