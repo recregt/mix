@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/recregt/mix/security/advisories/new
+    about: Report security problems privately.
+  - name: Ask a question or share ideas
+    url: https://github.com/recregt/mix/discussions
+    about: For support, design discussions, and feature ideas.
