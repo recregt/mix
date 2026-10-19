@@ -70,7 +70,7 @@ The git hooks run smaller parts of it for you, so most problems show up before y
 
 | When | What runs |
 |---|---|
-| Before a commit | `fmt` for Rust, `deny` when a `Cargo.toml` or `Cargo.lock` changed, `ruff` when Python changed. |
+| Before a commit | `fmt` for Rust, `ruff` when Python changed. When a `Cargo.toml` or `Cargo.lock` changed, `deny`, and an update of the fuzz crates' own `Cargo.lock` files that is added to the commit. |
 | On the commit message | The commit message check. |
 | Before a push | `doc` and `clippy`. |
 
@@ -113,12 +113,12 @@ type: subject
 type(scope): subject
 ```
 
-The `commit-msg` hook enforces this, because pull requests are squash-merged and the changelog is built from commit subjects. The detail of a change belongs in the pull request description, not in the commit.
+The `commit-msg` hook enforces this, because pull requests are squash-merged and each title becomes a commit on `main`. The detail of a change belongs in the pull request description, not in the commit.
 
 - The type is one of `feat`, `fix`, `refactor`, `ci`, `perf`, `test`, `chore` or `docs`.
 - The subject is 50 characters or fewer, in lowercase imperative.
 - A scope must be the exact name of a file or folder in the commit, such as a crate name. If the commit touches more than one crate, use `crates` or leave the scope out. If it touches `.github/` and anything else, leave the scope out.
-- A commit that only touches `.github/` uses `ci`, so the changelog skips it.
+- A commit that only touches `.github/` uses `ci`.
 
 > [!TIP]
 > Count the length before you commit: `echo -n "fix: handle a stale lock" | wc -c`. The hook rejects anything over 50.
@@ -127,6 +127,7 @@ The `commit-msg` hook enforces this, because pull requests are squash-merged and
 
 - The title follows the commit rules, because the pull request is squash-merged and the title becomes the commit.
 - Fill in the template: a one or two sentence summary, and `Fixes #<issue>` if there is an issue.
+- If users can notice the change, add a line for it under `Unreleased` in [CHANGELOG.md](CHANGELOG.md), with a link to the pull request. Changes to CI, tests or tooling get no line.
 - Keep a pull request to one change. Split unrelated work.
 - If your branch builds on another pull request, rebase it after the base merges. Squash-merging rewrites history, so use `git rebase --onto main <old-base> <branch>`.
 

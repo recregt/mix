@@ -1,0 +1,45 @@
+# Changelog
+
+All notable changes to `mix` are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [Unreleased]
+
+## [0.1.0-alpha.2] - 2026-10-19
+
+### Added
+
+- An install script: `curl -fsSL https://mix.recregt.com/install.sh | sh` downloads the newest release for your architecture, checks its checksum and installs `mix` and `mix-daemon` into `/usr/local/bin`. ([#137](https://github.com/recregt/mix/pull/137))
+- `mix user remove` removes `mix` from your own account without `sudo`. When you are the last user, it offers to remove Nix from the machine as well. ([#127](https://github.com/recregt/mix/pull/127))
+- `mix purge` removes `mix`, Nix and every user's `mix` state from the machine, including state left in the home of a former user. Its confirmation names each user, and `--dry-run` shows every change first. ([#127](https://github.com/recregt/mix/pull/127))
+
+### Changed
+
+- The `--json` output writes every field of a result, even at its default value, and names each change by its path. `cancellation` appears only when a run was cancelled. ([#133](https://github.com/recregt/mix/pull/133))
+- A package that does not exist or fails to build is named in the failure itself, not only in the command that failed. ([#133](https://github.com/recregt/mix/pull/133))
+
+### Removed
+
+- `mix self remove`. Use `mix user remove` to leave, or `mix purge` to remove `mix` from the whole machine. ([#127](https://github.com/recregt/mix/pull/127))
+
+### Fixed
+
+- The first `mix list` after an install no longer downloads nixpkgs again and works offline, and `mix update` no longer downloads the nixpkgs you already have. ([#128](https://github.com/recregt/mix/pull/128))
+- `mix user remove` and `mix purge` no longer fail and roll back when the daemon is listing packages in the background at the same time. ([#130](https://github.com/recregt/mix/pull/130), [#131](https://github.com/recregt/mix/pull/131))
+- A dry run of `mix install`, `mix remove` or `mix update` lists the change that records the new package list, as the real run does. ([#133](https://github.com/recregt/mix/pull/133))
+
+## [0.1.0-alpha.1] - 2026-10-17
+
+The first public alpha.
+
+### Added
+
+- `mix bootstrap` sets up a multi-user Nix with pinned, checksummed downloads.
+- `mix install`, `mix remove`, `mix list`, `mix update` and `mix clean` manage your own package list.
+- `mix doctor` and `mix repair` check the machine and fix configuration drift.
+- `mix explain` describes every failure code.
+- `mix self remove` takes `mix`, Nix and every user's `mix` state off the machine.
+- Interrupted requests are finished or undone the next time `mix` runs.
+
+[Unreleased]: https://github.com/recregt/mix/compare/v0.1.0-alpha.2...HEAD
+[0.1.0-alpha.2]: https://github.com/recregt/mix/compare/v0.1.0-alpha.1...v0.1.0-alpha.2
+[0.1.0-alpha.1]: https://github.com/recregt/mix/releases/tag/v0.1.0-alpha.1
