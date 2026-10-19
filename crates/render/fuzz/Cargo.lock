@@ -381,7 +381,7 @@ dependencies = [
 
 [[package]]
 name = "mix-events"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "pbjson",
  "pbjson-build",
@@ -398,7 +398,7 @@ dependencies = [
 
 [[package]]
 name = "mix-explain"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "mix-events",
  "mix-ui",
@@ -406,7 +406,7 @@ dependencies = [
 
 [[package]]
 name = "mix-render"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "mix-events",
  "mix-explain",
@@ -428,7 +428,7 @@ dependencies = [
 
 [[package]]
 name = "mix-ui"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "annotate-snippets",
  "anstyle-query",

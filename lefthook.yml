@@ -13,6 +13,9 @@ pre-commit:
     dependencies:
       glob: "{Cargo.toml,Cargo.lock,**/Cargo.toml}"
       run: S=$(nix eval --raw --impure --expr builtins.currentSystem) && nix build --no-link .#checks.$S.deny .#checks.$S.deny-core .#checks.$S.deny-cli .#checks.$S.deny-explain .#checks.$S.deny-render .#checks.$S.deny-ui
+    fuzz-lockfiles:
+      glob: "{Cargo.toml,Cargo.lock,**/Cargo.toml}"
+      run: for dir in crates/*/fuzz; do (cd "$dir" && cargo metadata --format-version 1 >/dev/null); done && git add crates/*/fuzz/Cargo.lock
     ruff:
       glob: "*.py"
       run: nix build --no-link .#checks.$(nix eval --raw --impure --expr builtins.currentSystem).ruff
