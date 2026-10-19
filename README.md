@@ -80,28 +80,39 @@ The point of the tool is that trying it is not a one-way decision.
 
 You need a Linux machine with systemd, on x86_64 or aarch64, and `sudo` for the first step. It must not be NixOS and must not already have a Nix that `mix` did not install.
 
-1. Download the archive for your architecture from the [releases page](https://github.com/recregt/mix/releases) and check it against the published checksum. It contains two programs, `mix` and `mix-daemon`, which must stay in the same directory.
+1. Install the two programs, `mix` and `mix-daemon`:
+
+   ```sh
+   curl -fsSL https://mix.recregt.com/install.sh | sh
+   ```
+
+   The [script](scripts/install.sh) downloads the newest release for your architecture, checks it against its published checksum and puts both programs into `/usr/local/bin`. It uses `sudo` for that one step and changes nothing else. To install a specific release, give the script its tag:
+
+   ```sh
+   curl -fsSL https://mix.recregt.com/install.sh | MIX_VERSION=v0.1.0-alpha.2 sh
+   ```
+
+   <details>
+   <summary>Install by hand instead</summary>
+
+   Download the archive for your architecture from the [releases page](https://github.com/recregt/mix/releases), check it against the published checksum and put both programs into the same directory on your `PATH`. `mix` finds `mix-daemon` next to itself.
 
    ```sh
    sha256sum -c mix-x86_64-linux.tar.gz.sha256
    tar -xzf mix-x86_64-linux.tar.gz
-   cd mix-x86_64-linux
+   sudo install -m 0755 mix-x86_64-linux/mix mix-x86_64-linux/mix-daemon /usr/local/bin/
    ```
 
-2. Put both programs on your `PATH`. `mix` finds `mix-daemon` next to itself, so they go in the same directory.
+   </details>
 
-   ```sh
-   sudo install -m 0755 mix mix-daemon /usr/local/bin/
-   ```
-
-3. See what setup would do, then do it. The setup asks for administrator rights once. It downloads Nix, so on a clean machine it can take several minutes.
+2. See what setup would do, then do it. The setup asks for administrator rights once. It downloads Nix, so on a clean machine it can take several minutes.
 
    ```sh
    mix bootstrap --dry-run
    mix bootstrap
    ```
 
-4. Bootstrap ends by printing one command that makes your installed packages visible in the shell you are already in. Run it, then install something.
+3. Bootstrap ends by printing one command that makes your installed packages visible in the shell you are already in. Run it, then install something.
 
    ```sh
    source /etc/profile.d/mix-nix.sh
@@ -111,7 +122,7 @@ You need a Linux machine with systemd, on x86_64 or aarch64, and `sudo` for the 
 
    New terminal sessions pick the packages up on their own. The `source` line is only for the session you ran `bootstrap` in.
 
-5. When you are done looking around, leave. If you are the only user, it offers to remove Nix from the machine too.
+4. When you are done looking around, leave. If you are the only user, it offers to remove Nix from the machine too.
 
    ```sh
    mix user remove
