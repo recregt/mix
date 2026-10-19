@@ -345,7 +345,15 @@ class Container:
         return self.exec("test", "-e", path).returncode == 0
 
 
-def _start_container(image: str, name: str, binary: pathlib.Path) -> str:
+def _start_container(image: str, name: str, binary: pathlib.Path | None) -> str:
+    mounts = []
+    if binary is not None:
+        mounts = [
+            "--volume",
+            f"{binary}:/usr/local/bin/mix:ro",
+            "--volume",
+            f"{binary.with_name('mix-daemon')}:/usr/local/bin/mix-daemon:ro",
+        ]
     subprocess.run(
         [
             "podman",
@@ -355,10 +363,7 @@ def _start_container(image: str, name: str, binary: pathlib.Path) -> str:
             "--cap-add=SYS_ADMIN",
             "--cap-add=SYS_PTRACE",
             "--pids-limit=-1",
-            "--volume",
-            f"{binary}:/usr/local/bin/mix:ro",
-            "--volume",
-            f"{binary.with_name('mix-daemon')}:/usr/local/bin/mix-daemon:ro",
+            *mounts,
             "--name",
             name,
             image,
@@ -552,6 +557,7 @@ def _known() -> dict[str, resources.Demand]:
 def container(request, container_image, mix_binary):
     test = request.node.nodeid
     bootstrapped = request.node.get_closest_marker("bootstrapped") is not None
+    unmounted = request.node.get_closest_marker("unmounted") is not None
     image = container_image
     if bootstrapped:
         image = _bootstrapped_image(
@@ -565,7 +571,7 @@ def container(request, container_image, mix_binary):
     started = time.monotonic()
     cgroup = None
     try:
-        _start_container(image, name, mix_binary)
+        _start_container(image, name, None if unmounted else mix_binary)
         cgroup = _cgroup_of(name)
         container = Container(name)
         yield container
