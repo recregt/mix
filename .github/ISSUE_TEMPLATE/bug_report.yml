@@ -1,0 +1,67 @@
+name: Bug report
+description: Something `mix` does wrong, or an error that does not explain what happened
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: mix version
+      description: The output of `mix --version`
+      placeholder: mix 0.1.0-alpha.2
+    validations:
+      required: true
+
+  - type: input
+    id: system
+    attributes:
+      label: Platform
+      description: The output of `uname -orsm`
+      placeholder: GNU/Linux 6.8.0 x86_64
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How mix was installed
+      options:
+        - The install script
+        - A release archive, copied by hand
+        - Built from source
+        - Other (describe below)
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Minimal reproduction
+      description: The smallest sequence of commands that still fails, in order. Bugs without one are hard to fix.
+      placeholder: |
+        1. mix bootstrap
+        2. mix install ripgrep
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: The full output, including any error code. Run the command again with `-v` if the output is too short.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `mix doctor`
+      description: Paste the plain output after the problem happens. If it reports nothing, say so. If a maintainer asks for JSON, run `mix --json doctor`.
+      render: text
