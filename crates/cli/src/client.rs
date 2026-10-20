@@ -152,6 +152,13 @@ fn unanswered(socket: &Path, error: mix_rpc::Error) -> Failure {
                 socket.display()
             ))
         }
+        mix_rpc::Error::VersionMismatch { ours, theirs } => {
+            Failure::Failed(Box::new(Fault::failed(
+                Code::DaemonVersionMismatch,
+                format!("the mix daemon is version {theirs}, but this mix is version {ours}"),
+                None,
+            )))
+        }
         error => Failure::Transport(error),
     }
 }

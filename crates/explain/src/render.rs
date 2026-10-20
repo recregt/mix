@@ -238,6 +238,13 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
                     "run `mix bootstrap` to install the daemon that matches this `mix`"
                 ))
         }
+        Code::DaemonVersionMismatch => Diagnostic::new(phrase!(
+            "the `mix` daemon is a different version than this `mix`"
+        ))
+        .note(note!("nothing was changed"))
+        .help(help!(
+            "run `mix bootstrap` to install the daemon that matches this `mix`"
+        )),
         Code::VersionMismatch => Diagnostic::new(phrase!(
             "the `mix` program was replaced while this command was starting"
         ))
