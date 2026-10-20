@@ -94,6 +94,25 @@ mod tests {
         }
     }
 
+    struct RefusesEveryone;
+
+    impl Worker for RefusesEveryone {
+        const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+
+        fn admits(&self, _caller: Caller) -> bool {
+            false
+        }
+
+        async fn run(
+            &self,
+            _caller: Caller,
+            _command: Command,
+            _controls: Controls,
+            _events: Events,
+        ) {
+        }
+    }
+
     struct EndsWithProblems;
 
     impl Worker for EndsWithProblems {
@@ -253,6 +272,23 @@ mod tests {
         assert_eq!(
             recorded.document().problems[0].code(),
             Code::DaemonUnavailable
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn a_daemon_that_refuses_the_caller_means_mix_is_not_set_up_for_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let daemon = listening(directory.path(), || RefusesEveryone);
+        std::fs::write(&daemon.unit, "[Socket]\n").unwrap();
+        let recorded = Recorded::default();
+
+        let exit = run(explain(Code::Network), &recorded.view(), &daemon, None).await;
+
+        assert_eq!(exit, ExitCode::FAILURE);
+        assert_eq!(
+            recorded.document().problems[0].code(),
+            Code::NotBootstrapped
         );
     }
 

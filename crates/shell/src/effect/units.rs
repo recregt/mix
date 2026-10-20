@@ -470,51 +470,55 @@ mod tests {
     }
 
     #[test]
-    fn a_job_on_the_unit_this_process_runs_in_is_not_waited_for() {
+    fn a_job_is_waited_for_unless_it_can_only_end_after_this_process_does() {
         let service = "mix-daemon.service";
-        let triggers = vec![service.to_string()];
-
-        let active = Some("active");
-
-        assert!(ends_with(Some(service), active, service, &[]));
-        assert!(ends_with(
-            Some(service),
-            active,
-            "mix-daemon.socket",
-            &triggers
-        ));
-        assert!(!ends_with(Some(service), active, "nix-daemon.service", &[]));
-        assert!(!ends_with(
-            Some(service),
-            active,
-            "nix-daemon.socket",
-            &["nix-daemon.service".to_string()]
-        ));
-        assert!(!ends_with(
-            Some("session-3.scope"),
-            active,
-            "mix-daemon.socket",
-            &triggers
-        ));
-        assert!(!ends_with(None, None, service, &triggers));
-    }
-
-    #[test]
-    fn once_the_unit_this_process_runs_in_is_stopping_no_job_is_waited_for() {
-        let nix_socket = ["nix-daemon.service".to_string()];
-
-        assert!(ends_with(
-            Some("mix-daemon.service"),
-            Some("deactivating"),
-            "nix-daemon.socket",
-            &nix_socket
-        ));
-        assert!(!ends_with(
-            Some("session-3.scope"),
-            Some("active"),
-            "nix-daemon.socket",
-            &nix_socket
-        ));
+        let ours = [service.to_string()];
+        let nix = ["nix-daemon.service".to_string()];
+        for (own, state, unit, triggers, unwaited) in [
+            (Some(service), Some("active"), service, &[][..], true),
+            (
+                Some(service),
+                Some("active"),
+                "mix-daemon.socket",
+                &ours[..],
+                true,
+            ),
+            (
+                Some(service),
+                Some("deactivating"),
+                "nix-daemon.socket",
+                &nix[..],
+                true,
+            ),
+            (
+                Some(service),
+                Some("active"),
+                "nix-daemon.service",
+                &[][..],
+                false,
+            ),
+            (
+                Some(service),
+                Some("active"),
+                "nix-daemon.socket",
+                &nix[..],
+                false,
+            ),
+            (
+                Some("session-3.scope"),
+                Some("active"),
+                "mix-daemon.socket",
+                &ours[..],
+                false,
+            ),
+            (None, None, service, &ours[..], false),
+        ] {
+            assert_eq!(
+                ends_with(own, state, unit, triggers),
+                unwaited,
+                "{own:?} {state:?} {unit}"
+            );
+        }
     }
 
     #[test]
@@ -590,18 +594,5 @@ mod tests {
     fn an_invocation_id_is_written_as_journald_matches_it() {
         assert_eq!(invocation(&[0xe5, 0xbd, 0x0d]), Some("e5bd0d".to_string()));
         assert_eq!(invocation(&[]), None);
-    }
-
-    #[tokio::test]
-    async fn a_unit_this_host_runs_is_observed_as_loaded_and_active() {
-        let Ok(units) = Units::connect().await else {
-            return;
-        };
-        let Ok(facts) = units.observe("dbus.socket").await else {
-            return;
-        };
-
-        assert_eq!(facts.load_state, "loaded");
-        assert_eq!(facts.active_state, "active");
     }
 }

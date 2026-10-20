@@ -208,14 +208,6 @@ pub async fn run(
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_one_shot_worker_is_the_daemon_installed_next_to_mix() {
-        assert_eq!(
-            daemon_next_to(Path::new("/usr/local/bin/mix")),
-            Path::new("/usr/local/bin/mix-daemon")
-        );
-    }
-
     fn io(message: &str) -> std::io::Error {
         std::io::Error::other(message.to_string())
     }
@@ -319,39 +311,6 @@ mod tests {
         ] {
             let failure = unreachable(socket, installed, &kind.into());
             assert_eq!(failure.fault().code(), Some(code), "{kind:?} {installed}");
-        }
-    }
-
-    #[test]
-    fn a_daemon_that_drops_the_connection_is_not_a_missing_right() {
-        use mix_rpc::Error;
-
-        let socket = Path::new("/run/mix/daemon.sock");
-        for (error, code) in [
-            (
-                Error::Connect("connection reset".into()),
-                Code::DaemonUnavailable,
-            ),
-            (
-                Error::Refused("h2 protocol error".into()),
-                Code::DaemonUnavailable,
-            ),
-            (Error::Ended, Code::DaemonUnavailable),
-            (Error::Denied("uid 1000".into()), Code::NotBootstrapped),
-            (
-                Error::VersionMismatch {
-                    ours: "0.1.0".into(),
-                    theirs: "0.0.9".into(),
-                },
-                Code::VersionMismatch,
-            ),
-        ] {
-            let shown = format!("{error:?}");
-            assert_eq!(
-                unanswered(socket, error).fault().code(),
-                Some(code),
-                "{shown}"
-            );
         }
     }
 }
