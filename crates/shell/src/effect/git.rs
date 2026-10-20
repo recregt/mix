@@ -30,12 +30,13 @@ const PROFILE_GIT: &str = ".nix-profile/bin/git";
 /// Oldest `git` release mix runs, as major and minor version.
 const OLDEST: (u32, u32) = (2, 34);
 
-/// Settings given to every `git` call: no hook runs, no file-system monitor starts and no commit
-/// is signed.
+/// Settings given to every `git` call: no hook runs, no file-system monitor starts, no commit is
+/// signed, and every object, ref and index git writes is synced to disk before it returns.
 const ISOLATION: &[&str] = &[
     "core.hooksPath=/dev/null",
     "core.fsmonitor=false",
     "commit.gpgsign=false",
+    "core.fsync=all",
 ];
 
 /// Environment of every `git` call besides the user's `HOME`, `USER` and `PATH`: no global or
