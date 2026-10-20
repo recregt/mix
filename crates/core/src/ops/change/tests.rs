@@ -505,6 +505,44 @@ fn an_install_writes_the_list_activates_it_and_records_it() {
 }
 
 #[test]
+fn an_install_never_activates_over_a_nix_profile_that_is_not_a_link() {
+    let mut world = bootstrapped();
+    world.with_dir(
+        user().home.join(crate::declared::paths::NIX_PROFILE_LINK),
+        0o755,
+        (user().uid, user().gid),
+    );
+    let before = world.clone();
+    let requested = names(&["ripgrep"]);
+    let change = install(&requested, settled_in(&world)).unwrap();
+
+    let run = run(
+        &mut world,
+        install_request(&requested),
+        &change,
+        &Script::default(),
+    );
+
+    assert!(matches!(run.report().verdict, Verdict::Failed { .. }));
+    assert!(
+        !run.performed()
+            .iter()
+            .any(|action| action.starts_with("ActivateProfile")),
+        "{:?}",
+        run.performed()
+    );
+    assert_eq!(active(&world), active(&before));
+    for path in [state_path(), home_nix_path()] {
+        assert_eq!(
+            world.contents(&path),
+            before.contents(&path),
+            "{}",
+            path.display()
+        );
+    }
+}
+
+#[test]
 fn a_failed_activation_puts_both_files_back() {
     let mut world = bootstrapped();
     let before = world.clone();

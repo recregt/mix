@@ -707,6 +707,38 @@ fn a_file_that_cannot_be_read_is_named_by_what_is_there() {
 }
 
 #[test]
+fn the_nix_profile_may_be_a_link_or_absent_and_nothing_else() {
+    let target = crate::declared::targets::Target::Link {
+        path: Path::new("/home/alice/.nix-profile").into(),
+    };
+    let found = |kind| {
+        vec![Fact::Path(crate::effect::PathFacts {
+            kind,
+            mode: 0o755,
+            owner: (1000, 1000),
+            id: None,
+            digest: None,
+            changed: None,
+        })]
+    };
+    for (kind, finding) in [
+        (Kind::Missing, None),
+        (Kind::Symlink, None),
+        (Kind::Directory, Some(Finding::NotALink)),
+        (Kind::File, Some(Finding::NotALink)),
+        (Kind::Other, Some(Finding::NotALink)),
+        (
+            Kind::Unreadable(std::io::ErrorKind::PermissionDenied),
+            Some(Finding::Unreadable {
+                kind: std::io::ErrorKind::PermissionDenied,
+            }),
+        ),
+    ] {
+        assert_eq!(classify(&target, &found(kind)), finding, "{kind:?}");
+    }
+}
+
+#[test]
 fn a_bootstrapped_machine_is_healthy() {
     let alice = user("alice", 1000);
 

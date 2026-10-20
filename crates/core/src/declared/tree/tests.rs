@@ -74,17 +74,57 @@ fn a_path_waits_on_the_nearest_declared_directory_above_it() {
     assert_eq!(checks[local].after, vec![home]);
 }
 
+fn precondition(tree: &mut Builder<'static>, path: &'static str) -> Handle {
+    tree.path(
+        path,
+        Target::Precondition {
+            path: std::path::Path::new(path).into(),
+        },
+    )
+}
+
 #[test]
 fn a_check_waits_on_what_it_refers_to_even_when_that_sorts_after_it() {
+    let mut tree = Builder::new(None);
+    precondition(&mut tree, "/a");
+    let early = precondition(&mut tree, "/a/b");
+    let late = precondition(&mut tree, "/a/z");
+    tree.refers(early, late);
+
+    let checks = tree.finish().into_checks();
+
+    let (early, late) = (index_of(&checks, "/a/b"), index_of(&checks, "/a/z"));
+    assert!(late < early);
+    assert!(checks[early].after.contains(&late));
+}
+
+#[test]
+fn only_the_checks_above_a_node_wait_on_what_it_up_refers_to() {
+    let mut tree = Builder::new(None);
+    precondition(&mut tree, "/a");
+    let node = precondition(&mut tree, "/a/b");
+    let late = precondition(&mut tree, "/a/z");
+    tree.up(node, Target::UnitActive { name: "x.service" });
+    tree.up_refers(node, late);
+
+    let checks = tree.finish().into_checks();
+
+    let late = index_of(&checks, "/a/z");
+    let node = index_of(&checks, "/a/b");
+    let above = index_of(&checks, "x.service activation");
+    assert!(late < node);
+    assert!(!checks[node].after.contains(&late));
+    assert!(checks[above].after.contains(&late));
+}
+
+#[test]
+fn activating_a_profile_waits_on_the_nix_profile_link() {
     let policy = Policy::default();
     let cfg = user_config();
     let tree = tree(Some(&cfg), &policy);
     let checks = tree.checks();
     let link = index_of(checks, "/home/alice/.nix-profile");
-    let states = index_of(checks, "/home/alice/.local/state");
     let activation = index_of(checks, "/home/alice profile");
-    assert!(link < states);
-    assert!(!checks[states].after.contains(&link));
     assert!(checks[activation].after.contains(&link));
 }
 
