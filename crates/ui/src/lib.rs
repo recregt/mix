@@ -117,6 +117,14 @@ fn terminal_width(term: &console::Term) -> Option<usize> {
         .filter(|columns| *columns > 0)
 }
 
+pub fn data_width() -> Option<usize> {
+    terminal_width(&console::Term::stdout())
+}
+
+pub fn fit(text: &str, columns: usize) -> std::borrow::Cow<'_, str> {
+    console::truncate_str(text, columns, "…")
+}
+
 pub struct Stderr;
 
 impl Out for Stderr {
@@ -450,6 +458,17 @@ pub fn restore_terminal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_text_is_fitted_by_the_columns_it_takes_and_its_cut_is_marked() {
+        assert_eq!(fit("hello", 5), "hello");
+        assert_eq!(fit("hello world", 8), "hello w…");
+        assert_eq!(fit("日本語のパッケージ", 7), "日本語…");
+        assert_eq!(
+            console::measure_text_width(&fit("日本語のパッケージ", 7)),
+            7
+        );
+    }
 
     #[test]
     fn only_y_or_yes_agrees() {

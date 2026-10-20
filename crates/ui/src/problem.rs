@@ -70,7 +70,7 @@ fn fitted(text: &str, start: usize, width: Option<usize>) -> String {
     let gutter = start.max(1).ilog10() as usize + 1 + " - ".len();
     let room = width.saturating_sub(gutter);
     text.lines()
-        .map(|line| console::truncate_str(line, room, "…").into_owned())
+        .map(|line| crate::fit(line, room).into_owned())
         .collect::<Vec<_>>()
         .join("\n")
 }

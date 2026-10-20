@@ -145,7 +145,7 @@ pub(super) fn finished(
         }
         Result::List(list) => {
             if data && !list.packages.is_empty() {
-                mix_ui::data(&listed(list));
+                mix_ui::data(&listed(list, mix_ui::data_width()));
             }
         }
         Result::Update(update) => {
@@ -228,7 +228,7 @@ fn version(version: Option<&str>) -> &str {
     version.unwrap_or("unversioned")
 }
 
-fn listed(list: &ListResult) -> String {
+fn listed(list: &ListResult, columns: Option<usize>) -> String {
     let rows: Vec<[String; 4]> = list
         .packages
         .iter()
@@ -253,8 +253,13 @@ fn listed(list: &ListResult) -> String {
             .unwrap_or(0)
     };
     let (names, versions, sizes) = (width(0), width(1), width(2));
+    let room = columns.map(|columns| columns.saturating_sub(names + versions + sizes + 6));
     rows.iter()
         .map(|[name, version, size, description]| {
+            let description = match room {
+                Some(room) => mix_ui::fit(description, room),
+                None => description.into(),
+            };
             format!("{name:<names$}  {version:<versions$}  {size:>sizes$}  {description}")
                 .trim_end()
                 .to_string()
@@ -286,7 +291,7 @@ fn explained(explain: &ExplainResult, request: Option<&Request>) -> String {
             | Request::UserRemove(_)
             | Request::Purge(_),
         )
-        | None => mix_explain::codes::list_text(codes),
+        | None => mix_explain::codes::list_text(codes, mix_ui::data_width()),
     }
 }
 
@@ -540,10 +545,32 @@ mod tests {
         };
 
         assert_eq!(
-            listed(&list),
+            listed(&list, None),
             "git   2.55.0   55.6MiB  Distributed version control\n\
              curl  8.22.0  456.7KiB  Transfers files"
         );
+    }
+
+    #[test]
+    fn on_a_narrow_terminal_only_the_description_is_cut_to_fit() {
+        let list = ListResult {
+            active: None,
+            packages: vec![package(
+                "libreoffice-fresh",
+                Some("26.2.1.2"),
+                &[1_500_000_000],
+                "Comprehensive, professional-quality productivity suite",
+            )],
+        };
+
+        let shown = listed(&list, Some(50));
+
+        assert!(shown.chars().count() <= 50, "{shown}");
+        assert!(
+            shown.starts_with("libreoffice-fresh  26.2.1.2  1.4GiB  Comp"),
+            "{shown}"
+        );
+        assert!(shown.ends_with('…'), "{shown}");
     }
 
     #[test]
@@ -553,6 +580,6 @@ mod tests {
             packages: vec![package("mystery", None, &[], "")],
         };
 
-        assert_eq!(listed(&list), "mystery  -  -");
+        assert_eq!(listed(&list, None), "mystery  -  -");
     }
 }
