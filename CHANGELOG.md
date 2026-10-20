@@ -15,7 +15,7 @@ All notable changes to `mix` are listed here. The format follows [Keep a Changel
 - When `mix-daemon` is stopped, keeps failing to start or is damaged, commands say "the `mix` daemon isn't answering" and point to `mix bootstrap`, instead of "isn't set up for you yet" or "couldn't get administrator rights". ([#164](https://github.com/recregt/mix/pull/164))
 - After `mix` is upgraded or downgraded with the install script, commands say the daemon is a different version and point to `mix bootstrap`, instead of asking to run the same command again, and the install script ends with that step. ([#165](https://github.com/recregt/mix/pull/165))
 - When `mix-daemon` stops partway through a command, the command says it stopped before it could finish, instead of exiting with nothing printed, and `mix doctor` reports a managed file above 4 MiB instead of failing silently. ([#167](https://github.com/recregt/mix/pull/167))
-- On a terminal, `mix doctor` and `mix repair` cut a long changed line to the terminal width instead of printing it whole in the repair suggestion. ([#169](https://github.com/recregt/mix/pull/169))
+- On a terminal, `mix doctor` and `mix repair` cut a long changed line to the terminal width instead of printing it whole in the repair suggestion, and `mix list` and `mix explain` cut long descriptions the same way. Output that is not a terminal is unchanged. ([#169](https://github.com/recregt/mix/pull/169))
 
 ## [0.1.0-alpha.2] - 2026-10-19
 
