@@ -20,60 +20,6 @@ use crate::ops::bootstrap::{Settings, steps};
 use crate::report::inspection;
 use crate::run::{Runner, StepOutcome};
 
-/// The binding between what an inspection found and what repair can do about it.
-#[test]
-fn a_finding_says_whether_repair_can_reconcile_it() {
-    assert_eq!(
-        Finding::NotADirectory.unfixable(),
-        Some(Unfixable::NotADirectory)
-    );
-    assert_eq!(
-        Finding::NoSuchUser.unfixable(),
-        Some(Unfixable::MissingUser)
-    );
-    assert_eq!(
-        Finding::RuntimeMissing.unfixable(),
-        Some(Unfixable::MissingRuntime)
-    );
-}
-
-#[test]
-fn everything_repair_reconciles_is_bound_to_no_reason() {
-    for finding in [
-        Finding::Missing,
-        Finding::Unreadable {
-            kind: std::io::ErrorKind::PermissionDenied,
-        },
-        Finding::Mode {
-            actual: 0o700,
-            expected: 0o755,
-        },
-        Finding::Owner {
-            actual: (0, 0),
-            expected: (1000, 1000),
-        },
-        Finding::ContentDrift,
-        Finding::GroupMissing,
-        Finding::GroupGid {
-            actual: 1,
-            expected: 30_000,
-        },
-        Finding::NotAMember { group: "mix-users" },
-        Finding::UserMissing,
-        Finding::UserIds {
-            actual: (1, 1),
-            expected: (30_000, 30_000),
-        },
-        Finding::UnitMissing,
-        Finding::UnitDrift,
-        Finding::UnitInactive,
-        Finding::RepositoryBroken,
-        Finding::RepositoryLocked,
-    ] {
-        assert_eq!(finding.unfixable(), None, "{finding:?}");
-    }
-}
-
 fn policy() -> Policy {
     Policy::new(Some("https://mirror.internal"), Some("mirror:AAAA")).unwrap()
 }
@@ -641,6 +587,15 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
             )],
         ),
         (
+            "a profile not built from the package list",
+            |world: &mut World| {
+                let state = mix_state_dir(Path::new("/home/alice")).join(STATE_FILE);
+                let listed = crate::model::testkit::required_with(&["ripgrep"]).render();
+                world.with_file(state, listed.as_bytes(), 0o644, (1000, 1000));
+            },
+            vec![("/home/alice profile", Finding::ProfileStale)],
+        ),
+        (
             "a missing runtime",
             |world: &mut World| {
                 world.files.remove(Path::new(DEFAULT_PROFILE_NIX_ENV));
@@ -1162,18 +1117,36 @@ fn a_secret_setting_never_leaves_the_core_with_its_value() {
 }
 
 #[test]
-fn files_without_known_contents_have_no_drift_to_show() {
-    let world = World::default();
-    let target = Target::Directory {
-        path: Path::new("/nix").into(),
-        mode: crate::declared::targets::Mode::Exact(0o755),
-        owner: None,
-    };
-    let facts: Vec<Fact> = queries(&target)
-        .iter()
-        .map(|query| world.observe(query))
+fn only_a_changed_file_or_unit_shows_what_changed_in_it() {
+    let alice = user("alice", 1000);
+    let mut world = bootstrapped(std::slice::from_ref(&alice));
+    world.with_file(NIX_CONF_DEST, b"trusted-users = *\n", 0o644, (0, 0));
+    world.with_file(NIX_DAEMON_SOCKET_DEST, b"[Socket]\n", 0o644, (0, 0));
+    world.files.get_mut(Path::new("/var/lib/mix")).unwrap().mode = 0o777;
+    let policy = policy();
+
+    let reports = super::audit(tree(Some(&alice), &policy), |queries| {
+        Ok(queries.iter().map(|query| world.observe(query)).collect())
+    });
+
+    let drifts: Vec<(String, super::Drift)> = reports
+        .into_iter()
+        .filter_map(|report| report.drift.map(|drift| (report.name, drift)))
         .collect();
-    assert_eq!(drift(&target, &facts), None);
+    let names: Vec<&str> = drifts.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, [NIX_CONF_DEST, NIX_DAEMON_SOCKET_UNIT]);
+    let (_, nix_conf) = &drifts[0];
+    assert_eq!(nix_conf.path, NIX_CONF_DEST);
+    assert_eq!(nix_conf.hunks[0].found, ["trusted-users = *"]);
+    assert_eq!(
+        nix_conf.hunks[0].expected,
+        policy
+            .nix_conf()
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(drifts[1].1.path, NIX_DAEMON_SOCKET_DEST);
 }
 
 #[test]

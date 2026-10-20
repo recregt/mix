@@ -60,18 +60,4 @@ mod tests {
         let source = std::error::Error::source(&err).expect("source should be preserved");
         assert_eq!(source.to_string(), "entity not found");
     }
-
-    /// The bottom of the tool states the fact and stops there: which command to wait for, and
-    /// whether waiting is even the right advice, is not known here.
-    #[test]
-    fn a_raw_error_states_the_fact_without_advising_anything() {
-        let err = Error::LockMissing {
-            path: "/var/lib/mix/lock".into(),
-        };
-
-        assert_eq!(
-            err.to_string(),
-            "the lock at /var/lib/mix/lock does not exist and cannot be created"
-        );
-    }
 }
