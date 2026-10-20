@@ -473,3 +473,29 @@ async fn a_bootstrap_request_can_be_sent_to_a_daemon_of_an_older_schema() {
         "the older daemon should run the bootstrap request"
     );
 }
+
+struct LargeReply;
+
+impl Worker for LargeReply {
+    const VERSION: &'static str = VERSION;
+
+    fn admits(&self, _caller: Caller) -> bool {
+        true
+    }
+
+    async fn run(&self, _caller: Caller, _command: Command, _controls: Controls, events: Events) {
+        let _ = events.send(Reply::Envelope(marked(1, "x".repeat(5 * 1024 * 1024))));
+    }
+}
+
+#[tokio::test]
+async fn a_reply_of_any_size_reaches_the_client() {
+    let (ours, theirs) = tokio::net::UnixStream::pair().unwrap();
+    let _server = tokio::spawn(serve_connection(LargeReply, theirs));
+    let mut client = Client::connect(ours, VERSION).await.unwrap();
+
+    let envelopes = every_envelope(&mut client, &repair()).await;
+
+    assert_eq!(envelopes.len(), 1);
+    assert_eq!(envelopes[0].request.len(), 5 * 1024 * 1024);
+}

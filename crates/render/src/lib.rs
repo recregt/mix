@@ -57,7 +57,6 @@ impl Json {
 
 #[derive(Debug, Clone, Default)]
 struct Seen {
-    started: bool,
     exit: Option<u32>,
 }
 
@@ -69,16 +68,8 @@ impl Exit {
         self.0.lock().unwrap_or_else(PoisonError::into_inner).exit
     }
 
-    pub fn started(&self) -> bool {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .started
-    }
-
     fn saw(&self, exit: Option<u32>) {
         let mut seen = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        seen.started = true;
         if exit.is_some() {
             seen.exit = exit;
         }
@@ -153,7 +144,7 @@ impl View {
         fault: &Fault,
         source: Option<&(dyn std::error::Error + 'static)>,
     ) {
-        if self.exit.started() {
+        if self.exit.code().is_some() {
             return;
         }
         if self.json.on() {
@@ -327,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stream_that_already_started_is_left_as_it_ended_rather_than_given_a_second_root() {
+    fn a_stream_that_stopped_before_its_ending_is_reported_once_by_the_client() {
         let (view, documents) = into();
         let mut sinks = view.sinks_to(Arc::new(mix_ui::Silent));
         let outbox = Arc::new(mix_events::Outbox::new("request", || {}));
@@ -339,11 +330,38 @@ mod tests {
         for envelope in outbox.drain() {
             sinks.envelope(envelope);
         }
+        std::mem::forget(tree);
 
         view.failed("other".to_string(), &install(), &refused(), None);
 
+        let documents = documents.lock().unwrap();
+        assert_eq!(documents.len(), 1);
+        assert_eq!(documents[0].problems[0].code(), refused().code().unwrap());
+        assert!(view.exit.code().is_some());
+    }
+
+    #[test]
+    fn a_stream_that_reached_its_ending_is_not_reported_again() {
+        let (view, documents) = into();
+        let mut sinks = view.sinks_to(Arc::new(mix_ui::Silent));
+        let outbox = Arc::new(mix_events::Outbox::new("request", || {}));
+        let mut tree = mix_events::Tree::new(
+            Arc::clone(&outbox),
+            Arc::new(|| None),
+            mix_events::Start::command("install", install()),
+        );
+        tree.finish(mix_events::ROOT, mix_events::Ending::succeeded())
+            .unwrap();
         drop(tree);
-        assert_eq!(view.exit.code(), None);
-        assert!(documents.lock().unwrap().is_empty());
+        for envelope in outbox.drain() {
+            sinks.envelope(envelope);
+        }
+        let ended = view.exit.code();
+
+        view.failed("other".to_string(), &install(), &refused(), None);
+
+        assert!(ended.is_some());
+        assert_eq!(documents.lock().unwrap().len(), 1);
+        assert_eq!(view.exit.code(), ended);
     }
 }

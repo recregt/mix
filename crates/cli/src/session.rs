@@ -164,6 +164,36 @@ mod tests {
         }
     }
 
+    struct StopsMidway;
+
+    impl Worker for StopsMidway {
+        const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+
+        fn admits(&self, _caller: Caller) -> bool {
+            true
+        }
+
+        async fn run(
+            &self,
+            _caller: Caller,
+            command: Command,
+            _controls: Controls,
+            events: Events,
+        ) {
+            let outbox = Arc::new(Outbox::new("request", || {}));
+            let key = mix_events::key_of(command.request.as_ref());
+            let tree = Tree::new(
+                Arc::clone(&outbox),
+                Arc::new(|| None),
+                Start::command(key, command),
+            );
+            for envelope in outbox.drain() {
+                let _ = events.send(Reply::Envelope(envelope));
+            }
+            std::mem::forget(tree);
+        }
+    }
+
     struct EndsSilently;
 
     impl Worker for EndsSilently {
@@ -380,6 +410,18 @@ mod tests {
     async fn a_worker_that_stops_without_an_ending_is_reported_as_ended() {
         let directory = tempfile::tempdir().unwrap();
         let socket = listening(directory.path(), || EndsSilently);
+        let recorded = Recorded::default();
+
+        let exit = run(explain(Code::Network), &recorded.view(), &socket, None).await;
+
+        assert_eq!(exit, ExitCode::FAILURE);
+        assert_eq!(recorded.document().problems[0].code(), Code::WorkerEnded);
+    }
+
+    #[tokio::test]
+    async fn a_daemon_that_stops_partway_through_a_command_is_reported_as_ended() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = listening(directory.path(), || StopsMidway);
         let recorded = Recorded::default();
 
         let exit = run(explain(Code::Network), &recorded.view(), &socket, None).await;
