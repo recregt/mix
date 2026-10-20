@@ -64,6 +64,10 @@ impl Out for Logging {
     fn colours(&self) -> bool {
         self.inner.colours()
     }
+
+    fn width(&self) -> Option<usize> {
+        self.inner.width()
+    }
 }
 
 pub struct Human {

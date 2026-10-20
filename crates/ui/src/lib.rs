@@ -105,6 +105,16 @@ fn stdout_colors() -> bool {
 pub trait Out: Send + Sync {
     fn line(&self, text: &str);
     fn colours(&self) -> bool;
+
+    fn width(&self) -> Option<usize> {
+        None
+    }
+}
+
+fn terminal_width(term: &console::Term) -> Option<usize> {
+    term.size_checked()
+        .map(|(_, columns)| usize::from(columns))
+        .filter(|columns| *columns > 0)
 }
 
 pub struct Stderr;
@@ -116,6 +126,10 @@ impl Out for Stderr {
 
     fn colours(&self) -> bool {
         stderr_colors()
+    }
+
+    fn width(&self) -> Option<usize> {
+        terminal_width(&console::Term::stderr())
     }
 }
 
@@ -149,6 +163,10 @@ impl<O: Out> Out for Spaced<O> {
     fn colours(&self) -> bool {
         self.inner.colours()
     }
+
+    fn width(&self) -> Option<usize> {
+        self.inner.width()
+    }
 }
 
 impl<O: Out + ?Sized> Out for std::sync::Arc<O> {
@@ -159,6 +177,10 @@ impl<O: Out + ?Sized> Out for std::sync::Arc<O> {
     fn colours(&self) -> bool {
         (**self).colours()
     }
+
+    fn width(&self) -> Option<usize> {
+        (**self).width()
+    }
 }
 
 impl Out for Stdout {
@@ -168,6 +190,10 @@ impl Out for Stdout {
 
     fn colours(&self) -> bool {
         stdout_colors()
+    }
+
+    fn width(&self) -> Option<usize> {
+        terminal_width(&console::Term::stdout())
     }
 }
 

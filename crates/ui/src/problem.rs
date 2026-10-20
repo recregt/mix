@@ -63,7 +63,24 @@ fn joined(lines: &[String]) -> String {
     lines.join("\n")
 }
 
-pub fn problem_text(severity: Severity, problem: &Problem<'_>, colours: bool) -> String {
+fn fitted(text: &str, start: usize, width: Option<usize>) -> String {
+    let Some(width) = width else {
+        return text.to_string();
+    };
+    let gutter = start.max(1).ilog10() as usize + 1 + " - ".len();
+    let room = width.saturating_sub(gutter);
+    text.lines()
+        .map(|line| console::truncate_str(line, room, "…").into_owned())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub fn problem_text(
+    severity: Severity,
+    problem: &Problem<'_>,
+    colours: bool,
+    width: Option<usize>,
+) -> String {
     let level = match severity {
         Severity::Error => Level::ERROR,
         Severity::Warning => Level::WARNING,
@@ -110,11 +127,12 @@ pub fn problem_text(severity: Severity, problem: &Problem<'_>, colours: bool) ->
                 at += line.len() + 1;
             }
             title = title.element(snippet);
+            let shown = fitted(found, start, width);
             suggestion = suggestion.element(
-                Snippet::source(found.as_str())
+                Snippet::source(shown.clone())
                     .path(lines.path)
                     .line_start(start)
-                    .patch(Patch::new(0..found.len(), expected.as_str())),
+                    .patch(Patch::new(0..shown.len(), fitted(expected, start, width))),
             );
         }
         fix = Some(suggestion);
@@ -144,10 +162,91 @@ pub fn problem_text(severity: Severity, problem: &Problem<'_>, colours: bool) ->
         Renderer::plain()
     }
     .decor_style(DecorStyle::Ascii);
+    let renderer = match width {
+        Some(width) => renderer.term_width(width),
+        None => renderer,
+    };
     let report: Vec<Group<'_>> = std::iter::once(title).chain(fix).collect();
     renderer.render(&report)
 }
 
 pub fn problem_to(out: &dyn Out, severity: Severity, problem: &Problem<'_>) {
-    out.line(&problem_text(severity, problem, out.colours()));
+    out.line(&problem_text(severity, problem, out.colours(), out.width()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn labels() -> Labels {
+        Labels {
+            added: crate::phrase!("not written by `mix`"),
+            changed: crate::phrase!("differs from what `mix` wrote"),
+            missing: crate::note_around!("lines `mix` wrote are missing at line ", ""),
+            fix: crate::phrase!("`mix repair` puts back what `mix` wrote"),
+        }
+    }
+
+    fn drift(found: &str, width: Option<usize>) -> String {
+        let labels = labels();
+        let hunks = [Hunk {
+            found_line: 19,
+            found: vec![found.to_string()],
+            expected: vec!["  home.stateVersion = \"25.05\";".into()],
+        }];
+        let summary =
+            crate::phrase!("/home/alice/.local/state/mix/home.nix was changed outside `mix`");
+        let problem = Problem::new(&summary).lines(Some(Lines {
+            path: "/home/alice/.local/state/mix/home.nix",
+            hunks: &hunks,
+            labels: &labels,
+        }));
+        problem_text(Severity::Warning, &problem, false, width)
+    }
+
+    fn long_line() -> String {
+        format!("  home.stateVersion = \"25.05\";{}", "A".repeat(10_000))
+    }
+
+    fn content(shown: &str) -> Vec<&str> {
+        shown
+            .lines()
+            .filter(|line| line.starts_with("19 "))
+            .collect()
+    }
+
+    #[test]
+    fn on_a_terminal_every_changed_line_of_a_drift_fits_its_width() {
+        let shown = drift(&long_line(), Some(80));
+
+        let lines = content(&shown);
+        assert_eq!(lines.len(), 3, "{shown}");
+        for line in lines {
+            assert!(console::measure_text_width(line) <= 80, "{line}");
+        }
+        assert!(
+            shown.contains("19 -   home.stateVersion = \"25.05\";AAA"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("19 +   home.stateVersion = \"25.05\";"),
+            "{shown}"
+        );
+    }
+
+    #[test]
+    fn away_from_a_terminal_the_repair_suggestion_keeps_the_whole_line() {
+        let line = long_line();
+
+        let shown = drift(&line, None);
+
+        assert!(shown.contains(&format!("19 - {line}")));
+    }
+
+    #[test]
+    fn a_drift_that_fits_reads_the_same_on_a_terminal() {
+        let line = "  home.stateVersion = \"24.11\";";
+
+        assert_eq!(drift(line, Some(80)), drift(line, None));
+    }
 }
