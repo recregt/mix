@@ -66,9 +66,9 @@ fn a_path_waits_on_the_nearest_declared_directory_above_it() {
     let cfg = user_config();
     let tree = tree(Some(&cfg), &policy);
     let checks = tree.checks();
-    let config = index_of(checks, "/home/alice/.local/state/mix/.git/config");
-    let git = index_of(checks, "/home/alice/.local/state/mix/.git");
-    assert_eq!(checks[config].after, vec![git]);
+    let state = index_of(checks, "/home/alice/.local/state/mix/state");
+    let state_dir = index_of(checks, "/home/alice/.local/state/mix");
+    assert_eq!(checks[state].after, vec![state_dir]);
     let home = index_of(checks, "/home/alice");
     let local = index_of(checks, "/home/alice/.local");
     assert_eq!(checks[local].after, vec![home]);

@@ -13,7 +13,6 @@ fn every_error() -> Vec<Error> {
         | Error::Exec { .. }
         | Error::Cancelled { .. }
         | Error::LockMissing { .. }
-        | Error::Unsupported { .. }
         | Error::Effect(_) => {}
     };
     let errors = vec![
@@ -34,11 +33,6 @@ fn every_error() -> Vec<Error> {
         },
         Error::LockMissing {
             path: "/var/lib/mix/lock".into(),
-        },
-        Error::Unsupported {
-            program: "git".into(),
-            found: "2.30.1".into(),
-            oldest: "2.34".into(),
         },
         Error::Effect(Box::new(Failure::CommandFailed {
             program: "git hash-object -- state".into(),

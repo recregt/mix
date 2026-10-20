@@ -27,9 +27,6 @@ const COMMIT_MESSAGE: &str = "mix: sync generated home-manager config";
 
 const PROFILE_GIT: &str = ".nix-profile/bin/git";
 
-/// Oldest `git` release mix runs, as major and minor version.
-const OLDEST: (u32, u32) = (2, 34);
-
 /// Settings given to every `git` call: no hook runs, no file-system monitor starts, no commit is
 /// signed, and every object, ref and index git writes is synced to disk before it returns.
 const ISOLATION: &[&str] = &[
@@ -52,20 +49,9 @@ pub struct Git {
 }
 
 impl Git {
-    pub async fn resolve(user: &InvokingUser, home: &mut Home<'_>, scope: &Scope) -> Result<Self> {
-        let git = Self {
-            binary: resolve_binary(user, home).await?,
-        };
-        let reported = git.run_as(user, &["--version"], scope).await?;
-        let found = reported.split_whitespace().nth(2).unwrap_or_default();
-        let mut parts = found.split('.').map(str::parse::<u32>);
-        match (parts.next(), parts.next()) {
-            (Some(Ok(major)), Some(Ok(minor))) if (major, minor) >= OLDEST => Ok(git),
-            _ => Err(mix_core::Error::Unsupported {
-                program: git.binary,
-                found: found.to_string(),
-                oldest: format!("{}.{}", OLDEST.0, OLDEST.1),
-            }),
+    pub fn of(user: &InvokingUser) -> Self {
+        Self {
+            binary: profile_git(user).to_string_lossy().into_owned(),
         }
     }
 
@@ -396,57 +382,6 @@ fn export(only: &str) -> [&str; 4] {
     ]
 }
 
-async fn resolve_binary(user: &InvokingUser, home: &mut Home<'_>) -> Result<String> {
-    let profile_git = profile_git(user);
-    if home
-        .exists(&profile_git)
-        .await
-        .map_err(|failure| core_error(failure, &profile_git))?
-    {
-        return Ok(profile_git.to_string_lossy().into_owned());
-    }
-    Ok("git".to_string())
-}
-
 fn profile_git(user: &InvokingUser) -> PathBuf {
     user.home.join(PROFILE_GIT)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn user(home: &Path) -> InvokingUser {
-        InvokingUser {
-            uid: nix::unistd::Uid::current().as_raw(),
-            gid: nix::unistd::Gid::current().as_raw(),
-            name: "mix-user".to_string(),
-            home: home.to_path_buf(),
-        }
-    }
-
-    #[tokio::test]
-    #[allow(clippy::disallowed_methods)]
-    async fn resolve_binary_uses_the_git_in_the_users_nix_profile() {
-        let home = tempfile::tempdir().unwrap();
-        let profile_git = profile_git(&user(home.path()));
-        std::fs::create_dir_all(profile_git.parent().unwrap()).unwrap();
-        std::fs::write(&profile_git, "").unwrap();
-
-        let files = mix_fs::Files::open(Path::new("/"), "r1").unwrap();
-
-        let binary = resolve_binary(&user(home.path()), &mut Home::Local(&files)).await;
-
-        assert_eq!(binary.unwrap(), profile_git.to_string_lossy());
-    }
-
-    #[tokio::test]
-    async fn resolve_binary_falls_back_to_the_path() {
-        let home = tempfile::tempdir().unwrap();
-        let files = mix_fs::Files::open(Path::new("/"), "r1").unwrap();
-
-        let binary = resolve_binary(&user(home.path()), &mut Home::Local(&files)).await;
-
-        assert_eq!(binary.unwrap(), "git");
-    }
 }

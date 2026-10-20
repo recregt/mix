@@ -114,7 +114,7 @@ pub async fn activate_generation(
 
 pub async fn record(user: &InvokingUser, home: &mut Home<'_>, scope: &Scope) -> Result<()> {
     let state_dir = mix_state_dir(&user.home);
-    let git = git::Git::resolve(user, home, scope).await?;
+    let git = git::Git::of(user);
     let git_dir = state_dir.join(GIT_DIR);
     if !home
         .exists(&git_dir)

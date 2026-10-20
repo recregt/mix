@@ -548,7 +548,7 @@ fn user_tree<'a>(
             states = Some(handle);
         }
     }
-    let state_node = tree.path(
+    tree.path(
         state_dir.clone(),
         Target::Directory {
             path: Cow::Owned(state_dir.clone()),
@@ -618,19 +618,15 @@ fn user_tree<'a>(
             },
         )
     });
-    let mut deferred = Vec::new();
-    if intent.runtime.is_some() {
-        deferred.extend([repo, config_file]);
-        deferred.extend(inner.into_iter().map(|(_, target)| target));
-        deferred.push(history);
-    } else {
-        tree.path(repository, repo);
-        tree.path(config, config_file);
-        for (path, target) in inner {
-            tree.path(path, target);
-        }
-        tree.up(state_node, history);
+    let mut deferred = vec![repo, config_file];
+    deferred.extend(inner.into_iter().map(|(_, target)| target));
+    if intent.tidy {
+        deferred.push(Target::Leftovers {
+            dir: Cow::Owned(repository),
+            journals: JOURNAL_DIR,
+        });
     }
+    deferred.push(history);
     tree.path(
         profiles_dir.clone(),
         Target::Directory {
