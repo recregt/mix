@@ -305,6 +305,39 @@ fn a_command_that_is_not_nix_keeps_its_whole_tail() {
 }
 
 #[test]
+fn the_values_a_conflict_names_are_written_as_words() {
+    let file = crate::effect::FileId {
+        dev: 2049,
+        ino: 7,
+        born: Some((1, 2)),
+    };
+    assert_eq!(crate::effect::generation(Some(98)), "generation 98");
+    assert_eq!(crate::effect::generation(None), "no generation");
+    assert_eq!(crate::effect::ids((0, 30_000)), "0:30000");
+    assert_eq!(file.to_string(), "inode 7 on device 2049");
+    assert_eq!(
+        crate::effect::Expect::Present(file).to_string(),
+        "inode 7 on device 2049"
+    );
+    assert_eq!(crate::effect::Expect::Absent.to_string(), "nothing");
+}
+
+#[test]
+fn an_effect_error_is_diagnosed_as_the_failure_it_carries() {
+    for failure in every_failure() {
+        let error = Error::Effect(Box::new(failure.clone()));
+        assert_eq!(error.fault(), failure.fault(), "{failure:?}");
+        if failure != Failure::Cancelled {
+            assert_eq!(
+                error.to_string(),
+                diagnostic(&failure).message,
+                "{failure:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn no_message_shows_an_internal_value() {
     let messages = every_error()
         .into_iter()
@@ -313,19 +346,7 @@ fn no_message_shows_an_internal_value() {
             every_failure()
                 .into_iter()
                 .map(|failure| diagnostic(&failure).message),
-        )
-        .chain([
-            crate::effect::generation(Some(98)),
-            crate::effect::generation(None),
-            crate::effect::ids((0, 30_000)),
-            crate::effect::Expect::Absent.to_string(),
-            crate::effect::FileId {
-                dev: 2049,
-                ino: 7,
-                born: Some((1, 2)),
-            }
-            .to_string(),
-        ]);
+        );
     for message in messages {
         for internal in ["Some(", "None", "{ ", "CommandFailed", "FileId", "(0, "] {
             assert!(!message.contains(internal), "{message}");

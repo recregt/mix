@@ -376,6 +376,25 @@ mod tests {
     }
 
     #[test]
+    fn an_unreadable_item_gives_the_reason_only_when_one_is_known() {
+        let unreadable = |kind| {
+            check(&report(
+                "/etc/nix/nix.conf",
+                Some(Finding::Unreadable { kind }),
+            ))
+            .message()
+        };
+        assert_eq!(
+            unreadable(std::io::ErrorKind::IsADirectory),
+            "/etc/nix/nix.conf can't be read\nis a directory"
+        );
+        assert_eq!(
+            unreadable(std::io::ErrorKind::Other),
+            "/etc/nix/nix.conf can't be read"
+        );
+    }
+
+    #[test]
     fn a_problem_names_the_item_and_notes_what_was_found_against_what_mix_set() {
         assert_eq!(
             check(&report(
