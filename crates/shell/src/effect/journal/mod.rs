@@ -14,6 +14,7 @@ use mix_exec::Scope;
 use crate::drive::{Journal, Performer};
 
 pub use mix_core::declared::paths::JOURNAL_DIR;
+use mix_core::declared::paths::JOURNAL_DIR_MODE;
 
 fn io(path: &Path, error: std::io::Error) -> Failure {
     Failure::Io {
@@ -35,7 +36,7 @@ impl FileJournal {
     pub fn create(dir: &Path, request: &str) -> Result<Self, Failure> {
         std::fs::DirBuilder::new()
             .recursive(true)
-            .mode(0o700)
+            .mode(JOURNAL_DIR_MODE)
             .create(dir)
             .map_err(|error| io(dir, error))?;
         let path = dir.join(format!("{request}.ndjson"));

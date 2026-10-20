@@ -44,6 +44,7 @@ pub const POLICY_FILE: &str = "/etc/mix/policy.json";
 
 pub const LOCK_FILE: &str = "/var/lib/mix/lock";
 pub const JOURNAL_DIR: &str = "/var/lib/mix/journal";
+pub const JOURNAL_DIR_MODE: u32 = 0o700;
 pub const RUNNING_PROGRAM: &str = "/proc/self/exe";
 pub const USER_PROFILE_NAME: &str = "profile";
 pub const PROFILE_LOCK_SUFFIX: &str = ".lock";

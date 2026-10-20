@@ -3,12 +3,13 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::declared::identity::{self, InvokingUser};
+use crate::declared::paths::JOURNAL_DIR_MODE;
 use crate::declared::paths::{
     INDEX_LOCK, MIX_DAEMON_BIN, MIX_DAEMON_SERVICE_DEST, MIX_DAEMON_SERVICE_UNIT,
     MIX_DAEMON_SOCKET_DEST, NIX_CONF_DEST, NIX_DAEMON_SERVICE_UNIT, REPOSITORY_BRANCH, STATE_FILE,
     mix_state_dir, repository_dir,
 };
-use crate::declared::targets::{Target, UnitSource};
+use crate::declared::targets::{Mode, ROOT, SYSTEM_FILE, Target, UnitSource};
 use crate::declared::tree::{Check, Tree};
 use crate::effect::{
     Action, Expect, Fact, Failure, Kind, Owner, PathFacts, ProgramFacts, Query, UserSpec,
@@ -250,7 +251,9 @@ pub fn queries(target: &Target<'_>) -> Vec<Query> {
                 source: (*source).into(),
             },
         ],
-        Target::Journals { path } => vec![Query::Journals((*path).into())],
+        Target::Journals { path } => {
+            vec![Query::Journals((*path).into()), Query::Path((*path).into())]
+        }
         Target::Leftovers { dir, journals } => vec![
             Query::Journals((*journals).into()),
             Query::Leftovers(dir.to_path_buf()),
@@ -300,6 +303,40 @@ fn absent(kind: Kind) -> Option<Finding> {
 fn owner_drift(actual: (u32, u32), owner: Option<(u32, u32)>) -> Option<Finding> {
     let expected = owner?;
     (actual != expected).then_some(Finding::Owner { actual, expected })
+}
+
+fn shape(found: &PathFacts, mode: Mode, owner: Option<Owner>) -> Option<Finding> {
+    owner_drift(found.owner, owner).or_else(|| {
+        let expected = mode.settled(found.mode, owner);
+        (found.mode != expected).then_some(Finding::Mode {
+            actual: found.mode,
+            expected,
+        })
+    })
+}
+
+fn remode(path: &Path, found: &PathFacts, mode: Mode, owner: Option<Owner>) -> Option<Action> {
+    let settled = mode.settled(found.mode, owner);
+    (found.mode != settled).then(|| Action::SetMode {
+        path: path.to_path_buf(),
+        mode: settled,
+        expect: found.mode,
+    })
+}
+
+fn reshape(path: &Path, found: &PathFacts, mode: Mode, owner: Option<Owner>) -> Vec<Action> {
+    let mut actions = Vec::new();
+    if let Some(expected) = owner
+        && found.owner != expected
+    {
+        actions.push(Action::SetOwner {
+            path: path.to_path_buf(),
+            owner: expected,
+            expect: found.owner,
+        });
+    }
+    actions.extend(remode(path, found, mode, owner));
+    actions
 }
 
 const SECRET_SETTINGS: &[&str] = &["access-tokens"];
@@ -409,7 +446,7 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
             absent(found.kind)
                 .or_else(|| (found.kind != Kind::Directory).then_some(Finding::NotADirectory))
         }
-        Target::Parent { bits, owner, .. } => {
+        Target::Parent { mode, owner, .. } | Target::Directory { mode, owner, .. } => {
             let found = path_facts(facts, 0);
             if let Some(finding) = absent(found.kind) {
                 return Some(finding);
@@ -417,37 +454,13 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
             if found.kind != Kind::Directory {
                 return Some(Finding::NotADirectory);
             }
-            if let Some(expected) = *owner
-                && found.owner != expected
-            {
-                return Some(Finding::Owner {
-                    actual: found.owner,
-                    expected,
-                });
-            }
-            (found.mode & bits != *bits).then_some(Finding::Mode {
-                actual: found.mode,
-                expected: found.mode | bits,
-            })
-        }
-        Target::Directory { mode, owner, .. } => {
-            let found = path_facts(facts, 0);
-            if let Some(finding) = absent(found.kind) {
-                return Some(finding);
-            }
-            if found.kind != Kind::Directory {
-                return Some(Finding::NotADirectory);
-            }
-            if found.mode != *mode {
-                return Some(Finding::Mode {
-                    actual: found.mode,
-                    expected: *mode,
-                });
-            }
-            owner_drift(found.owner, *owner)
+            shape(found, *mode, *owner)
         }
         Target::File {
-            expected, owner, ..
+            expected,
+            mode,
+            owner,
+            ..
         } => {
             let found = path_facts(facts, 0);
             match expected {
@@ -457,7 +470,7 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
                     }
                     match contents(facts, 1) {
                         Some(current) if current == expected.as_bytes() => {
-                            owner_drift(found.owner, *owner)
+                            shape(found, *mode, *owner)
                         }
                         Some(_) => Some(Finding::ContentDrift),
                         None => Some(Finding::Unreadable {
@@ -469,13 +482,13 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
                         }),
                     }
                 }
-                None if owner.is_none() || found.kind == Kind::Missing => None,
-                None => owner_drift(found.owner, *owner),
+                None if found.kind == Kind::Missing => None,
+                None => shape(found, *mode, *owner),
             }
         }
-        Target::SeededFile { owner, .. } => {
+        Target::SeededFile { mode, owner, .. } => {
             let found = path_facts(facts, 0);
-            absent(found.kind).or_else(|| owner_drift(found.owner, *owner))
+            absent(found.kind).or_else(|| shape(found, *mode, *owner))
         }
         Target::Group { gid, .. } => match &facts[0] {
             Fact::Group(None) => Some(Finding::GroupMissing),
@@ -516,9 +529,10 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
                     _ => Some(Finding::UnitDrift),
                 };
             };
-            unit_source(src, facts)
-                .is_some_and(|source| source != installed)
-                .then_some(Finding::UnitDrift)
+            if unit_source(src, facts).is_some_and(|source| source != installed) {
+                return Some(Finding::UnitDrift);
+            }
+            shape(path_facts(facts, 1), SYSTEM_FILE, ROOT)
         }
         Target::UnitActive { .. } => {
             let active = matches!(
@@ -560,16 +574,19 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
             if matches!(&facts[1], Fact::Program(program) if !program.same) {
                 return Some(Finding::ContentDrift);
             }
-            if found.mode != *mode {
-                return Some(Finding::Mode {
-                    actual: found.mode,
-                    expected: *mode,
-                });
-            }
-            owner_drift(found.owner, Some((0, 0)))
+            shape(found, *mode, ROOT)
         }
         Target::Journals { .. } => match &facts[0] {
-            Fact::Journals(abandoned) if !abandoned.is_empty() => {
+            Fact::Journals(abandoned) if abandoned.is_empty() => {
+                let found = path_facts(facts, 1);
+                match found.kind {
+                    Kind::Missing => None,
+                    Kind::Directory => shape(found, Mode::Exact(JOURNAL_DIR_MODE), ROOT),
+                    Kind::Unreadable(kind) => Some(Finding::Unreadable { kind }),
+                    _ => Some(Finding::NotADirectory),
+                }
+            }
+            Fact::Journals(abandoned) => {
                 let mut pending: Vec<String> = abandoned
                     .iter()
                     .flat_map(|request| request.pending.iter().cloned())
@@ -721,31 +738,13 @@ pub fn fix(
     }
     Ok(match target {
         Target::Precondition { .. } => return Err(Unfixable::Outside),
-        Target::Parent { path, bits, owner } => match finding {
+        Target::Parent { path, mode, owner } => match finding {
             Finding::Owner { .. } | Finding::Mode { .. } => {
-                let found = path_facts(facts, 0);
-                let mut actions = Vec::new();
-                if let Some(expected) = *owner
-                    && found.owner != expected
-                {
-                    actions.push(Action::SetOwner {
-                        path: path.to_path_buf(),
-                        owner: expected,
-                        expect: found.owner,
-                    });
-                }
-                if found.mode & bits != *bits {
-                    actions.push(Action::SetMode {
-                        path: path.to_path_buf(),
-                        mode: found.mode | bits,
-                        expect: found.mode,
-                    });
-                }
-                actions
+                reshape(path, path_facts(facts, 0), *mode, *owner)
             }
             _ => vec![Action::CreateDirs {
                 path: path.to_path_buf(),
-                mode: *bits,
+                mode: mode.bits(),
                 owner: *owner,
             }],
         },
@@ -754,7 +753,7 @@ pub fn fix(
             match found.kind {
                 Kind::Missing | Kind::Unreadable(_) => vec![Action::CreateDirs {
                     path: path.to_path_buf(),
-                    mode: *mode,
+                    mode: mode.bits(),
                     owner: *owner,
                 }],
                 _ => {
@@ -762,16 +761,12 @@ pub fn fix(
                     match actions.first_mut() {
                         Some(Action::ReclaimTree {
                             mode: reclaimed, ..
-                        }) => *reclaimed = *mode,
-                        _ if found.mode != *mode => actions.insert(
-                            0,
-                            Action::SetMode {
-                                path: path.to_path_buf(),
-                                mode: *mode,
-                                expect: found.mode,
-                            },
-                        ),
-                        _ => {}
+                        }) => *reclaimed = mode.settled(found.mode, *owner),
+                        _ => {
+                            if let Some(remode) = remode(path, found, *mode, *owner) {
+                                actions.insert(0, remode);
+                            }
+                        }
                     }
                     actions
                 }
@@ -780,6 +775,7 @@ pub fn fix(
         Target::File {
             path,
             expected,
+            mode,
             owner,
         } => {
             let found = path_facts(facts, 0);
@@ -789,29 +785,45 @@ pub fn fix(
                     vec![Action::PutFile {
                         path: path.to_path_buf(),
                         contents: Arc::from(expected.as_bytes()),
-                        mode: if found.kind == Kind::File {
-                            found.mode
-                        } else {
-                            FILE_MODE
-                        },
+                        mode: mode.settled(
+                            if found.kind == Kind::File {
+                                found.mode
+                            } else {
+                                FILE_MODE
+                            },
+                            *owner,
+                        ),
                         owner: *owner,
                         expect: found.id.map_or(Expect::Absent, Expect::Present),
                     }]
                 }
-                _ => own_again(path, found, *owner, tree),
+                _ => {
+                    let mut actions = own_again(path, found, *owner, tree);
+                    actions.extend(remode(path, found, *mode, *owner));
+                    actions
+                }
             }
         }
-        Target::SeededFile { path, seed, owner } => {
+        Target::SeededFile {
+            path,
+            seed,
+            mode,
+            owner,
+        } => {
             let found = path_facts(facts, 0);
             match found.kind {
                 Kind::Missing | Kind::Unreadable(_) => vec![Action::PutFile {
                     path: path.to_path_buf(),
                     contents: Arc::from(seed.as_bytes()),
-                    mode: FILE_MODE,
+                    mode: mode.settled(FILE_MODE, *owner),
                     owner: *owner,
                     expect: found.id.map_or(Expect::Absent, Expect::Present),
                 }],
-                _ => own_again(path, found, *owner, tree_owner(facts, 1)),
+                _ => {
+                    let mut actions = own_again(path, found, *owner, tree_owner(facts, 1));
+                    actions.extend(remode(path, found, *mode, *owner));
+                    actions
+                }
             }
         }
         Target::Group { name, gid } => match finding {
@@ -845,9 +857,17 @@ pub fn fix(
                 groups: vec![identity::NIXBLD_GROUP.to_string()],
             })],
         },
-        Target::SystemdUnit { name, src, .. } => {
+        Target::SystemdUnit { name, src, dest } => {
             if matches!(&facts[2], Fact::Unit(unit) if unit.file_state.starts_with("masked")) {
                 return Err(Unfixable::Masked);
+            }
+            if matches!(finding, Finding::Owner { .. } | Finding::Mode { .. }) {
+                return Ok(reshape(
+                    Path::new(dest),
+                    path_facts(facts, 1),
+                    SYSTEM_FILE,
+                    ROOT,
+                ));
             }
             let wanted = unit_source(src, facts).ok_or(Unfixable::MissingRuntime)?;
             vec![
@@ -903,22 +923,7 @@ pub fn fix(
             let found = path_facts(facts, 0);
             match finding {
                 Finding::Mode { .. } | Finding::Owner { .. } => {
-                    let mut actions = Vec::new();
-                    if found.owner != (0, 0) {
-                        actions.push(Action::SetOwner {
-                            path: (*path).into(),
-                            owner: (0, 0),
-                            expect: found.owner,
-                        });
-                    }
-                    if found.mode != *mode {
-                        actions.push(Action::SetMode {
-                            path: (*path).into(),
-                            mode: *mode,
-                            expect: found.mode,
-                        });
-                    }
-                    actions
+                    reshape(Path::new(path), found, *mode, ROOT)
                 }
                 _ => vec![Action::PutFile {
                     path: (*path).into(),
@@ -929,13 +934,21 @@ pub fn fix(
                         }) => Arc::clone(source),
                         _ => return Err(Unfixable::MissingRuntime),
                     },
-                    mode: *mode,
+                    mode: mode.bits(),
                     owner: None,
                     expect: found.id.map_or(Expect::Absent, Expect::Present),
                 }],
             }
         }
-        Target::Journals { .. } => return Err(Unfixable::Unrecovered),
+        Target::Journals { path } => match finding {
+            Finding::Owner { .. } | Finding::Mode { .. } => reshape(
+                Path::new(path),
+                path_facts(facts, 1),
+                Mode::Exact(JOURNAL_DIR_MODE),
+                ROOT,
+            ),
+            _ => return Err(Unfixable::Unrecovered),
+        },
         Target::HomeFiles { .. } => return Err(Unfixable::InTheWay),
         Target::Leftovers { .. } => leftovers(facts, Some(request))
             .map(|(path, expect)| Action::RemoveCreatedTree {

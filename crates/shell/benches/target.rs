@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use mix_core::declared::targets::Target;
+use mix_core::declared::targets::{Mode, Target};
 use mix_core::declared::tree::Check;
 use mix_core::ops::health;
 use mix_core::run::Runner;
@@ -37,22 +37,25 @@ fn declared_tree(root: &std::path::Path, n: usize) -> Vec<Target<'static>> {
 
         items.push(Target::Directory {
             path: dir.clone().into(),
-            mode: mode_of(&dir),
+            mode: Mode::Exact(mode_of(&dir)),
             owner: None,
         });
         items.push(Target::File {
             path: dir.join("nix.conf").into(),
             expected: Some("declared contents\n".to_string().into()),
+            mode: Mode::AtLeast(0o600),
             owner: None,
         });
         items.push(Target::File {
             path: dir.join("flake.lock").into(),
             expected: None,
+            mode: Mode::AtLeast(0o600),
             owner: None,
         });
         items.push(Target::SeededFile {
             path: dir.join("state").into(),
             seed: "{\"version\":1,\"packages\":[]}".into(),
+            mode: Mode::AtLeast(0o600),
             owner: None,
         });
     }
@@ -153,6 +156,7 @@ fn repair_a_file_that_drifted(bencher: divan::Bencher) {
     let target = Target::File {
         path: path.clone().into(),
         expected: Some("build-users-group = nixbld\n".to_string().into()),
+        mode: Mode::AtLeast(0o600),
         owner: None,
     };
     let rt = runtime();
