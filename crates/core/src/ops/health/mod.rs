@@ -473,13 +473,15 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
                             shape(found, *mode, *owner)
                         }
                         Some(_) => Some(Finding::ContentDrift),
-                        None => Some(Finding::Unreadable {
-                            kind: if found.kind == Kind::Directory {
-                                std::io::ErrorKind::IsADirectory
-                            } else {
-                                std::io::ErrorKind::InvalidData
-                            },
-                        }),
+                        None => match found.kind {
+                            Kind::Directory => Some(Finding::Unreadable {
+                                kind: std::io::ErrorKind::IsADirectory,
+                            }),
+                            Kind::Symlink | Kind::Other => Some(Finding::ContentDrift),
+                            _ => shape(found, *mode, *owner).or(Some(Finding::Unreadable {
+                                kind: std::io::ErrorKind::Other,
+                            })),
+                        },
                     }
                 }
                 None if found.kind == Kind::Missing => None,

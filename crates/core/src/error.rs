@@ -38,6 +38,9 @@ pub enum Error {
 
     #[error("the lock at {} does not exist and cannot be created", path.display())]
     LockMissing { path: PathBuf },
+
+    #[error("{}", crate::report::diagnose::diagnostic(.0).message)]
+    Effect(Box<crate::effect::Failure>),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

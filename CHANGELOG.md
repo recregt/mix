@@ -8,6 +8,7 @@ All notable changes to `mix` are listed here. The format follows [Keep a Changel
 
 - A user outside `mix-users` can no longer slow down or block `mix` for other users by holding connections to the daemon open, and the daemon no longer stops when it runs out of file descriptors. ([#157](https://github.com/recregt/mix/pull/157))
 - `mix doctor` reports, and `mix repair` fixes, a wrong owner or a mode that lets others write on every file and directory `mix` installs as root, including `/etc/nix/nix.conf`, `/var/lib/mix`, the systemd units and the request journals. ([#158](https://github.com/recregt/mix/pull/158))
+- A file `mix` manages that nobody can read is reported as having the wrong permissions, and `mix repair` fixes it. Errors no longer show internal values such as `Some(98)` or a raw `CommandFailed { .. }`. ([#159](https://github.com/recregt/mix/pull/159))
 
 ## [0.1.0-alpha.2] - 2026-10-19
 

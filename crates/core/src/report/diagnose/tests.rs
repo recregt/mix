@@ -13,7 +13,8 @@ fn every_error() -> Vec<Error> {
         | Error::Exec { .. }
         | Error::Cancelled { .. }
         | Error::LockMissing { .. }
-        | Error::Unsupported { .. } => {}
+        | Error::Unsupported { .. }
+        | Error::Effect(_) => {}
     };
     let errors = vec![
         Error::Io {
@@ -39,6 +40,11 @@ fn every_error() -> Vec<Error> {
             found: "2.30.1".into(),
             oldest: "2.34".into(),
         },
+        Error::Effect(Box::new(Failure::CommandFailed {
+            program: "git hash-object -- state".into(),
+            status: Some(128),
+            output_tail: "fatal: could not open 'state' for reading: Permission denied".into(),
+        })),
     ];
     errors.iter().for_each(exhaustive);
     errors
@@ -296,4 +302,19 @@ fn a_command_that_is_not_nix_keeps_its_whole_tail() {
         &diagnostic.detail,
         Some(Detail::Command(command)) if command.output_tail == "fatal: not a git repository"
     ));
+}
+
+#[test]
+fn an_effect_error_is_diagnosed_as_the_failure_it_carries() {
+    for failure in every_failure() {
+        let error = Error::Effect(Box::new(failure.clone()));
+        assert_eq!(error.fault(), failure.fault(), "{failure:?}");
+        if failure != Failure::Cancelled {
+            assert_eq!(
+                error.to_string(),
+                diagnostic(&failure).message,
+                "{failure:?}"
+            );
+        }
+    }
 }

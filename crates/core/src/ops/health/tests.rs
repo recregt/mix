@@ -311,6 +311,20 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
             vec![(POLICY_FILE, Finding::Missing)],
         ),
         (
+            "a state file nobody can read",
+            |world: &mut World| {
+                let state = mix_state_dir(Path::new("/home/alice")).join(STATE_FILE);
+                world.files.get_mut(&state).unwrap().mode = 0;
+            },
+            vec![(
+                "/home/alice/.local/state/mix/state",
+                Finding::Mode {
+                    actual: 0,
+                    expected: 0o600,
+                },
+            )],
+        ),
+        (
             "a missing seeded file",
             |world: &mut World| {
                 let state = mix_state_dir(Path::new("/home/alice"));
@@ -627,6 +641,61 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
             vec![("default profile", Finding::RuntimeMissing)],
         ),
     ]
+}
+
+#[test]
+fn a_file_that_cannot_be_read_is_named_by_what_is_there() {
+    let target = crate::declared::targets::Target::File {
+        path: Path::new(NIX_CONF_DEST).into(),
+        expected: Some("sandbox = true\n".into()),
+        mode: crate::declared::targets::SYSTEM_FILE,
+        owner: crate::declared::targets::ROOT,
+    };
+    let found = |kind, mode| {
+        vec![
+            Fact::Path(crate::effect::PathFacts {
+                kind,
+                mode,
+                owner: (0, 0),
+                id: None,
+                digest: None,
+                changed: None,
+            }),
+            Fact::Contents(None),
+        ]
+    };
+    for (kind, mode, finding) in [
+        (
+            Kind::Directory,
+            0o755,
+            Finding::Unreadable {
+                kind: std::io::ErrorKind::IsADirectory,
+            },
+        ),
+        (Kind::Symlink, 0o777, Finding::ContentDrift),
+        (Kind::Other, 0o644, Finding::ContentDrift),
+        (
+            Kind::File,
+            0,
+            Finding::Mode {
+                actual: 0,
+                expected: 0o644,
+            },
+        ),
+        (
+            Kind::File,
+            0o644,
+            Finding::Unreadable {
+                kind: std::io::ErrorKind::Other,
+            },
+        ),
+    ] {
+        assert_eq!(
+            classify(&target, &found(kind, mode)),
+            Some(finding),
+            "{kind:?} {mode:o}"
+        );
+    }
 }
 
 #[test]

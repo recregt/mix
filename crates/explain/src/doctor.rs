@@ -41,10 +41,10 @@ pub fn check(report: &InspectionReport) -> Diagnostic {
         ),
         Kind::Unreadable(unreadable) => (
             around!("", " can't be read"),
-            Some(note!(
-                "{}",
-                std::io::Error::from(mix_events::io_kind::named(&unreadable.kind))
-            )),
+            match mix_events::io_kind::named(&unreadable.kind) {
+                std::io::ErrorKind::Other => None,
+                kind => Some(note!("{}", std::io::Error::from(kind))),
+            },
         ),
         Kind::NotADirectory(_) => (
             around!("", " is not a directory"),
@@ -373,6 +373,25 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn an_unreadable_item_gives_the_reason_only_when_one_is_known() {
+        let unreadable = |kind| {
+            check(&report(
+                "/etc/nix/nix.conf",
+                Some(Finding::Unreadable { kind }),
+            ))
+            .message()
+        };
+        assert_eq!(
+            unreadable(std::io::ErrorKind::IsADirectory),
+            "/etc/nix/nix.conf can't be read\nis a directory"
+        );
+        assert_eq!(
+            unreadable(std::io::ErrorKind::Other),
+            "/etc/nix/nix.conf can't be read"
+        );
     }
 
     #[test]

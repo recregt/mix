@@ -230,14 +230,14 @@ macro_rules! write_phrase {
     }};
 }
 
-fn digits(buffer: &mut [u8; 22], value: u64, base: u64) -> &str {
+fn digits(buffer: &mut [u8; 22], value: u64, base: u64, width: usize) -> &str {
     let mut at = buffer.len();
     let mut rest = value;
     loop {
         at -= 1;
         buffer[at] = b'0' + (rest % base) as u8;
         rest /= base;
-        if rest == 0 {
+        if rest == 0 && buffer.len() - at >= width {
             break;
         }
     }
@@ -245,11 +245,11 @@ fn digits(buffer: &mut [u8; 22], value: u64, base: u64) -> &str {
 }
 
 pub fn decimal(buffer: &mut [u8; 22], value: u64) -> &str {
-    digits(buffer, value, 10)
+    digits(buffer, value, 10, 1)
 }
 
 pub fn octal(buffer: &mut [u8; 22], value: u64) -> &str {
-    digits(buffer, value, 8)
+    digits(buffer, value, 8, 3)
 }
 
 #[doc(hidden)]
@@ -456,6 +456,8 @@ mod tests {
         assert_eq!(decimal(&mut buffer, 64), "64");
         assert_eq!(decimal(&mut buffer, u64::MAX), "18446744073709551615");
         assert_eq!(octal(&mut buffer, 0o755), "755");
+        assert_eq!(octal(&mut buffer, 0), "000");
+        assert_eq!(octal(&mut buffer, 0o44), "044");
         assert_eq!(octal(&mut buffer, u64::MAX), "1777777777777777777777");
     }
 

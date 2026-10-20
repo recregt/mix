@@ -119,10 +119,33 @@ fn setting_aside_a_replaced_object_is_a_conflict() {
         expect: id(1),
     };
 
-    assert!(matches!(
+    assert_eq!(
         verdict(&aside, &ground),
-        Err(Failure::Conflict { .. })
-    ));
+        Err(Failure::Conflict {
+            subject: "/a".into(),
+            expected: "inode 1 on device 1".into(),
+            found: "inode 2 on device 1".into(),
+        })
+    );
+}
+
+#[test]
+fn an_owner_someone_changed_is_a_conflict_named_by_its_ids() {
+    let ground = Fake::default().with("/a", present(Kind::File, 1));
+    let chown = Action::SetOwner {
+        path: PathBuf::from("/a"),
+        owner: (1000, 1000),
+        expect: (1000, 100),
+    };
+
+    assert_eq!(
+        verdict(&chown, &ground),
+        Err(Failure::Conflict {
+            subject: "/a".into(),
+            expected: "owner 1000:100".into(),
+            found: "owner 0:0".into(),
+        })
+    );
 }
 
 #[test]
@@ -173,6 +196,20 @@ fn replacing_a_file_needs_the_object_that_was_seen() {
         verdict(&put(Expect::Present(id(1))), &ground),
         Ok(Verdict::Go)
     );
-    assert!(verdict(&put(Expect::Absent), &ground).is_err());
-    assert!(verdict(&put(Expect::Present(id(2))), &ground).is_err());
+    assert_eq!(
+        verdict(&put(Expect::Absent), &ground),
+        Err(Failure::Conflict {
+            subject: "/a".into(),
+            expected: "nothing".into(),
+            found: "something already there".into(),
+        })
+    );
+    assert_eq!(
+        verdict(&put(Expect::Present(id(2))), &ground),
+        Err(Failure::Conflict {
+            subject: "/a".into(),
+            expected: "inode 2 on device 1".into(),
+            found: "inode 1 on device 1".into(),
+        })
+    );
 }
