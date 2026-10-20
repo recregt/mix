@@ -168,7 +168,7 @@ pub fn check(report: &InspectionReport) -> Diagnostic {
             ]),
         ),
         Kind::InTheWay(in_the_way) => (
-            around!("files in ", " are in the way of files `mix` manages"),
+            around!("", " were found"),
             Some(note!("{}", in_the_way.paths.join(", "))),
         ),
         Kind::ProfileStale(_) => (
@@ -445,6 +445,22 @@ mod tests {
             unhealthy(&[unknown, report("/nix", None)])
                 .message()
                 .starts_with("found 1 problem\n")
+        );
+    }
+
+    #[test]
+    fn files_in_the_way_are_named_once_and_listed() {
+        let words = check(&report(
+            "/home/alice files in the way",
+            Some(Finding::InTheWay {
+                paths: vec!["/home/alice/.bashrc".into(), "/home/alice/.profile".into()],
+            }),
+        ))
+        .message();
+
+        assert_eq!(
+            words,
+            "/home/alice files in the way were found\n/home/alice/.bashrc, /home/alice/.profile\nmove them somewhere else, then run `mix doctor` again"
         );
     }
 
