@@ -12,6 +12,7 @@ All notable changes to `mix` are listed here. The format follows [Keep a Changel
 - `mix doctor` reports a `~/.nix-profile` that is not a link, and `mix install` stops with that reason instead of failing inside Nix. ([#160](https://github.com/recregt/mix/pull/160))
 - `mix doctor` names files in the way once, instead of "files in /home/alice files in the way are in the way". ([#161](https://github.com/recregt/mix/pull/161))
 - After a `mix bootstrap` was interrupted, `mix-daemon` no longer hangs in "Recovering interrupted requests" and blocks `mix`, `systemctl stop` and boot. It undoes the bootstrap and stops. ([#163](https://github.com/recregt/mix/pull/163))
+- When `mix-daemon` is stopped, keeps failing to start or is damaged, commands say "the `mix` daemon isn't answering" and point to `mix bootstrap`, instead of "isn't set up for you yet" or "couldn't get administrator rights". ([#164](https://github.com/recregt/mix/pull/164))
 
 ## [0.1.0-alpha.2] - 2026-10-19
 
