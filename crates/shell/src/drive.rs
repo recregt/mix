@@ -488,7 +488,7 @@ impl Performer {
         else {
             return Err(Failure::Conflict {
                 subject: path.display().to_string(),
-                expected: format!("{expect:?}"),
+                expected: expect.to_string(),
                 found: "nothing".to_string(),
             });
         };

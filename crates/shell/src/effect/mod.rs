@@ -30,9 +30,6 @@ pub fn core_error(failure: Failure, path: &Path) -> mix_core::Error {
         Failure::Cancelled => mix_core::Error::Cancelled {
             command: format!("change {}", path.display()),
         },
-        other => mix_core::Error::Command {
-            command: format!("change {}", path.display()),
-            detail: format!("{other:?}"),
-        },
+        other => mix_core::Error::Effect(Box::new(other)),
     }
 }

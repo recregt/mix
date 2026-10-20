@@ -311,6 +311,20 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
             vec![(POLICY_FILE, Finding::Missing)],
         ),
         (
+            "a state file nobody can read",
+            |world: &mut World| {
+                let state = mix_state_dir(Path::new("/home/alice")).join(STATE_FILE);
+                world.files.get_mut(&state).unwrap().mode = 0;
+            },
+            vec![(
+                "/home/alice/.local/state/mix/state",
+                Finding::Mode {
+                    actual: 0,
+                    expected: 0o600,
+                },
+            )],
+        ),
+        (
             "a missing seeded file",
             |world: &mut World| {
                 let state = mix_state_dir(Path::new("/home/alice"));

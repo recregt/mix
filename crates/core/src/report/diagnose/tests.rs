@@ -13,7 +13,8 @@ fn every_error() -> Vec<Error> {
         | Error::Exec { .. }
         | Error::Cancelled { .. }
         | Error::LockMissing { .. }
-        | Error::Unsupported { .. } => {}
+        | Error::Unsupported { .. }
+        | Error::Effect(_) => {}
     };
     let errors = vec![
         Error::Io {
@@ -39,6 +40,11 @@ fn every_error() -> Vec<Error> {
             found: "2.30.1".into(),
             oldest: "2.34".into(),
         },
+        Error::Effect(Box::new(Failure::CommandFailed {
+            program: "git hash-object -- state".into(),
+            status: Some(128),
+            output_tail: "fatal: could not open 'state' for reading: Permission denied".into(),
+        })),
     ];
     errors.iter().for_each(exhaustive);
     errors
@@ -296,4 +302,33 @@ fn a_command_that_is_not_nix_keeps_its_whole_tail() {
         &diagnostic.detail,
         Some(Detail::Command(command)) if command.output_tail == "fatal: not a git repository"
     ));
+}
+
+#[test]
+fn no_message_shows_an_internal_value() {
+    let messages = every_error()
+        .into_iter()
+        .map(|error| error.to_string())
+        .chain(
+            every_failure()
+                .into_iter()
+                .map(|failure| diagnostic(&failure).message),
+        )
+        .chain([
+            crate::effect::generation(Some(98)),
+            crate::effect::generation(None),
+            crate::effect::ids((0, 30_000)),
+            crate::effect::Expect::Absent.to_string(),
+            crate::effect::FileId {
+                dev: 2049,
+                ino: 7,
+                born: Some((1, 2)),
+            }
+            .to_string(),
+        ]);
+    for message in messages {
+        for internal in ["Some(", "None", "{ ", "CommandFailed", "FileId", "(0, "] {
+            assert!(!message.contains(internal), "{message}");
+        }
+    }
 }

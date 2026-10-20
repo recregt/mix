@@ -237,7 +237,7 @@ impl Files {
 
     fn place_holding(&mut self, path: &Path, expect: FileId) -> Result<Place, Failure> {
         self.place_of(path)?
-            .ok_or_else(|| conflict(path, format!("{expect:?}"), "nothing"))
+            .ok_or_else(|| conflict(path, expect.to_string(), "nothing"))
     }
 
     fn forget(&self) {
@@ -521,8 +521,8 @@ impl Files {
             if held.id != expect {
                 return Err(conflict(
                     &place.path,
-                    format!("{expect:?}"),
-                    format!("{:?}", held.id),
+                    expect.to_string(),
+                    held.id.to_string(),
                 ));
             }
             return Ok(Some(held));
@@ -541,8 +541,8 @@ impl Files {
         if id(&stat) != expect {
             return Err(conflict(
                 &place.path,
-                format!("{expect:?}"),
-                format!("{:?}", id(&stat)),
+                expect.to_string(),
+                id(&stat).to_string(),
             ));
         }
         Ok(Some(Pinned {
@@ -555,7 +555,7 @@ impl Files {
 
     fn pinned(place: &mut Place, expect: FileId) -> Result<Pinned, Failure> {
         Self::pin(place, expect)?
-            .ok_or_else(|| conflict(&place.path, format!("{expect:?}"), "nothing"))
+            .ok_or_else(|| conflict(&place.path, expect.to_string(), "nothing"))
     }
 
     fn holds(place: &Place, name: &OsStr, pinned: &Pinned) -> Result<Statx, Failure> {
@@ -786,7 +786,7 @@ impl Files {
                 {
                     let _ = sys::unlinkat(&place.dir, &backup, AtFlags::empty());
                     return Err(match errno {
-                        Errno::NOENT => conflict(path, format!("{old:?}"), "nothing"),
+                        Errno::NOENT => conflict(path, old.to_string(), "nothing"),
                         errno => io(path, errno),
                     });
                 }
@@ -842,8 +842,8 @@ impl Files {
         if owner_of(&stat) != expect {
             return Err(conflict(
                 path,
-                format!("owner {expect:?}"),
-                format!("owner {:?}", owner_of(&stat)),
+                format!("owner {}", mix_core::effect::ids(expect)),
+                format!("owner {}", mix_core::effect::ids(owner_of(&stat))),
             ));
         }
         let undo = vec![Action::SetOwner {
@@ -869,7 +869,7 @@ impl Files {
         prepared(&undo)?;
         Self::rename(&place, &place.name, &aside, RenameFlags::NOREPLACE).map_err(|errno| {
             match errno {
-                Errno::NOENT => conflict(path, format!("{expect:?}"), "nothing"),
+                Errno::NOENT => conflict(path, expect.to_string(), "nothing"),
                 errno => io(path, errno),
             }
         })?;
@@ -972,11 +972,7 @@ impl Files {
         .map_err(|errno| io(&place.path, errno))?;
         let found = id(&statx_fd(&top).map_err(|errno| io(&place.path, errno))?);
         if found != expect {
-            return Err(conflict(
-                &place.path,
-                format!("{expect:?}"),
-                format!("{found:?}"),
-            ));
+            return Err(conflict(&place.path, expect.to_string(), found.to_string()));
         }
         let names: Vec<OsString> = sys::Dir::read_from(&top)
             .map_err(|errno| io(&place.path, errno))?
@@ -1061,7 +1057,7 @@ impl Files {
                         {
                             io(from, errno)
                         }
-                        Errno::NOENT => conflict(path, format!("{current:?}"), "nothing"),
+                        Errno::NOENT => conflict(path, current.to_string(), "nothing"),
                         errno => io(path, errno),
                     },
                 )?;

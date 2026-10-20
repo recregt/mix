@@ -98,13 +98,9 @@ fn absent(path: &Path, spot: Spot) -> Result<(), Failure> {
 fn holding(path: &Path, expect: FileId, spot: Spot) -> Result<Node, Failure> {
     match spot {
         Spot::Present(node) if node.id == expect => Ok(node),
-        Spot::Present(node) => Err(conflict(
-            path,
-            format!("{expect:?}"),
-            format!("{:?}", node.id),
-        )),
+        Spot::Present(node) => Err(conflict(path, expect.to_string(), node.id.to_string())),
         Spot::Blocked(failure) if !gone(&failure) => Err(failure),
-        Spot::Blocked(_) | Spot::Missing => Err(conflict(path, format!("{expect:?}"), "nothing")),
+        Spot::Blocked(_) | Spot::Missing => Err(conflict(path, expect.to_string(), "nothing")),
     }
 }
 
@@ -138,8 +134,8 @@ fn running_as<G: Ground>(
     }
     Err(conflict(
         path,
-        format!("a copy made as {owner:?}"),
-        format!("a process running as {running:?}"),
+        format!("a copy made as {}", super::ids(owner)),
+        format!("a process running as {}", super::ids(running)),
     ))
 }
 
@@ -204,8 +200,8 @@ fn check<G: Ground>(action: &Action, look: &mut Looking<'_, '_, G>) -> Result<Ve
             if found.owner != *expect {
                 return Err(conflict(
                     path,
-                    format!("owner {expect:?}"),
-                    format!("owner {:?}", found.owner),
+                    format!("owner {}", super::ids(*expect)),
+                    format!("owner {}", super::ids(found.owner)),
                 ));
             }
         }

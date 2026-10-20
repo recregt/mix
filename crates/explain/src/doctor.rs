@@ -41,10 +41,10 @@ pub fn check(report: &InspectionReport) -> Diagnostic {
         ),
         Kind::Unreadable(unreadable) => (
             around!("", " can't be read"),
-            Some(note!(
-                "{}",
-                std::io::Error::from(mix_events::io_kind::named(&unreadable.kind))
-            )),
+            match mix_events::io_kind::named(&unreadable.kind) {
+                std::io::ErrorKind::Other => None,
+                kind => Some(note!("{}", std::io::Error::from(kind))),
+            },
         ),
         Kind::NotADirectory(_) => (
             around!("", " is not a directory"),

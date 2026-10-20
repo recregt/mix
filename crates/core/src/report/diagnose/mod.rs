@@ -150,6 +150,7 @@ impl Diagnose for Error {
             Error::Cancelled { .. } => return None,
             Error::LockMissing { .. } => Code::LockMissing,
             Error::Unsupported { .. } => Code::UnsupportedProgram,
+            Error::Effect(failure) => return failure.code(),
         })
     }
 
@@ -196,6 +197,7 @@ impl Diagnose for Error {
                     oldest: oldest.clone(),
                 })),
             ),
+            Error::Effect(failure) => failure.fault(),
             Error::LockMissing { path } => lock(Code::LockMissing, path, |path| {
                 joined(&[
                     "the lock at ",

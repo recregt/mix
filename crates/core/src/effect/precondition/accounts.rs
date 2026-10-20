@@ -40,10 +40,14 @@ fn expect_user(accounts: &impl Accounts, name: &str, ids: Owner) -> Result<UserF
         Some(found) if (found.uid, found.gid) == ids => Ok(found),
         Some(found) => Err(conflict(
             name,
-            format!("ids {ids:?}"),
-            format!("ids {:?}", (found.uid, found.gid)),
+            format!("ids {}", super::super::ids(ids)),
+            format!("ids {}", super::super::ids((found.uid, found.gid))),
         )),
-        None => Err(conflict(name, format!("ids {ids:?}"), "no user")),
+        None => Err(conflict(
+            name,
+            format!("ids {}", super::super::ids(ids)),
+            "no user",
+        )),
     }
 }
 
@@ -193,8 +197,8 @@ pub fn account_precondition(
             if found.comment != *comment {
                 return Err(conflict(
                     name,
-                    format!("comment {comment:?}"),
-                    format!("comment {:?}", found.comment),
+                    format!("comment `{comment}`"),
+                    format!("comment `{}`", found.comment),
                 ));
             }
             vec![Action::AddUser(UserSpec {

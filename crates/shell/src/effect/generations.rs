@@ -164,8 +164,8 @@ pub async fn perform(
             if found != *expect {
                 return Some(Err(Failure::Conflict {
                     subject: profile_link(user).display().to_string(),
-                    expected: format!("generation {expect:?}"),
-                    found: format!("generation {found:?}"),
+                    expected: mix_core::effect::generation(*expect),
+                    found: mix_core::effect::generation(found),
                 }));
             }
             let undo = vec![Action::SwitchGeneration {

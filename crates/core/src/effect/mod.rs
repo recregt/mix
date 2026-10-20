@@ -44,3 +44,29 @@ pub enum Expect {
     Absent,
     Present(FileId),
 }
+
+impl std::fmt::Display for FileId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "inode {} on device {}", self.ino, self.dev)
+    }
+}
+
+impl std::fmt::Display for Expect {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Expect::Absent => f.write_str("nothing"),
+            Expect::Present(id) => id.fmt(f),
+        }
+    }
+}
+
+pub fn ids((uid, gid): Owner) -> String {
+    format!("{uid}:{gid}")
+}
+
+pub fn generation(generation: Option<u64>) -> String {
+    match generation {
+        Some(generation) => format!("generation {generation}"),
+        None => "no generation".to_string(),
+    }
+}
