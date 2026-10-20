@@ -309,6 +309,11 @@ pub fn explanation(code: Code) -> Explanation {
                 "run it again with `--yes` to confirm"
             ]
         ),
+        Code::DaemonVersionMismatch => explained!(
+            "The `mix` daemon is a different version than the `mix` that sent the request.",
+            "`mix bootstrap` copies the daemon into `/var/lib/mix/bin`, and replacing `mix` with a newer or older release, as the install script does, leaves that copy as it was. The two must be the same version, so the request was refused and nothing was changed.",
+            ["run `mix bootstrap` to install the daemon that matches this `mix`"]
+        ),
         Code::VersionMismatch => explained!(
             "The privileged helper is a different version of `mix` than the command that started it.",
             "`mix` starts its helper with administrator rights from its own program file. That file was replaced, usually by an update, between the command starting and the helper starting. The two must be the same version, so the helper refused the request before changing anything.",

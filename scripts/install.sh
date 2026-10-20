@@ -73,7 +73,11 @@ main() {
     as_root install -m 0755 "$work/mix-$arch-linux/mix" "$work/mix-$arch-linux/mix-daemon" /usr/local/bin/
 
     printf '\nInstalled %s into /usr/local/bin.\n\n' "$(/usr/local/bin/mix --version)"
-    printf 'See what setup would do, then do it:\n\n  mix bootstrap --dry-run\n  mix bootstrap\n'
+    if [ -e /etc/systemd/system/mix-daemon.socket ]; then
+        printf 'mix is already set up on this machine. Finish the upgrade so its daemon matches:\n\n  mix bootstrap\n'
+    else
+        printf 'See what setup would do, then do it:\n\n  mix bootstrap --dry-run\n  mix bootstrap\n'
+    fi
 }
 
 main "$@"

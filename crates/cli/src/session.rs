@@ -94,6 +94,25 @@ mod tests {
         }
     }
 
+    struct AnotherRelease;
+
+    impl Worker for AnotherRelease {
+        const VERSION: &'static str = "0.0.1-older";
+
+        fn admits(&self, _caller: Caller) -> bool {
+            true
+        }
+
+        async fn run(
+            &self,
+            _caller: Caller,
+            _command: Command,
+            _controls: Controls,
+            _events: Events,
+        ) {
+        }
+    }
+
     struct RefusesEveryone;
 
     impl Worker for RefusesEveryone {
@@ -272,6 +291,33 @@ mod tests {
         assert_eq!(
             recorded.document().problems[0].code(),
             Code::DaemonUnavailable
+        );
+    }
+
+    #[tokio::test]
+    async fn a_daemon_of_another_release_is_named_as_such_and_not_retried() {
+        let directory = tempfile::tempdir().unwrap();
+        let daemon = listening(directory.path(), || AnotherRelease);
+        let recorded = Recorded::default();
+
+        let exit = run(explain(Code::Network), &recorded.view(), &daemon, None).await;
+
+        assert_eq!(exit, ExitCode::FAILURE);
+        let problem = &recorded.document().problems[0];
+        assert_eq!(problem.code(), Code::DaemonVersionMismatch);
+        assert!(problem.detail.contains("0.0.1-older"), "{}", problem.detail);
+        assert!(
+            problem.detail.contains(env!("CARGO_PKG_VERSION")),
+            "{}",
+            problem.detail
+        );
+        assert!(
+            problem
+                .help
+                .iter()
+                .any(|help| help.contains("mix bootstrap")),
+            "{:?}",
+            problem.help
         );
     }
 
