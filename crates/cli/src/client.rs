@@ -119,8 +119,20 @@ async fn one_shot(view: &View) -> Result<Client, mix_rpc::Error> {
     .await
 }
 
-fn unreachable(socket: &Path, error: &std::io::Error) -> Failure {
+fn daemon_unavailable(message: String) -> Failure {
+    Failure::Failed(Box::new(Fault::failed(
+        Code::DaemonUnavailable,
+        message,
+        None,
+    )))
+}
+
+fn unreachable(socket: &Path, installed: bool, error: &std::io::Error) -> Failure {
     match error.kind() {
+        _ if installed => daemon_unavailable(format!(
+            "no mix daemon answers at {}: {error}",
+            socket.display()
+        )),
         std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused => {
             Failure::Failed(Box::new(Fault::failed(
                 Code::NotBootstrapped,
@@ -132,24 +144,59 @@ fn unreachable(socket: &Path, error: &std::io::Error) -> Failure {
     }
 }
 
-async fn socket(path: &Path) -> Result<Client, Failure> {
-    let stream = tokio::net::UnixStream::connect(path)
+fn unanswered(socket: &Path, error: mix_rpc::Error) -> Failure {
+    match error {
+        mix_rpc::Error::Connect(_) | mix_rpc::Error::Refused(_) | mix_rpc::Error::Ended => {
+            daemon_unavailable(format!(
+                "the mix daemon at {} closed the connection before it answered: {error}",
+                socket.display()
+            ))
+        }
+        error => Failure::Transport(error),
+    }
+}
+
+pub struct Daemon {
+    pub socket: std::path::PathBuf,
+    pub unit: std::path::PathBuf,
+}
+
+impl Daemon {
+    pub fn installed() -> Self {
+        Self {
+            socket: mix_rpc::SOCKET_PATH.into(),
+            unit: mix_rpc::SOCKET_UNIT_FILE.into(),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn in_dir(dir: &Path) -> Self {
+        Self {
+            socket: dir.join("daemon.sock"),
+            unit: dir.join("mix-daemon.socket"),
+        }
+    }
+}
+
+#[allow(clippy::disallowed_methods)]
+async fn socket(daemon: &Daemon) -> Result<Client, Failure> {
+    let stream = tokio::net::UnixStream::connect(&daemon.socket)
         .await
-        .map_err(|error| unreachable(path, &error))?;
+        .map_err(|error| unreachable(&daemon.socket, daemon.unit.exists(), &error))?;
     Client::connect(stream, env!("CARGO_PKG_VERSION"))
         .await
-        .map_err(Failure::Transport)
+        .map_err(|error| unanswered(&daemon.socket, error))
 }
 
 pub async fn run(
     command: &Command,
     route: Route,
     view: &View,
-    socket_path: &Path,
+    daemon: &Daemon,
 ) -> Result<(), Failure> {
     let mut client = match route {
         Route::OneShot => one_shot(view).await.map_err(Failure::Transport)?,
-        Route::Socket => socket(socket_path).await?,
+        Route::Socket => socket(daemon).await?,
     };
     let (controller, replies) = client.run(command).await.map_err(Failure::Transport)?;
     let replayed = replay(controller, replies, view).await;
@@ -160,14 +207,6 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_one_shot_worker_is_the_daemon_installed_next_to_mix() {
-        assert_eq!(
-            daemon_next_to(Path::new("/usr/local/bin/mix")),
-            Path::new("/usr/local/bin/mix-daemon")
-        );
-    }
 
     fn io(message: &str) -> std::io::Error {
         std::io::Error::other(message.to_string())
@@ -239,18 +278,39 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_or_silent_socket_means_mix_is_not_set_up_and_anything_else_is_transport() {
+    fn an_unreachable_socket_is_a_daemon_problem_once_mix_is_installed() {
         let socket = Path::new("/run/mix/daemon.sock");
-        for (kind, code) in [
-            (std::io::ErrorKind::NotFound, Code::NotBootstrapped),
-            (std::io::ErrorKind::ConnectionRefused, Code::NotBootstrapped),
+        for (kind, installed, code) in [
+            (std::io::ErrorKind::NotFound, false, Code::NotBootstrapped),
+            (
+                std::io::ErrorKind::ConnectionRefused,
+                false,
+                Code::NotBootstrapped,
+            ),
             (
                 std::io::ErrorKind::PermissionDenied,
+                false,
                 Code::PrivilegesUnavailable,
             ),
+            (std::io::ErrorKind::NotFound, true, Code::DaemonUnavailable),
+            (
+                std::io::ErrorKind::ConnectionRefused,
+                true,
+                Code::DaemonUnavailable,
+            ),
+            (
+                std::io::ErrorKind::PermissionDenied,
+                true,
+                Code::DaemonUnavailable,
+            ),
+            (
+                std::io::ErrorKind::WouldBlock,
+                true,
+                Code::DaemonUnavailable,
+            ),
         ] {
-            let failure = unreachable(socket, &kind.into());
-            assert_eq!(failure.fault().code(), Some(code), "{kind:?}");
+            let failure = unreachable(socket, installed, &kind.into());
+            assert_eq!(failure.fault().code(), Some(code), "{kind:?} {installed}");
         }
     }
 }

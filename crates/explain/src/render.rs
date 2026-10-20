@@ -226,6 +226,11 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
             .help(help!(
                 "run the same command again to pick up where it stopped"
             )),
+        Code::DaemonUnavailable => Diagnostic::new(phrase!("the `mix` daemon isn't answering"))
+            .note(note!("nothing was changed"))
+            .help(help!(
+                "run `mix bootstrap` to start it again, which needs sudo"
+            )),
         Code::DaemonOutdated => {
             Diagnostic::new(phrase!("the running `mix` daemon is older than this `mix`"))
                 .note(note!("nothing was changed"))
