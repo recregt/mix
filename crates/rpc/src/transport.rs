@@ -389,7 +389,7 @@ impl Client {
             }))
             .await
             .map_err(|error| Error::Connect(error.to_string()))?;
-        let mut inner = WorkerServiceClient::new(channel);
+        let mut inner = WorkerServiceClient::new(channel).max_decoding_message_size(usize::MAX);
         let answer = inner
             .hello(proto::HelloRequest {
                 version: version.to_string(),
