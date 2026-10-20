@@ -31,6 +31,8 @@ pub const PROTOCOL: u32 = 1;
 
 pub const SOCKET_PATH: &str = "/run/mix/daemon.sock";
 
+pub const SOCKET_UNIT_FILE: &str = "/etc/systemd/system/mix-daemon.socket";
+
 pub type Events = mpsc::UnboundedSender<Reply>;
 
 pub type Controls = mpsc::UnboundedReceiver<Control>;

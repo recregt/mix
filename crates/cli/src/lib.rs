@@ -34,22 +34,22 @@ pub async fn run() -> ExitCode {
         args.draws_progress(environment.ci),
     );
     let interactive = !args.json && mix_render::interactive();
-    let socket = std::path::Path::new(mix_rpc::SOCKET_PATH);
+    let daemon = client::Daemon::installed();
     let first = view(false);
     let exit = match request::confirmation(&args.command, interactive, mix_render::confirm) {
-        request::Confirmation::Given => session::run(command, &first, socket, None).await,
+        request::Confirmation::Given => session::run(command, &first, &daemon, None).await,
         request::Confirmation::Refused(fault) => {
-            session::run(command, &first, socket, Some(fault)).await
+            session::run(command, &first, &daemon, Some(fault)).await
         }
         request::Confirmation::AfterThePlan => {
             let plan = request::command_of(&args.command, true, &environment);
-            let planned = session::run(plan, &view(true), socket, None).await;
+            let planned = session::run(plan, &view(true), &daemon, None).await;
             if planned != ExitCode::SUCCESS {
                 return planned;
             }
             let answer = (!mix_render::confirm(request::PURGE_QUESTION))
                 .then(|| request::refusal("the answer was not yes"));
-            session::run(command, &first, socket, answer).await
+            session::run(command, &first, &daemon, answer).await
         }
     };
     if exit == ExitCode::SUCCESS
@@ -65,7 +65,7 @@ pub async fn run() -> ExitCode {
             false,
             &environment,
         );
-        return session::run(purge, &view(false), socket, None).await;
+        return session::run(purge, &view(false), &daemon, None).await;
     }
     exit
 }

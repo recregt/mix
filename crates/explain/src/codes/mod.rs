@@ -288,6 +288,14 @@ pub fn explanation(code: Code) -> Explanation {
             "A subcommand, flag or value was misspelled, missing, or given where it does not belong.",
             ["run `mix help` to see the commands and their flags"]
         ),
+        Code::DaemonUnavailable => explained!(
+            "The `mix` daemon did not answer.",
+            "After `mix bootstrap`, every command is carried out by `mix-daemon`, which systemd starts when a command connects. It was not listening, or it stopped before it answered: its units were stopped, it failed to start too often in a row, or its program is damaged. Nothing was changed.",
+            [
+                "run `mix bootstrap` to start it again, which needs sudo",
+                "make sure an administrator runs it if you cannot use sudo"
+            ]
+        ),
         Code::DaemonOutdated => explained!(
             "The running `mix` daemon is older than the `mix` that sent the request.",
             "The daemon does the work for every command after `mix bootstrap`, and it was installed by an earlier `mix`. A request can carry settings an older daemon does not know, such as `--dry-run`, and an older daemon would carry the request out without them. So `mix` refused to send it, and nothing was changed.",

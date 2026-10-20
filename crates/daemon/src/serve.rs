@@ -263,6 +263,14 @@ mod tests {
     }
 
     #[test]
+    fn the_client_looks_for_the_socket_unit_where_mix_installs_it() {
+        assert_eq!(
+            mix_rpc::SOCKET_UNIT_FILE,
+            mix_core::declared::paths::MIX_DAEMON_SOCKET_DEST
+        );
+    }
+
+    #[test]
     fn the_installed_socket_listens_where_the_client_dials() {
         assert!(
             mix_core::declared::targets::MIX_DAEMON_SOCKET

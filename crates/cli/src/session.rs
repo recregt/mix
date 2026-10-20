@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::process::ExitCode;
 
 use mix_events::v1::Command;
@@ -10,7 +9,7 @@ use crate::request;
 pub async fn run(
     command: Command,
     view: &View,
-    socket: &Path,
+    daemon: &client::Daemon,
     unconfirmed: Option<mix_events::Fault>,
 ) -> ExitCode {
     let refused = unconfirmed.or_else(|| command.request.as_ref().and_then(request::refused));
@@ -21,7 +20,7 @@ pub async fn run(
                 .request
                 .as_ref()
                 .map_or(request::Route::Socket, request::route);
-            client::run(&command, route, view, socket).await
+            client::run(&command, route, view, daemon).await
         }
     };
     if let Err(failure) = &result {
@@ -47,7 +46,7 @@ pub async fn run(
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::process::ExitCode;
     use std::sync::Arc;
 
@@ -59,6 +58,7 @@ mod tests {
     use mix_rpc::{Caller, Controls, Events, Reply, Worker};
 
     use super::run;
+    use crate::client;
 
     struct Forward(Events);
 
@@ -145,15 +145,15 @@ mod tests {
         }
     }
 
-    fn listening<W: Worker>(directory: &Path, worker: fn() -> W) -> PathBuf {
-        let path = directory.join("daemon.sock");
-        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+    fn listening<W: Worker>(directory: &Path, worker: fn() -> W) -> client::Daemon {
+        let daemon = client::Daemon::in_dir(directory);
+        let listener = tokio::net::UnixListener::bind(&daemon.socket).unwrap();
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 tokio::spawn(mix_rpc::serve_connection(worker(), stream));
             }
         });
-        path
+        daemon
     }
 
     #[derive(Default)]
@@ -212,7 +212,7 @@ mod tests {
         let exit = run(
             explain(Code::Network),
             &recorded.view(),
-            &directory.path().join("daemon.sock"),
+            &client::Daemon::in_dir(directory.path()),
             None,
         )
         .await;
@@ -226,8 +226,8 @@ mod tests {
     #[tokio::test]
     async fn a_socket_nobody_listens_on_is_not_set_up_either() {
         let directory = tempfile::tempdir().unwrap();
-        let socket = directory.path().join("daemon.sock");
-        drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+        let socket = client::Daemon::in_dir(directory.path());
+        drop(std::os::unix::net::UnixListener::bind(&socket.socket).unwrap());
         let recorded = Recorded::default();
 
         let exit = run(explain(Code::Network), &recorded.view(), &socket, None).await;
@@ -236,6 +236,46 @@ mod tests {
         assert_eq!(
             recorded.document().problems[0].code(),
             Code::NotBootstrapped
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn on_a_machine_mix_set_up_a_daemon_that_is_not_listening_is_reported_as_such() {
+        let directory = tempfile::tempdir().unwrap();
+        let daemon = client::Daemon::in_dir(directory.path());
+        std::fs::write(&daemon.unit, "[Socket]\n").unwrap();
+        let recorded = Recorded::default();
+
+        let exit = run(explain(Code::Network), &recorded.view(), &daemon, None).await;
+
+        assert_eq!(exit, ExitCode::FAILURE);
+        assert_eq!(
+            recorded.document().problems[0].code(),
+            Code::DaemonUnavailable
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn a_daemon_that_closes_the_connection_unanswered_is_not_a_missing_right() {
+        let directory = tempfile::tempdir().unwrap();
+        let daemon = client::Daemon::in_dir(directory.path());
+        std::fs::write(&daemon.unit, "[Socket]\n").unwrap();
+        let listener = tokio::net::UnixListener::bind(&daemon.socket).unwrap();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                drop(stream);
+            }
+        });
+        let recorded = Recorded::default();
+
+        let exit = run(explain(Code::Network), &recorded.view(), &daemon, None).await;
+
+        assert_eq!(exit, ExitCode::FAILURE);
+        assert_eq!(
+            recorded.document().problems[0].code(),
+            Code::DaemonUnavailable
         );
     }
 
@@ -281,7 +321,7 @@ mod tests {
         let exit = run(
             command,
             &recorded.view(),
-            &directory.path().join("daemon.sock"),
+            &client::Daemon::in_dir(directory.path()),
             Some(unconfirmed),
         )
         .await;
@@ -315,7 +355,7 @@ mod tests {
         let exit = run(
             command,
             &view,
-            &directory.path().join("daemon.sock"),
+            &client::Daemon::in_dir(directory.path()),
             Some(mix_events::Fault::failed(
                 Code::ConfirmationRequired,
                 "the answer was not yes",
