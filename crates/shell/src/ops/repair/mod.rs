@@ -271,7 +271,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
-    use mix_core::declared::targets::Target;
+    use mix_core::declared::targets::{Mode, Target};
     use mix_core::run::journal::Record;
 
     use std::sync::Arc;
@@ -307,6 +307,7 @@ mod tests {
                 Target::File {
                     path: path.into(),
                     expected: Some("expected".to_string().into()),
+                    mode: Mode::AtLeast(0o600),
                     owner: None,
                 }
             })
@@ -373,7 +374,7 @@ mod tests {
         std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).unwrap();
         let mut targets = vec![Target::Directory {
             path: blocked.clone().into(),
-            mode: 0o755,
+            mode: Mode::Exact(0o755),
             owner: None,
         }];
         targets.extend(drifted_files(dir.path()));
@@ -465,7 +466,7 @@ mod tests {
         std::fs::write(&blocked, "a file where a directory belongs").unwrap();
         let mut targets = vec![Target::Directory {
             path: blocked.clone().into(),
-            mode: 0o755,
+            mode: Mode::Exact(0o755),
             owner: None,
         }];
         targets.extend(drifted_files(dir.path()));

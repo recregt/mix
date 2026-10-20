@@ -222,6 +222,88 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
             vec![(NIX_CONF_DEST, Finding::ContentDrift)],
         ),
         (
+            "a configuration file handed to a user",
+            |world: &mut World| {
+                world.files.get_mut(Path::new(NIX_CONF_DEST)).unwrap().owner = (1000, 1000);
+            },
+            vec![(
+                NIX_CONF_DEST,
+                Finding::Owner {
+                    actual: (1000, 1000),
+                    expected: (0, 0),
+                },
+            )],
+        ),
+        (
+            "a configuration file anyone can write",
+            |world: &mut World| {
+                world.files.get_mut(Path::new(NIX_CONF_DEST)).unwrap().mode = 0o666;
+            },
+            vec![(
+                NIX_CONF_DEST,
+                Finding::Mode {
+                    actual: 0o666,
+                    expected: 0o644,
+                },
+            )],
+        ),
+        (
+            "a configuration file only root can read",
+            |world: &mut World| {
+                world.files.get_mut(Path::new(NIX_CONF_DEST)).unwrap().mode = 0o600;
+            },
+            vec![(
+                NIX_CONF_DEST,
+                Finding::Mode {
+                    actual: 0o600,
+                    expected: 0o644,
+                },
+            )],
+        ),
+        (
+            "the daemon's directory anyone can write",
+            |world: &mut World| {
+                world.files.get_mut(Path::new("/var/lib/mix")).unwrap().mode = 0o777;
+            },
+            vec![(
+                "/var/lib/mix",
+                Finding::Mode {
+                    actual: 0o777,
+                    expected: 0o755,
+                },
+            )],
+        ),
+        (
+            "an installed unit anyone can write",
+            |world: &mut World| {
+                world
+                    .files
+                    .get_mut(Path::new("/etc/systemd/system/mix-daemon.service"))
+                    .unwrap()
+                    .mode = 0o666;
+            },
+            vec![(
+                "mix-daemon.service",
+                Finding::Mode {
+                    actual: 0o666,
+                    expected: 0o644,
+                },
+            )],
+        ),
+        (
+            "a journal directory anyone can write",
+            |world: &mut World| {
+                world.with_dir("/var/lib/mix/journal", 0o777, (0, 0));
+            },
+            vec![(
+                "/var/lib/mix/journal",
+                Finding::Mode {
+                    actual: 0o777,
+                    expected: 0o700,
+                },
+            )],
+        ),
+        (
             "a missing configuration file",
             |world: &mut World| {
                 world.files.remove(Path::new(POLICY_FILE));
@@ -974,7 +1056,7 @@ fn files_without_known_contents_have_no_drift_to_show() {
     let world = World::default();
     let target = Target::Directory {
         path: Path::new("/nix").into(),
-        mode: 0o755,
+        mode: crate::declared::targets::Mode::Exact(0o755),
         owner: None,
     };
     let facts: Vec<Fact> = queries(&target)

@@ -156,6 +156,42 @@ impl Category {
 
 type Owner = Option<(u32, u32)>;
 
+pub const ROOT: Owner = Some((0, 0));
+
+pub const SYSTEM_FILE: Mode = Mode::AtLeast(0o644);
+
+const USER_FILE: Mode = Mode::AtLeast(0o600);
+
+const WRITABLE_BY_OTHERS: u32 = 0o022;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Exact(u32),
+    AtLeast(u32),
+}
+
+impl Mode {
+    pub fn bits(self) -> u32 {
+        match self {
+            Mode::Exact(bits) | Mode::AtLeast(bits) => bits,
+        }
+    }
+
+    pub fn settled(self, found: u32, owner: Owner) -> u32 {
+        match self {
+            Mode::Exact(mode) => mode,
+            Mode::AtLeast(bits) => {
+                let foreign = if owner.is_some_and(|(uid, _)| uid == 0) {
+                    WRITABLE_BY_OTHERS & !bits
+                } else {
+                    0
+                };
+                (found | bits) & !foreign
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnitSource {
     File(&'static str),
@@ -169,22 +205,24 @@ pub enum Target<'a> {
     },
     Parent {
         path: Cow<'a, Path>,
-        bits: u32,
+        mode: Mode,
         owner: Owner,
     },
     Directory {
         path: Cow<'a, Path>,
-        mode: u32,
+        mode: Mode,
         owner: Owner,
     },
     File {
         path: Cow<'a, Path>,
         expected: Option<Cow<'a, str>>,
+        mode: Mode,
         owner: Owner,
     },
     SeededFile {
         path: Cow<'a, Path>,
         seed: Cow<'a, str>,
+        mode: Mode,
         owner: Owner,
     },
     Group {
@@ -224,7 +262,7 @@ pub enum Target<'a> {
     Program {
         path: &'static str,
         source: &'static str,
-        mode: u32,
+        mode: Mode,
     },
     Journals {
         path: &'static str,
@@ -277,9 +315,9 @@ impl Target<'_> {
             Target::Precondition { path } => Target::Precondition {
                 path: own_path(path),
             },
-            Target::Parent { path, bits, owner } => Target::Parent {
+            Target::Parent { path, mode, owner } => Target::Parent {
                 path: own_path(path),
-                bits,
+                mode,
                 owner,
             },
             Target::Directory { path, mode, owner } => Target::Directory {
@@ -290,15 +328,23 @@ impl Target<'_> {
             Target::File {
                 path,
                 expected,
+                mode,
                 owner,
             } => Target::File {
                 path: own_path(path),
                 expected: expected.map(|expected| Cow::Owned(expected.into_owned())),
+                mode,
                 owner,
             },
-            Target::SeededFile { path, seed, owner } => Target::SeededFile {
+            Target::SeededFile {
+                path,
+                seed,
+                mode,
+                owner,
+            } => Target::SeededFile {
                 path: own_path(path),
                 seed: Cow::Owned(seed.into_owned()),
+                mode,
                 owner,
             },
             Target::Group { name, gid } => Target::Group { name, gid },
@@ -478,7 +524,7 @@ fn user_tree<'a>(
             path.clone(),
             Target::Parent {
                 path: Cow::Owned(path),
-                bits: USER_PARENT_BITS,
+                mode: Mode::AtLeast(USER_PARENT_BITS),
                 owner,
             },
         );
@@ -490,7 +536,7 @@ fn user_tree<'a>(
         state_dir.clone(),
         Target::Directory {
             path: Cow::Owned(state_dir.clone()),
-            mode: MIX_STATE_DIR_MODE,
+            mode: Mode::Exact(MIX_STATE_DIR_MODE),
             owner,
         },
     );
@@ -501,6 +547,7 @@ fn user_tree<'a>(
             Target::File {
                 path: Cow::Owned(path),
                 expected: Some(Cow::Borrowed(expected)),
+                mode: USER_FILE,
                 owner,
             },
         )
@@ -522,6 +569,7 @@ fn user_tree<'a>(
                 Target::SeededFile {
                     path: Cow::Owned(path),
                     seed: Cow::Borrowed(crate::declared::state::StateManifest::seed_rendered()),
+                    mode: USER_FILE,
                     owner,
                 },
             )
@@ -536,6 +584,7 @@ fn user_tree<'a>(
     let config_file = Target::File {
         path: Cow::Owned(config.clone()),
         expected: Some(Cow::Borrowed(REPOSITORY_CONFIG_CONTENTS)),
+        mode: USER_FILE,
         owner,
     };
     let history = Target::History {
@@ -548,7 +597,7 @@ fn user_tree<'a>(
             path.clone(),
             Target::Parent {
                 path: Cow::Owned(path),
-                bits: USER_PARENT_BITS,
+                mode: Mode::AtLeast(USER_PARENT_BITS),
                 owner,
             },
         )
@@ -570,7 +619,7 @@ fn user_tree<'a>(
         profiles_dir.clone(),
         Target::Directory {
             path: Cow::Owned(profiles_dir),
-            mode: NIX_PROFILES_DIR_MODE,
+            mode: Mode::Exact(NIX_PROFILES_DIR_MODE),
             owner,
         },
     );
@@ -631,8 +680,8 @@ fn parent(tree: &mut Builder<'_>, path: &'static str, bits: u32) -> Handle {
         path,
         Target::Parent {
             path: Cow::Borrowed(Path::new(path)),
-            bits,
-            owner: Some((0, 0)),
+            mode: Mode::AtLeast(bits),
+            owner: ROOT,
         },
     )
 }
@@ -652,18 +701,19 @@ fn file<'a>(tree: &mut Builder<'a>, path: &'static str, expected: &'a str) -> Ha
         Target::File {
             path: Cow::Borrowed(Path::new(path)),
             expected: Some(Cow::Borrowed(expected)),
-            owner: None,
+            mode: SYSTEM_FILE,
+            owner: ROOT,
         },
     )
 }
 
-fn directory(tree: &mut Builder<'_>, path: &'static str, mode: u32) -> Handle {
+fn directory(tree: &mut Builder<'_>, path: &'static str, mode: u32, owner: Owner) -> Handle {
     tree.path(
         path,
         Target::Directory {
             path: Cow::Borrowed(Path::new(path)),
-            mode,
-            owner: None,
+            mode: Mode::Exact(mode),
+            owner,
         },
     )
 }
@@ -712,10 +762,10 @@ pub fn tree_for<'a>(intent: &Intent<'a>) -> Tree<'a> {
             gid: MIX_USERS_GID,
         },
     );
-    directory(&mut tree, "/nix", 0o755);
-    directory(&mut tree, NIX_STORE, 0o1775);
+    directory(&mut tree, "/nix", 0o755, ROOT);
+    directory(&mut tree, NIX_STORE, 0o1775, Some((0, NIXBLD_GID)));
     for &path in NIX_TREE_PATHS {
-        directory(&mut tree, path, NIX_TREE_MODE);
+        directory(&mut tree, path, NIX_TREE_MODE, ROOT);
     }
     file(&mut tree, NIX_OWNERSHIP_MARKER, "");
     let runtime = tree.path(
@@ -729,7 +779,7 @@ pub fn tree_for<'a>(intent: &Intent<'a>) -> Tree<'a> {
     for path in ["/var", "/var/lib"] {
         precondition(&mut tree, path);
     }
-    directory(&mut tree, NIXBLD_HOME, NIXBLD_HOME_MODE);
+    directory(&mut tree, NIXBLD_HOME, NIXBLD_HOME_MODE, ROOT);
     for path in [MIX_VAR_DIR, MIX_BIN_DIR] {
         parent(&mut tree, path, MIX_VAR_DIR_MODE);
     }
@@ -738,7 +788,7 @@ pub fn tree_for<'a>(intent: &Intent<'a>) -> Tree<'a> {
         Target::Program {
             path: MIX_DAEMON_BIN,
             source: RUNNING_PROGRAM,
-            mode: MIX_DAEMON_BIN_MODE,
+            mode: Mode::Exact(MIX_DAEMON_BIN_MODE),
         },
     );
     tree.path(JOURNAL_DIR, Target::Journals { path: JOURNAL_DIR });
@@ -841,10 +891,23 @@ mod tests {
     }
 
     #[test]
+    fn only_paths_root_owns_must_not_be_writable_by_others() {
+        assert_eq!(SYSTEM_FILE.settled(0o666, ROOT), 0o644);
+        assert_eq!(SYSTEM_FILE.settled(0o600, ROOT), 0o644);
+        assert_eq!(Mode::AtLeast(0o755).settled(0o777, ROOT), 0o755);
+        assert_eq!(USER_FILE.settled(0o664, Some((1000, 1000))), 0o664);
+        assert_eq!(USER_FILE.settled(0o400, Some((1000, 1000))), 0o600);
+        assert_eq!(
+            Mode::Exact(0o1775).settled(0o755, Some((0, NIXBLD_GID))),
+            0o1775
+        );
+    }
+
+    #[test]
     fn label_uses_the_path_for_path_based_targets() {
         let target = Target::Directory {
             path: PathBuf::from("/nix").into(),
-            mode: 0o755,
+            mode: Mode::Exact(0o755),
             owner: None,
         };
         assert_eq!(target.label(), "/nix");
@@ -855,7 +918,7 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
         let target = Target::Directory {
             path: Path::new(std::ffi::OsStr::from_bytes(b"/home/a\xffb")).into(),
-            mode: 0o755,
+            mode: Mode::Exact(0o755),
             owner: None,
         };
         assert_eq!(target.label(), "/home/a\u{fffd}b");
@@ -898,7 +961,7 @@ mod tests {
         assert_eq!(
             Target::Directory {
                 path: PathBuf::from("/nix").into(),
-                mode: 0o755,
+                mode: Mode::Exact(0o755),
                 owner: None,
             }
             .category(),
@@ -908,7 +971,8 @@ mod tests {
             Target::File {
                 path: PathBuf::from(NIX_OWNERSHIP_MARKER).into(),
                 expected: Some(String::new().into()),
-                owner: None,
+                mode: SYSTEM_FILE,
+                owner: ROOT,
             }
             .category(),
             Category::Filesystem
@@ -921,7 +985,8 @@ mod tests {
             Target::File {
                 path: PathBuf::from(NIX_CONF_DEST).into(),
                 expected: Some(default_policy().nix_conf().into()),
-                owner: None,
+                mode: SYSTEM_FILE,
+                owner: ROOT,
             }
             .category(),
             Category::Configuration
@@ -930,7 +995,8 @@ mod tests {
             Target::File {
                 path: PathBuf::from(PROFILE_SNIPPET_DEST).into(),
                 expected: Some(PROFILE_SNIPPET.to_string().into()),
-                owner: None,
+                mode: SYSTEM_FILE,
+                owner: ROOT,
             }
             .category(),
             Category::Configuration
@@ -1000,7 +1066,7 @@ mod tests {
                 items.iter().any(|t| matches!(
                     t,
                     Target::Directory { path: p, mode, .. }
-                        if p.as_ref() == Path::new(path) && *mode == NIX_TREE_MODE
+                        if p.as_ref() == Path::new(path) && *mode == Mode::Exact(NIX_TREE_MODE)
                 )),
                 "the tree is missing an entry for {path} (mode {NIX_TREE_MODE:o})"
             );
@@ -1035,16 +1101,16 @@ mod tests {
         assert!(items.iter().any(|t| matches!(
             t,
             Target::Directory { path, mode, owner: Some((1000, 1000)) }
-                if path.ends_with(".local/state/mix") && *mode == MIX_STATE_DIR_MODE
+                if path.ends_with(".local/state/mix") && *mode == Mode::Exact(MIX_STATE_DIR_MODE)
         )));
         assert!(items.iter().any(|t| matches!(
             t,
-            Target::File { path, expected, owner: Some((1000, 1000)) }
+            Target::File { path, expected, owner: Some((1000, 1000)), .. }
                 if path.ends_with("flake.nix") && expected.as_deref() == Some("flake-content")
         )));
         assert!(items.iter().any(|t| matches!(
             t,
-            Target::File { path, expected, owner: Some((1000, 1000)) }
+            Target::File { path, expected, owner: Some((1000, 1000)), .. }
                 if path.ends_with("home.nix") && expected.as_deref() == Some("home-content")
         )));
     }
@@ -1156,7 +1222,7 @@ mod tests {
         assert!(user_targets(&cfg).iter().any(|t| matches!(
             t,
             Target::Directory { path, mode, owner: Some((1000, 1000)) }
-                if path.ends_with(".local/state/nix/profiles") && *mode == 0o755
+                if path.ends_with(".local/state/nix/profiles") && *mode == Mode::Exact(0o755)
         )));
     }
 
@@ -1165,7 +1231,7 @@ mod tests {
         let cfg = sample_user_config();
         assert!(user_targets(&cfg).iter().any(|t| matches!(
             t,
-            Target::File { path, expected: Some(expected), owner: Some((1000, 1000)) }
+            Target::File { path, expected: Some(expected), owner: Some((1000, 1000)), .. }
                 if path.ends_with("flake.lock") && expected == &cfg.lock
         )));
     }
@@ -1175,7 +1241,7 @@ mod tests {
         let cfg = sample_user_config();
         assert!(user_targets(&cfg).iter().any(|t| matches!(
             t,
-            Target::SeededFile { path, seed, owner: Some((1000, 1000)) }
+            Target::SeededFile { path, seed, owner: Some((1000, 1000)), .. }
                 if path.ends_with("state")
                     && seed.as_ref() == crate::declared::state::StateManifest::seed().render()
         )));
