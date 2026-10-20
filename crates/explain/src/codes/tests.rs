@@ -148,7 +148,7 @@ fn an_explanation_reads_its_name_then_what_happened_then_why_then_the_steps_in_o
 fn the_list_has_one_row_per_code_with_every_description_in_the_same_column() {
     let codes = every_code();
 
-    let list = list_text(codes.iter().copied());
+    let list = list_text(codes.iter().copied(), None);
 
     let mut lines = list.lines();
     assert_eq!(lines.next(), Some("Failure codes:"));
@@ -254,4 +254,21 @@ fn nothing_mix_says_by_default_names_nix_mechanics() {
             );
         }
     }
+}
+
+#[test]
+fn on_a_narrow_terminal_every_code_stays_whole_and_its_description_is_cut() {
+    let list = list_text(every_code(), Some(60));
+
+    for line in list.lines().filter(|line| line.starts_with("    ")) {
+        assert!(line.chars().count() <= 60, "{line}");
+    }
+    for code in every_code() {
+        assert!(
+            list.contains(&format!("    {} ", kebab(code))),
+            "{}",
+            kebab(code)
+        );
+    }
+    assert!(list.contains('…'));
 }

@@ -105,6 +105,24 @@ fn stdout_colors() -> bool {
 pub trait Out: Send + Sync {
     fn line(&self, text: &str);
     fn colours(&self) -> bool;
+
+    fn width(&self) -> Option<usize> {
+        None
+    }
+}
+
+fn terminal_width(term: &console::Term) -> Option<usize> {
+    term.size_checked()
+        .map(|(_, columns)| usize::from(columns))
+        .filter(|columns| *columns > 0)
+}
+
+pub fn data_width() -> Option<usize> {
+    terminal_width(&console::Term::stdout())
+}
+
+pub fn fit(text: &str, columns: usize) -> std::borrow::Cow<'_, str> {
+    console::truncate_str(text, columns, "…")
 }
 
 pub struct Stderr;
@@ -116,6 +134,10 @@ impl Out for Stderr {
 
     fn colours(&self) -> bool {
         stderr_colors()
+    }
+
+    fn width(&self) -> Option<usize> {
+        terminal_width(&console::Term::stderr())
     }
 }
 
@@ -149,6 +171,10 @@ impl<O: Out> Out for Spaced<O> {
     fn colours(&self) -> bool {
         self.inner.colours()
     }
+
+    fn width(&self) -> Option<usize> {
+        self.inner.width()
+    }
 }
 
 impl<O: Out + ?Sized> Out for std::sync::Arc<O> {
@@ -159,6 +185,10 @@ impl<O: Out + ?Sized> Out for std::sync::Arc<O> {
     fn colours(&self) -> bool {
         (**self).colours()
     }
+
+    fn width(&self) -> Option<usize> {
+        (**self).width()
+    }
 }
 
 impl Out for Stdout {
@@ -168,6 +198,10 @@ impl Out for Stdout {
 
     fn colours(&self) -> bool {
         stdout_colors()
+    }
+
+    fn width(&self) -> Option<usize> {
+        terminal_width(&console::Term::stdout())
     }
 }
 
@@ -424,6 +458,17 @@ pub fn restore_terminal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_text_is_fitted_by_the_columns_it_takes_and_its_cut_is_marked() {
+        assert_eq!(fit("hello", 5), "hello");
+        assert_eq!(fit("hello world", 8), "hello w…");
+        assert_eq!(fit("日本語のパッケージ", 7), "日本語…");
+        assert_eq!(
+            console::measure_text_width(&fit("日本語のパッケージ", 7)),
+            7
+        );
+    }
 
     #[test]
     fn only_y_or_yes_agrees() {

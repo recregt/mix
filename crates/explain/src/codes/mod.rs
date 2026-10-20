@@ -1,7 +1,7 @@
 use mix_events::code::{kebab, name};
 use mix_events::v1::Code;
 
-pub fn list_text(codes: impl IntoIterator<Item = Code>) -> String {
+pub fn list_text(codes: impl IntoIterator<Item = Code>, columns: Option<usize>) -> String {
     let codes: Vec<(String, &str)> = codes
         .into_iter()
         .map(|code| {
@@ -13,8 +13,13 @@ pub fn list_text(codes: impl IntoIterator<Item = Code>) -> String {
         })
         .collect();
     let width = codes.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
+    let room = columns.map(|columns| columns.saturating_sub(width + 5));
     let mut out = String::from("Failure codes:");
     for (name, description) in codes {
+        let description = match room {
+            Some(room) => mix_ui::fit(description, room),
+            None => description.into(),
+        };
         out.push_str(&format!("\n    {name:<width$} {description}"));
     }
     out.push_str("\n\n");
