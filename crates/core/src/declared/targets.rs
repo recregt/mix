@@ -17,7 +17,8 @@ use crate::declared::paths::{
 };
 use crate::declared::paths::{
     GIT_DIR, HOME_MANAGER_PROFILE_NAME, JOURNAL_DIR, MIX_DAEMON_BIN, MIX_DAEMON_BIN_MODE,
-    MIX_VAR_DIR_MODE, REPOSITORY_CONFIG, REPOSITORY_CONFIG_CONTENTS, RUNNING_PROGRAM,
+    MIX_VAR_DIR_MODE, NIX_PROFILE_LINK, REPOSITORY_CONFIG, REPOSITORY_CONFIG_CONTENTS,
+    RUNNING_PROGRAM,
 };
 use crate::declared::policy::Policy;
 use crate::declared::tree::{Builder, Handle, Tree};
@@ -203,6 +204,9 @@ pub enum Target<'a> {
     Precondition {
         path: Cow<'a, Path>,
     },
+    Link {
+        path: Cow<'a, Path>,
+    },
     Parent {
         path: Cow<'a, Path>,
         mode: Mode,
@@ -315,6 +319,9 @@ impl Target<'_> {
             Target::Precondition { path } => Target::Precondition {
                 path: own_path(path),
             },
+            Target::Link { path } => Target::Link {
+                path: own_path(path),
+            },
             Target::Parent { path, mode, owner } => Target::Parent {
                 path: own_path(path),
                 mode,
@@ -411,6 +418,7 @@ impl Target<'_> {
     pub fn label(&self) -> Cow<'_, str> {
         match self {
             Target::Precondition { path }
+            | Target::Link { path }
             | Target::Parent { path, .. }
             | Target::Directory { path, .. } => text(path),
             Target::File { path, .. } => text(path),
@@ -433,9 +441,10 @@ impl Target<'_> {
 
     pub fn category(&self) -> Category {
         match self {
-            Target::Precondition { .. } | Target::Parent { .. } | Target::Directory { .. } => {
-                Category::Filesystem
-            }
+            Target::Precondition { .. }
+            | Target::Link { .. }
+            | Target::Parent { .. }
+            | Target::Directory { .. } => Category::Filesystem,
             Target::File { path, .. } if is_configuration(path) => Category::Configuration,
             Target::File { .. } => Category::Filesystem,
             Target::SeededFile { .. } => Category::Filesystem,
@@ -515,6 +524,13 @@ fn user_tree<'a>(
         Target::HomeFiles {
             path: Cow::Borrowed(home.as_path()),
             user: user(),
+        },
+    );
+    let profile_link = join(home, NIX_PROFILE_LINK);
+    let link = tree.path(
+        profile_link.clone(),
+        Target::Link {
+            path: Cow::Owned(profile_link),
         },
     );
     let mut states = None;
@@ -647,6 +663,7 @@ fn user_tree<'a>(
     let Some(above) = states else {
         return;
     };
+    tree.up_refers(above, link);
     let (verb, subject) = match &intent.activating {
         Some((verb, subject)) => (Some(*verb), subject.clone()),
         None => (None, Cow::Borrowed("")),
@@ -1165,10 +1182,10 @@ mod tests {
     #[test]
     fn a_user_adds_exactly_their_own_checks() {
         let cfg = sample_user_config();
-        assert_eq!(user_targets(&cfg).len(), 26);
+        assert_eq!(user_targets(&cfg).len(), 27);
         assert_eq!(
             listed(Some(&cfg), default_policy()).len(),
-            listed(None, default_policy()).len() + 26
+            listed(None, default_policy()).len() + 27
         );
     }
 

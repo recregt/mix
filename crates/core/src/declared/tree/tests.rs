@@ -75,6 +75,20 @@ fn a_path_waits_on_the_nearest_declared_directory_above_it() {
 }
 
 #[test]
+fn a_check_waits_on_what_it_refers_to_even_when_that_sorts_after_it() {
+    let policy = Policy::default();
+    let cfg = user_config();
+    let tree = tree(Some(&cfg), &policy);
+    let checks = tree.checks();
+    let link = index_of(checks, "/home/alice/.nix-profile");
+    let states = index_of(checks, "/home/alice/.local/state");
+    let activation = index_of(checks, "/home/alice profile");
+    assert!(link < states);
+    assert!(!checks[states].after.contains(&link));
+    assert!(checks[activation].after.contains(&link));
+}
+
+#[test]
 fn the_nix_daemon_units_come_after_what_they_need() {
     let policy = Policy::default();
     let tree = tree(None, &policy);

@@ -59,11 +59,12 @@ pub const MIX_DAEMON_SOCKET_DEST: &str = "/etc/systemd/system/mix-daemon.socket"
 pub const MIX_DAEMON_SERVICE_DEST: &str = "/etc/systemd/system/mix-daemon.service";
 
 pub const MIX_STATE_DIR: &str = ".local/state/mix";
+pub const NIX_PROFILE_LINK: &str = ".nix-profile";
 pub const HOME_TRACES: &[&str] = &[
     MIX_STATE_DIR,
     ".local/state/nix",
     ".local/state/home-manager",
-    ".nix-profile",
+    NIX_PROFILE_LINK,
     ".nix-defexpr",
     ".nix-channels",
     ".cache/nix",

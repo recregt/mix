@@ -35,6 +35,7 @@ fn a_finding_says_whether_repair_can_reconcile_it() {
         Finding::RuntimeMissing.unfixable(),
         Some(Unfixable::MissingRuntime)
     );
+    assert_eq!(Finding::NotALink.unfixable(), Some(Unfixable::InTheWay));
 }
 
 #[test]
@@ -323,6 +324,13 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
                     expected: 0o600,
                 },
             )],
+        ),
+        (
+            "a directory where the Nix profile link belongs",
+            |world: &mut World| {
+                world.with_dir("/home/alice/.nix-profile", 0o755, (1000, 1000));
+            },
+            vec![("/home/alice/.nix-profile", Finding::NotALink)],
         ),
         (
             "a missing seeded file",
@@ -974,6 +982,7 @@ fn every_finding_and_category_reach_the_event_stream_as_their_own_kind() {
             kind: std::io::ErrorKind::PermissionDenied,
         },
         Finding::NotADirectory,
+        Finding::NotALink,
         Finding::Mode {
             actual: 0o600,
             expected: 0o644,
@@ -1023,6 +1032,7 @@ fn every_finding_and_category_reach_the_event_stream_as_their_own_kind() {
             Finding::Missing
             | Finding::Unreadable { .. }
             | Finding::NotADirectory
+            | Finding::NotALink
             | Finding::Mode { .. }
             | Finding::Owner { .. }
             | Finding::ContentDrift

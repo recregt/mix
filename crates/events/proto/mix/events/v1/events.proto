@@ -639,6 +639,7 @@ message Finding {
     Paths in_the_way = 22;
     google.protobuf.Empty profile_stale = 23;
     OldGenerations old_generations = 24;
+    google.protobuf.Empty not_a_link = 25;
   }
 }
 

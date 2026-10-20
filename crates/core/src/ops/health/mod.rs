@@ -85,13 +85,20 @@ pub enum Finding {
     Missing,
 
     /// The path is there but could not be read.
-    Unreadable { kind: std::io::ErrorKind },
+    Unreadable {
+        kind: std::io::ErrorKind,
+    },
 
     /// Something else is in the place of the directory.
     NotADirectory,
 
+    NotALink,
+
     /// The permission bits drifted from the ones mix sets.
-    Mode { actual: u32, expected: u32 },
+    Mode {
+        actual: u32,
+        expected: u32,
+    },
 
     /// The owning uid/gid drifted from the ones mix sets.
     Owner {
@@ -106,10 +113,15 @@ pub enum Finding {
     GroupMissing,
 
     /// The group exists under a different gid.
-    GroupGid { actual: u32, expected: u32 },
+    GroupGid {
+        actual: u32,
+        expected: u32,
+    },
 
     /// The user exists but is not enrolled in the group.
-    NotAMember { group: &'static str },
+    NotAMember {
+        group: &'static str,
+    },
 
     /// The user the membership was for is gone.
     NoSuchUser,
@@ -149,19 +161,27 @@ pub enum Finding {
     },
 
     /// Siblings an interrupted write left beside the files it was replacing.
-    Leftovers { paths: Vec<String> },
+    Leftovers {
+        paths: Vec<String>,
+    },
 
     /// A generation of the user's profile whose link no longer resolves.
-    GenerationDangling { generation: u64 },
+    GenerationDangling {
+        generation: u64,
+    },
 
     /// Files in the user's home where the active generation links a managed file.
-    InTheWay { paths: Vec<String> },
+    InTheWay {
+        paths: Vec<String>,
+    },
 
     /// The active generation was not built from the package list.
     ProfileStale,
 
     /// Generations the retention of this run does not keep.
-    OldGenerations { generations: Vec<u64> },
+    OldGenerations {
+        generations: Vec<u64>,
+    },
 }
 
 impl Finding {
@@ -176,7 +196,7 @@ impl Finding {
             Finding::NoSuchUser => Some(Unfixable::MissingUser),
             Finding::RuntimeMissing => Some(Unfixable::MissingRuntime),
             Finding::Interrupted { .. } => Some(Unfixable::Unrecovered),
-            Finding::InTheWay { .. } => Some(Unfixable::InTheWay),
+            Finding::InTheWay { .. } | Finding::NotALink => Some(Unfixable::InTheWay),
             _ => None,
         }
     }
@@ -184,7 +204,7 @@ impl Finding {
 
 pub fn queries(target: &Target<'_>) -> Vec<Query> {
     match target {
-        Target::Precondition { path } | Target::Parent { path, .. } => {
+        Target::Precondition { path } | Target::Parent { path, .. } | Target::Link { path } => {
             vec![Query::Path(path.to_path_buf())]
         }
         Target::Directory { path, owner, .. } => {
@@ -418,6 +438,7 @@ pub fn drift(target: &Target<'_>, facts: &[Fact]) -> Option<Drift> {
             })
         }
         Target::Precondition { .. }
+        | Target::Link { .. }
         | Target::UnitActive { .. }
         | Target::Parent { .. }
         | Target::Directory { .. }
@@ -441,6 +462,11 @@ pub fn drift(target: &Target<'_>, facts: &[Fact]) -> Option<Drift> {
 
 pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
     match target {
+        Target::Link { .. } => match path_facts(facts, 0).kind {
+            Kind::Missing | Kind::Symlink => None,
+            Kind::Unreadable(kind) => Some(Finding::Unreadable { kind }),
+            _ => Some(Finding::NotALink),
+        },
         Target::Precondition { .. } => {
             let found = path_facts(facts, 0);
             absent(found.kind)
@@ -740,6 +766,7 @@ pub fn fix(
     }
     Ok(match target {
         Target::Precondition { .. } => return Err(Unfixable::Outside),
+        Target::Link { .. } => return Err(Unfixable::InTheWay),
         Target::Parent { path, mode, owner } => match finding {
             Finding::Owner { .. } | Finding::Mode { .. } => {
                 reshape(path, path_facts(facts, 0), *mode, *owner)
