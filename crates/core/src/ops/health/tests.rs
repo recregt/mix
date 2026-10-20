@@ -596,6 +596,19 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
             vec![("/home/alice profile", Finding::ProfileStale)],
         ),
         (
+            "a package list written by a newer mix",
+            |world: &mut World| {
+                let state = mix_state_dir(Path::new("/home/alice")).join(STATE_FILE);
+                world.with_file(
+                    state,
+                    br#"{"version":99,"packages":[]}"#,
+                    0o644,
+                    (1000, 1000),
+                );
+            },
+            vec![("/home/alice profile", Finding::NewerState { format: 99 })],
+        ),
+        (
             "a missing runtime",
             |world: &mut World| {
                 world.files.remove(Path::new(DEFAULT_PROFILE_NIX_ENV));
@@ -690,6 +703,31 @@ fn the_nix_profile_may_be_a_link_or_absent_and_nothing_else() {
     ] {
         assert_eq!(classify(&target, &found(kind)), finding, "{kind:?}");
     }
+}
+
+#[test]
+fn repair_builds_nothing_from_a_package_list_it_cannot_read() {
+    let alice = user("alice", 1000);
+    let mut world = bootstrapped(std::slice::from_ref(&alice));
+    let state = mix_state_dir(Path::new("/home/alice")).join(STATE_FILE);
+    world.with_file(
+        state,
+        br#"{"version":99,"packages":[]}"#,
+        0o644,
+        (1000, 1000),
+    );
+    let generations = world.profiles[&1000].generations.clone();
+
+    let run = repair(&mut world, &alice);
+
+    assert!(
+        !run.performed().iter().any(
+            |action| action.starts_with("ActivateProfile") || action.starts_with("RecordState")
+        ),
+        "{:?}",
+        run.performed()
+    );
+    assert_eq!(world.profiles[&1000].generations, generations);
 }
 
 #[test]
@@ -969,6 +1007,7 @@ fn every_finding_and_category_reach_the_event_stream_as_their_own_kind() {
         },
         Finding::NotADirectory,
         Finding::NotALink,
+        Finding::NewerState { format: 99 },
         Finding::Mode {
             actual: 0o600,
             expected: 0o644,
@@ -1019,6 +1058,7 @@ fn every_finding_and_category_reach_the_event_stream_as_their_own_kind() {
             | Finding::Unreadable { .. }
             | Finding::NotADirectory
             | Finding::NotALink
+            | Finding::NewerState { .. }
             | Finding::Mode { .. }
             | Finding::Owner { .. }
             | Finding::ContentDrift

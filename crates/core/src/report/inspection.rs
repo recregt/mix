@@ -32,6 +32,7 @@ pub fn unfixable(reason: Unfixable) -> WireUnfixable {
         Unfixable::InTheWay => WireUnfixable::InTheWay,
         Unfixable::Outside => WireUnfixable::Outside,
         Unfixable::Masked => WireUnfixable::Masked,
+        Unfixable::Newer => WireUnfixable::Newer,
     }
 }
 
@@ -76,6 +77,7 @@ pub fn finding(finding: Finding) -> WireFinding {
         }),
         Finding::NotADirectory => Kind::NotADirectory(Default::default()),
         Finding::NotALink => Kind::NotALink(Default::default()),
+        Finding::NewerState { format } => Kind::NewerState(mix_events::v1::FormatDetail { format }),
         Finding::Mode { actual, expected } => Kind::Mode(Mode { actual, expected }),
         Finding::Owner { actual, expected } => Kind::Owner(ids(actual, expected)),
         Finding::ContentDrift => Kind::ContentDrift(Default::default()),

@@ -54,6 +54,9 @@ pub(crate) fn unfixable(reason: Unfixable) -> Option<Help> {
         Unfixable::InTheWay => help!("move them somewhere else, then run `mix doctor` again"),
         Unfixable::Outside => help!("recreate it, then run `mix repair` again"),
         Unfixable::Masked => help!("run `systemctl unmask` on it if it should run"),
+        Unfixable::Newer => help!(
+            "update `mix` using your original install method, or visit https://github.com/recregt/mix"
+        ),
         Unfixable::Unspecified => return None,
     })
 }
@@ -67,6 +70,7 @@ fn unfixable_reason(reason: Unfixable) -> Option<&'static str> {
         Unfixable::InTheWay => "in the way of a file `mix` manages",
         Unfixable::Outside => "missing, and not `mix`'s to create",
         Unfixable::Masked => "masked, and `mix` won't unmask it",
+        Unfixable::Newer => "set up by a newer `mix`, which this one won't change",
         Unfixable::Unspecified => return None,
     })
 }
