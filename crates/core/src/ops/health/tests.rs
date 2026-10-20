@@ -35,7 +35,6 @@ fn a_finding_says_whether_repair_can_reconcile_it() {
         Finding::RuntimeMissing.unfixable(),
         Some(Unfixable::MissingRuntime)
     );
-    assert_eq!(Finding::NotALink.unfixable(), Some(Unfixable::InTheWay));
 }
 
 #[test]

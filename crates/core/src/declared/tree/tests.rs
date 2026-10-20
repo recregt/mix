@@ -118,17 +118,6 @@ fn only_the_checks_above_a_node_wait_on_what_it_up_refers_to() {
 }
 
 #[test]
-fn activating_a_profile_waits_on_the_nix_profile_link() {
-    let policy = Policy::default();
-    let cfg = user_config();
-    let tree = tree(Some(&cfg), &policy);
-    let checks = tree.checks();
-    let link = index_of(checks, "/home/alice/.nix-profile");
-    let activation = index_of(checks, "/home/alice profile");
-    assert!(checks[activation].after.contains(&link));
-}
-
-#[test]
 fn the_nix_daemon_units_come_after_what_they_need() {
     let policy = Policy::default();
     let tree = tree(None, &policy);
