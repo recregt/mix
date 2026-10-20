@@ -10,6 +10,7 @@ All notable changes to `mix` are listed here. The format follows [Keep a Changel
 - `mix doctor` reports, and `mix repair` fixes, a wrong owner or a mode that lets others write on every file and directory `mix` installs as root, including `/etc/nix/nix.conf`, `/var/lib/mix`, the systemd units and the request journals. ([#158](https://github.com/recregt/mix/pull/158))
 - A file `mix` manages that nobody can read is reported as having the wrong permissions, and `mix repair` fixes it. Errors no longer show internal values such as `Some(98)` or a raw `CommandFailed { .. }`. ([#159](https://github.com/recregt/mix/pull/159))
 - `mix doctor` reports a `~/.nix-profile` that is not a link, and `mix install` stops with that reason instead of failing inside Nix. ([#160](https://github.com/recregt/mix/pull/160))
+- `mix doctor` names files in the way once, instead of "files in /home/alice files in the way are in the way". ([#161](https://github.com/recregt/mix/pull/161))
 
 ## [0.1.0-alpha.2] - 2026-10-19
 
