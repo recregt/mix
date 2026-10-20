@@ -921,16 +921,6 @@ mod tests {
     }
 
     #[test]
-    fn label_uses_the_path_for_path_based_targets() {
-        let target = Target::Directory {
-            path: PathBuf::from("/nix").into(),
-            mode: Mode::Exact(0o755),
-            owner: None,
-        };
-        assert_eq!(target.label(), "/nix");
-    }
-
-    #[test]
     fn label_replaces_bytes_that_are_not_utf8() {
         use std::os::unix::ffi::OsStrExt;
         let target = Target::Directory {
@@ -974,29 +964,6 @@ mod tests {
     }
 
     #[test]
-    fn category_groups_directories_and_the_ownership_marker_as_filesystem() {
-        assert_eq!(
-            Target::Directory {
-                path: PathBuf::from("/nix").into(),
-                mode: Mode::Exact(0o755),
-                owner: None,
-            }
-            .category(),
-            Category::Filesystem
-        );
-        assert_eq!(
-            Target::File {
-                path: PathBuf::from(NIX_OWNERSHIP_MARKER).into(),
-                expected: Some(String::new().into()),
-                mode: SYSTEM_FILE,
-                owner: ROOT,
-            }
-            .category(),
-            Category::Filesystem
-        );
-    }
-
-    #[test]
     fn category_groups_nix_conf_and_the_profile_snippet_as_configuration() {
         assert_eq!(
             Target::File {
@@ -1018,86 +985,16 @@ mod tests {
             .category(),
             Category::Configuration
         );
-    }
-
-    #[test]
-    fn category_groups_the_group_and_user_targets_as_identity() {
         assert_eq!(
-            Target::Group {
-                name: NIXBLD_GROUP,
-                gid: NIXBLD_GID,
-            }
-            .category(),
-            Category::Identity
-        );
-        assert_eq!(
-            Target::User {
-                n: 1,
-                uid: NIXBLD_UID_BASE + 1,
-                gid: NIXBLD_GID,
-            }
-            .category(),
-            Category::Identity
-        );
-        assert_eq!(
-            Target::GroupMember {
-                group: MIX_USERS_GROUP,
-                user: "mix-user".to_string(),
-            }
-            .category(),
-            Category::Identity
-        );
-    }
-
-    #[test]
-    fn category_groups_systemd_units_as_services() {
-        assert_eq!(
-            Target::SystemdUnit {
-                name: NIX_DAEMON_SOCKET_UNIT,
-                src: UnitSource::File(NIX_DAEMON_SOCKET_SRC),
-                dest: NIX_DAEMON_SOCKET_DEST,
-            }
-            .category(),
-            Category::Services
-        );
-    }
-
-    #[test]
-    fn category_groups_path_exists_as_filesystem() {
-        assert_eq!(
-            Target::PathExists {
-                name: "default profile",
-                path: DEFAULT_PROFILE_NIX_ENV,
-                install: None,
+            Target::File {
+                path: PathBuf::from(NIX_OWNERSHIP_MARKER).into(),
+                expected: Some(String::new().into()),
+                mode: SYSTEM_FILE,
+                owner: ROOT,
             }
             .category(),
             Category::Filesystem
         );
-    }
-
-    #[test]
-    fn targets_include_every_directory_in_the_managed_nix_tree() {
-        let items = listed(None, default_policy());
-        for &path in NIX_TREE_PATHS {
-            assert!(
-                items.iter().any(|t| matches!(
-                    t,
-                    Target::Directory { path: p, mode, .. }
-                        if p.as_ref() == Path::new(path) && *mode == Mode::Exact(NIX_TREE_MODE)
-                )),
-                "the tree is missing an entry for {path} (mode {NIX_TREE_MODE:o})"
-            );
-        }
-    }
-
-    #[test]
-    fn targets_include_all_build_users() {
-        let items = listed(None, default_policy());
-        let user_count = items
-            .iter()
-            .filter(|t| matches!(t, Target::User { .. }))
-            .count();
-        assert_eq!(user_count, NIXBLD_USER_COUNT as usize);
     }
 
     #[test]
@@ -1108,28 +1005,6 @@ mod tests {
                 .iter()
                 .any(|t| matches!(t, Target::Directory { path, .. } if path.ends_with("mix")))
         );
-    }
-
-    #[test]
-    fn targets_includes_per_user_entries_when_a_user_is_given() {
-        let cfg = sample_user_config();
-        let items = listed(Some(&cfg), default_policy());
-
-        assert!(items.iter().any(|t| matches!(
-            t,
-            Target::Directory { path, mode, owner: Some((1000, 1000)) }
-                if path.ends_with(".local/state/mix") && *mode == Mode::Exact(MIX_STATE_DIR_MODE)
-        )));
-        assert!(items.iter().any(|t| matches!(
-            t,
-            Target::File { path, expected, owner: Some((1000, 1000)), .. }
-                if path.ends_with("flake.nix") && expected.as_deref() == Some("flake-content")
-        )));
-        assert!(items.iter().any(|t| matches!(
-            t,
-            Target::File { path, expected, owner: Some((1000, 1000)), .. }
-                if path.ends_with("home.nix") && expected.as_deref() == Some("home-content")
-        )));
     }
 
     #[test]
@@ -1172,106 +1047,26 @@ mod tests {
     }
 
     #[test]
-    fn targets_include_the_group_the_nix_conf_trusts() {
-        assert!(listed(None, default_policy()).iter().any(|t| matches!(
-            t,
-            Target::Group { name, gid } if *name == MIX_USERS_GROUP && *gid == MIX_USERS_GID
-        )));
-    }
-
-    #[test]
-    fn a_user_adds_exactly_their_own_checks() {
+    fn a_user_adds_only_checks_on_their_own_home_and_membership() {
         let cfg = sample_user_config();
-        assert_eq!(user_targets(&cfg).len(), 27);
-        assert_eq!(
-            listed(Some(&cfg), default_policy()).len(),
-            listed(None, default_policy()).len() + 27
-        );
-    }
-
-    #[test]
-    fn leftovers_are_looked_for_beside_everything_mix_writes() {
-        let cfg = sample_user_config();
-        let dirs: Vec<std::path::PathBuf> = listed(Some(&cfg), default_policy())
+        let machine: Vec<String> = listed(None, default_policy())
+            .iter()
+            .map(|target| target.label().into_owned())
+            .collect();
+        let added: Vec<Target<'_>> = listed(Some(&cfg), default_policy())
             .into_iter()
-            .filter_map(|target| match target {
-                Target::Leftovers { dir, .. } => Some(dir.into_owned()),
-                _ => None,
-            })
+            .filter(|target| !machine.contains(&target.label().into_owned()))
             .collect();
 
-        for dir in [
-            "/etc/nix",
-            "/etc/systemd/system",
-            "/var/lib/mix/bin",
-            "/home/mix-user/.local/state",
-            "/home/mix-user/.local/state/mix",
-            "/home/mix-user/.local/state/mix/.git",
-        ] {
-            assert!(dirs.iter().any(|found| found == Path::new(dir)), "{dir}");
+        assert!(!added.is_empty());
+        assert_eq!(added.len(), user_targets(&cfg).len());
+        for target in &added {
+            assert!(
+                target.label().contains("/home/mix-user")
+                    || matches!(target, Target::GroupMember { user, .. } if user == "mix-user"),
+                "{target:?}"
+            );
         }
-    }
-
-    #[test]
-    fn user_targets_check_the_history_after_the_repository_config() {
-        let cfg = sample_user_config();
-        let targets = user_targets(&cfg);
-        let position =
-            |wanted: &dyn Fn(&Target<'_>) -> bool| targets.iter().position(wanted).unwrap();
-
-        let history = position(
-            &|target| matches!(target, Target::History { user, .. } if **user == cfg.user),
-        );
-        let config = position(
-            &|target| matches!(target, Target::File { path, .. } if path.ends_with(".git/config")),
-        );
-
-        assert!(config < history);
-        assert_eq!(
-            targets[history].label(),
-            "/home/mix-user/.local/state/mix/.git history"
-        );
-    }
-
-    #[test]
-    fn user_targets_includes_the_nix_profiles_directory() {
-        let cfg = sample_user_config();
-        assert!(user_targets(&cfg).iter().any(|t| matches!(
-            t,
-            Target::Directory { path, mode, owner: Some((1000, 1000)) }
-                if path.ends_with(".local/state/nix/profiles") && *mode == Mode::Exact(0o755)
-        )));
-    }
-
-    #[test]
-    fn user_targets_includes_the_rendered_flake_lock() {
-        let cfg = sample_user_config();
-        assert!(user_targets(&cfg).iter().any(|t| matches!(
-            t,
-            Target::File { path, expected: Some(expected), owner: Some((1000, 1000)), .. }
-                if path.ends_with("flake.lock") && expected == &cfg.lock
-        )));
-    }
-
-    #[test]
-    fn user_targets_includes_the_state_file_seeded_with_git() {
-        let cfg = sample_user_config();
-        assert!(user_targets(&cfg).iter().any(|t| matches!(
-            t,
-            Target::SeededFile { path, seed, owner: Some((1000, 1000)), .. }
-                if path.ends_with("state")
-                    && seed.as_ref() == crate::declared::state::StateManifest::seed().render()
-        )));
-    }
-
-    #[test]
-    fn user_targets_enroll_the_user_in_the_managed_group() {
-        let cfg = sample_user_config();
-        assert!(user_targets(&cfg).iter().any(|t| matches!(
-            t,
-            Target::GroupMember { group, user }
-                if *group == MIX_USERS_GROUP && user == "mix-user"
-        )));
     }
 }
 

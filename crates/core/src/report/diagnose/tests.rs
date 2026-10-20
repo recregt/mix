@@ -159,6 +159,31 @@ fn every_action_failure_has_a_code_unless_it_is_an_interruption() {
 }
 
 #[test]
+fn a_conflict_names_what_changed_and_keeps_what_was_expected_and_found() {
+    let conflict = Failure::Conflict {
+        subject: "/etc/nix/nix.conf".into(),
+        expected: "the file mix wrote".into(),
+        found: "another file".into(),
+    };
+
+    let diagnostic = diagnostic(&conflict);
+
+    assert_eq!(diagnostic.code(), Code::Conflict);
+    assert_eq!(
+        diagnostic.message,
+        "/etc/nix/nix.conf: expected the file mix wrote, found another file"
+    );
+    assert_eq!(
+        diagnostic.detail,
+        Some(Detail::Conflict(Box::new(mix_events::v1::ConflictDetail {
+            subject: "/etc/nix/nix.conf".into(),
+            expected: "the file mix wrote".into(),
+            found: "another file".into(),
+        })))
+    );
+}
+
+#[test]
 fn a_denied_permission_is_told_apart_from_other_io() {
     let denied = Error::Io {
         path: "/nix".into(),

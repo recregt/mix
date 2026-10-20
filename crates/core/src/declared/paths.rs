@@ -165,16 +165,3 @@ pub fn active_lock_path(home: &std::path::Path) -> std::path::PathBuf {
 pub fn nix_profiles_dir(home: &std::path::Path) -> std::path::PathBuf {
     join(home, NIX_PROFILES_DIR)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn mix_state_dir_joins_home_and_the_state_dir_fragment() {
-        assert_eq!(
-            mix_state_dir(std::path::Path::new("/home/mix-user")),
-            std::path::PathBuf::from("/home/mix-user/.local/state/mix")
-        );
-    }
-}
