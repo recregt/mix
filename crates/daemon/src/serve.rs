@@ -1,12 +1,81 @@
+use std::collections::HashSet;
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::process::ExitCode;
+use std::sync::{Arc, Mutex, PoisonError};
 
+use mix_rpc::{Caller, Worker};
+use nix::errno::Errno;
 use nix::sys::signal::Signal;
 
 use crate::controls;
 use crate::worker::{Gate, Host};
 
 const FIRST_PASSED_FD: i32 = 3;
+
+#[derive(Clone, Default)]
+struct Outsiders(Arc<Mutex<HashSet<u32>>>);
+
+struct Outsider {
+    uid: u32,
+    outsiders: Outsiders,
+}
+
+impl Outsiders {
+    fn admit(&self, uid: u32) -> Option<Outsider> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(uid)
+            .then(|| Outsider {
+                uid,
+                outsiders: self.clone(),
+            })
+    }
+}
+
+impl Drop for Outsider {
+    fn drop(&mut self) {
+        self.outsiders
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.uid);
+    }
+}
+
+fn admission(
+    host: &Host,
+    outsiders: &Outsiders,
+    stream: &tokio::net::UnixStream,
+) -> Option<Option<Outsider>> {
+    let credentials = stream.peer_cred().ok()?;
+    let caller = Caller {
+        uid: credentials.uid(),
+        gid: credentials.gid(),
+    };
+    if host.admits(caller) {
+        Some(None)
+    } else {
+        outsiders.admit(caller.uid).map(Some)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum AfterAcceptError {
+    Retry,
+    WaitForAClose,
+    Stop,
+}
+
+fn after_accept_error(error: &std::io::Error, open: usize) -> AfterAcceptError {
+    match error.raw_os_error().map(Errno::from_raw) {
+        Some(Errno::ECONNABORTED | Errno::EINTR) => AfterAcceptError::Retry,
+        Some(Errno::EMFILE | Errno::ENFILE | Errno::ENOBUFS | Errno::ENOMEM) if open > 0 => {
+            AfterAcceptError::WaitForAClose
+        }
+        _ => AfterAcceptError::Stop,
+    }
+}
 
 fn passed_by_systemd() -> Result<tokio::net::UnixListener, String> {
     let ours = crate::env::listen_pid() == Some(std::process::id());
@@ -84,14 +153,30 @@ pub async fn serve() -> ExitCode {
     host.installed
         .warm_enrolled(mix_shell::request::stored_mirror());
     let mut connections = tokio::task::JoinSet::new();
+    let outsiders = Outsiders::default();
+    let mut full = false;
     let ended = loop {
         tokio::select! {
-            accepted = listener.accept() => match accepted {
+            accepted = listener.accept(), if !full => match accepted {
                 Ok((stream, _)) => {
-                    connections.spawn(mix_rpc::serve_connection(host.clone(), stream));
+                    let Some(admitted) = admission(&host, &outsiders, &stream) else {
+                        continue;
+                    };
+                    let host = host.clone();
+                    connections.spawn(async move {
+                        let served = mix_rpc::serve_connection(host, stream).await;
+                        drop(admitted);
+                        served
+                    });
                     crate::notify::status(&serving(connections.len(), *waiting.borrow()));
                 }
-                Err(error) => break Ended::Failed(format!("accepting a connection failed: {error}")),
+                Err(error) => match after_accept_error(&error, connections.len()) {
+                    AfterAcceptError::Retry => {}
+                    AfterAcceptError::WaitForAClose => full = true,
+                    AfterAcceptError::Stop => {
+                        break Ended::Failed(format!("accepting a connection failed: {error}"));
+                    }
+                },
             },
             _ = terminate.recv() => break Ended::Stopped,
             _ = drain.recv() => break Ended::Drained,
@@ -99,6 +184,7 @@ pub async fn serve() -> ExitCode {
                 crate::notify::status(&serving(connections.len(), *waiting.borrow()));
             }
             Some(_) = connections.join_next(), if !connections.is_empty() => {
+                full = false;
                 crate::notify::status(&serving(connections.len(), *waiting.borrow()));
             }
         }
@@ -129,7 +215,45 @@ enum Ended {
 
 #[cfg(test)]
 mod tests {
-    use super::serving;
+    use nix::errno::Errno;
+
+    use super::{AfterAcceptError, Outsiders, after_accept_error, serving};
+
+    #[test]
+    fn running_out_of_descriptors_waits_for_a_connection_to_close() {
+        let error = |errno: Errno| std::io::Error::from_raw_os_error(errno as i32);
+        assert_eq!(
+            after_accept_error(&error(Errno::EMFILE), 3),
+            AfterAcceptError::WaitForAClose
+        );
+        assert_eq!(
+            after_accept_error(&error(Errno::ENFILE), 1),
+            AfterAcceptError::WaitForAClose
+        );
+        assert_eq!(
+            after_accept_error(&error(Errno::EMFILE), 0),
+            AfterAcceptError::Stop
+        );
+        assert_eq!(
+            after_accept_error(&error(Errno::ECONNABORTED), 0),
+            AfterAcceptError::Retry
+        );
+        assert_eq!(
+            after_accept_error(&error(Errno::EBADF), 3),
+            AfterAcceptError::Stop
+        );
+    }
+
+    #[test]
+    fn a_user_outside_mix_users_holds_one_connection_at_a_time() {
+        let outsiders = Outsiders::default();
+        let first = outsiders.admit(1000);
+        assert!(first.is_some());
+        assert!(outsiders.admit(1000).is_none());
+        assert!(outsiders.admit(1001).is_some());
+        drop(first);
+        assert!(outsiders.admit(1000).is_some());
+    }
 
     #[test]
     fn the_status_counts_the_requests_served_and_the_ones_waiting_for_a_lock() {

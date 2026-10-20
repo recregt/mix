@@ -4,6 +4,10 @@ All notable changes to `mix` are listed here. The format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+
+- A user outside `mix-users` can no longer slow down or block `mix` for other users by holding connections to the daemon open, and the daemon no longer stops when it runs out of file descriptors. ([#157](https://github.com/recregt/mix/pull/157))
+
 ## [0.1.0-alpha.2] - 2026-10-19
 
 ### Added
