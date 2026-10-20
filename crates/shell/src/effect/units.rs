@@ -210,6 +210,27 @@ impl Units {
         }))
     }
 
+    async fn own_unit(&self) -> Option<String> {
+        let manager = self.manager(UnitOperation::Inspect).await.ok()?;
+        let path: OwnedObjectPath = manager
+            .call("GetUnitByPID", &(std::process::id(),))
+            .await
+            .ok()?;
+        Proxy::new(&self.bus, DESTINATION, path, UNIT)
+            .await
+            .ok()?
+            .get_property("Id")
+            .await
+            .ok()
+    }
+
+    async fn triggers(&self, unit: &str) -> Vec<String> {
+        match self.unit_proxy(UnitOperation::Inspect, unit, UNIT).await {
+            Ok(proxy) => proxy.get_property("Triggers").await.unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
+    }
+
     async fn job(&self, job: Job, unit: &str, scope: &Scope) -> Result<(), Failure> {
         let (method, operation) = match job {
             Job::Start => ("StartUnit", UnitOperation::Start),
@@ -218,12 +239,26 @@ impl Units {
         };
         let manager = self.manager(operation).await?;
         let failed = |error| bus_failure(operation, unit, error);
+        let own = self.own_unit().await;
+        let own_state = match &own {
+            Some(own) => self.observe(own).await.ok().map(|facts| facts.active_state),
+            None => None,
+        };
+        let ends_with_us = ends_with(
+            own.as_deref(),
+            own_state.as_deref(),
+            unit,
+            &self.triggers(unit).await,
+        );
         let _ = manager.call::<_, _, ()>("Subscribe", &()).await;
         let mut removed = manager.receive_signal("JobRemoved").await.map_err(failed)?;
         let job: OwnedObjectPath = manager
             .call(method, &(unit, "replace"))
             .await
             .map_err(failed)?;
+        if ends_with_us {
+            return Ok(());
+        }
         let result = scope
             .guard(async {
                 while let Some(signal) = removed.next().await {
@@ -412,6 +447,14 @@ fn still_running(active_state: &str) -> bool {
     !matches!(active_state, "inactive" | "failed")
 }
 
+fn ends_with(own: Option<&str>, own_state: Option<&str>, unit: &str, triggers: &[String]) -> bool {
+    own.is_some_and(|own| {
+        own_state == Some("deactivating")
+            || own == unit
+            || triggers.iter().any(|triggered| triggered == own)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -424,6 +467,54 @@ mod tests {
         for state in ["inactive", "failed"] {
             assert!(!still_running(state), "{state}");
         }
+    }
+
+    #[test]
+    fn a_job_on_the_unit_this_process_runs_in_is_not_waited_for() {
+        let service = "mix-daemon.service";
+        let triggers = vec![service.to_string()];
+
+        let active = Some("active");
+
+        assert!(ends_with(Some(service), active, service, &[]));
+        assert!(ends_with(
+            Some(service),
+            active,
+            "mix-daemon.socket",
+            &triggers
+        ));
+        assert!(!ends_with(Some(service), active, "nix-daemon.service", &[]));
+        assert!(!ends_with(
+            Some(service),
+            active,
+            "nix-daemon.socket",
+            &["nix-daemon.service".to_string()]
+        ));
+        assert!(!ends_with(
+            Some("session-3.scope"),
+            active,
+            "mix-daemon.socket",
+            &triggers
+        ));
+        assert!(!ends_with(None, None, service, &triggers));
+    }
+
+    #[test]
+    fn once_the_unit_this_process_runs_in_is_stopping_no_job_is_waited_for() {
+        let nix_socket = ["nix-daemon.service".to_string()];
+
+        assert!(ends_with(
+            Some("mix-daemon.service"),
+            Some("deactivating"),
+            "nix-daemon.socket",
+            &nix_socket
+        ));
+        assert!(!ends_with(
+            Some("session-3.scope"),
+            Some("active"),
+            "nix-daemon.socket",
+            &nix_socket
+        ));
     }
 
     #[test]
