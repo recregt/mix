@@ -196,6 +196,20 @@ fn replacing_a_file_needs_the_object_that_was_seen() {
         verdict(&put(Expect::Present(id(1))), &ground),
         Ok(Verdict::Go)
     );
-    assert!(verdict(&put(Expect::Absent), &ground).is_err());
-    assert!(verdict(&put(Expect::Present(id(2))), &ground).is_err());
+    assert_eq!(
+        verdict(&put(Expect::Absent), &ground),
+        Err(Failure::Conflict {
+            subject: "/a".into(),
+            expected: "nothing".into(),
+            found: "something already there".into(),
+        })
+    );
+    assert_eq!(
+        verdict(&put(Expect::Present(id(2))), &ground),
+        Err(Failure::Conflict {
+            subject: "/a".into(),
+            expected: "inode 2 on device 1".into(),
+            found: "inode 1 on device 1".into(),
+        })
+    );
 }

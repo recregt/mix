@@ -422,6 +422,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn switching_back_from_a_generation_someone_moved_is_a_conflict() {
+        let home = tempfile::tempdir().unwrap();
+        let user = user_in(home.path());
+        let profiles = nix_profiles_dir(&user.home);
+        std::fs::create_dir_all(&profiles).unwrap();
+        let gen100 = profiles.join("home-manager-100-link");
+        std::fs::create_dir_all(&gen100).unwrap();
+        std::os::unix::fs::symlink(&gen100, profile_link(&user)).unwrap();
+        let action = Action::SwitchGeneration {
+            user: user.clone(),
+            generation: Some(97),
+            expect: Some(98),
+        };
+        let reporter: Arc<dyn ActivityReporter> = Arc::new(mix_core::NoopActivity);
+        let files = mix_fs::Files::open(Path::new("/"), "r1").unwrap();
+        let mut prepared = |_undo: &[Action]| Ok(());
+
+        let outcome = perform(
+            &action,
+            None,
+            &ProfileContext { mirror: None },
+            &reporter,
+            &mut Home::Local(&files),
+            &Scope::root(),
+            &mut prepared,
+        )
+        .await;
+
+        assert_eq!(
+            outcome,
+            Some(Err(Failure::Conflict {
+                subject: profile_link(&user).display().to_string(),
+                expected: "generation 98".into(),
+                found: "generation 100".into(),
+            }))
+        );
+    }
+
+    #[tokio::test]
     async fn deleting_the_active_generation_is_a_noop() {
         let home = tempfile::tempdir().unwrap();
         let user = user_in(home.path());

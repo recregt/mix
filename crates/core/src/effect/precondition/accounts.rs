@@ -236,3 +236,206 @@ pub fn account_precondition(
     };
     Ok(Accounted::Go(undo))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::World;
+
+    fn machine() -> World {
+        let mut world = World::default();
+        world.groups.insert(
+            "nixbld".into(),
+            GroupFacts {
+                gid: 30_000,
+                members: vec!["nixbld1".into()],
+            },
+        );
+        world.groups.insert(
+            "docker".into(),
+            GroupFacts {
+                gid: 991,
+                members: Vec::new(),
+            },
+        );
+        world.users.insert(
+            "nixbld1".into(),
+            UserFacts {
+                uid: 30_001,
+                gid: 30_000,
+                home: "/var/empty".into(),
+                shell: "/sbin/nologin".into(),
+                comment: "mix build user 1".into(),
+            },
+        );
+        world
+    }
+
+    fn spec(name: &str, uid: u32, gid: u32) -> UserSpec {
+        UserSpec {
+            name: name.into(),
+            uid,
+            gid,
+            home: "/var/empty".into(),
+            shell: "/sbin/nologin".into(),
+            comment: format!("mix build user {name}"),
+            groups: vec!["nixbld".into()],
+        }
+    }
+
+    fn refused(action: &Action, world: &World) -> (String, String) {
+        match account_precondition(action, world) {
+            Err(Failure::Conflict {
+                expected, found, ..
+            }) => (expected, found),
+            other => panic!("{action:?} was not refused: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn what_is_already_as_wanted_is_done() {
+        let world = machine();
+        for action in [
+            Action::AddGroup {
+                name: "nixbld".into(),
+                gid: 30_000,
+            },
+            Action::AddUser(spec("nixbld1", 30_001, 30_000)),
+            Action::AddMember {
+                group: "nixbld".into(),
+                user: "nixbld1".into(),
+            },
+            Action::DeleteUser {
+                name: "nobody-here".into(),
+                expect: (1, 1),
+                comment: String::new(),
+            },
+        ] {
+            assert_eq!(
+                account_precondition(&action, &world),
+                Ok(Accounted::Done),
+                "{action:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_id_someone_else_holds_is_never_taken() {
+        let world = machine();
+
+        assert_eq!(
+            refused(
+                &Action::AddGroup {
+                    name: "mix-users".into(),
+                    gid: 991,
+                },
+                &world
+            ),
+            ("gid 991 free".into(), "gid 991 held by docker".into())
+        );
+        assert_eq!(
+            refused(&Action::AddUser(spec("nixbld2", 30_001, 30_000)), &world),
+            ("uid 30001 free".into(), "uid 30001 held by nixbld1".into())
+        );
+    }
+
+    #[test]
+    fn a_group_with_another_gid_is_not_taken_over() {
+        assert_eq!(
+            refused(
+                &Action::AddGroup {
+                    name: "docker".into(),
+                    gid: 30_100,
+                },
+                &machine()
+            ),
+            ("no group".into(), "gid 991".into())
+        );
+    }
+
+    #[test]
+    fn a_user_is_only_added_once_its_groups_exist() {
+        assert_eq!(
+            refused(
+                &Action::AddUser(spec("nixbld2", 30_002, 30_100)),
+                &machine()
+            ),
+            ("group 30100".into(), "no group".into())
+        );
+    }
+
+    #[test]
+    fn a_group_someone_has_as_their_primary_group_is_kept() {
+        assert_eq!(
+            refused(
+                &Action::DeleteGroup {
+                    name: "nixbld".into(),
+                    expect: 30_000,
+                },
+                &machine()
+            ),
+            (
+                "no user in it as their primary group".into(),
+                "the primary group of nixbld1".into()
+            )
+        );
+    }
+
+    #[test]
+    fn a_user_someone_changed_is_not_deleted() {
+        let mut world = machine();
+        world.users.get_mut("nixbld1").unwrap().comment = "kept by the admin".into();
+
+        assert_eq!(
+            refused(
+                &Action::DeleteUser {
+                    name: "nixbld1".into(),
+                    expect: (30_001, 30_000),
+                    comment: "mix build user 1".into(),
+                },
+                &world
+            ),
+            (
+                "comment `mix build user 1`".into(),
+                "comment `kept by the admin`".into()
+            )
+        );
+        assert_eq!(
+            refused(
+                &Action::SetUserIds {
+                    name: "nixbld1".into(),
+                    ids: (30_005, 30_000),
+                    expect: (40_001, 30_000),
+                },
+                &world
+            ),
+            ("ids 40001:30000".into(), "ids 30001:30000".into())
+        );
+    }
+
+    #[test]
+    fn deleting_a_group_is_undone_with_its_members() {
+        let mut world = machine();
+        world.users.remove("nixbld1");
+
+        assert_eq!(
+            account_precondition(
+                &Action::DeleteGroup {
+                    name: "nixbld".into(),
+                    expect: 30_000,
+                },
+                &world
+            ),
+            Ok(Accounted::Go(vec![
+                Action::AddGroup {
+                    name: "nixbld".into(),
+                    gid: 30_000,
+                },
+                Action::AddMember {
+                    group: "nixbld".into(),
+                    user: "nixbld1".into(),
+                },
+            ]))
+        );
+    }
+}
