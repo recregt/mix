@@ -74,6 +74,49 @@ fn a_path_waits_on_the_nearest_declared_directory_above_it() {
     assert_eq!(checks[local].after, vec![home]);
 }
 
+fn precondition(tree: &mut Builder<'static>, path: &'static str) -> Handle {
+    tree.path(
+        path,
+        Target::Precondition {
+            path: std::path::Path::new(path).into(),
+        },
+    )
+}
+
+#[test]
+fn a_check_waits_on_what_it_refers_to_even_when_that_sorts_after_it() {
+    let mut tree = Builder::new(None);
+    precondition(&mut tree, "/a");
+    let early = precondition(&mut tree, "/a/b");
+    let late = precondition(&mut tree, "/a/z");
+    tree.refers(early, late);
+
+    let checks = tree.finish().into_checks();
+
+    let (early, late) = (index_of(&checks, "/a/b"), index_of(&checks, "/a/z"));
+    assert!(late < early);
+    assert!(checks[early].after.contains(&late));
+}
+
+#[test]
+fn only_the_checks_above_a_node_wait_on_what_it_up_refers_to() {
+    let mut tree = Builder::new(None);
+    precondition(&mut tree, "/a");
+    let node = precondition(&mut tree, "/a/b");
+    let late = precondition(&mut tree, "/a/z");
+    tree.up(node, Target::UnitActive { name: "x.service" });
+    tree.up_refers(node, late);
+
+    let checks = tree.finish().into_checks();
+
+    let late = index_of(&checks, "/a/z");
+    let node = index_of(&checks, "/a/b");
+    let above = index_of(&checks, "x.service activation");
+    assert!(late < node);
+    assert!(!checks[node].after.contains(&late));
+    assert!(checks[above].after.contains(&late));
+}
+
 #[test]
 fn the_nix_daemon_units_come_after_what_they_need() {
     let policy = Policy::default();

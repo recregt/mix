@@ -75,6 +75,7 @@ pub fn finding(finding: Finding) -> WireFinding {
             kind: mix_events::io_kind::name(kind),
         }),
         Finding::NotADirectory => Kind::NotADirectory(Default::default()),
+        Finding::NotALink => Kind::NotALink(Default::default()),
         Finding::Mode { actual, expected } => Kind::Mode(Mode { actual, expected }),
         Finding::Owner { actual, expected } => Kind::Owner(ids(actual, expected)),
         Finding::ContentDrift => Kind::ContentDrift(Default::default()),

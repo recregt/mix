@@ -50,6 +50,12 @@ pub fn check(report: &InspectionReport) -> Diagnostic {
             around!("", " is not a directory"),
             Some(note!("something else is in its place")),
         ),
+        Kind::NotALink(_) => (
+            around!("", " is not a link"),
+            Some(note!(
+                "your Nix profile link belongs here, and something else is in its place"
+            )),
+        ),
         Kind::Mode(mode) => (
             around!("", " has the wrong permissions"),
             Some(note_parts![
@@ -211,6 +217,7 @@ pub fn labels(finding: &Finding) -> Labels {
             Kind::Missing(_)
             | Kind::Unreadable(_)
             | Kind::NotADirectory(_)
+            | Kind::NotALink(_)
             | Kind::Mode(_)
             | Kind::Owner(_)
             | Kind::ContentDrift(_)
@@ -293,6 +300,7 @@ mod tests {
                 kind: std::io::ErrorKind::PermissionDenied,
             },
             Finding::NotADirectory,
+            Finding::NotALink,
             Finding::Mode {
                 actual: 0o700,
                 expected: 0o755,
@@ -344,6 +352,7 @@ mod tests {
                 Finding::Missing
                 | Finding::Unreadable { .. }
                 | Finding::NotADirectory
+                | Finding::NotALink
                 | Finding::Mode { .. }
                 | Finding::Owner { .. }
                 | Finding::ContentDrift

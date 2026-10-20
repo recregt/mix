@@ -77,6 +77,7 @@ struct Draft<'a> {
     down: Option<Target<'a>>,
     up: Vec<Target<'a>>,
     refers: Vec<Handle>,
+    up_refers: Vec<Handle>,
     parent: Option<Handle>,
     children: Vec<Handle>,
     path: Option<PathBuf>,
@@ -88,6 +89,7 @@ impl Draft<'_> {
             down,
             up: Vec::new(),
             refers: Vec::new(),
+            up_refers: Vec::new(),
             parent: None,
             children: Vec::new(),
             path,
@@ -164,6 +166,10 @@ impl<'a> Builder<'a> {
         self.drafts[from.0].refers.push(to);
     }
 
+    pub fn up_refers(&mut self, from: Handle, to: Handle) {
+        self.drafts[from.0].up_refers.push(to);
+    }
+
     fn link(&mut self) {
         let placed: Vec<(PathBuf, Handle)> = self
             .paths
@@ -197,6 +203,61 @@ impl<'a> Builder<'a> {
             });
             self.drafts[index].children = children;
         }
+        self.put_referred_first();
+    }
+
+    fn put_referred_first(&mut self) {
+        let references: Vec<(Handle, Handle)> = self
+            .drafts
+            .iter()
+            .enumerate()
+            .flat_map(|(index, draft)| {
+                draft
+                    .refers
+                    .iter()
+                    .chain(&draft.up_refers)
+                    .map(move |to| (Handle(index), *to))
+            })
+            .collect();
+        for (from, to) in references {
+            let from_line = self.line(from);
+            let to_line = self.line(to);
+            let Some((at, ancestor)) = from_line
+                .iter()
+                .enumerate()
+                .find(|(_, ancestor)| to_line.contains(ancestor))
+            else {
+                continue;
+            };
+            let below = to_line.iter().position(|node| node == ancestor);
+            let (Some(from_child), Some(to_child)) = (
+                at.checked_sub(1).map(|index| from_line[index]),
+                below
+                    .and_then(|index| index.checked_sub(1))
+                    .map(|index| to_line[index]),
+            ) else {
+                continue;
+            };
+            let children = &mut self.drafts[ancestor.0].children;
+            let (Some(first), Some(second)) = (
+                children.iter().position(|child| *child == from_child),
+                children.iter().position(|child| *child == to_child),
+            ) else {
+                continue;
+            };
+            if second > first {
+                let moved = children.remove(second);
+                children.insert(first, moved);
+            }
+        }
+    }
+
+    fn line(&self, node: Handle) -> Vec<Handle> {
+        let mut line = vec![node];
+        while let Some(parent) = self.drafts[line[line.len() - 1].0].parent {
+            line.push(parent);
+        }
+        line
     }
 
     fn mark_leftovers(&mut self) {
@@ -227,9 +288,16 @@ impl<'a> Builder<'a> {
         let mut stack: Vec<(Handle, Option<usize>)> = vec![(MACHINE, None)];
         while let Some((node, opened)) = stack.pop() {
             if let Some(opened) = opened {
+                let mut after = self.referred(node, &down_at);
+                after.extend(
+                    self.drafts[node.0]
+                        .up_refers
+                        .iter()
+                        .filter_map(|target| down_at[target.0]),
+                );
                 for target in std::mem::take(&mut self.drafts[node.0].up) {
                     checks.push(Check {
-                        after: self.referred(node, &down_at),
+                        after: after.clone(),
                         within: opened..checks.len(),
                         target,
                         phase: Phase::Up,
