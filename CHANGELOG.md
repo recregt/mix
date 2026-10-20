@@ -17,6 +17,7 @@ All notable changes to `mix` are listed here. The format follows [Keep a Changel
 - When `mix-daemon` stops partway through a command, the command says it stopped before it could finish, instead of exiting with nothing printed, and `mix doctor` reports a managed file above 4 MiB instead of failing silently. ([#167](https://github.com/recregt/mix/pull/167))
 - On a terminal, `mix doctor` and `mix repair` cut a long changed line to the terminal width instead of printing it whole in the repair suggestion, and `mix list` and `mix explain` cut long descriptions the same way. Output that is not a terminal is unchanged. ([#169](https://github.com/recregt/mix/pull/169))
 - `mix doctor` reports a package list written by a newer `mix` instead of calling the profile stale, and `mix repair` leaves it alone instead of building a new generation on every run. ([#170](https://github.com/recregt/mix/pull/170))
+- A power cut while `mix` records a change no longer leaves empty files in the state repository, because every git write is synced to disk. ([#171](https://github.com/recregt/mix/pull/171))
 
 ## [0.1.0-alpha.2] - 2026-10-19
 
