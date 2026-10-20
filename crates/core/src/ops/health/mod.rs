@@ -15,7 +15,7 @@ use crate::effect::{
     Action, Expect, Fact, Failure, Kind, Owner, PathFacts, ProgramFacts, Query, UserSpec,
 };
 use crate::ops::bootstrap::stale_restart;
-use crate::ops::change::{old_generations, validate};
+use crate::ops::change::{Invalid, old_generations, validate};
 use crate::run::{StepSpec, Title};
 use mix_events::v1::Verb;
 
@@ -73,6 +73,9 @@ pub enum Unfixable {
     /// A unit someone masked, which mix will not unmask.
     #[error("masked, and `mix` won't unmask it")]
     Masked,
+
+    #[error("set up by a newer `mix`, which this one won't change")]
+    Newer,
 }
 
 /// What an inspection measured about an artifact that is not as it should be.
@@ -93,6 +96,10 @@ pub enum Finding {
     NotADirectory,
 
     NotALink,
+
+    NewerState {
+        format: u32,
+    },
 
     /// The permission bits drifted from the ones mix sets.
     Mode {
@@ -197,6 +204,7 @@ impl Finding {
             Finding::RuntimeMissing => Some(Unfixable::MissingRuntime),
             Finding::Interrupted { .. } => Some(Unfixable::Unrecovered),
             Finding::InTheWay { .. } | Finding::NotALink => Some(Unfixable::InTheWay),
+            Finding::NewerState { .. } => Some(Unfixable::Newer),
             _ => None,
         }
     }
@@ -658,6 +666,9 @@ pub fn classify(target: &Target<'_>, facts: &[Fact]) -> Option<Finding> {
         },
         Target::Activation { pins, .. } => {
             let listed = std::str::from_utf8(contents(facts, 0)?).ok()?;
+            if let Err(Invalid::Newer(format)) = validate(listed) {
+                return Some(Finding::NewerState { format });
+            }
             let active = contents(facts, 1)
                 .and_then(|active| std::str::from_utf8(active).ok())
                 .and_then(|active| validate(active).ok());

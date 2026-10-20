@@ -50,6 +50,10 @@ pub fn check(report: &InspectionReport) -> Diagnostic {
             around!("", " is not a directory"),
             Some(note!("something else is in its place")),
         ),
+        Kind::NewerState(_) => (
+            around!("", " uses a package list from a newer `mix`"),
+            Some(note!("this `mix` leaves it alone instead of misreading it")),
+        ),
         Kind::NotALink(_) => (
             around!("", " is not a link"),
             Some(note!(
@@ -218,6 +222,7 @@ pub fn labels(finding: &Finding) -> Labels {
             | Kind::Unreadable(_)
             | Kind::NotADirectory(_)
             | Kind::NotALink(_)
+            | Kind::NewerState(_)
             | Kind::Mode(_)
             | Kind::Owner(_)
             | Kind::ContentDrift(_)
@@ -301,6 +306,7 @@ mod tests {
             },
             Finding::NotADirectory,
             Finding::NotALink,
+            Finding::NewerState { format: 99 },
             Finding::Mode {
                 actual: 0o700,
                 expected: 0o755,
@@ -353,6 +359,7 @@ mod tests {
                 | Finding::Unreadable { .. }
                 | Finding::NotADirectory
                 | Finding::NotALink
+                | Finding::NewerState { .. }
                 | Finding::Mode { .. }
                 | Finding::Owner { .. }
                 | Finding::ContentDrift

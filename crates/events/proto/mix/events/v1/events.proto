@@ -640,6 +640,7 @@ message Finding {
     google.protobuf.Empty profile_stale = 23;
     OldGenerations old_generations = 24;
     google.protobuf.Empty not_a_link = 25;
+    FormatDetail newer_state = 26;
   }
 }
 
@@ -772,6 +773,7 @@ enum Unfixable {
   UNFIXABLE_IN_THE_WAY = 5;
   UNFIXABLE_OUTSIDE = 6;
   UNFIXABLE_MASKED = 7;
+  UNFIXABLE_NEWER = 8;
 }
 
 message Diagnostic {
