@@ -691,11 +691,9 @@ impl Performer {
             });
         }
         prepared(&[])?;
-        let mut home = self.home(user.uid, &user.home, scope)?;
-        let created = match Git::resolve(user, &mut home, scope).await {
-            Ok(git) => git.create(user, &mix_state_dir(&user.home), scope).await,
-            Err(error) => Err(error),
-        };
+        let created = Git::of(user)
+            .create(user, &mix_state_dir(&user.home), scope)
+            .await;
         let undo = match self.look(&Query::Path(repository.clone()), scope).await? {
             Some(Fact::Path(PathFacts { id: Some(id), .. })) => vec![Action::RemoveCreatedTree {
                 path: repository.clone(),
@@ -954,9 +952,7 @@ impl Performer {
                     });
                 }
                 let mut home = self.home(user.uid, &user.home, scope)?;
-                let git = Git::resolve(user, &mut home, scope)
-                    .await
-                    .map_err(core_failure)?;
+                let git = Git::of(user);
                 let state_dir = mix_state_dir(&user.home);
                 let verified = git
                     .verify(user, &mut home, &repository_dir(&user.home), scope)
