@@ -11,7 +11,7 @@ use crate::declared::paths::{
     POLICY_FILE, PROFILE_SNIPPET_DEST, mix_state_dir,
 };
 use crate::effect::{Action, Fact, Failure, Query, UnitFacts};
-use crate::ops::removal::{RemoveHome, path, set_aside_each};
+use crate::ops::removal::{RemoveHome, path, set_aside_each, set_aside_units};
 use crate::run::{StepSpec, Title};
 use mix_events::v1::Verb;
 
@@ -85,31 +85,27 @@ impl StepSpec for RemoveUnits {
 
     fn queries(&self) -> Vec<Query> {
         unit_queries()
+            .chain(
+                UNITS
+                    .iter()
+                    .map(|unit| Query::UnitLinks((*unit).to_string())),
+            )
             .chain(UNIT_FILES.iter().map(|file| Query::Path(file.into())))
             .collect()
     }
 
     fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
-        let mut actions = Vec::new();
-        for (unit, fact) in UNITS.iter().zip(facts) {
-            let state = unit_facts(fact);
-            if state.active_state == "active" {
-                actions.push(Action::StopUnit {
-                    unit: (*unit).to_string(),
-                });
-            }
-            if state.enabled() {
-                actions.push(Action::DisableUnit {
-                    unit: (*unit).to_string(),
-                });
-            }
-        }
+        let mut actions: Vec<Action> = UNITS
+            .iter()
+            .zip(facts)
+            .filter(|(_, fact)| unit_facts(fact).active_state == "active")
+            .map(|(unit, _)| Action::StopUnit {
+                unit: (*unit).to_string(),
+            })
+            .collect();
         let files: Vec<PathBuf> = UNIT_FILES.iter().map(PathBuf::from).collect();
-        let removed = set_aside_each(&files, &facts[UNITS.len()..]);
-        if !removed.is_empty() {
-            actions.extend(removed);
-            actions.push(Action::DaemonReload);
-        }
+        let links = &facts[UNITS.len()..2 * UNITS.len()];
+        actions.extend(set_aside_units(links, &files, &facts[2 * UNITS.len()..]));
         Ok(actions)
     }
 }

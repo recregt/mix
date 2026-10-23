@@ -10,10 +10,9 @@ use crate::declared::paths::{
 };
 use crate::declared::policy::Policy;
 use crate::declared::targets::{Intent, Runtime, UserConfig, tree_for};
-use crate::effect::{
-    Action, Fact, Failure, FileId, GroupFacts, PathFacts, Query, UnitFacts, UserFacts,
-};
+use crate::effect::{Action, Fact, Failure, GroupFacts, PathFacts, Query, UnitFacts, UserFacts};
 use crate::ops::health::reconcile_steps;
+use crate::ops::removal::set_aside_units;
 use crate::run::{StepSpec, Title};
 use mix_events::v1::Verb;
 
@@ -47,13 +46,6 @@ impl Facts<'_> {
         match &self.0[index] {
             Fact::User(user) => user.as_ref(),
             other => unreachable!("a user query was answered with {other:?}"),
-        }
-    }
-
-    fn links(&self, index: usize) -> &[(PathBuf, FileId)] {
-        match &self.0[index] {
-            Fact::UnitLinks(links) => links,
-            other => unreachable!("a unit links query was answered with {other:?}"),
         }
     }
 
@@ -111,32 +103,13 @@ impl StepSpec for RemoveExistingInstallation {
                 });
             }
         }
-        let mut moved: Vec<PathBuf> = Vec::new();
-        for index in 0..UNITS.len() {
-            for (link, id) in facts.links(UNITS.len() + index) {
-                if !moved.contains(link) {
-                    actions.push(Action::SetAside {
-                        path: link.clone(),
-                        expect: *id,
-                    });
-                    moved.push(link.clone());
-                }
-            }
-        }
         let files = 2 * UNITS.len();
-        for (offset, path) in UNIT_FILES.iter().enumerate() {
-            let path = Path::new(path);
-            if moved.iter().any(|done| done == path) {
-                continue;
-            }
-            if let Some(action) = set_aside(path, facts.path(files + offset)) {
-                actions.push(action);
-                moved.push(path.to_path_buf());
-            }
-        }
-        if !moved.is_empty() {
-            actions.push(Action::DaemonReload);
-        }
+        let unit_files: Vec<PathBuf> = UNIT_FILES.iter().map(PathBuf::from).collect();
+        actions.extend(set_aside_units(
+            &facts.0[UNITS.len()..files],
+            &unit_files,
+            &facts.0[files..files + UNIT_FILES.len()],
+        ));
         let users = files + UNIT_FILES.len();
         for n in 1..=NIXBLD_USER_COUNT {
             if let Some(user) = facts.user(users + n as usize - 1) {

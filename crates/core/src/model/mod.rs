@@ -114,7 +114,7 @@ pub struct World {
 
 impl PartialEq for World {
     fn eq(&self, other: &Self) -> bool {
-        self.files == other.files
+        self.comparable_files().eq(other.comparable_files())
             && self.groups == other.groups
             && self.users == other.users
             && self.meaningful_units().eq(other.meaningful_units())
@@ -129,7 +129,26 @@ impl PartialEq for World {
 
 impl Eq for World {}
 
+fn systemd_owned(path: &Path) -> bool {
+    let link_dir = |dir: &Path| {
+        dir.parent() == Some(Path::new(UNIT_DIR))
+            && dir
+                .extension()
+                .is_some_and(|kind| kind == "wants" || kind == "requires")
+    };
+    link_dir(path) || path.parent().is_some_and(link_dir)
+}
+
+type Comparable<'a> = (&'a PathBuf, &'a Content, u32, Owner, Option<(FileId, u64)>);
+
 impl World {
+    fn comparable_files(&self) -> impl Iterator<Item = Comparable<'_>> {
+        self.files.iter().map(|(path, entry)| {
+            let identity = (!systemd_owned(path)).then_some((entry.id, entry.changed));
+            (path, &entry.content, entry.mode, entry.owner, identity)
+        })
+    }
+
     fn meaningful_units(&self) -> impl Iterator<Item = (&String, &Unit)> {
         self.units
             .iter()
