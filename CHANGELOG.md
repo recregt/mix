@@ -22,6 +22,7 @@ All notable changes to `mix` are listed here. The format follows [Keep a Changel
 - A power cut shortly after `mix install` no longer leaves empty files in the Nix store or an interrupted request that can never be undone, because new store paths are synced to disk before they are used. ([#177](https://github.com/recregt/mix/pull/177))
 - When the output can't be written, for example to a full disk, `mix` says so and exits 1 instead of exiting 0 with the output cut short. A reader that stops early, like `head`, still ends the output quietly. ([#178](https://github.com/recregt/mix/pull/178))
 - When the disk that holds the Nix store is full, commands say so and suggest `mix clean --all`, instead of ending with "1 dependency failed". ([#179](https://github.com/recregt/mix/pull/179))
+- `mix bootstrap --force` replaces a Nix from any installer, and when it fails it puts that Nix back as it was, with its units enabled and running, instead of leaving neither Nix nor `mix` working. A `mix purge` that fails also puts every unit back enabled. ([#180](https://github.com/recregt/mix/pull/180))
 
 ## [0.1.0-alpha.2] - 2026-10-19
 

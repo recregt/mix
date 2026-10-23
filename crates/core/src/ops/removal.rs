@@ -21,6 +21,39 @@ pub(super) fn set_aside(path: impl Into<PathBuf>, found: &PathFacts) -> Option<A
     })
 }
 
+fn unit_links(fact: &Fact) -> &[(PathBuf, FileId)] {
+    match fact {
+        Fact::UnitLinks(links) => links,
+        other => unreachable!("a unit links query was answered with {other:?}"),
+    }
+}
+
+pub(super) fn set_aside_units(links: &[Fact], files: &[PathBuf], found: &[Fact]) -> Vec<Action> {
+    let mut actions = Vec::new();
+    let mut moved: Vec<&PathBuf> = Vec::new();
+    for (link, expect) in links.iter().flat_map(unit_links) {
+        if !moved.contains(&link) {
+            actions.push(Action::SetAside {
+                path: link.clone(),
+                expect: *expect,
+            });
+            moved.push(link);
+        }
+    }
+    for (file, fact) in files.iter().zip(found) {
+        if !moved.contains(&file)
+            && let Some(action) = set_aside(file.clone(), path(fact))
+        {
+            actions.push(action);
+            moved.push(file);
+        }
+    }
+    if !actions.is_empty() {
+        actions.push(Action::DaemonReload);
+    }
+    actions
+}
+
 pub(super) fn set_aside_each(paths: &[PathBuf], facts: &[Fact]) -> Vec<Action> {
     paths
         .iter()

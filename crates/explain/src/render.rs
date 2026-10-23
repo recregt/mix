@@ -204,10 +204,16 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
             "this system already has Nix, set up by something other than `mix`"
         ))
         .note(note!(
-            "`mix` needs to set up its own, and uninstalling the existing one removes everything \
-             you installed with it"
+            "`mix` needs to set up its own, and replacing or uninstalling the existing one removes \
+             everything you installed with it"
         ))
-        .help_around(help_around!("uninstall it, then run `", "` again"), command),
+        .help_around(
+            help_around!(
+                "uninstall it and run `",
+                "` again, or add `--force` to replace it"
+            ),
+            command,
+        ),
         Code::CrossDeviceStore => Diagnostic::hinting(
             phrase!(
                 "`/nix/store` is on a different disk than `/nix`, and `mix` needs them on the same one"

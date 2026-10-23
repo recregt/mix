@@ -234,6 +234,9 @@ impl Prediction {
             Query::Group(name) => self.touched.contains(&Subject::Group(name.clone())),
             Query::User(name) => self.touched.contains(&Subject::User(name.clone())),
             Query::Unit(name) => self.touched.contains(&Subject::Unit(name.clone())),
+            Query::UnitLinks(name) => {
+                self.touched.contains(&Subject::Unit(name.clone())) || near(Path::new(UNIT_DIR))
+            }
             Query::Profile(user) | Query::Clobbered(user) => {
                 self.touched.contains(&Subject::Profile(user.clone()))
             }
@@ -883,8 +886,9 @@ impl Performer {
                     Fact::Contents(contents) => contents,
                     _ => None,
                 };
+                let links = self.unit_links(name).await?;
                 if let Some(prediction) = &mut self.prediction {
-                    prediction.world.seed_unit(name, &found, contents);
+                    prediction.world.seed_unit(name, &found, contents, &links);
                 }
             }
             Subject::Profile(user) => {
@@ -923,9 +927,26 @@ impl Performer {
         Ok(performed)
     }
 
+    async fn unit_links(
+        &mut self,
+        unit: &str,
+    ) -> Result<Vec<(PathBuf, mix_core::effect::FileId)>, Failure> {
+        let links = self.units().await?.links(unit).await?;
+        Ok(links
+            .into_iter()
+            .filter_map(
+                |link| match self.files.observe(&Query::Path(link.clone())) {
+                    Some(Fact::Path(PathFacts { id: Some(id), .. })) => Some((link, id)),
+                    _ => None,
+                },
+            )
+            .collect())
+    }
+
     async fn observe_one(&mut self, query: &Query, scope: &Scope) -> Result<Fact, Failure> {
         Ok(match query {
             Query::Unit(unit) => Fact::Unit(self.units().await?.observe(unit).await?),
+            Query::UnitLinks(unit) => Fact::UnitLinks(self.unit_links(unit).await?),
             Query::Accounts => Fact::Accounts(identity::accounts(scope).await?),
             Query::Repository(user) => {
                 let repository = repository_dir(&user.home);

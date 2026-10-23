@@ -13,6 +13,7 @@ fn query(query: &observation::Query) -> (&'static str, &str) {
         Query::Group(name) => ("group", name),
         Query::User(name) => ("user", name),
         Query::Unit(name) => ("unit", name),
+        Query::UnitLinks(name) => ("unit file links of", name),
         Query::Profile(name) => ("profile of", name),
         Query::TreeOwner(path) => ("owner of", path),
         Query::Repository(path) => ("history in", path),
@@ -99,6 +100,7 @@ fn fact(out: &mut String, fact: &observation::Fact) {
         | Fact::LeftoversFact(found)
         | Fact::ClobberedFact(found)
         | Fact::LinkedFact(found)
+        | Fact::UnitLinksFact(found)
             if found.paths.is_empty() =>
         {
             write!(out, "none")
@@ -106,7 +108,8 @@ fn fact(out: &mut String, fact: &observation::Fact) {
         Fact::JournalsFact(found)
         | Fact::LeftoversFact(found)
         | Fact::ClobberedFact(found)
-        | Fact::LinkedFact(found) => {
+        | Fact::LinkedFact(found)
+        | Fact::UnitLinksFact(found) => {
             write!(out, "{}", found.paths.join(", "))
         }
         Fact::ProgramFact(program) if program.same => write!(out, "the same"),
