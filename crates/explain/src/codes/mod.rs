@@ -225,6 +225,14 @@ pub fn explanation(code: Code) -> Explanation {
                 "use a different version or package"
             ]
         ),
+        Code::DiskFull => explained!(
+            "The disk that holds the Nix store ran out of space.",
+            "Nix needs room to download, unpack and build packages. It stopped when the disk filled up, and `mix` put back what it had changed. Nix's own words are under `Caused by`.",
+            [
+                "make room on the disk, for example with `mix clean --all`",
+                "run the command again"
+            ]
+        ),
         Code::UpdateUnavailable => explained!(
             "`mix` cannot update from here.",
             "This machine fetches from a mirror, which holds exactly the versions that your copy of `mix` was released with. Newer versions are not on it.",

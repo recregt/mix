@@ -307,6 +307,29 @@ fn an_unknown_package_is_named_in_the_message_and_the_command_is_the_cause() {
 }
 
 #[test]
+fn a_build_stopped_by_a_full_disk_says_so_and_keeps_the_error_that_named_the_disk() {
+    let error = Error::Command {
+        command: "/nix/var/nix/profiles/default/bin/nix build".into(),
+        detail: "error: Cannot build '/nix/store/aaa-home-manager-path.drv'.\n       Reason: builder failed with exit code 1.\n       note: build failure may have been caused by lack of free disk space\nerror: Cannot build '/nix/store/bbb-home-manager-generation.drv'.\n       Reason: 1 dependency failed.".into(),
+    };
+
+    assert_eq!(error.code(), Some(Code::DiskFull));
+    let Fault::Failed(diagnostic) = error.fault() else {
+        panic!("a failed command is a failure");
+    };
+    assert_eq!(diagnostic.code(), Code::DiskFull);
+    assert_eq!(
+        diagnostic.message,
+        "the disk that holds the Nix store is full"
+    );
+    let Some(Detail::Command(command)) = &diagnostic.causes[0].detail else {
+        panic!("the command is the cause");
+    };
+    assert!(command.output_tail.contains("-home-manager-path.drv'"));
+    assert!(!command.output_tail.contains("1 dependency failed"));
+}
+
+#[test]
 fn a_command_that_is_not_nix_keeps_its_whole_tail() {
     let error = Error::Command {
         command: "git commit".into(),

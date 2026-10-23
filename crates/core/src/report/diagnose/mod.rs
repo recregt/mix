@@ -14,6 +14,7 @@ fn command_code(tail: &str) -> Code {
     match nix_error(tail).and_then(|error| error.failure) {
         Some(NixFailure::Build { .. }) => Code::BuildFailed,
         Some(NixFailure::UnknownPackage { .. }) => Code::UnknownPackage,
+        Some(NixFailure::DiskFull) => Code::DiskFull,
         None => Code::CommandFailed,
     }
 }
@@ -38,7 +39,23 @@ pub fn command_failure(
             ..Diagnostic::default()
         };
     };
+    let cause = |output_tail: String| Diagnostic {
+        code: Code::CommandFailed as i32,
+        severity: Severity::Error as i32,
+        message: format!("`{command}` failed"),
+        detail: Some(Detail::Command(invocation(output_tail))),
+        ..Diagnostic::default()
+    };
     let (code, message, package) = match error.failure {
+        Some(NixFailure::DiskFull) => {
+            return Diagnostic {
+                code: Code::DiskFull as i32,
+                severity: Severity::Error as i32,
+                message: "the disk that holds the Nix store is full".to_string(),
+                causes: vec![cause(error.message)],
+                ..Diagnostic::default()
+            };
+        }
         Some(NixFailure::Build { package }) => (
             Code::BuildFailed,
             format!("couldn't build {package}"),
@@ -64,13 +81,7 @@ pub fn command_failure(
         severity: Severity::Error as i32,
         node: 0,
         message,
-        causes: vec![Diagnostic {
-            code: Code::CommandFailed as i32,
-            severity: Severity::Error as i32,
-            message: format!("`{command}` failed"),
-            detail: Some(Detail::Command(invocation(error.message))),
-            ..Diagnostic::default()
-        }],
+        causes: vec![cause(error.message)],
         detail: Some(Detail::Packages(PackagesDetail {
             packages: vec![package],
         })),
