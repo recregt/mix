@@ -19,6 +19,7 @@ All notable changes to `mix` are listed here. The format follows [Keep a Changel
 - `mix doctor` reports a package list written by a newer `mix` instead of calling the profile stale, and `mix repair` leaves it alone instead of building a new generation on every run. ([#170](https://github.com/recregt/mix/pull/170))
 - A power cut while `mix` records a change no longer leaves empty files in the state repository, because every git write is synced to disk. ([#171](https://github.com/recregt/mix/pull/171))
 - `mix repair` puts back a deleted profile and history in one run, and `mix` always uses the git in your profile instead of falling back to the system `git`. The `unsupported-program` failure code is gone. ([#172](https://github.com/recregt/mix/pull/172))
+- A power cut shortly after `mix install` no longer leaves empty files in the Nix store or an interrupted request that can never be undone, because new store paths are synced to disk before they are used. ([#177](https://github.com/recregt/mix/pull/177))
 
 ## [0.1.0-alpha.2] - 2026-10-19
 

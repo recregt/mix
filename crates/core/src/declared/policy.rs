@@ -103,7 +103,7 @@ fn render(mirror: Option<&Mirror>) -> String {
 
 fn nix_conf(mirror: Option<&Mirror>) -> String {
     let mut conf = String::from(
-        "build-users-group = nixbld\nexperimental-features = nix-command flakes\ntrusted-users = root\n",
+        "build-users-group = nixbld\nexperimental-features = nix-command flakes\nfsync-store-paths = true\ntrusted-users = root\n",
     );
     if let Some(mirror) = mirror {
         conf.push_str(&format!("substituters = {}/cache\n", mirror.url()));
@@ -123,10 +123,10 @@ mod tests {
     const KEY: &str = "mix-mirror:AAAA";
 
     #[test]
-    fn the_default_trusts_root_alone_and_adds_no_substituter() {
+    fn the_default_trusts_root_alone_syncs_store_paths_and_adds_no_substituter() {
         assert_eq!(
             Policy::default().nix_conf(),
-            "build-users-group = nixbld\nexperimental-features = nix-command flakes\ntrusted-users = root\n"
+            "build-users-group = nixbld\nexperimental-features = nix-command flakes\nfsync-store-paths = true\ntrusted-users = root\n"
         );
     }
 

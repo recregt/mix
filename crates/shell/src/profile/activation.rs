@@ -11,7 +11,8 @@ use std::sync::Arc;
 use mix_core::ActivityReporter;
 use mix_core::declared::identity::InvokingUser;
 use mix_core::declared::paths::{
-    DEFAULT_PROFILE_NIX, GIT_DIR, HOME_MANAGER_PROFILE_NAME, mix_state_dir, nix_profiles_dir,
+    DEFAULT_PROFILE_NIX, GIT_DIR, HOME_MANAGER_PROFILE_NAME, NIX_STORE, mix_state_dir,
+    nix_profiles_dir,
 };
 use mix_exec::Scope;
 use mix_home::Home;
@@ -91,14 +92,34 @@ pub async fn switch(
         &profile.to_string_lossy(),
         &nix_options(mirror),
     );
-    run_as_reporting(
+    let built = run_as_reporting(
         user,
         DEFAULT_PROFILE_NIX,
         &as_refs(&args),
         scope,
         Some(Arc::clone(activity)),
     )
+    .await?;
+    settle_store().await?;
+    Ok(built)
+}
+
+async fn settle_store() -> Result<()> {
+    let synced = tokio::task::spawn_blocking(|| {
+        use rustix::fs::{Mode, OFlags};
+        let store = rustix::fs::open(
+            NIX_STORE,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+        rustix::fs::syncfs(&store)
+    })
     .await
+    .expect("syncing the store does not panic");
+    synced.map_err(|errno| mix_core::Error::Io {
+        path: NIX_STORE.into(),
+        source: errno.into(),
+    })
 }
 
 pub async fn activate_generation(
