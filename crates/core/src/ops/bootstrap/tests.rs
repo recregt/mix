@@ -138,7 +138,7 @@ fn a_fresh_bootstrap_builds_the_whole_machine() {
         MIX_DAEMON_SERVICE_UNIT,
     ] {
         let facts = &world.units[unit];
-        assert!(facts.enabled, "{unit} is not enabled");
+        assert!(world.enabled(unit), "{unit} is not enabled");
         assert!(facts.running.is_some(), "{unit} is not running");
     }
     let builders = &world.groups["nixbld"].members;
@@ -453,8 +453,24 @@ fn forcing_over_an_installation_replaces_it_and_a_failure_brings_it_back() {
         stopped < moved_aside,
         "a unit is stopped before its file is moved away"
     );
+    first(
+        &forced,
+        "the socket's enabling link being moved aside",
+        |action| {
+            matches!(action, Action::SetAside { path, .. }
+            if path == Path::new("/etc/systemd/system/sockets.target.wants/nix-daemon.socket"))
+        },
+    );
+    assert_eq!(
+        position(&forced, |action| matches!(
+            action,
+            Action::DisableUnit { .. }
+        )),
+        None,
+        "a unit is moved aside, never disabled, so its links can be put back exactly"
+    );
 
-    for fail_at in [0, changes / 2, changes - 1] {
+    for fail_at in 0..changes {
         let mut world = installed.clone();
         let failed = run(&mut world, &settings, Script::failing_at(fail_at));
         assert!(matches!(failed.report().verdict, Verdict::Failed { .. }));

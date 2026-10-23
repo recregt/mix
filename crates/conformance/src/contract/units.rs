@@ -112,6 +112,7 @@ fn queries() -> Vec<Query> {
         .flat_map(|unit| {
             [
                 Query::Unit(unit.to_string()),
+                Query::UnitLinks(unit.to_string()),
                 Query::Path(file(unit)),
                 Query::Contents(file(unit)),
             ]

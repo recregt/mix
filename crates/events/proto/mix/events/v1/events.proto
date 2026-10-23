@@ -246,6 +246,7 @@ message Observation {
     string program = 26;
     string linked = 27;
     bool accounts = 28;
+    string unit_links = 33;
   }
   oneof fact {
     PathFact path_fact = 10;
@@ -263,6 +264,7 @@ message Observation {
     ProgramFact program_fact = 30;
     PathsFact linked_fact = 31;
     AccountsFact accounts_fact = 32;
+    PathsFact unit_links_fact = 34;
   }
 }
 

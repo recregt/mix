@@ -70,6 +70,7 @@ fn query_of(query: &Query) -> observation::Query {
         Query::Group(name) => Wire::Group(name.clone()),
         Query::User(name) => Wire::User(name.clone()),
         Query::Unit(name) => Wire::Unit(name.clone()),
+        Query::UnitLinks(name) => Wire::UnitLinks(name.clone()),
         Query::Profile(user) => Wire::Profile(user.name.clone()),
         Query::TreeOwner(at) => Wire::TreeOwner(path(at)),
         Query::Repository(user) => Wire::Repository(path(&repository_dir(&user.home))),
@@ -191,6 +192,12 @@ fn fact_of(fact: &Fact) -> observation::Fact {
             paths: found.iter().map(|at| at.display().to_string()).collect(),
         }),
         Fact::Linked(found) => Wire::LinkedFact(PathsFact {
+            paths: found
+                .iter()
+                .map(|(at, _)| at.display().to_string())
+                .collect(),
+        }),
+        Fact::UnitLinks(found) => Wire::UnitLinksFact(PathsFact {
             paths: found
                 .iter()
                 .map(|(at, _)| at.display().to_string())

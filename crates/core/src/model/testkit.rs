@@ -590,7 +590,6 @@ fn file_change(before: &Entry, after: &Entry) -> Value {
 fn unit(unit: &Unit) -> Value {
     json!({
         "loaded": unit.loaded.as_deref().map(text),
-        "enabled": unit.enabled,
         "running": unit.running.as_deref().map(text),
     })
 }

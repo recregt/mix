@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use futures_util::StreamExt;
 use mix_core::effect::{
     Action, Failure, Outcome, Performed, UnitFacts, UnitFailure, UnitOperation,
@@ -143,6 +145,16 @@ impl Units {
         Proxy::new(&self.bus, DESTINATION, path, interface)
             .await
             .map_err(failed)
+    }
+
+    pub async fn links(&self, unit: &str) -> Result<Vec<PathBuf>, Failure> {
+        let operation = UnitOperation::Inspect;
+        let manager = self.manager(operation).await?;
+        let links: Vec<String> = manager
+            .call("GetUnitFileLinks", &(unit, false))
+            .await
+            .map_err(|error| bus_failure(operation, unit, error))?;
+        Ok(links.into_iter().map(PathBuf::from).collect())
     }
 
     pub async fn observe(&self, unit: &str) -> Result<UnitFacts, Failure> {

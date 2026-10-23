@@ -1,7 +1,7 @@
 pub mod system;
 
 use std::borrow::Cow;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::declared::identity::{MIX_USERS_GROUP, NIXBLD_GROUP, NIXBLD_USER_COUNT, user_name};
 use crate::declared::paths::{
@@ -10,7 +10,9 @@ use crate::declared::paths::{
 };
 use crate::declared::policy::Policy;
 use crate::declared::targets::{Intent, Runtime, UserConfig, tree_for};
-use crate::effect::{Action, Fact, Failure, GroupFacts, PathFacts, Query, UnitFacts, UserFacts};
+use crate::effect::{
+    Action, Fact, Failure, FileId, GroupFacts, PathFacts, Query, UnitFacts, UserFacts,
+};
 use crate::ops::health::reconcile_steps;
 use crate::run::{StepSpec, Title};
 use mix_events::v1::Verb;
@@ -48,6 +50,13 @@ impl Facts<'_> {
         }
     }
 
+    fn links(&self, index: usize) -> &[(PathBuf, FileId)] {
+        match &self.0[index] {
+            Fact::UnitLinks(links) => links,
+            other => unreachable!("a unit links query was answered with {other:?}"),
+        }
+    }
+
     fn unit(&self, index: usize) -> &UnitFacts {
         match &self.0[index] {
             Fact::Unit(unit) => unit,
@@ -65,6 +74,7 @@ fn set_aside(path: &Path, facts: &PathFacts) -> Option<Action> {
 
 struct RemoveExistingInstallation;
 
+const UNITS: [&str; 2] = [NIX_DAEMON_SOCKET_UNIT, NIX_DAEMON_SERVICE_UNIT];
 const UNIT_FILES: [&str; 2] = [NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SOCKET_DEST];
 const SET_ASIDE: [&str; 4] = [NIX_CONF_DEST, PROFILE_SNIPPET_DEST, POLICY_FILE, "/nix"];
 
@@ -78,10 +88,11 @@ impl StepSpec for RemoveExistingInstallation {
     }
 
     fn queries(&self) -> Vec<Query> {
-        let mut queries = vec![
-            Query::Unit(NIX_DAEMON_SOCKET_UNIT.to_string()),
-            Query::Unit(NIX_DAEMON_SERVICE_UNIT.to_string()),
-        ];
+        let mut queries: Vec<Query> = UNITS
+            .iter()
+            .map(|unit| Query::Unit(unit.to_string()))
+            .collect();
+        queries.extend(UNITS.iter().map(|unit| Query::UnitLinks(unit.to_string())));
         queries.extend(UNIT_FILES.iter().map(|path| Query::Path(path.into())));
         queries.extend((1..=NIXBLD_USER_COUNT).map(|n| Query::User(user_name(n).into_owned())));
         queries.push(Query::Group(NIXBLD_GROUP.to_string()));
@@ -93,33 +104,40 @@ impl StepSpec for RemoveExistingInstallation {
     fn actions(&self, facts: &[Fact]) -> Result<Vec<Action>, Failure> {
         let facts = Facts(facts);
         let mut actions = Vec::new();
-        for (index, unit) in [NIX_DAEMON_SOCKET_UNIT, NIX_DAEMON_SERVICE_UNIT]
-            .iter()
-            .enumerate()
-        {
-            let state = facts.unit(index);
-            if state.active_state == "active" {
+        for (index, unit) in UNITS.iter().enumerate() {
+            if facts.unit(index).active_state == "active" {
                 actions.push(Action::StopUnit {
                     unit: unit.to_string(),
                 });
             }
-            if state.enabled() {
-                actions.push(Action::DisableUnit {
-                    unit: unit.to_string(),
-                });
+        }
+        let mut moved: Vec<PathBuf> = Vec::new();
+        for index in 0..UNITS.len() {
+            for (link, id) in facts.links(UNITS.len() + index) {
+                if !moved.contains(link) {
+                    actions.push(Action::SetAside {
+                        path: link.clone(),
+                        expect: *id,
+                    });
+                    moved.push(link.clone());
+                }
             }
         }
-        let mut units_removed = false;
+        let files = 2 * UNITS.len();
         for (offset, path) in UNIT_FILES.iter().enumerate() {
-            if let Some(action) = set_aside(Path::new(path), facts.path(2 + offset)) {
+            let path = Path::new(path);
+            if moved.iter().any(|done| done == path) {
+                continue;
+            }
+            if let Some(action) = set_aside(path, facts.path(files + offset)) {
                 actions.push(action);
-                units_removed = true;
+                moved.push(path.to_path_buf());
             }
         }
-        if units_removed {
+        if !moved.is_empty() {
             actions.push(Action::DaemonReload);
         }
-        let users = 2 + UNIT_FILES.len();
+        let users = files + UNIT_FILES.len();
         for n in 1..=NIXBLD_USER_COUNT {
             if let Some(user) = facts.user(users + n as usize - 1) {
                 actions.push(Action::DeleteUser {

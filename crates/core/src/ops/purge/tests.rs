@@ -81,7 +81,7 @@ fn a_purge_leaves_nothing_mix_made_and_keeps_the_users_own_files() {
     assert!(!world.groups.contains_key(MIX_USERS_GROUP));
     for unit in UNITS {
         let facts = world.units.get(unit).cloned().unwrap_or_default();
-        assert!(!facts.enabled, "{unit} is still enabled");
+        assert!(!world.enabled(unit), "{unit} is still enabled");
         assert!(facts.running.is_none(), "{unit} is still running");
     }
     assert!(world.users.contains_key("alice"));

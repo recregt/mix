@@ -90,6 +90,21 @@ pub fn comparable(fact: Fact) -> Fact {
             digest: None,
             ..facts
         }),
+        Fact::UnitLinks(links) => {
+            let mut links: Vec<_> = links
+                .into_iter()
+                .map(|(link, _)| {
+                    let unknown = mix_core::effect::FileId {
+                        dev: 0,
+                        ino: 0,
+                        born: None,
+                    };
+                    (link, unknown)
+                })
+                .collect();
+            links.sort_by(|(a, _), (b, _)| a.cmp(b));
+            Fact::UnitLinks(links)
+        }
         other => other,
     }
 }

@@ -53,25 +53,24 @@ pub struct Entry {
 #[derive(Debug, Clone, Default)]
 pub struct Unit {
     pub loaded: Option<Arc<[u8]>>,
-    pub enabled: bool,
     pub running: Option<Arc<[u8]>>,
     pub since: Option<u64>,
     pub stamp: Option<u64>,
 }
 
 impl Unit {
-    fn held(&self) -> bool {
-        self.running.is_some() || self.enabled
+    fn held(&self, enabled: bool) -> bool {
+        self.running.is_some() || enabled
     }
 
-    fn forget_unless_held(&mut self) {
-        if !self.held() {
+    fn forget_unless_held(&mut self, enabled: bool) {
+        if !self.held(enabled) {
             self.loaded = None;
         }
     }
 
-    fn seen(&self, file: Option<Arc<[u8]>>) -> Option<Arc<[u8]>> {
-        if self.held() {
+    fn seen(&self, enabled: bool, file: Option<Arc<[u8]>>) -> Option<Arc<[u8]>> {
+        if self.held(enabled) {
             self.loaded.clone()
         } else {
             file
@@ -81,9 +80,7 @@ impl Unit {
 
 impl PartialEq for Unit {
     fn eq(&self, other: &Self) -> bool {
-        self.loaded == other.loaded
-            && self.enabled == other.enabled
-            && self.running == other.running
+        self.loaded == other.loaded && self.running == other.running
     }
 }
 
@@ -286,6 +283,27 @@ fn unit_path(unit: &str) -> PathBuf {
     Path::new(UNIT_DIR).join(unit)
 }
 
+fn install_links(unit: &str, file: &[u8]) -> Vec<PathBuf> {
+    let text = String::from_utf8_lossy(file);
+    let mut links = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        let (suffix, targets) = match line.split_once('=') {
+            Some(("WantedBy", targets)) => ("wants", targets),
+            Some(("RequiredBy", targets)) => ("requires", targets),
+            _ => continue,
+        };
+        for target in targets.split_whitespace() {
+            links.push(
+                Path::new(UNIT_DIR)
+                    .join(format!("{target}.{suffix}"))
+                    .join(unit),
+            );
+        }
+    }
+    links
+}
+
 fn done(undo: Vec<Action>) -> Outcome {
     Ok(Performed { undo })
 }
@@ -325,6 +343,34 @@ impl World {
             },
         );
         self
+    }
+
+    fn with_wants_dir(&mut self, link: &Path) {
+        if let Some(dir) = link.parent()
+            && !self.files.contains_key(dir)
+        {
+            self.with_dir(dir, 0o755, ROOT);
+        }
+    }
+
+    fn unit_links(&self, unit: &str) -> Vec<PathBuf> {
+        self.files
+            .keys()
+            .filter(|path| path.file_name().is_some_and(|name| name == unit))
+            .filter(|path| {
+                path.parent().is_some_and(|dir| {
+                    dir.parent() == Some(Path::new(UNIT_DIR))
+                        && dir
+                            .extension()
+                            .is_some_and(|kind| kind == "wants" || kind == "requires")
+                })
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub fn enabled(&self, unit: &str) -> bool {
+        !self.unit_links(unit).is_empty()
     }
 
     pub fn contents(&self, path: impl AsRef<Path>) -> Option<&[u8]> {
@@ -796,21 +842,36 @@ impl World {
                 done(vec![Action::DaemonReload])
             }
             Action::EnableUnit { unit } => {
-                let facts = self.loaded_unit(unit, UnitOperation::Enable)?;
-                if facts.enabled {
+                if self.enabled(unit) {
                     return Err(account_conflict(unit, "disabled", "enabled"));
                 }
-                facts.enabled = true;
+                let facts = self.loaded_unit(unit, UnitOperation::Enable)?;
+                let links = facts
+                    .loaded
+                    .as_deref()
+                    .map(|file| install_links(unit, file))
+                    .unwrap_or_default();
+                for link in links {
+                    self.with_wants_dir(&link);
+                    self.with_file(link, unit.as_bytes(), 0o777, ROOT);
+                }
                 self.reload();
                 done(vec![Action::DisableUnit { unit: unit.clone() }])
             }
             Action::DisableUnit { unit } => {
-                let facts = self.units.entry(unit.clone()).or_default();
-                if !facts.enabled {
+                if !self.enabled(unit) {
                     return Err(account_conflict(unit, "enabled", "disabled"));
                 }
-                facts.enabled = false;
-                facts.forget_unless_held();
+                for link in self.unit_links(unit) {
+                    self.files.remove(&link);
+                    if let Some(dir) = link.parent()
+                        && self.subtree(dir).len() == 1
+                    {
+                        self.files.remove(dir);
+                    }
+                }
+                let facts = self.units.entry(unit.clone()).or_default();
+                facts.forget_unless_held(false);
                 self.reload();
                 done(vec![Action::EnableUnit { unit: unit.clone() }])
             }
@@ -825,13 +886,14 @@ impl World {
                 done(vec![Action::StopUnit { unit: unit.clone() }])
             }
             Action::StopUnit { unit } => {
+                let enabled = self.enabled(unit);
                 let facts = self.units.entry(unit.clone()).or_default();
                 if facts.running.is_none() {
                     return Err(account_conflict(unit, "active", "inactive"));
                 }
                 facts.running = None;
                 facts.since = None;
-                facts.forget_unless_held();
+                facts.forget_unless_held(enabled);
                 done(vec![Action::StartUnit { unit: unit.clone() }])
             }
             Action::RestartUnit { unit } => {
@@ -980,8 +1042,8 @@ impl World {
 
     fn already(&self, action: &Action) -> bool {
         match action {
-            Action::EnableUnit { unit } => self.units.get(unit).is_some_and(|unit| unit.enabled),
-            Action::DisableUnit { unit } => !self.units.get(unit).is_some_and(|unit| unit.enabled),
+            Action::EnableUnit { unit } => self.enabled(unit),
+            Action::DisableUnit { unit } => !self.enabled(unit),
             Action::StartUnit { unit } => self
                 .units
                 .get(unit)
@@ -1020,8 +1082,9 @@ impl World {
         for name in names {
             let loaded = self.contents(unit_path(&name)).map(Arc::from);
             let stamp = self.stamp(unit_path(&name));
+            let enabled = self.enabled(&name);
             let facts = self.units.entry(name).or_default();
-            if facts.held() {
+            if facts.held(enabled) {
                 facts.loaded = loaded;
                 facts.stamp = stamp;
             }
@@ -1031,8 +1094,9 @@ impl World {
     fn loaded_unit(&mut self, unit: &str, operation: UnitOperation) -> Result<&mut Unit, Failure> {
         let file = self.contents(unit_path(unit)).map(Arc::from);
         let stamp = self.stamp(unit_path(unit));
+        let enabled = self.enabled(unit);
         let facts = self.units.entry(unit.to_string()).or_default();
-        if !facts.held() {
+        if !facts.held(enabled) {
             facts.loaded = file;
             facts.stamp = stamp;
         }
@@ -1063,10 +1127,13 @@ impl World {
     fn install_runtime(&mut self) -> Outcome {
         let files: [(&str, &[u8]); 3] = [
             (DEFAULT_PROFILE_NIX_ENV, b"nix-env"),
-            (NIX_DAEMON_SERVICE_SRC, b"[Service]\nExecStart=nix-daemon\n"),
+            (
+                NIX_DAEMON_SERVICE_SRC,
+                b"[Service]\nExecStart=nix-daemon\n\n[Install]\nWantedBy=multi-user.target\n",
+            ),
             (
                 NIX_DAEMON_SOCKET_SRC,
-                b"[Socket]\nListenStream=/nix/var/nix/daemon-socket/socket\n",
+                b"[Socket]\nListenStream=/nix/var/nix/daemon-socket/socket\n\n[Install]\nWantedBy=sockets.target\n",
             ),
         ];
         let mut created = Vec::new();
@@ -1167,7 +1234,30 @@ impl World {
         }
     }
 
-    pub fn seed_unit(&mut self, name: &str, found: &UnitFacts, file: Option<Arc<[u8]>>) {
+    pub fn seed_unit(
+        &mut self,
+        name: &str,
+        found: &UnitFacts,
+        file: Option<Arc<[u8]>>,
+        links: &[(PathBuf, FileId)],
+    ) {
+        let installed: Vec<&(PathBuf, FileId)> = links
+            .iter()
+            .filter(|(link, _)| link.parent() != Some(Path::new(UNIT_DIR)))
+            .collect();
+        for (link, id) in &installed {
+            self.with_wants_dir(link);
+            self.files.insert(
+                link.clone(),
+                Entry {
+                    content: Content::File(Arc::from(name.as_bytes())),
+                    mode: 0o777,
+                    owner: ROOT,
+                    id: *id,
+                    changed: id.ino,
+                },
+            );
+        }
         let loaded = (found.load_state == "loaded").then_some(file).flatten();
         let running = matches!(found.active_state.as_str(), "active" | "reloading")
             .then(|| loaded.clone())
@@ -1178,7 +1268,6 @@ impl World {
             name.to_string(),
             Unit {
                 loaded,
-                enabled: found.enabled(),
                 running,
                 since,
                 stamp,
@@ -1318,11 +1407,21 @@ impl World {
                     .filter_map(|path| Some((path.clone(), self.files.get(path)?.id)))
                     .collect(),
             ),
+            Query::UnitLinks(name) => Fact::UnitLinks(
+                self.unit_links(name)
+                    .into_iter()
+                    .filter_map(|link| {
+                        let id = self.files.get(&link)?.id;
+                        Some((link, id))
+                    })
+                    .collect(),
+            ),
             Query::Unit(name) => {
                 let facts = self.units.get(name).cloned().unwrap_or_default();
+                let enabled = self.enabled(name);
                 let file = self.contents(unit_path(name)).map(Arc::from);
-                let loaded = facts.seen(file.clone());
-                let stale = facts.held()
+                let loaded = facts.seen(enabled, file.clone());
+                let stale = facts.held(enabled)
                     && match (self.stamp(unit_path(name)), facts.stamp) {
                         (Some(stamp), Some(loaded)) => stamp > loaded,
                         (Some(_), None) | (None, Some(_)) => true,
@@ -1341,7 +1440,7 @@ impl World {
                         "inactive"
                     }
                     .to_string(),
-                    file_state: match (facts.enabled, &file) {
+                    file_state: match (enabled, &file) {
                         (true, _) => "enabled",
                         (false, Some(_)) => "disabled",
                         (false, None) => "",
@@ -1635,7 +1734,7 @@ mod tests {
                 },
                 Action::InstallUnit {
                     unit: "nix-daemon.socket".into(),
-                    contents: bytes("[Socket]"),
+                    contents: bytes("[Socket]\n\n[Install]\nWantedBy=sockets.target\n"),
                     expect: Expect::Absent,
                 },
                 Action::DaemonReload,
@@ -1657,10 +1756,9 @@ mod tests {
         roll_back(&mut world, &journal);
 
         let unloaded = |world: &World| {
-            world
-                .units
-                .values()
-                .all(|unit| unit.loaded.is_none() && unit.running.is_none() && !unit.enabled)
+            world.units.iter().all(|(name, unit)| {
+                unit.loaded.is_none() && unit.running.is_none() && !world.enabled(name)
+            })
         };
         assert!(unloaded(&world));
         assert_eq!(world.files, before.files);
