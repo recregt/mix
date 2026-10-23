@@ -265,6 +265,16 @@ impl Args {
                     error.to_string().trim(),
                 ));
             }
+            if !error.use_stderr() {
+                let code = match error.print() {
+                    Err(failed) if failed.kind() != std::io::ErrorKind::BrokenPipe => {
+                        mix_render::report_unwritten(failed.kind());
+                        mix_events::exit::FAILED as i32
+                    }
+                    _ => error.exit_code(),
+                };
+                std::process::exit(code);
+            }
             error.exit()
         })
     }

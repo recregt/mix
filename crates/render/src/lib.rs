@@ -19,7 +19,7 @@ use mix_events::{Detail, Fault, ROOT, Render};
 use human::Human;
 
 pub use mix_ui::ColorChoice as Color;
-pub use mix_ui::{confirm, interactive};
+pub use mix_ui::{confirm, interactive, report_unwritten, unwritten};
 
 pub fn start(color: Color, draws_progress: bool) {
     mix_ui::set_color(color);

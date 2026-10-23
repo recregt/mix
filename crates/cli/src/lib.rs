@@ -10,6 +10,20 @@ use std::process::ExitCode;
 use args::{Args, Color, Command};
 
 pub async fn run() -> ExitCode {
+    let exit = served().await;
+    match mix_render::unwritten() {
+        Some(kind) => {
+            mix_render::report_unwritten(kind);
+            match exit == ExitCode::SUCCESS {
+                true => ExitCode::from(mix_events::exit::FAILED as u8),
+                false => exit,
+            }
+        }
+        None => exit,
+    }
+}
+
+async fn served() -> ExitCode {
     let args = Args::parse_with_color();
     let environment = env::Environment::read();
     let command = request::command_of(&args.command, args.dry_run(), &environment);
