@@ -430,28 +430,40 @@ impl Units {
         if facts.active_state != "active" && facts.active_state != "activating" {
             return done(Vec::new());
         }
-        prepared(&[Action::StartUnit {
-            unit: unit.to_string(),
-        }])?;
         let triggered: Vec<String> = self
             .unit_proxy(UnitOperation::Stop, unit, UNIT)
             .await?
             .get_property("Triggers")
             .await
             .unwrap_or_default();
-        self.job(Job::Stop, unit, scope).await?;
-        for dependent in triggered {
+        let mut running = Vec::new();
+        for dependent in &triggered {
             if self
-                .observe(&dependent)
+                .observe(dependent)
+                .await
+                .is_ok_and(|facts| facts.active_state == "active")
+            {
+                running.push(dependent.as_str());
+            }
+        }
+        let undo: Vec<Action> = std::iter::once(unit)
+            .chain(running)
+            .map(|unit| Action::StartUnit {
+                unit: unit.to_string(),
+            })
+            .collect();
+        prepared(&undo)?;
+        self.job(Job::Stop, unit, scope).await?;
+        for dependent in &triggered {
+            if self
+                .observe(dependent)
                 .await
                 .is_ok_and(|facts| still_running(&facts.active_state))
             {
-                self.job(Job::Stop, &dependent, scope).await?;
+                self.job(Job::Stop, dependent, scope).await?;
             }
         }
-        done(vec![Action::StartUnit {
-            unit: unit.to_string(),
-        }])
+        done(undo)
     }
 }
 
