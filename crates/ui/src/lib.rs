@@ -141,8 +141,6 @@ impl Out for Stderr {
     }
 }
 
-pub struct Stdout;
-
 pub struct Spaced<O> {
     inner: O,
     gap: AtomicBool,
@@ -191,32 +189,20 @@ impl<O: Out + ?Sized> Out for std::sync::Arc<O> {
     }
 }
 
-impl Out for Stdout {
-    fn line(&self, text: &str) {
-        data(text);
-    }
-
-    fn colours(&self) -> bool {
-        stdout_colors()
-    }
-
-    fn width(&self) -> Option<usize> {
-        terminal_width(&console::Term::stdout())
+fn above_progress<R>(write: impl FnOnce() -> R) -> R {
+    match progress_enabled() {
+        true => progress::board().suspend(write),
+        false => write(),
     }
 }
 
 fn print_line(line: &str) {
-    let write = || {
+    above_progress(|| {
         let mut out = std::io::stderr().lock();
         let _ = out
             .write_all(line.as_bytes())
             .and_then(|()| out.write_all(b"\n"));
-    };
-    if progress_enabled() {
-        progress::board().suspend(write);
-    } else {
-        write();
-    }
+    });
 }
 
 fn painted(out: &mut String, colour: &str, text: &str, colours: bool) {
@@ -230,19 +216,22 @@ fn painted(out: &mut String, colour: &str, text: &str, colours: bool) {
     }
 }
 
-pub fn data(text: &str) {
-    let write = || {
-        let mut out = std::io::stdout().lock();
-        let _ = out
-            .write_all(text.as_bytes())
-            .and_then(|()| out.write_all(b"\n"))
-            .and_then(|()| out.flush());
-    };
-    if progress_enabled() {
-        progress::board().suspend(write);
-    } else {
-        write();
+pub struct Stdout;
+
+impl Write for Stdout {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        above_progress(|| std::io::stdout().lock().write(buf))
     }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        above_progress(|| std::io::stdout().lock().flush())
+    }
+}
+
+pub fn data(out: &mut (impl Write + ?Sized), text: &str) -> std::io::Result<()> {
+    out.write_all(text.as_bytes())?;
+    out.write_all(b"\n")?;
+    out.flush()
 }
 
 pub fn status_line(status: Status, subject: &str, colours: bool) -> String {
@@ -468,6 +457,46 @@ mod tests {
             console::measure_text_width(&fit("日本語のパッケージ", 7)),
             7
         );
+    }
+
+    struct Refusing {
+        on_write: bool,
+    }
+
+    impl Write for Refusing {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            match self.on_write {
+                true => Err(std::io::ErrorKind::StorageFull.into()),
+                false => Ok(buf.len()),
+            }
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::ErrorKind::StorageFull.into())
+        }
+    }
+
+    #[test]
+    fn data_that_could_not_be_written_or_flushed_returns_why() {
+        for on_write in [true, false] {
+            let written = data(&mut Refusing { on_write }, "line");
+
+            assert_eq!(
+                written.map_err(|error| error.kind()),
+                Err(std::io::ErrorKind::StorageFull),
+                "failing on write: {on_write}"
+            );
+        }
+    }
+
+    #[test]
+    fn each_piece_of_data_ends_in_a_newline() {
+        let mut out = Vec::new();
+
+        data(&mut out, "first").unwrap();
+        data(&mut out, "second").unwrap();
+
+        assert_eq!(out, b"first\nsecond\n");
     }
 
     #[test]

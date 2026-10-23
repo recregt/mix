@@ -1,5 +1,6 @@
 #![cfg_attr(not(test), deny(clippy::wildcard_enum_match_arm))]
 
+use std::io::Write;
 use std::time::Duration;
 
 use mix_events::Detail;
@@ -24,16 +25,16 @@ fn words(out: &dyn Out, severity: Severity, words: &mix_explain::Diagnostic) {
     mix_ui::report_to(out, severity, &words.report());
 }
 
-pub(super) fn finished(
+pub(super) fn finished<W: Write + ?Sized>(
     out: &dyn Out,
     node: &NodeFinished,
     request: Option<&Request>,
     level: Detail,
-    data: bool,
+    data: Option<&mut W>,
     elapsed: Duration,
-) {
+) -> std::io::Result<()> {
     let Some(result) = &node.result else {
-        return;
+        return Ok(());
     };
     let chatty = level >= Detail::Step;
     match result {
@@ -139,13 +140,15 @@ pub(super) fn finished(
             }
         }
         Result::Explain(explain) => {
-            if data {
-                mix_ui::data(&explained(explain, request));
+            if let Some(data) = data {
+                mix_ui::data(data, &explained(explain, request))?;
             }
         }
         Result::List(list) => {
-            if data && !list.packages.is_empty() {
-                mix_ui::data(&listed(list, mix_ui::data_width()));
+            if let Some(data) = data
+                && !list.packages.is_empty()
+            {
+                mix_ui::data(data, &listed(list, mix_ui::data_width()))?;
             }
         }
         Result::Update(update) => {
@@ -155,6 +158,7 @@ pub(super) fn finished(
         }
         Result::Inspection(_) | Result::Process(_) => {}
     }
+    Ok(())
 }
 
 fn updated(out: &dyn Out, update: &UpdateResult, elapsed: Duration) {

@@ -37,6 +37,12 @@ pub fn command(request: Request) -> Command {
 }
 
 pub fn fail(request: String, command: Command, fault: Fault, render: &mut (impl Render + ?Sized)) {
+    for envelope in failure(request, command, fault) {
+        render.envelope(envelope);
+    }
+}
+
+pub fn failure(request: String, command: Command, fault: Fault) -> Vec<Envelope> {
     let outbox = Arc::new(Outbox::new(request, || {}));
     let mut tree = Tree::new(
         Arc::clone(&outbox),
@@ -46,7 +52,5 @@ pub fn fail(request: String, command: Command, fault: Fault, render: &mut (impl 
     let ending: Ending = fault.into();
     let _ = tree.finish(ROOT, ending.for_root(false));
     drop(tree);
-    for envelope in outbox.drain() {
-        render.envelope(envelope);
-    }
+    outbox.drain()
 }

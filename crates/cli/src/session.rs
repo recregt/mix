@@ -23,24 +23,41 @@ pub async fn run(
             client::run(&command, route, view, daemon).await
         }
     };
-    if let Err(failure) = &result {
-        view.failed(
+    let written = match &result {
+        Ok(()) | Err(Failure::Unwritten(_)) => Ok(()),
+        Err(failure) => view.failed(
             uuid::Uuid::now_v7().to_string(),
             &command,
             &failure.fault(),
             failure.source(),
-        );
+        ),
+    };
+    let code = view.exit.code().unwrap_or_else(|| match &result {
+        Ok(()) => mix_events::exit::SUCCEEDED,
+        Err(failure) => mix_events::Ending::from(failure.fault())
+            .for_root(false)
+            .exit_code(),
+    });
+    let unwritten = unwritable(match result {
+        Err(Failure::Unwritten(error)) => Err(error),
+        _ => written,
+    });
+    if let Some(error) = &unwritten {
+        mix_render::report_unwritten(error);
     }
-    let from_root = view
-        .exit
-        .code()
-        .map(|code| ExitCode::from(u8::try_from(code).unwrap_or(u8::MAX)));
-    match result {
-        Ok(()) => from_root.unwrap_or(ExitCode::SUCCESS),
-        Err(failure) => from_root.unwrap_or_else(|| {
-            let ending = mix_events::Ending::from(failure.fault()).for_root(false);
-            ExitCode::from(u8::try_from(ending.exit_code()).unwrap_or(u8::MAX))
-        }),
+    ExitCode::from(u8::try_from(closing(code, unwritten.is_some())).unwrap_or(u8::MAX))
+}
+
+pub(crate) fn unwritable(written: std::io::Result<()>) -> Option<std::io::Error> {
+    written
+        .err()
+        .filter(|error| error.kind() != std::io::ErrorKind::BrokenPipe)
+}
+
+fn closing(code: u32, unwritten: bool) -> u32 {
+    match unwritten && code == mix_events::exit::SUCCEEDED {
+        true => mix_events::exit::FAILED,
+        false => code,
     }
 }
 
@@ -57,7 +74,7 @@ mod tests {
     use mix_render::{Exit, Json, View};
     use mix_rpc::{Caller, Controls, Events, Reply, Worker};
 
-    use super::run;
+    use super::{closing, run, unwritable};
     use crate::client;
 
     struct Forward(Events);
@@ -489,5 +506,26 @@ mod tests {
         .await;
 
         assert_eq!(exit, ExitCode::from(2));
+    }
+
+    #[test]
+    fn output_that_could_not_be_written_fails_only_a_command_that_otherwise_succeeded() {
+        use mix_events::exit::{FAILED, PROBLEMS_REMAIN, SUCCEEDED};
+
+        assert_eq!(closing(SUCCEEDED, true), FAILED);
+        assert_eq!(closing(PROBLEMS_REMAIN, true), PROBLEMS_REMAIN);
+        assert_eq!(closing(SUCCEEDED, false), SUCCEEDED);
+    }
+
+    #[test]
+    fn a_reader_that_stopped_reading_is_not_an_output_that_could_not_be_written() {
+        let kind = |written: std::io::Result<()>| unwritable(written).map(|error| error.kind());
+
+        assert_eq!(kind(Ok(())), None);
+        assert_eq!(kind(Err(std::io::ErrorKind::BrokenPipe.into())), None);
+        assert_eq!(
+            kind(Err(std::io::ErrorKind::StorageFull.into())),
+            Some(std::io::ErrorKind::StorageFull)
+        );
     }
 }

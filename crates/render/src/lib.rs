@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use mix_events::result::v1::Result as Document;
 use mix_events::v1::{Command, Envelope, envelope, node_finished};
-use mix_events::{Detail, Fault, ROOT, Render};
+use mix_events::{Detail, Fault, ROOT};
 
 use human::Human;
 
@@ -43,14 +43,17 @@ impl Json {
         !matches!(self, Json::Off)
     }
 
-    pub fn write(&self, document: Document) {
+    pub fn write(&self, document: Document) -> std::io::Result<()> {
         match self {
-            Json::Off => {}
+            Json::Off => Ok(()),
             Json::Stdout => document::print(&document),
-            Json::Into(documents) => documents
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push(document),
+            Json::Into(documents) => {
+                documents
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(document);
+                Ok(())
+            }
         }
     }
 }
@@ -105,14 +108,18 @@ pub struct View {
 
 impl View {
     pub fn sinks(&self) -> Sinks {
-        self.sinks_to(mix_ui::display())
+        self.sinks_to(mix_ui::display(), Box::new(mix_ui::Stdout))
     }
 
-    fn sinks_to(&self, display: Arc<dyn mix_ui::Display>) -> Sinks {
+    fn sinks_to(
+        &self,
+        display: Arc<dyn mix_ui::Display>,
+        data: Box<dyn std::io::Write + Send>,
+    ) -> Sinks {
         Sinks {
             human: Human::new(display)
                 .level(self.level())
-                .data(!self.json.on())
+                .data((!self.json.on()).then_some(data))
                 .preview(self.preview),
             document: self
                 .json
@@ -143,20 +150,16 @@ impl View {
         command: &Command,
         fault: &Fault,
         source: Option<&(dyn std::error::Error + 'static)>,
-    ) {
+    ) -> std::io::Result<()> {
         if self.exit.code().is_some() {
-            return;
+            return Ok(());
         }
-        if self.json.on() {
-            let mut documented = Documented {
-                builder: document::Builder::default(),
-                json: self.json.clone(),
-                exit: self.exit.clone(),
-            };
-            mix_events::fail(id, command.clone(), fault.clone(), &mut documented);
-        }
+        let documented = match self.json.on() {
+            true => self.documented(id, command, fault),
+            false => Ok(()),
+        };
         let Some(request) = &command.request else {
-            return;
+            return documented;
         };
         let words = words::outcome(request, fault);
         let code = (self.verbose > 0)
@@ -173,7 +176,27 @@ impl View {
             mix_ui::Severity::Error,
             &words.report().code(code.as_deref()).causes(causes),
         );
+        documented
     }
+
+    fn documented(&self, id: String, command: &Command, fault: &Fault) -> std::io::Result<()> {
+        let mut builder = document::Builder::default();
+        for envelope in mix_events::failure(id, command.clone(), fault.clone()) {
+            self.exit.saw(root_exit(&envelope));
+            if let Some(document) = builder.envelope(&envelope) {
+                self.json.write(document)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn report_unwritten(error: &std::io::Error) {
+    mix_ui::report(
+        mix_ui::Severity::Error,
+        &mix_ui::Report::new(&mix_ui::phrase!("`mix` couldn't write its output"))
+            .causes(vec![format!("standard output: {}", error.kind())]),
+    );
 }
 
 pub fn level(quiet: bool, verbose: u8) -> Detail {
@@ -218,43 +241,18 @@ fn root_departure(envelope: &Envelope) -> Option<Vec<String>> {
     None
 }
 
-struct Documented {
-    builder: document::Builder,
-    json: Json,
-    exit: Exit,
-}
-
-impl Render for Documented {
-    fn detail(&self) -> Detail {
-        Detail::Action
-    }
-
-    fn envelope(&mut self, envelope: Envelope) {
-        self.exit.saw(root_exit(&envelope));
-        if let Some(document) = self.builder.envelope(&envelope) {
-            self.json.write(document);
-        }
-    }
-}
-
-impl Render for Sinks {
-    fn detail(&self) -> Detail {
-        let human = self.human.detail();
-        match self.document {
-            Some(_) => human.max(Detail::Action),
-            None => human,
-        }
-    }
-
-    fn envelope(&mut self, envelope: Envelope) {
+impl Sinks {
+    pub fn envelope(&mut self, envelope: Envelope) -> std::io::Result<()> {
         self.exit.saw(root_exit(&envelope));
         self.departure.saw(&envelope);
-        if let Some((builder, json)) = &mut self.document
-            && let Some(document) = builder.envelope(&envelope)
-        {
-            json.write(document);
-        }
-        self.human.envelope(envelope);
+        let documented = match &mut self.document {
+            Some((builder, json)) => builder
+                .envelope(&envelope)
+                .map_or(Ok(()), |document| json.write(document)),
+            None => Ok(()),
+        };
+        let shown = self.human.envelope(envelope);
+        documented.and(shown)
     }
 }
 
@@ -296,15 +294,26 @@ mod tests {
             ..json
         };
         let (json, _) = into();
-        assert!(!json.sinks_to(Arc::new(mix_ui::Silent)).human.prints_data());
-        assert!(human.sinks_to(Arc::new(mix_ui::Silent)).human.prints_data());
+        assert!(
+            !json
+                .sinks_to(Arc::new(mix_ui::Silent), Box::new(std::io::sink()))
+                .human
+                .prints_data()
+        );
+        assert!(
+            human
+                .sinks_to(Arc::new(mix_ui::Silent), Box::new(std::io::sink()))
+                .human
+                .prints_data()
+        );
     }
 
     #[test]
     fn a_failure_before_any_work_still_ends_in_a_document_with_its_code() {
         let (view, documents) = into();
 
-        view.failed("request".to_string(), &install(), &refused(), None);
+        view.failed("request".to_string(), &install(), &refused(), None)
+            .unwrap();
 
         let documents = documents.lock().unwrap();
         let [document] = documents.as_slice() else {
@@ -320,7 +329,7 @@ mod tests {
     #[test]
     fn a_stream_that_stopped_before_its_ending_is_reported_once_by_the_client() {
         let (view, documents) = into();
-        let mut sinks = view.sinks_to(Arc::new(mix_ui::Silent));
+        let mut sinks = view.sinks_to(Arc::new(mix_ui::Silent), Box::new(std::io::sink()));
         let outbox = Arc::new(mix_events::Outbox::new("request", || {}));
         let tree = mix_events::Tree::new(
             Arc::clone(&outbox),
@@ -328,11 +337,12 @@ mod tests {
             mix_events::Start::command("install", install()),
         );
         for envelope in outbox.drain() {
-            sinks.envelope(envelope);
+            sinks.envelope(envelope).unwrap();
         }
         std::mem::forget(tree);
 
-        view.failed("other".to_string(), &install(), &refused(), None);
+        view.failed("other".to_string(), &install(), &refused(), None)
+            .unwrap();
 
         let documents = documents.lock().unwrap();
         assert_eq!(documents.len(), 1);
@@ -343,7 +353,7 @@ mod tests {
     #[test]
     fn a_stream_that_reached_its_ending_is_not_reported_again() {
         let (view, documents) = into();
-        let mut sinks = view.sinks_to(Arc::new(mix_ui::Silent));
+        let mut sinks = view.sinks_to(Arc::new(mix_ui::Silent), Box::new(std::io::sink()));
         let outbox = Arc::new(mix_events::Outbox::new("request", || {}));
         let mut tree = mix_events::Tree::new(
             Arc::clone(&outbox),
@@ -354,14 +364,72 @@ mod tests {
             .unwrap();
         drop(tree);
         for envelope in outbox.drain() {
-            sinks.envelope(envelope);
+            sinks.envelope(envelope).unwrap();
         }
         let ended = view.exit.code();
 
-        view.failed("other".to_string(), &install(), &refused(), None);
+        view.failed("other".to_string(), &install(), &refused(), None)
+            .unwrap();
 
         assert!(ended.is_some());
         assert_eq!(documents.lock().unwrap().len(), 1);
         assert_eq!(view.exit.code(), ended);
+    }
+
+    struct Full;
+
+    impl std::io::Write for Full {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::StorageFull.into())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_list_that_could_not_be_written_says_why_and_the_commands_own_exit_is_kept() {
+        let (view, _) = into();
+        let view = View {
+            json: Json::Off,
+            ..view
+        };
+        let mut sinks = view.sinks_to(Arc::new(mix_ui::Silent), Box::new(Full));
+        let outbox = Arc::new(mix_events::Outbox::new("request", || {}));
+        let mut tree = mix_events::Tree::new(
+            Arc::clone(&outbox),
+            Arc::new(|| None),
+            mix_events::Start::command(
+                "list",
+                mix_events::command(Request::List(mix_events::v1::ListRequest::default())),
+            ),
+        );
+        let listed = mix_events::v1::ListResult {
+            packages: vec![mix_events::v1::InstalledPackage {
+                name: "curl".into(),
+                ..mix_events::v1::InstalledPackage::default()
+            }],
+            ..mix_events::v1::ListResult::default()
+        };
+        tree.finish(
+            mix_events::ROOT,
+            mix_events::Ending::succeeded()
+                .with_result(node_finished::Result::List(listed))
+                .for_root(false),
+        )
+        .unwrap();
+        drop(tree);
+
+        let written = outbox
+            .drain()
+            .into_iter()
+            .try_for_each(|envelope| sinks.envelope(envelope));
+
+        assert_eq!(
+            written.map_err(|error| error.kind()),
+            Err(std::io::ErrorKind::StorageFull)
+        );
+        assert_eq!(view.exit.code(), Some(mix_events::exit::SUCCEEDED));
     }
 }

@@ -6,7 +6,6 @@ use std::sync::Arc;
 use mix_render::human::Human;
 use mix_events::Normalize;
 use mix_events::v1::Envelope;
-use mix_events::Render;
 use prost::Message;
 
 fn consume(envelopes: &[Envelope]) {
@@ -16,7 +15,7 @@ fn consume(envelopes: &[Envelope]) {
         let json = serde_json::to_string(envelope).expect("an envelope has a JSON form");
         let read: Envelope = serde_json::from_str(&json).expect("its JSON form reads back");
         assert_eq!(&read, envelope, "{json}");
-        human.envelope(envelope.clone());
+        human.envelope(envelope.clone()).expect("stdout takes the rendered data");
     }
 }
 
