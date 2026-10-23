@@ -183,8 +183,11 @@ pub fn explanation(code: Code) -> Explanation {
         ),
         Code::AlreadyManaged => explained!(
             "Nix is already installed here by something other than `mix`.",
-            "`mix` needs to own its installation. Uninstalling the existing one removes everything installed with it.",
-            ["uninstall the existing Nix", "run the command again"]
+            "`mix` needs to own its installation. Replacing or uninstalling the existing one removes everything installed with it. `mix bootstrap --force` replaces it, and puts it back if setting up fails.",
+            [
+                "uninstall the existing Nix, then run the command again",
+                "run `mix bootstrap --force` to replace it instead"
+            ]
         ),
         Code::CrossDeviceStore => explained!(
             "`/nix/store` is a separate mount from `/nix`.",

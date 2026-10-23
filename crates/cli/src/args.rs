@@ -68,7 +68,7 @@ pub enum Command {
         #[arg(long)]
         mirror_key: Option<String>,
 
-        /// Wipe any existing managed installation before bootstrapping
+        /// Replace any existing Nix, and put it back if setting up fails
         #[arg(short, long)]
         force: bool,
 
