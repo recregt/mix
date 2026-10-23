@@ -21,6 +21,7 @@ All notable changes to `mix` are listed here. The format follows [Keep a Changel
 - `mix repair` puts back a deleted profile and history in one run, and `mix` always uses the git in your profile instead of falling back to the system `git`. The `unsupported-program` failure code is gone. ([#172](https://github.com/recregt/mix/pull/172))
 - A power cut shortly after `mix install` no longer leaves empty files in the Nix store or an interrupted request that can never be undone, because new store paths are synced to disk before they are used. ([#177](https://github.com/recregt/mix/pull/177))
 - When the output can't be written, for example to a full disk, `mix` says so and exits 1 instead of exiting 0 with the output cut short. A reader that stops early, like `head`, still ends the output quietly. ([#178](https://github.com/recregt/mix/pull/178))
+- When the disk that holds the Nix store is full, commands say so and suggest `mix clean --all`, instead of ending with "1 dependency failed". ([#179](https://github.com/recregt/mix/pull/179))
 
 ## [0.1.0-alpha.2] - 2026-10-19
 
