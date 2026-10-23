@@ -1,0 +1,21 @@
+warning: Git tree '/data/home/.local/state/mix' is dirty
+these 3 derivations will be built:
+  /nix/store/3cb73g4fl9cgvnnsqr0s2c0w097xn8s5-home-manager-path.drv
+  /nix/store/iyvbx3w3gxkwbrscaq41y6jpbxbfj6cw-activation-script.drv
+  /nix/store/0yka8xif4d93ghwzslv2f8lrbh99bfmi-home-manager-generation.drv
+these 2 paths will be fetched (59.4 MiB download, 217.4 MiB unpacked):
+  /nix/store/4l04h8656as4i291mpcg38wz9m4k8acp-go-1.26.7
+  /nix/store/9v00p4m9cdzn23gmy5m9d3a6c3gfwhl7-iana-etc-20251215
+error: Cannot build '/nix/store/3cb73g4fl9cgvnnsqr0s2c0w097xn8s5-home-manager-path.drv'.
+       Reason: builder failed with exit code 1.
+       Output paths:
+         /nix/store/rhpdv29ka26fy2vbwbhc9k2q9syxk19w-home-manager-path
+       Last 1 log lines:
+       > structuredAttrs is enabled
+       For full logs, run:
+         nix log /nix/store/3cb73g4fl9cgvnnsqr0s2c0w097xn8s5-home-manager-path.drv
+       note: build failure may have been caused by lack of free disk space
+error: Cannot build '/nix/store/0yka8xif4d93ghwzslv2f8lrbh99bfmi-home-manager-generation.drv'.
+       Reason: 1 dependency failed.
+       Output paths:
+         /nix/store/kqfrh7mkym799r16dv83k96nz7qhqvdg-home-manager-generation

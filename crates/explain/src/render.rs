@@ -127,6 +127,14 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
             .help(help!("run `mix bootstrap` first")),
         Code::UpdateUnavailable => Diagnostic::new(phrase!("`mix` can't update from a mirror"))
             .help(help!("update `mix` to get newer packages")),
+        Code::DiskFull => Diagnostic::hinting(
+            phrase!("the disk that holds the Nix store is full"),
+            help_around!(
+                "make room on the disk, for example with `mix clean --all`, then run `",
+                "` again"
+            ),
+            command,
+        ),
         Code::Io | Code::CommandFailed | Code::SpawnFailed => failed(context.action),
         Code::Internal | Code::Unspecified => bug(),
         Code::JournalUnwritable => Diagnostic::new(phrase!("`mix` couldn't record its progress"))

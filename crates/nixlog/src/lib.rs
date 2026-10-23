@@ -434,7 +434,14 @@ impl<'de: 'a, 'a> Deserialize<'de> for Field<'a> {
 pub enum NixFailure {
     Build { package: String },
     UnknownPackage { name: String },
+    DiskFull,
 }
+
+const DISK_FULL: [&str; 3] = [
+    "No space left on device",
+    "build failure may have been caused by lack of free disk space",
+    "database or disk is full",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NixError {
@@ -482,12 +489,25 @@ fn package_of(derivation: &str) -> String {
 
 pub fn nix_error(tail: &str) -> Option<NixError> {
     let clean = without_escapes(tail);
-    let start = clean
+    let starts: Vec<usize> = clean
         .match_indices("error:")
         .map(|(at, _)| at)
         .filter(|at| *at == 0 || clean[..*at].ends_with(char::is_whitespace))
-        .last()?;
-    let message = clean[start..].trim_end().to_string();
+        .collect();
+    let ends = starts.iter().skip(1).copied().chain([clean.len()]);
+    let errors: Vec<&str> = starts
+        .iter()
+        .zip(ends)
+        .map(|(start, end)| clean[*start..end].trim_end())
+        .collect();
+    let full = |text: &str| DISK_FULL.iter().any(|sign| text.contains(sign));
+    if let Some(error) = errors.iter().find(|error| full(error)) {
+        return Some(NixError {
+            message: error.to_string(),
+            failure: Some(NixFailure::DiskFull),
+        });
+    }
+    let message = errors.last()?.to_string();
     let failure = if let Some(derivation) = quoted_after(&message, "Cannot build '") {
         Some(NixFailure::Build {
             package: package_of(derivation),
@@ -905,6 +925,35 @@ mod tests {
                 name: "ripgrep2".into()
             })
         );
+    }
+
+    #[test]
+    fn a_full_disk_is_read_from_whichever_error_says_so_and_that_error_is_kept() {
+        let build = nix_error(include_str!("../fixtures/nix/disk-full-build.txt")).unwrap();
+        let write = nix_error(include_str!("../fixtures/nix/disk-full-write.txt")).unwrap();
+        let database = nix_error(
+            "error: executing SQLite statement 'insert into ValidPaths': database or disk is full",
+        )
+        .unwrap();
+
+        assert_eq!(build.failure, Some(NixFailure::DiskFull));
+        assert!(
+            build
+                .message
+                .starts_with("error: Cannot build '/nix/store/")
+        );
+        assert!(build.message.contains("-home-manager-path.drv'"));
+        assert!(
+            build
+                .message
+                .ends_with("note: build failure may have been caused by lack of free disk space")
+        );
+        assert_eq!(write.failure, Some(NixFailure::DiskFull));
+        assert_eq!(
+            write.message,
+            "error: write of 64 bytes: No space left on device"
+        );
+        assert_eq!(database.failure, Some(NixFailure::DiskFull));
     }
 
     #[test]
