@@ -141,8 +141,6 @@ impl Out for Stderr {
     }
 }
 
-pub struct Stdout;
-
 pub struct Spaced<O> {
     inner: O,
     gap: AtomicBool,
@@ -191,32 +189,20 @@ impl<O: Out + ?Sized> Out for std::sync::Arc<O> {
     }
 }
 
-impl Out for Stdout {
-    fn line(&self, text: &str) {
-        data(text);
-    }
-
-    fn colours(&self) -> bool {
-        stdout_colors()
-    }
-
-    fn width(&self) -> Option<usize> {
-        terminal_width(&console::Term::stdout())
+fn above_progress<R>(write: impl FnOnce() -> R) -> R {
+    match progress_enabled() {
+        true => progress::board().suspend(write),
+        false => write(),
     }
 }
 
 fn print_line(line: &str) {
-    let write = || {
+    above_progress(|| {
         let mut out = std::io::stderr().lock();
         let _ = out
             .write_all(line.as_bytes())
             .and_then(|()| out.write_all(b"\n"));
-    };
-    if progress_enabled() {
-        progress::board().suspend(write);
-    } else {
-        write();
-    }
+    });
 }
 
 fn painted(out: &mut String, colour: &str, text: &str, colours: bool) {
@@ -230,58 +216,22 @@ fn painted(out: &mut String, colour: &str, text: &str, colours: bool) {
     }
 }
 
-#[derive(Default)]
-struct DataOut {
-    failed: OnceLock<std::io::ErrorKind>,
-}
+pub struct Stdout;
 
-impl DataOut {
-    fn write(&self, out: &mut impl Write, text: &str) {
-        if self.failed.get().is_some() {
-            return;
-        }
-        let written = out
-            .write_all(text.as_bytes())
-            .and_then(|()| out.write_all(b"\n"))
-            .and_then(|()| out.flush());
-        if let Err(error) = written {
-            let _ = self.failed.set(error.kind());
-        }
+impl Write for Stdout {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        above_progress(|| std::io::stdout().lock().write(buf))
     }
 
-    fn unwritten(&self) -> Option<std::io::ErrorKind> {
-        self.failed
-            .get()
-            .copied()
-            .filter(|kind| *kind != std::io::ErrorKind::BrokenPipe)
+    fn flush(&mut self) -> std::io::Result<()> {
+        above_progress(|| std::io::stdout().lock().flush())
     }
 }
 
-static DATA: OnceLock<DataOut> = OnceLock::new();
-
-fn data_out() -> &'static DataOut {
-    DATA.get_or_init(DataOut::default)
-}
-
-pub fn data(text: &str) {
-    let write = || data_out().write(&mut std::io::stdout().lock(), text);
-    if progress_enabled() {
-        progress::board().suspend(write);
-    } else {
-        write();
-    }
-}
-
-pub fn unwritten() -> Option<std::io::ErrorKind> {
-    data_out().unwritten()
-}
-
-pub fn report_unwritten(kind: std::io::ErrorKind) {
-    report(
-        Severity::Error,
-        &Report::new(&phrase!("`mix` couldn't write its output"))
-            .causes(vec![format!("standard output: {kind}")]),
-    );
+pub fn data(out: &mut (impl Write + ?Sized), text: &str) -> std::io::Result<()> {
+    out.write_all(text.as_bytes())?;
+    out.write_all(b"\n")?;
+    out.flush()
 }
 
 pub fn status_line(status: Status, subject: &str, colours: bool) -> String {
@@ -510,60 +460,43 @@ mod tests {
     }
 
     struct Refusing {
-        kind: std::io::ErrorKind,
-        tries: usize,
+        on_write: bool,
     }
 
     impl Write for Refusing {
-        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
-            self.tries += 1;
-            Err(self.kind.into())
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            match self.on_write {
+                true => Err(std::io::ErrorKind::StorageFull.into()),
+                false => Ok(buf.len()),
+            }
         }
 
         fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
+            Err(std::io::ErrorKind::StorageFull.into())
         }
     }
 
     #[test]
-    fn output_that_could_not_be_written_is_remembered_and_nothing_more_is_tried() {
-        let data = DataOut::default();
-        let mut full = Refusing {
-            kind: std::io::ErrorKind::StorageFull,
-            tries: 0,
-        };
+    fn data_that_could_not_be_written_or_flushed_returns_why() {
+        for on_write in [true, false] {
+            let written = data(&mut Refusing { on_write }, "line");
 
-        data.write(&mut full, "first");
-        data.write(&mut full, "second");
-
-        assert_eq!(data.unwritten(), Some(std::io::ErrorKind::StorageFull));
-        assert_eq!(full.tries, 1);
+            assert_eq!(
+                written.map_err(|error| error.kind()),
+                Err(std::io::ErrorKind::StorageFull),
+                "failing on write: {on_write}"
+            );
+        }
     }
 
     #[test]
-    fn a_reader_that_stopped_reading_ends_the_output_without_an_error() {
-        let data = DataOut::default();
-        let mut closed = Refusing {
-            kind: std::io::ErrorKind::BrokenPipe,
-            tries: 0,
-        };
-
-        data.write(&mut closed, "first");
-        data.write(&mut closed, "second");
-
-        assert_eq!(data.unwritten(), None);
-        assert_eq!(closed.tries, 1);
-    }
-
-    #[test]
-    fn output_that_was_written_leaves_nothing_unwritten() {
-        let data = DataOut::default();
+    fn each_piece_of_data_ends_in_a_newline() {
         let mut out = Vec::new();
 
-        data.write(&mut out, "line");
+        data(&mut out, "first").unwrap();
+        data(&mut out, "second").unwrap();
 
-        assert_eq!(out, b"line\n");
-        assert_eq!(data.unwritten(), None);
+        assert_eq!(out, b"first\nsecond\n");
     }
 
     #[test]

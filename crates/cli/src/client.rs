@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use mix_events::Fault;
-use mix_events::Render;
 use mix_events::v1::Code;
 use mix_events::v1::Command;
 use mix_render::{Sinks, View};
@@ -19,6 +18,7 @@ const SERVE_STDIN: &str = "serve-stdin";
 pub enum Failure {
     Failed(Box<Fault>),
     Transport(mix_rpc::Error),
+    Unwritten(std::io::Error),
 }
 
 impl Failure {
@@ -26,13 +26,16 @@ impl Failure {
         match self {
             Failure::Failed(fault) => (**fault).clone(),
             Failure::Transport(error) => Fault::failed(transported(error), error.to_string(), None),
+            Failure::Unwritten(error) => {
+                Fault::failed(Code::Io, format!("standard output: {}", error.kind()), None)
+            }
         }
     }
 
     pub fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Failure::Transport(error) => std::error::Error::source(error),
-            Failure::Failed(_) => None,
+            Failure::Failed(_) | Failure::Unwritten(_) => None,
         }
     }
 }
@@ -81,7 +84,9 @@ async fn replay(controller: Controller, mut replies: Replies, view: &View) -> Re
         tokio::select! {
             reply = replies.next() => match reply.transpose().map_err(Failure::Transport)? {
                 None => break,
-                Some(Reply::Envelope(envelope)) => sinks.envelope(envelope),
+                Some(Reply::Envelope(envelope)) => {
+                    sinks.envelope(envelope).map_err(Failure::Unwritten)?;
+                }
                 Some(Reply::Applied(mix_rpc::Control::Pause)) if std::mem::take(&mut pausing) => {
                     let _ = nix::sys::signal::raise(Signal::SIGSTOP);
                 }

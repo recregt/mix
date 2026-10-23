@@ -18,7 +18,6 @@ use mix_events::{Ending, Outbox, ROOT, Start, Tree};
 use std::sync::Arc;
 
 use mix_events::Detail;
-use mix_events::Render;
 use mix_events::capture::Captured;
 use mix_events::v1::{Envelope, envelope::Event};
 use mix_ui::Out;
@@ -843,7 +842,7 @@ fn rendered(captured: &Captured, level: Detail) -> String {
         .to(out.clone());
     for (envelope, offset) in captured.envelopes.iter().zip(&captured.offsets) {
         human.at(*offset);
-        human.envelope(envelope.clone());
+        human.envelope(envelope.clone()).unwrap();
     }
     out.0
         .lock()
@@ -1190,7 +1189,7 @@ fn a_plan_shown_before_a_question_does_not_tell_the_reader_to_run_it_again() {
             .to(out.clone());
         for (envelope, offset) in captured.envelopes.iter().zip(&captured.offsets) {
             human.at(*offset);
-            human.envelope(envelope.clone());
+            human.envelope(envelope.clone()).unwrap();
         }
         out.0.lock().unwrap().concat()
     };

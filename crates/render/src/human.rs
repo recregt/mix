@@ -1,10 +1,10 @@
 #![cfg_attr(not(test), deny(clippy::wildcard_enum_match_arm))]
 
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use mix_events::Render;
 use mix_events::v1::command::Request;
 use mix_events::v1::{
     Envelope, NodeFinished, NodeProgress, Status as Ended, envelope::Event, node_progress,
@@ -75,7 +75,7 @@ pub struct Human {
     out: Arc<Logging>,
     recorded: Option<Duration>,
     level: Detail,
-    data: bool,
+    data: Option<Box<dyn Write + Send>>,
     preview: bool,
     started: Instant,
     stop_noticed: bool,
@@ -95,7 +95,7 @@ impl Human {
             out: Arc::new(Logging::new(Arc::new(mix_ui::Spaced::new(mix_ui::Stderr)))),
             recorded: None,
             level: Detail::Step,
-            data: true,
+            data: Some(Box::new(mix_ui::Stdout)),
             preview: false,
             started: Instant::now(),
             stop_noticed: false,
@@ -119,7 +119,7 @@ impl Human {
         self
     }
 
-    pub fn data(mut self, data: bool) -> Self {
+    pub fn data(mut self, data: Option<Box<dyn Write + Send>>) -> Self {
         self.data = data;
         self
     }
@@ -136,7 +136,7 @@ impl Human {
 
     #[cfg(test)]
     pub(crate) fn prints_data(&self) -> bool {
-        self.data
+        self.data.is_some()
     }
 
     fn shows(&self, detail: Detail) -> bool {
@@ -163,9 +163,9 @@ impl Human {
         self.lines.insert(node, line);
     }
 
-    fn replay(&mut self, envelope: Envelope) {
+    pub fn envelope(&mut self, envelope: Envelope) -> std::io::Result<()> {
         let Some(event) = envelope.event else {
-            return;
+            return Ok(());
         };
         match event {
             Event::NodeStarted(node) => match node.kind {
@@ -238,7 +238,7 @@ impl Human {
             },
             Event::NodeFinished(node) if node.id == ROOT => {
                 let elapsed = self.recorded.unwrap_or_else(|| self.started.elapsed());
-                if self.dry_run {
+                let written = if self.dry_run {
                     if self.shows(Detail::Step)
                         && !self.preview
                         && node.status() == mix_events::v1::Status::Succeeded
@@ -251,17 +251,19 @@ impl Human {
                             )),
                         );
                     }
+                    Ok(())
                 } else {
                     super::results::finished(
                         self.out.as_ref(),
                         &node,
                         self.request.as_ref(),
                         self.level,
-                        self.data,
+                        self.data.as_deref_mut(),
                         elapsed,
-                    );
-                }
+                    )
+                };
                 self.outcome(&node, elapsed);
+                return written;
             }
             Event::NodeFinished(node) if self.actions.remove(&node.id) => {
                 self.lines.remove(&node.id);
@@ -297,6 +299,7 @@ impl Human {
             }
             Event::NodeProgress(NodeProgress { progress: None, .. }) | Event::NotRun(_) => {}
         }
+        Ok(())
     }
 
     fn outcome(&self, node: &NodeFinished, elapsed: std::time::Duration) {
@@ -440,16 +443,6 @@ impl Human {
     }
 }
 
-impl Render for Human {
-    fn envelope(&mut self, envelope: Envelope) {
-        self.replay(envelope);
-    }
-
-    fn detail(&self) -> Detail {
-        self.level
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
@@ -526,7 +519,8 @@ mod tests {
         outbox
             .drain()
             .into_iter()
-            .for_each(|envelope| human.envelope(envelope));
+            .try_for_each(|envelope| human.envelope(envelope))
+            .unwrap();
         seen.0.lock().unwrap().clone()
     }
 

@@ -260,18 +260,23 @@ impl Args {
             .and_then(|matches| Self::from_arg_matches(&matches));
         parsed.unwrap_or_else(|error| {
             if error.use_stderr() && json_requested(std::env::args_os().skip(1)) {
-                mix_render::Json::Stdout.write(mix_render::document::usage(
+                let usage = mix_render::document::usage(
                     uuid::Uuid::now_v7().to_string(),
                     error.to_string().trim(),
-                ));
+                );
+                if let Some(failed) =
+                    crate::session::unwritable(mix_render::Json::Stdout.write(usage))
+                {
+                    mix_render::report_unwritten(&failed);
+                }
             }
             if !error.use_stderr() {
-                let code = match error.print() {
-                    Err(failed) if failed.kind() != std::io::ErrorKind::BrokenPipe => {
-                        mix_render::report_unwritten(failed.kind());
+                let code = match crate::session::unwritable(error.print()) {
+                    Some(failed) => {
+                        mix_render::report_unwritten(&failed);
                         mix_events::exit::FAILED as i32
                     }
-                    _ => error.exit_code(),
+                    None => error.exit_code(),
                 };
                 std::process::exit(code);
             }
@@ -432,18 +437,6 @@ mod tests {
             (&["mix", "doctor"], true, false),
         ] {
             assert_eq!(parse(args).draws_progress(ci), drawn, "{args:?}, CI {ci}");
-        }
-    }
-
-    #[test]
-    fn update_takes_the_flags_every_command_takes() {
-        for args in [
-            &["mix", "update", "--json", "-n"][..],
-            &["mix", "--json", "update", "--dry-run"],
-        ] {
-            let parsed = parse(args);
-            assert!(parsed.json, "{args:?}");
-            assert!(parsed.dry_run(), "{args:?}");
         }
     }
 

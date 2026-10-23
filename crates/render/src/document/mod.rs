@@ -372,10 +372,11 @@ pub fn of<'e>(envelopes: impl IntoIterator<Item = &'e Envelope>) -> Option<Docum
         .find_map(|envelope| builder.envelope(envelope))
 }
 
-pub(crate) fn print(document: &Document) {
-    if let Ok(text) = serde_json::to_string_pretty(document) {
-        mix_ui::data(&text);
-    }
+pub(crate) fn print(document: &Document) -> std::io::Result<()> {
+    mix_ui::data(
+        &mut mix_ui::Stdout,
+        &serde_json::to_string_pretty(document)?,
+    )
 }
 
 #[cfg(test)]

@@ -36,7 +36,7 @@ pub use detail::{Detail, detail};
 pub use fault::{Diagnose, Fault};
 pub use outbox::Outbox;
 pub use pbjson_types::Timestamp;
-pub use root::{Render, command, fail, key_of};
+pub use root::{Render, command, fail, failure, key_of};
 pub use tree::{Ending, Misuse, Node, NodeId, ROOT, Start, Stopped, Tree, exit, output};
 pub use validate::{Entry, Outcome, Validated, Validator, Violation, validate};
 
