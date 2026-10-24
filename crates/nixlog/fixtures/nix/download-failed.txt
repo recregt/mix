@@ -1,0 +1,9 @@
+unpacking 'github:NixOS/nixpkgs/efe6f071ede9d21c37462d2d6682d5e670099684?host=127.0.0.1' into the Git cache...
+warning: unable to download 'https://127.0.0.1/api/v3/repos/NixOS/nixpkgs/tarball/efe6f071ede9d21c37462d2d6682d5e670099684': Could not connect to server (7) Failed to connect to 127.0.0.1 port 443 after 0 ms: Could not connect to server; retrying in 16 ms (attempt 1/5)
+warning: unable to download 'https://127.0.0.1/api/v3/repos/NixOS/nixpkgs/tarball/efe6f071ede9d21c37462d2d6682d5e670099684': Could not connect to server (7) Failed to connect to 127.0.0.1 port 443 after 0 ms: Could not connect to server; retrying in 67 ms (attempt 2/5)
+warning: unable to download 'https://127.0.0.1/api/v3/repos/NixOS/nixpkgs/tarball/efe6f071ede9d21c37462d2d6682d5e670099684': Could not connect to server (7) Failed to connect to 127.0.0.1 port 443 after 0 ms: Could not connect to server; retrying in 94 ms (attempt 3/5)
+warning: unable to download 'https://127.0.0.1/api/v3/repos/NixOS/nixpkgs/tarball/efe6f071ede9d21c37462d2d6682d5e670099684': Could not connect to server (7) Failed to connect to 127.0.0.1 port 443 after 0 ms: Could not connect to server; retrying in 497 ms (attempt 4/5)
+error:
+       … while fetching the input 'github:NixOS/nixpkgs/efe6f071ede9d21c37462d2d6682d5e670099684?host=127.0.0.1'
+
+       error: Failed to open archive (Source threw exception: error: unable to download 'https://127.0.0.1/api/v3/repos/NixOS/nixpkgs/tarball/efe6f071ede9d21c37462d2d6682d5e670099684': Could not connect to server (7) Failed to connect to 127.0.0.1 port 443 after 0 ms: Could not connect to server)
