@@ -126,9 +126,9 @@ pub fn explanation(code: Code) -> Explanation {
             ]
         ),
         Code::InterruptedRequest => explained!(
-            "An earlier request was interrupted and has not been put back yet.",
-            "`mix` puts an interrupted request back before it changes anything else, so the packages shown now may change once that happens.",
-            ["run `mix repair` to put it back now"]
+            "An earlier request was interrupted and has not been finished or undone yet.",
+            "`mix` finishes or undoes an interrupted request before it changes anything else, so the packages shown now may change once that happens.",
+            ["run `mix repair` to finish or undo it now"]
         ),
         Code::Network => explained!(
             "A download failed.",
@@ -288,7 +288,7 @@ pub fn explanation(code: Code) -> Explanation {
         ),
         Code::WorkerEnded => explained!(
             "The privileged helper stopped before it answered.",
-            "`mix` starts a helper with administrator rights for this command. Whatever it had changed is undone by the next command.",
+            "`mix` starts a helper with administrator rights for this command. The next command finishes or undoes whatever it had started.",
             ["run the command again to finish"]
         ),
         Code::Usage => explained!(

@@ -66,7 +66,7 @@ fn unfixable_reason(reason: Unfixable) -> Option<&'static str> {
         Unfixable::NotADirectory => "exists but is not a directory",
         Unfixable::MissingUser => "the user no longer exists",
         Unfixable::MissingRuntime => "missing, and `mix repair` can't restore it",
-        Unfixable::Unrecovered => "an interrupted request couldn't be put back",
+        Unfixable::Unrecovered => "an interrupted request couldn't be finished or undone",
         Unfixable::InTheWay => "in the way of a file `mix` manages",
         Unfixable::Outside => "missing, and not `mix`'s to create",
         Unfixable::Masked => "masked, and `mix` won't unmask it",
@@ -148,12 +148,12 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
             "run `mix doctor` to see what is left, and `mix repair` to put back what it can"
         )),
         Code::InterruptedRequest => Diagnostic::new(phrase!(
-            "an interrupted request hasn't been put back yet"
+            "an interrupted request hasn't been finished or undone yet"
         ))
         .note(note!(
             "what is shown may change once it is, which the next change to your packages does"
         ))
-        .help(help!("run `mix repair` to put it back now")),
+        .help(help!("run `mix repair` to finish or undo it now")),
         Code::RollbackIncomplete => Diagnostic::new(phrase!("`mix` couldn't undo every change"))
             .help(help!(
                 "run `mix doctor` to see what is left, and `mix repair` to put back what it can"
