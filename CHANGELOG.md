@@ -25,6 +25,7 @@ All notable changes to `mix` are listed here. The format follows [Keep a Changel
 - `mix bootstrap --force` replaces a Nix from any installer, and when it fails it puts that Nix back as it was, with its units enabled and running, instead of leaving neither Nix nor `mix` working. A `mix purge` that fails also puts every unit back enabled. ([#180](https://github.com/recregt/mix/pull/180))
 - After `mix bootstrap --force`, `mix doctor` no longer reports old Home Manager generations whose store paths are gone, because the old profile links are moved aside with the old Nix. A forced bootstrap or purge also works when `/nix` holds the daemon's socket, and a purge finds unit links even after the unit file is gone. ([#182](https://github.com/recregt/mix/pull/182))
 - `mix update` no longer fails with GitHub's API rate limit, because it finds the newest nixpkgs and home-manager with `git` and fetches that exact revision. A failed download says which URL it could not fetch and suggests checking the connection, instead of showing Nix's raw error. ([#184](https://github.com/recregt/mix/pull/184))
+- While an interrupted request waits to be finished or undone, `mix doctor` says so and that the next change or `mix repair` settles it, instead of saying it couldn't be put back and that `mix repair` can't fix it. The files it still holds are shown as waiting on it, instead of "changed outside `mix`". ([#185](https://github.com/recregt/mix/pull/185))
 
 ## [0.1.0-alpha.2] - 2026-10-19
 
