@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::declared::identity::{MIX_USERS_GROUP, NIXBLD_GROUP, NIXBLD_USER_COUNT, user_name};
 use crate::declared::paths::{
     NIX_CONF_DEST, NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_UNIT, NIX_DAEMON_SOCKET_DEST,
-    NIX_DAEMON_SOCKET_UNIT, POLICY_FILE, PROFILE_SNIPPET_DEST,
+    NIX_DAEMON_SOCKET_UNIT, POLICY_FILE, PROFILE_SNIPPET_DEST, nix_profiles_dir,
 };
 use crate::declared::policy::Policy;
 use crate::declared::targets::{Intent, Runtime, UserConfig, tree_for};
@@ -64,7 +64,9 @@ fn set_aside(path: &Path, facts: &PathFacts) -> Option<Action> {
     })
 }
 
-struct RemoveExistingInstallation;
+struct RemoveExistingInstallation {
+    profiles: Option<PathBuf>,
+}
 
 const UNITS: [&str; 2] = [NIX_DAEMON_SOCKET_UNIT, NIX_DAEMON_SERVICE_UNIT];
 const UNIT_FILES: [&str; 2] = [NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SOCKET_DEST];
@@ -90,6 +92,7 @@ impl StepSpec for RemoveExistingInstallation {
         queries.push(Query::Group(NIXBLD_GROUP.to_string()));
         queries.push(Query::Group(MIX_USERS_GROUP.to_string()));
         queries.extend(SET_ASIDE.iter().map(|path| Query::Path(path.into())));
+        queries.extend(self.profiles.iter().cloned().map(Query::Path));
         queries
     }
 
@@ -133,6 +136,9 @@ impl StepSpec for RemoveExistingInstallation {
         for (offset, path) in SET_ASIDE.iter().enumerate() {
             actions.extend(set_aside(Path::new(path), facts.path(paths + offset)));
         }
+        if let Some(profiles) = &self.profiles {
+            actions.extend(set_aside(profiles, facts.path(paths + SET_ASIDE.len())));
+        }
         Ok(actions)
     }
 }
@@ -150,7 +156,12 @@ pub fn stale_restart(service: &UnitFacts, configured: Option<(i64, u32)>) -> Opt
 
 pub fn steps(settings: &Settings) -> Vec<Box<dyn StepSpec>> {
     let before: Vec<Box<dyn StepSpec>> = if settings.force {
-        vec![Box::new(RemoveExistingInstallation)]
+        vec![Box::new(RemoveExistingInstallation {
+            profiles: settings
+                .user
+                .as_ref()
+                .map(|config| nix_profiles_dir(&config.user.home)),
+        })]
     } else {
         Vec::new()
     };

@@ -1,10 +1,9 @@
-import json
 import re
 import subprocess
 
 import pytest
 
-from support.container import REPO_ROOT
+from support.container import REPO_ROOT, nix_build
 from support.mirror import MIRROR_TEST_USERS
 
 USER = MIRROR_TEST_USERS[0]
@@ -17,31 +16,7 @@ PROFILE_GIT = f"/home/{USER}/.nix-profile/bin/git"
 
 @pytest.fixture(scope="session")
 def conformance_binary():
-    build = subprocess.run(
-        [
-            "cargo",
-            "build",
-            "--release",
-            "-p",
-            "mix-conformance",
-            "--bin",
-            "mix-conformance",
-            "--message-format=json",
-        ],
-        cwd=REPO_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    for line in build.stdout.splitlines():
-        message = json.loads(line)
-        if (
-            message.get("reason") == "compiler-artifact"
-            and message.get("executable")
-            and message["target"]["name"] == "mix-conformance"
-        ):
-            return message["executable"]
-    raise RuntimeError("cargo built no mix-conformance binary")
+    return nix_build("checks.{system}.conformance") / "bin/mix-conformance"
 
 
 @pytest.mark.parametrize(
@@ -77,3 +52,30 @@ def test_the_versions_mix_evaluates_at_a_profiles_pins_are_the_ones_it_lists(
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert re.search(r"^nix: [1-9][0-9]* cases passed$", result.stdout, re.MULTILINE), result.stdout
+
+
+@pytest.mark.bootstrapped
+def test_every_profile_action_and_its_undo_do_what_the_model_says(
+    container, conformance_binary, mock_nix_server, mirror_cache
+):
+    subprocess.run(["podman", "cp", conformance_binary, f"{container.name}:{BINARY}"], check=True)
+
+    result = container.exec(BINARY, "profiles", "--user", USER)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert re.search(r"^profiles: [1-9][0-9]* cases passed$", result.stdout, re.MULTILINE), (
+        result.stdout
+    )
+
+
+def test_installing_and_removing_the_runtime_do_what_the_model_says(
+    container, conformance_binary, mock_nix_server
+):
+    subprocess.run(["podman", "cp", conformance_binary, f"{container.name}:{BINARY}"], check=True)
+
+    result = container.exec(BINARY, "runtime", "--mirror", mock_nix_server["url"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert re.search(r"^runtime: [1-9][0-9]* cases passed$", result.stdout, re.MULTILINE), (
+        result.stdout
+    )

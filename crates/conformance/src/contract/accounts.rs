@@ -57,6 +57,40 @@ pub enum Op {
     },
 }
 
+pub fn known() -> Vec<Vec<Op>> {
+    let [group, extra] = GROUPS;
+    let user = USERS[0];
+    vec![vec![
+        Op::AddGroup { group, gid: IDS[0] },
+        Op::AddGroup {
+            group: extra,
+            gid: IDS[2],
+        },
+        Op::AddUser {
+            user,
+            uid: IDS[1],
+            gid: IDS[0],
+            groups: vec![group],
+        },
+        Op::AddMember { group: extra, user },
+        Op::SetUserIds {
+            user,
+            ids: (IDS[2], IDS[0]),
+            expect: Guess::Current,
+        },
+        Op::SetGroupGid {
+            group: extra,
+            gid: IDS[1],
+            expect: Guess::Current,
+        },
+        Op::RemoveMember { group: extra, user },
+        Op::DeleteUser {
+            user,
+            expect: Guess::Current,
+        },
+    ]]
+}
+
 fn group(fact: Fact) -> Option<GroupFacts> {
     match fact {
         Fact::Group(group) => group,

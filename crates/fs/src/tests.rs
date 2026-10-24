@@ -144,6 +144,50 @@ fn a_tree_is_never_copied_into_itself() {
 }
 
 #[test]
+fn a_socket_and_a_fifo_are_copied_with_their_type_and_mode() {
+    use std::os::unix::fs::FileTypeExt;
+
+    let mut root = root();
+    std::fs::create_dir(root.real("/var/run")).unwrap();
+    let socket = std::os::unix::net::UnixListener::bind(root.real("/var/run/socket")).unwrap();
+    std::fs::set_permissions(
+        root.real("/var/run/socket"),
+        std::fs::Permissions::from_mode(0o666),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("socket", root.real("/var/run/link")).unwrap();
+    sys::mknodat(
+        sys::CWD,
+        root.real("/var/run/fifo"),
+        FileType::Fifo,
+        Mode::from_raw_mode(0o640),
+        0,
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        root.real("/var/run/fifo"),
+        std::fs::Permissions::from_mode(0o640),
+    )
+    .unwrap();
+
+    root.apply(Action::CopyTree {
+        from: "/var/run".into(),
+        to: "/var/copy".into(),
+        owner: my_ids(),
+        mode: 0o755,
+    })
+    .unwrap();
+    drop(socket);
+
+    let copied = |name: &str| std::fs::symlink_metadata(root.real("/var/copy").join(name)).unwrap();
+    assert!(copied("socket").file_type().is_socket());
+    assert_eq!(copied("socket").permissions().mode() & 0o7777, 0o666);
+    assert!(copied("fifo").file_type().is_fifo());
+    assert_eq!(copied("fifo").permissions().mode() & 0o7777, 0o640);
+    assert!(copied("link").file_type().is_symlink());
+}
+
+#[test]
 fn a_replaced_file_is_swapped_in_atomically_and_swapped_back_by_undo() {
     let mut root = root();
     std::fs::write(root.real("/etc/nix.conf"), "trusted-users = root alice\n").unwrap();
@@ -734,6 +778,44 @@ fn only_what_an_interrupted_write_left_is_a_leftover() {
         ]
     );
     assert!(root.files.leftovers(Path::new("/var/linked")).is_empty());
+}
+
+#[test]
+fn a_link_that_enables_a_unit_is_found_even_without_its_unit_file() {
+    let root = root();
+    for dir in [
+        "/etc/sockets.target.wants",
+        "/etc/multi-user.target.requires",
+        "/etc/other.d",
+    ] {
+        std::fs::create_dir(root.real(dir)).unwrap();
+    }
+    for link in [
+        "/etc/sockets.target.wants/a.socket",
+        "/etc/multi-user.target.requires/a.socket",
+        "/etc/other.d/a.socket",
+        "/etc/sockets.target.wants/b.socket",
+    ] {
+        std::os::unix::fs::symlink("/etc/a.socket", root.real(link)).unwrap();
+    }
+    std::os::unix::fs::symlink(root.real("/var"), root.real("/etc/linked.wants")).unwrap();
+    std::os::unix::fs::symlink("/etc/a.socket", root.real("/var/a.socket")).unwrap();
+
+    let found = root.files.installed_links(Path::new("/etc"), "a.socket");
+
+    assert_eq!(
+        found,
+        [
+            (
+                PathBuf::from("/etc/multi-user.target.requires/a.socket"),
+                root.id("/etc/multi-user.target.requires/a.socket")
+            ),
+            (
+                PathBuf::from("/etc/sockets.target.wants/a.socket"),
+                root.id("/etc/sockets.target.wants/a.socket")
+            ),
+        ]
+    );
 }
 
 #[test]

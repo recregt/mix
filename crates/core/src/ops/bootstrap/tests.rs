@@ -469,6 +469,20 @@ fn forcing_over_an_installation_replaces_it_and_a_failure_brings_it_back() {
         None,
         "a unit is moved aside, never disabled, so its links can be put back exactly"
     );
+    let profiles = crate::declared::paths::nix_profiles_dir(Path::new("/home/alice"));
+    let profiles_aside = first(
+        &forced,
+        "the user's profiles being moved aside",
+        |action| matches!(action, Action::SetAside { path, .. } if *path == profiles),
+    );
+    let activated = first(&forced, "the user's profile being built again", |action| {
+        matches!(action, Action::ActivateProfile { .. })
+    });
+    assert!(
+        profiles_aside < activated,
+        "no generation that points into the replaced store is kept"
+    );
+    assert_eq!(replaced.profiles[&1000].generations, [1]);
 
     for fail_at in 0..changes {
         let mut world = installed.clone();

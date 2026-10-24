@@ -2,6 +2,7 @@ pub mod accounts;
 pub mod files;
 pub mod git;
 pub mod nix;
+pub mod sequences;
 pub mod units;
 
 use mix_core::effect::{Action, Fact, Failure, Outcome, PathFacts, Query};
@@ -82,6 +83,7 @@ pub fn comparable(fact: Fact) -> Fact {
         }
         Fact::Unit(mut unit) => {
             unit.active_since = None;
+            unit.needs_reload = false;
             Fact::Unit(unit)
         }
         Fact::Path(facts) => Fact::Path(PathFacts {

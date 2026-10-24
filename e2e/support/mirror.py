@@ -59,6 +59,7 @@ def nix_conf_content(mirror: str | None = None, key: str | None = None) -> str:
     conf = (
         "build-users-group = nixbld\n"
         "experimental-features = nix-command flakes\n"
+        "fsync-store-paths = true\n"
         "trusted-users = root\n"
     )
     if mirror is not None:

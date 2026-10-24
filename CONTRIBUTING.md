@@ -82,7 +82,6 @@ Some workflows run by themselves. Cargo Audit and Zizmor run on every pull reque
 |---|---|---|
 | Unit and integration | `cargo test` | Hermetic. They must not need git, Nix, systemd or any other host program. |
 | Real-binary behavior | `crates/conformance` | The home for any test that needs a real program. |
-| Machine tests | `mix-shell` with `--features machine-tests` | They change the machine they run on. |
 | End to end | `e2e/` | A systemd container driven by pytest. Needs `podman`, `uv` and `nix`. |
 
 ```sh
@@ -90,9 +89,11 @@ e2e/run.sh
 ```
 
 > [!WARNING]
-> Machine tests change the system they run on. Do not run them on a machine you care about.
+> The `mix-conformance` binary changes accounts, units and files on the system it runs on. Run it only inside the E2E container.
 
 The end-to-end tests are slow, so CI runs them after a change merges to `main`, not on the pull request. Run them locally if you change behavior they cover.
+
+The tests run the static binaries that the flake builds, the same `mix` and `mix-daemon` a release ships. Nix builds only the files git knows about, so add a new file with `git add -N` before you run them.
 
 Write the test that would have caught the bug before you fix it, and name each test after the behavior it checks.
 

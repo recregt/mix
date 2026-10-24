@@ -14,6 +14,11 @@
     "cpu_cores": 1.625,
     "seconds": 66.4
   },
+  "test_bootstrap.py::test_forcing_over_an_installation_leaves_a_healthy_machine": {
+    "peak_bytes": 2770743296,
+    "cpu_cores": 0.106,
+    "seconds": 293.0
+  },
   "test_cancellation.py::test_a_second_ctrl_c_leaves_the_worker_to_finish_the_rollback": {
     "peak_bytes": 2326188032,
     "cpu_cores": 1.539,
@@ -33,21 +38,6 @@
     "peak_bytes": 2086191104,
     "cpu_cores": 1.648,
     "seconds": 47.3
-  },
-  "test_differential.py::test_profile_actions_do_what_the_model_predicts": {
-    "peak_bytes": 544272384,
-    "cpu_cores": 0.861,
-    "seconds": 8.9
-  },
-  "test_differential.py::test_root_only_actions_do_what_the_model_predicts": {
-    "peak_bytes": 39460864,
-    "cpu_cores": 0.454,
-    "seconds": 3.4
-  },
-  "test_differential.py::test_the_runtime_does_what_the_model_predicts": {
-    "peak_bytes": 229433344,
-    "cpu_cores": 0.531,
-    "seconds": 3.9
   },
   "test_install.py::test_an_unknown_package_is_named_and_nothing_changes": {
     "peak_bytes": 228184064,

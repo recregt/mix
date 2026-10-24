@@ -145,6 +145,16 @@
               '';
 
           checks = {
+            conformance = craneLib.buildPackage (
+              common
+              // {
+                inherit cargoArtifacts;
+                pname = "mix-conformance";
+                cargoExtraArgs = "--locked --package mix-conformance --bin mix-conformance";
+                doCheck = false;
+              }
+            );
+
             tests = craneLib.cargoNextest (
               common
               // {

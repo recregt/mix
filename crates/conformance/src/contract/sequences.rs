@@ -2,9 +2,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use mix_core::declared::identity::InvokingUser;
 use mix_core::declared::identity::{
-    NIXBLD_GID, NIXBLD_GROUP, NIXBLD_HOME, NIXBLD_SHELL, NIXBLD_UID_BASE,
+    InvokingUser, NIXBLD_GID, NIXBLD_GROUP, NIXBLD_HOME, NIXBLD_SHELL, NIXBLD_UID_BASE,
 };
 use mix_core::declared::paths::{
     DEFAULT_PROFILE_NIX_ENV, GENERATION_INPUTS, HOME_NIX, NIX_DAEMON_SERVICE_SRC,
@@ -22,6 +21,8 @@ use mix_fs::Files;
 use mix_shell::drive::Performer;
 use mix_shell::effect::generations::ProfileContext;
 
+use super::comparable;
+
 const ROOT_OWNER: Owner = (0, 0);
 
 type Step<'a> = &'a dyn Fn(&mut Machine, bool) -> Action;
@@ -38,7 +39,7 @@ impl Machine {
     fn new(world: World) -> Self {
         Self::with(
             world,
-            Performer::new(Files::open(Path::new("/"), "differential").unwrap()),
+            Performer::new(Files::open(Path::new("/"), super::request()).expect("the root opens")),
         )
     }
 
@@ -46,25 +47,12 @@ impl Machine {
         Self {
             world,
             performer,
-            runtime: tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
+            runtime: super::runtime(),
         }
     }
 
     fn real(&mut self, query: &Query) -> Fact {
-        self.runtime
-            .block_on(
-                self.performer
-                    .observe(std::slice::from_ref(query), &mix_exec::Scope::root()),
-            )
-            .unwrap()
-            .remove(0)
-    }
-
-    fn both(&mut self, query: &Query) -> (Fact, Fact) {
-        (self.world.observe(query), self.real(query))
+        super::observe(&self.runtime, &mut self.performer, query)
     }
 
     fn perform(&mut self, model: &Action, real: &Action) -> (Vec<Action>, Vec<Action>) {
@@ -87,16 +75,13 @@ impl Machine {
 
     fn same(&mut self, queries: &[Query], seen: fn(Fact) -> Fact, after: &str) {
         for query in queries {
-            let (model, real) = self.both(query);
+            let model = self.world.observe(query);
+            let real = self.real(query);
             assert_eq!(seen(model), seen(real), "{query:?} after {after}");
         }
     }
 
-    fn run(&mut self, steps: &[Step<'_>], queries: &[Query]) {
-        self.run_seeing(steps, queries, comparable);
-    }
-
-    fn run_seeing(&mut self, steps: &[Step<'_>], queries: &[Query], seen: fn(Fact) -> Fact) {
+    fn run(&mut self, steps: &[Step<'_>], queries: &[Query], seen: fn(Fact) -> Fact) -> u32 {
         let baseline: Vec<Fact> = queries.iter().map(|query| seen(self.real(query))).collect();
         let mut undos = (Vec::new(), Vec::new());
         for step in steps {
@@ -115,26 +100,7 @@ impl Machine {
         }
         let after: Vec<Fact> = queries.iter().map(|query| seen(self.real(query))).collect();
         assert_eq!(after, baseline, "the machine is back where it started");
-    }
-}
-
-fn comparable(fact: Fact) -> Fact {
-    match fact {
-        Fact::Group(Some(mut group)) => {
-            group.members.sort();
-            Fact::Group(Some(group))
-        }
-        Fact::Unit(mut unit) => {
-            unit.active_since = None;
-            Fact::Unit(unit)
-        }
-        Fact::Path(facts) => Fact::Path(PathFacts {
-            id: None,
-            changed: None,
-            digest: None,
-            ..facts
-        }),
-        other => other,
+        u32::try_from(steps.len()).expect("a short sequence")
     }
 }
 
@@ -146,169 +112,22 @@ fn observed<T>(machine: &mut Machine, model: bool, query: Query, pick: fn(Fact) 
     })
 }
 
-fn group_gid(fact: Fact) -> u32 {
-    match fact {
-        Fact::Group(Some(group)) => group.gid,
-        other => panic!("{other:?}"),
-    }
-}
-
-fn user_ids(fact: Fact) -> Owner {
-    match fact {
-        Fact::User(Some(user)) => (user.uid, user.gid),
-        other => panic!("{other:?}"),
-    }
-}
-
-fn user_comment(fact: Fact) -> String {
-    match fact {
-        Fact::User(Some(user)) => user.comment,
-        other => panic!("{other:?}"),
-    }
-}
-
 fn path_facts(fact: Fact) -> PathFacts {
     match fact {
         Fact::Path(facts) => facts,
-        other => panic!("{other:?}"),
-    }
-}
-
-#[test]
-fn every_account_action_and_its_undo_match_the_model() {
-    let mut machine = Machine::new(World::default());
-    let group = || Query::Group("mixdiff".into());
-    let extra = || Query::Group("mixdiff-extra".into());
-    let user = || Query::User("mixdiff1".into());
-
-    machine.run(
-        &[
-            &|_, _| Action::AddGroup {
-                name: "mixdiff".into(),
-                gid: 39_000,
-            },
-            &|_, _| Action::AddGroup {
-                name: "mixdiff-extra".into(),
-                gid: 39_002,
-            },
-            &|_, _| {
-                Action::AddUser(UserSpec {
-                    name: "mixdiff1".into(),
-                    uid: 39_001,
-                    gid: 39_000,
-                    home: "/var/empty".into(),
-                    shell: "/usr/sbin/nologin".into(),
-                    comment: "mix differential".into(),
-                    groups: vec!["mixdiff".into()],
-                })
-            },
-            &|_, _| Action::AddMember {
-                group: "mixdiff-extra".into(),
-                user: "mixdiff1".into(),
-            },
-            &|machine, model| Action::SetUserIds {
-                name: "mixdiff1".into(),
-                ids: (39_011, 39_000),
-                expect: observed(machine, model, user(), user_ids),
-            },
-            &|machine, model| Action::SetGroupGid {
-                name: "mixdiff-extra".into(),
-                gid: 39_012,
-                expect: observed(machine, model, extra(), group_gid),
-            },
-            &|_, _| Action::RemoveMember {
-                group: "mixdiff-extra".into(),
-                user: "mixdiff1".into(),
-            },
-            &|machine, model| Action::DeleteUser {
-                name: "mixdiff1".into(),
-                expect: observed(machine, model, user(), user_ids),
-                comment: observed(machine, model, user(), user_comment),
-            },
-        ],
-        &[group(), extra(), user()],
-    );
-}
-
-#[test]
-fn every_unit_action_and_its_undo_match_the_model() {
-    let mut machine = Machine::new(World::default());
-    let unit = "mix-differential.service";
-    let contents: Arc<[u8]> = Arc::from(
-        &b"[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n"[..],
-    );
-    let install = {
-        let contents = contents.clone();
-        move |_: &mut Machine, _: bool| Action::InstallUnit {
-            unit: unit.into(),
-            contents: contents.clone(),
-            expect: Expect::Absent,
-        }
-    };
-
-    machine.run(
-        &[
-            &install,
-            &|_, _| Action::DaemonReload,
-            &|_, _| Action::EnableUnit { unit: unit.into() },
-            &|_, _| Action::StartUnit { unit: unit.into() },
-            &|_, _| Action::RestartUnit { unit: unit.into() },
-            &|_, _| Action::StopUnit { unit: unit.into() },
-            &|_, _| Action::DisableUnit { unit: unit.into() },
-        ],
-        &[Query::Unit(unit.into())],
-    );
-}
-
-#[test]
-fn changing_an_owner_to_another_user_matches_the_model() {
-    let dir = tempfile::tempdir_in("/tmp").unwrap();
-    let path = dir.path().join("owned");
-    let mut world = World::default();
-    world.with_dir("/tmp", 0o1777, ROOT_OWNER);
-    world.with_dir(dir.path(), 0o700, ROOT_OWNER);
-    let mut machine = Machine::new(world);
-    let at = path.clone();
-    let put = move |_: &mut Machine, _: bool| Action::PutFile {
-        path: at.clone(),
-        contents: Arc::from(&b"x"[..]),
-        mode: 0o640,
-        owner: None,
-        expect: Expect::Absent,
-    };
-    let at = path.clone();
-    let chown = move |machine: &mut Machine, model: bool| Action::SetOwner {
-        path: at.clone(),
-        owner: (4_242, 4_243),
-        expect: observed(machine, model, Query::Path(at.clone()), path_facts).owner,
-    };
-
-    machine.run(&[&put, &chown], &[Query::Path(path.clone())]);
-}
-
-#[allow(clippy::disallowed_methods)]
-fn enrolled() -> InvokingUser {
-    let name = std::env::var("MIX_DIFFERENTIAL_USER").expect("the enrolled user's name");
-    let user = nix::unistd::User::from_name(&name).unwrap().unwrap();
-    InvokingUser {
-        uid: user.uid.as_raw(),
-        gid: user.gid.as_raw(),
-        name,
-        home: user.dir,
+        other => panic!("a path query answered {other:?}"),
     }
 }
 
 fn profile_of(fact: Fact) -> ProfileFacts {
     match fact {
         Fact::Profile(profile) => profile,
-        other => panic!("{other:?}"),
+        other => panic!("a profile query answered {other:?}"),
     }
 }
 
-#[test]
 #[allow(clippy::disallowed_methods)]
-fn every_profile_action_and_its_undo_match_the_model() {
-    let user = enrolled();
+pub fn profile_actions(user: &InvokingUser) -> u32 {
     let owner = (user.uid, user.gid);
     let state = mix_state_dir(&user.home);
     let inputs: Vec<&str> = GENERATION_INPUTS.iter().map(|(file, _)| *file).collect();
@@ -316,13 +135,14 @@ fn every_profile_action_and_its_undo_match_the_model() {
         .iter()
         .map(|file| std::fs::read(state.join(file)).ok().map(Arc::from))
         .collect();
-    let performer = Performer::new(Files::open(Path::new("/"), "differential").unwrap())
-        .with_profile(ProfileContext {
-            mirror: Policy::load(std::fs::read_to_string(POLICY_FILE).ok().as_deref())
-                .mirror()
-                .map(|mirror| mirror.url().to_string()),
-        })
-        .with_agent_program("/usr/local/bin/mix-daemon".into());
+    let performer =
+        Performer::new(Files::open(Path::new("/"), super::request()).expect("the root opens"))
+            .with_profile(ProfileContext {
+                mirror: Policy::load(std::fs::read_to_string(POLICY_FILE).ok().as_deref())
+                    .mirror()
+                    .map(|mirror| mirror.url().to_string()),
+            })
+            .with_agent_program("/usr/local/bin/mix-daemon".into());
     let mut machine = Machine::with(World::default(), performer);
     let real = profile_of(machine.real(&Query::Profile(user.clone())));
     let world = &mut machine.world;
@@ -363,9 +183,18 @@ fn every_profile_action_and_its_undo_match_the_model() {
     );
     let home_nix = state.join(HOME_NIX);
     let changed: Arc<[u8]> = {
-        let at = inputs.iter().position(|file| *file == HOME_NIX).unwrap();
-        let text = String::from_utf8(config[at].as_deref().unwrap().to_vec()).unwrap();
-        let end = text.rfind('}').unwrap();
+        let at = inputs
+            .iter()
+            .position(|file| *file == HOME_NIX)
+            .expect("home.nix is a generation input");
+        let text = String::from_utf8(
+            config[at]
+                .as_deref()
+                .expect("bootstrap wrote home.nix")
+                .to_vec(),
+        )
+        .expect("home.nix is text");
+        let end = text.rfind('}').expect("home.nix ends its attribute set");
         Arc::from(
             format!(
                 "{}  manual.manpages.enable = false;\n{}",
@@ -392,7 +221,7 @@ fn every_profile_action_and_its_undo_match_the_model() {
             expect: Expect::Present(
                 observed(machine, model, Query::Path(home_nix.clone()), path_facts)
                     .id
-                    .unwrap(),
+                    .expect("home.nix exists"),
             ),
         }
     };
@@ -419,7 +248,8 @@ fn every_profile_action_and_its_undo_match_the_model() {
             Query::Contents(home_nix.clone()),
             Query::Path(state.join(".git")),
         ],
-    );
+        comparable,
+    )
 }
 
 fn present(fact: Fact) -> Fact {
@@ -440,11 +270,9 @@ fn present(fact: Fact) -> Fact {
     }
 }
 
-#[test]
-#[allow(clippy::disallowed_methods)]
-fn installing_and_removing_the_runtime_match_the_model() {
-    let mirror = std::env::var("MIX_DIFFERENTIAL_MIRROR").expect("the mirror's url");
-    let runtime = mix_shell::ops::bootstrap::runtime(Some(&mirror)).unwrap();
+pub fn runtime_install(mirror: &str) -> u32 {
+    let runtime = mix_shell::ops::bootstrap::runtime(Some(mirror))
+        .unwrap_or_else(|failure| panic!("the runtime at {mirror}: {failure:?}"));
     let mut machine = Machine::new(World::default());
     let skeleton: Vec<&'static str> = std::iter::once("/nix")
         .chain(NIX_TREE_PATHS.iter().copied())
@@ -480,7 +308,7 @@ fn installing_and_removing_the_runtime_match_the_model() {
             gid: NIXBLD_GID,
             home: NIXBLD_HOME.into(),
             shell: NIXBLD_SHELL.into(),
-            comment: "mix differential build user".into(),
+            comment: "mix contract build user".into(),
             groups: vec![NIXBLD_GROUP.into()],
         })
     };
@@ -497,5 +325,5 @@ fn installing_and_removing_the_runtime_match_the_model() {
         .map(|path| Query::Path((*path).into()))
         .collect();
 
-    machine.run_seeing(&steps, &queries, present);
+    machine.run(&steps, &queries, present)
 }
