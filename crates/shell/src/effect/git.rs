@@ -1,7 +1,7 @@
-//! The git repository the generated configuration is recorded in.
+//! `git` as `mix` runs it: the repository the generated configuration is recorded in, and the
+//! branch heads `mix update` moves to.
 //!
-//! Note: mix drives `git` through plumbing commands only, as the user, with the `git` of the
-//! user's Nix profile when it has one and the one on `PATH` otherwise.
+//! Note: Every call runs as the user, with the `git` of the user's Nix profile.
 
 use std::path::{Path, PathBuf};
 
@@ -36,8 +36,8 @@ const ISOLATION: &[&str] = &[
     "core.fsync=all",
 ];
 
-/// Environment of every `git` call besides the user's `HOME`, `USER` and `PATH`: no global or
-/// system configuration is read and no credential is asked for.
+/// Environment every `git` call adds to that of any command run as the user: no global or system
+/// configuration is read and no credential is asked for.
 const ISOLATED_ENV: &[(&str, &str)] = &[
     ("GIT_CONFIG_GLOBAL", "/dev/null"),
     ("GIT_CONFIG_NOSYSTEM", "1"),
@@ -72,7 +72,7 @@ impl Git {
         .map(|_| ())
     }
 
-    /// Creates the repository and commits the generated config into it.
+    /// Creates an empty repository in `state_dir`.
     pub async fn create(&self, user: &InvokingUser, state_dir: &Path, scope: &Scope) -> Result<()> {
         self.init(user, state_dir, scope).await
     }
@@ -330,6 +330,16 @@ impl Git {
     ) -> Result<Option<String>> {
         let args = [dir, &["rev-parse", "--verify", "--quiet", rev]].concat();
         self.answered(user, &args, scope).await
+    }
+
+    pub async fn branches(
+        &self,
+        user: &InvokingUser,
+        remote: &str,
+        scope: &Scope,
+    ) -> Result<Option<String>> {
+        self.answered(user, &["ls-remote", "--branches", remote], scope)
+            .await
     }
 
     async fn answered(
