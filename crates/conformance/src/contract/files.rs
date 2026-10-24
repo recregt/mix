@@ -100,6 +100,24 @@ pub enum Op {
     Damage(Breakage),
 }
 
+pub fn known() -> Vec<Vec<Op>> {
+    let path = PathBuf::from("/a");
+    vec![vec![
+        Op::PutFile {
+            path: path.clone(),
+            contents: 1,
+            mode: MODES[2],
+            owner: None,
+            expect: Guess::Absent,
+        },
+        Op::SetOwner {
+            path,
+            owner: STRANGER,
+            expect: Guess::Current,
+        },
+    ]]
+}
+
 fn expect(guess: Guess, facts: &PathFacts) -> Expect {
     match (guess, facts.id) {
         (Guess::Current, Some(id)) => Expect::Present(id),

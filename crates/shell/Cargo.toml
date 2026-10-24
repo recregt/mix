@@ -10,7 +10,6 @@ license.workspace = true
 [features]
 default = []
 embed-tarball = []
-machine-tests = []
 
 [dependencies]
 uuid = { workspace = true }
@@ -62,10 +61,6 @@ harness = false
 [[bench]]
 name = "target"
 harness = false
-
-[[test]]
-name = "machine"
-required-features = ["machine-tests"]
 
 [lints]
 workspace = true

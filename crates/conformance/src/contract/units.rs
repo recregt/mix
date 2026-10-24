@@ -38,20 +38,35 @@ pub enum Op {
 
 pub fn known() -> Vec<Vec<Op>> {
     let unit = UNITS[0];
-    vec![vec![
-        Op::Install {
-            unit,
-            contents: 0,
-            expect: Guess::Current,
-        },
-        Op::Start(unit),
-        Op::Enable(unit),
-        Op::Restart(unit),
-        Op::Restart(unit),
-        Op::Stop(unit),
-        Op::Start(unit),
-        Op::Stop(unit),
-    ]]
+    vec![
+        vec![
+            Op::Install {
+                unit,
+                contents: 0,
+                expect: Guess::Current,
+            },
+            Op::Start(unit),
+            Op::Enable(unit),
+            Op::Restart(unit),
+            Op::Restart(unit),
+            Op::Stop(unit),
+            Op::Start(unit),
+            Op::Stop(unit),
+        ],
+        vec![
+            Op::Install {
+                unit,
+                contents: 0,
+                expect: Guess::Absent,
+            },
+            Op::Reload,
+            Op::Enable(unit),
+            Op::Start(unit),
+            Op::Restart(unit),
+            Op::Stop(unit),
+            Op::Disable(unit),
+        ],
+    ]
 }
 
 fn file(unit: &str) -> PathBuf {

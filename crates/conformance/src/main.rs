@@ -4,8 +4,8 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use std::io::Write as _;
 use std::process::ExitCode;
 
-use mix_conformance::contract::accounts::Accounts;
-use mix_conformance::contract::files::FileTree;
+use mix_conformance::contract::accounts::{self, Accounts};
+use mix_conformance::contract::files::{self, FileTree};
 use mix_conformance::contract::git::{GIT, Git, known};
 use mix_conformance::contract::units::{self, Units};
 use proptest::strategy::{Strategy, ValueTree};
@@ -14,7 +14,9 @@ use proptest::test_runner::{
 };
 use proptest_state_machine::{ReferenceStateMachine, StateMachineTest};
 
-const SUITES: [&str; 5] = ["files", "accounts", "units", "git", "nix"];
+const SUITES: [&str; 7] = [
+    "files", "accounts", "units", "git", "nix", "profiles", "runtime",
+];
 
 fn config(seeds: Option<&str>, suite: &str) -> Config {
     let path: Option<&'static str> =
@@ -34,6 +36,11 @@ fn panicked(payload: &(dyn std::any::Any + Send)) -> String {
         .cloned()
         .or_else(|| payload.downcast_ref::<&str>().map(|text| text.to_string()))
         .unwrap_or_default()
+}
+
+fn sequence(check: impl FnOnce() -> u32) -> Result<u32, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(check))
+        .map_err(|payload| panicked(payload.as_ref()))
 }
 
 fn suite<T>(
@@ -129,8 +136,16 @@ fn main() -> ExitCode {
         report("the git suite checks the pinned git, so it needs --git PATH");
         return ExitCode::from(2);
     }
-    if chosen.iter().any(|name| name == "nix") && user.is_none() {
-        report("the nix suite reads a bootstrapped user's profile, so it needs --user NAME");
+    for name in ["nix", "profiles"] {
+        if chosen.iter().any(|chosen| chosen == name) && user.is_none() {
+            report(&format!(
+                "the {name} suite reads a bootstrapped user's profile, so it needs --user NAME"
+            ));
+            return ExitCode::from(2);
+        }
+    }
+    if chosen.iter().any(|name| name == "runtime") && mirror.is_none() {
+        report("the runtime suite installs Nix from a mirror, so it needs --mirror URL");
         return ExitCode::from(2);
     }
     if !nix::unistd::Uid::effective().is_root() {
@@ -140,8 +155,8 @@ fn main() -> ExitCode {
     let mut failed = false;
     for name in &chosen {
         let result = match name.as_str() {
-            "files" => suite::<FileTree>(seeds.as_deref(), name, Vec::new()),
-            "accounts" => suite::<Accounts>(seeds.as_deref(), name, Vec::new()),
+            "files" => suite::<FileTree>(seeds.as_deref(), name, files::known()),
+            "accounts" => suite::<Accounts>(seeds.as_deref(), name, accounts::known()),
             "units" => suite::<Units>(seeds.as_deref(), name, units::known()),
             "git" => suite::<Git>(seeds.as_deref(), name, known()),
             "nix" => mix_conformance::contract::nix::user(user.as_deref().unwrap_or_default())
@@ -158,6 +173,15 @@ fn main() -> ExitCode {
                     )?;
                     Ok(locked + listed)
                 }),
+            "profiles" => mix_conformance::contract::nix::user(user.as_deref().unwrap_or_default())
+                .and_then(|user| {
+                    sequence(|| mix_conformance::contract::sequences::profile_actions(&user))
+                }),
+            "runtime" => sequence(|| {
+                mix_conformance::contract::sequences::runtime_install(
+                    mirror.as_deref().unwrap_or_default(),
+                )
+            }),
             _ => unreachable!("only known suites are chosen"),
         };
         match result {
