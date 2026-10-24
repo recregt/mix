@@ -503,7 +503,7 @@ fn drifts() -> Vec<(&'static str, Drift, Found)> {
             )],
         ),
         (
-            "an interrupted request recovery could not put back",
+            "an interrupted request not yet finished or undone",
             |world: &mut World| {
                 world.journals = vec![r9()];
             },
@@ -740,6 +740,24 @@ fn a_bootstrapped_machine_is_healthy() {
     );
 }
 
+fn refused_by_steps(finding: &Finding) -> Option<Unfixable> {
+    match finding {
+        Finding::Interrupted { .. } => Some(Unfixable::Unrecovered),
+        _ => finding.unfixable(),
+    }
+}
+
+#[test]
+fn an_interrupted_request_is_left_to_the_recovery_repair_runs_first() {
+    let finding = Finding::Interrupted {
+        requests: vec!["r9".into()],
+        pending: vec!["/etc/nix/nix.conf".into()],
+    };
+
+    assert_eq!(finding.unfixable(), None);
+    assert_eq!(refused_by_steps(&finding), Some(Unfixable::Unrecovered));
+}
+
 #[test]
 fn every_finding_is_found_on_its_target_and_fixed_or_refused() {
     let alice = user("alice", 1000);
@@ -758,7 +776,7 @@ fn every_finding_is_found_on_its_target_and_fixed_or_refused() {
         let report = run.report();
         let left: Vec<(String, Finding)> = expected
             .iter()
-            .filter(|(_, finding)| finding.unfixable().is_some())
+            .filter(|(_, finding)| refused_by_steps(finding).is_some())
             .cloned()
             .collect();
         for (target, finding) in &expected {
@@ -767,7 +785,7 @@ fn every_finding_is_found_on_its_target_and_fixed_or_refused() {
                 .iter()
                 .find(|(step, _)| step == target)
                 .map(|(_, outcome)| outcome.clone());
-            match finding.unfixable() {
+            match refused_by_steps(finding) {
                 None => assert!(
                     matches!(outcome, Some(StepOutcome::Changed | StepOutcome::Satisfied)),
                     "{what}: {target}: {outcome:?}"

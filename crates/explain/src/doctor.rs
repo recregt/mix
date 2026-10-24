@@ -1,9 +1,7 @@
-//! What `mix doctor` says: about a single inspection, and about the audit as a whole.
+//! The words of `mix doctor` for each inspection and for the audit as a whole.
 //!
-//! The audit hands over measurements, such as a mode, a pair of ids, or a unit that is not
-//! running, and every one of them is written here. The match is exhaustive on purpose: a new
-//! inspection cannot reach a terminal without someone deciding how it reads, and one this
-//! build does not know is still shown as a failed check.
+//! Note: Every finding kind has its own wording, so adding a kind fails to compile until it has
+//! one. A finding this build does not know is shown as a failed check.
 
 use mix_events::v1::finding::Kind;
 use mix_events::v1::{Finding, InspectionReport, Unfixable};
@@ -152,11 +150,13 @@ pub fn check(report: &InspectionReport) -> Diagnostic {
             )),
         ),
         Kind::Interrupted(interrupted) => (
-            around!("an interrupted request in ", " couldn't be put back"),
+            around!(
+                "an interrupted request in ",
+                " hasn't been finished or undone yet"
+            ),
             Some(note!(
-                "request {} still has to put back {}",
-                interrupted.requests.join(", "),
-                interrupted.pending.join(", ")
+                "the next change to your packages, or `mix repair`, finishes or undoes request {}",
+                interrupted.requests.join(", ")
             )),
         ),
         Kind::Leftovers(leftovers) => (
@@ -389,6 +389,28 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn an_interrupted_request_reads_as_waiting_for_repair_or_the_next_change() {
+        let words = check(&report(
+            "/var/lib/mix/journal",
+            Some(Finding::Interrupted {
+                requests: vec!["r9".into()],
+                pending: vec!["/home/alice/.local/state/mix/home.nix".into()],
+            }),
+        ))
+        .message();
+
+        assert!(
+            words.starts_with(
+                "an interrupted request in /var/lib/mix/journal hasn't been finished or undone yet"
+            ),
+            "{words}"
+        );
+        assert!(words.contains("`mix repair`"), "{words}");
+        assert!(words.contains("request r9"), "{words}");
+        assert!(!words.contains("couldn't"), "{words}");
     }
 
     #[test]

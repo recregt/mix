@@ -37,11 +37,9 @@ impl HealthReport {
     }
 }
 
-/// Why an artifact is beyond repair's reach.
+/// Why `mix repair` cannot fix an artifact.
 ///
-/// The reason is a value, not a sentence. What a reader should do about it depends on the
-/// command: `mix repair` offers a way out, and the health gate in front of the other commands
-/// only says why it stopped. So the words are chosen where the command is known.
+/// Note: The client words each reason for the command that met it.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, serde::Serialize, serde::Deserialize,
 )]
@@ -58,8 +56,8 @@ pub enum Unfixable {
     #[error("missing, and `mix repair` can't restore it")]
     MissingRuntime,
 
-    /// An interrupted request whose recovery keeps failing.
-    #[error("an interrupted request couldn't be put back")]
+    /// An interrupted request whose recovery failed in this run.
+    #[error("an interrupted request couldn't be finished or undone")]
     Unrecovered,
 
     /// A user's file where a file mix manages belongs, which repair will not delete.
@@ -80,8 +78,7 @@ pub enum Unfixable {
 
 /// What an inspection measured about an artifact that is not as it should be.
 ///
-/// Every variant is a fact and nothing else: no advice, no sentence, no name. The artifact is
-/// named by the report that carries the finding.
+/// Note: The report that carries a finding names its artifact.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Finding {
     /// Nothing is at the path.
@@ -154,14 +151,17 @@ pub enum Finding {
     /// Part of the Nix runtime itself is not there.
     RuntimeMissing,
 
-    /// The repository's `HEAD` does not resolve to a commit, or `git fsck` fails.
+    /// The repository's `HEAD` does not resolve to a commit, or its objects do not match their
+    /// ids.
     RepositoryBroken,
 
     /// The repository's index lock is there while no mix command holds the repository.
     RepositoryLocked,
 
-    /// Journals of requests that were interrupted and that no running request holds, and the
-    /// subjects their recovery still has to put back.
+    /// Journals of interrupted requests that no running request holds, and the paths their
+    /// recovery still has to finish or undo.
+    ///
+    /// Note: The audit reports a target at one of those paths as blocked by this finding.
     Interrupted {
         requests: Vec<String>,
         pending: Vec<String>,
@@ -192,17 +192,14 @@ pub enum Finding {
 }
 
 impl Finding {
-    /// Why `mix repair` cannot reconcile this finding, or `None` when it can.
+    /// Why `mix repair` cannot fix this finding, or `None` when it can.
     ///
-    /// Repair's reach is a fact about repair, not a choice of words, so it is bound to the
-    /// finding here. The daemon sends the answer with every report, so the client never decides
-    /// for itself what the reader can be promised.
+    /// Note: The daemon sends the answer with every report.
     pub fn unfixable(&self) -> Option<Unfixable> {
         match self {
             Finding::NotADirectory => Some(Unfixable::NotADirectory),
             Finding::NoSuchUser => Some(Unfixable::MissingUser),
             Finding::RuntimeMissing => Some(Unfixable::MissingRuntime),
-            Finding::Interrupted { .. } => Some(Unfixable::Unrecovered),
             Finding::InTheWay { .. } | Finding::NotALink => Some(Unfixable::InTheWay),
             Finding::NewerState { .. } => Some(Unfixable::Newer),
             _ => None,
@@ -1097,6 +1094,15 @@ impl<'a> Audit<'a> {
         self.checks.iter().map(|check| check.label().into_owned())
     }
 
+    fn settling(&self, label: &str) -> Option<usize> {
+        self.reports.iter().position(|report| {
+            matches!(
+                &report.finding,
+                Some(Finding::Interrupted { pending, .. }) if pending.iter().any(|path| path == label)
+            )
+        })
+    }
+
     pub fn step(&mut self, facts: Option<Result<Vec<Fact>, Failure>>) -> Audited {
         let at = self.reports.len();
         let Some(check) = self.checks.get(at) else {
@@ -1109,7 +1115,11 @@ impl<'a> Audit<'a> {
                 None,
             ),
             Some(Err(failure)) => (Some(unreadable(&failure)), None, None),
-            None => match check.waits_on().find_map(|before| self.causes[before]) {
+            None => match check
+                .waits_on()
+                .find_map(|before| self.causes[before])
+                .or_else(|| self.settling(&check.label()))
+            {
                 Some(cause) => {
                     self.causes[at] = Some(cause);
                     (None, None, Some(self.checks[cause].label().into_owned()))
