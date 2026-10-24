@@ -330,6 +330,33 @@ fn a_build_stopped_by_a_full_disk_says_so_and_keeps_the_error_that_named_the_dis
 }
 
 #[test]
+fn a_download_nix_gave_up_on_is_a_network_failure_that_names_the_url() {
+    let url =
+        "https://github.com/NixOS/nixpkgs/archive/efe6f071ede9d21c37462d2d6682d5e670099684.tar.gz";
+    let error = Error::Command {
+        command: "/nix/var/nix/profiles/default/bin/nix flake prefetch".into(),
+        detail: format!(
+            "error:\n       … while fetching the input 'github:NixOS/nixpkgs/efe6f071ede9d21c37462d2d6682d5e670099684'\n\n       error: Failed to open archive (Source threw exception: error: unable to download '{url}': Could not connect to server (7))"
+        ),
+    };
+
+    assert_eq!(error.code(), Some(Code::Network));
+    let Fault::Failed(diagnostic) = error.fault() else {
+        panic!("a failed command is a failure");
+    };
+    assert_eq!(diagnostic.code(), Code::Network);
+    assert_eq!(diagnostic.message, format!("couldn't download {url}"));
+    assert_eq!(
+        diagnostic.detail,
+        Some(Detail::Network(NetworkDetail { url: url.into() }))
+    );
+    let Some(Detail::Command(command)) = &diagnostic.causes[0].detail else {
+        panic!("the command is the cause");
+    };
+    assert!(command.output_tail.contains("Could not connect to server"));
+}
+
+#[test]
 fn a_command_that_is_not_nix_keeps_its_whole_tail() {
     let error = Error::Command {
         command: "git commit".into(),

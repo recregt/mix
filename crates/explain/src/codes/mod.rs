@@ -132,7 +132,7 @@ pub fn explanation(code: Code) -> Explanation {
         ),
         Code::Network => explained!(
             "A download failed.",
-            "The Nix runtime or a package could not be fetched.",
+            "The Nix runtime, a package, or the newest versions of your packages could not be fetched.",
             [
                 "check your internet connection, or the mirror given with `--mirror`",
                 "run the command again"

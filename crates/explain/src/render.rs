@@ -162,11 +162,6 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
             Diagnostic::new(phrase!("the change was made but not recorded in git"))
                 .help(help!("run `mix repair` to record it"))
         }
-        Code::Network => Diagnostic::hinting(
-            phrase!("couldn't download required setup files"),
-            help_around!("check your internet connection, then run `", "` again"),
-            command,
-        ),
         Code::Integrity | Code::Decompression => Diagnostic::hinting(
             damaged(),
             help_around!("run `", "` again to download them again"),
@@ -277,6 +272,7 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
             .help(help!("run `mix help` to see the commands and their flags")),
         Code::PermissionDenied
         | Code::Conflict
+        | Code::Network
         | Code::InvalidMirror
         | Code::UnsupportedTarget
         | Code::Unrepairable
@@ -314,6 +310,14 @@ fn detailed(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
             ),
             _ => failed(context.action),
         },
+        Code::Network => Diagnostic::hinting(
+            match detail {
+                Some(Detail::Network(network)) => phrase!("couldn't download {}", network.url),
+                _ => phrase!("couldn't download required setup files"),
+            },
+            help_around!("check your internet connection, then run `", "` again"),
+            command,
+        ),
         Code::InvalidMirror => Diagnostic::new(phrase!(
             "the mirror settings aren't valid: {}",
             diagnostic.message
