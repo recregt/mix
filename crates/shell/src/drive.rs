@@ -932,7 +932,7 @@ impl Performer {
         unit: &str,
     ) -> Result<Vec<(PathBuf, mix_core::effect::FileId)>, Failure> {
         let links = self.units().await?.links(unit).await?;
-        Ok(links
+        let mut found: Vec<(PathBuf, mix_core::effect::FileId)> = links
             .into_iter()
             .filter_map(
                 |link| match self.files.observe(&Query::Path(link.clone())) {
@@ -940,7 +940,11 @@ impl Performer {
                     _ => None,
                 },
             )
-            .collect())
+            .collect();
+        found.extend(self.files.installed_links(Path::new(UNIT_DIR), unit));
+        found.sort_by(|(a, _), (b, _)| a.cmp(b));
+        found.dedup_by(|(a, _), (b, _)| a == b);
+        Ok(found)
     }
 
     async fn observe_one(&mut self, query: &Query, scope: &Scope) -> Result<Fact, Failure> {

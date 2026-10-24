@@ -150,10 +150,13 @@ impl Units {
     pub async fn links(&self, unit: &str) -> Result<Vec<PathBuf>, Failure> {
         let operation = UnitOperation::Inspect;
         let manager = self.manager(operation).await?;
-        let links: Vec<String> = manager
-            .call("GetUnitFileLinks", &(unit, false))
-            .await
-            .map_err(|error| bus_failure(operation, unit, error))?;
+        let links: Vec<String> = match manager.call("GetUnitFileLinks", &(unit, false)).await {
+            Ok(links) => links,
+            Err(zbus::Error::FDO(error)) if matches!(*error, zbus::fdo::Error::FileNotFound(_)) => {
+                Vec::new()
+            }
+            Err(error) => return Err(bus_failure(operation, unit, error)),
+        };
         Ok(links.into_iter().map(PathBuf::from).collect())
     }
 

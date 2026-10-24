@@ -1181,6 +1181,33 @@ impl Files {
         .ok()
     }
 
+    pub fn installed_links(&self, dir: &Path, unit: &str) -> Vec<(PathBuf, FileId)> {
+        let Some(fd) = self.open_dir(dir) else {
+            return Vec::new();
+        };
+        let mut found: Vec<(PathBuf, FileId)> = entries(&fd)
+            .into_iter()
+            .filter(|name| {
+                Path::new(name)
+                    .extension()
+                    .is_some_and(|kind| kind == "wants" || kind == "requires")
+            })
+            .filter_map(|name| {
+                let targets = sys::openat(
+                    &fd,
+                    &*name,
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )
+                .ok()?;
+                let stat = sys::statx(&targets, unit, AtFlags::SYMLINK_NOFOLLOW, WANTED).ok()?;
+                Some((dir.join(&name).join(unit), id(&stat)))
+            })
+            .collect();
+        found.sort_by(|(a, _), (b, _)| a.cmp(b));
+        found
+    }
+
     /// The siblings in `dir` that an interrupted write of mix's left behind.
     fn leftovers(&self, dir: &Path) -> Vec<(PathBuf, FileId)> {
         let Some(fd) = self.open_dir(dir) else {
@@ -1388,7 +1415,12 @@ fn copy_tree_at(
             let target = sys::readlinkat(from_dir, from, Vec::new())?;
             sys::symlinkat(target.as_c_str(), to_dir, to)
         }
-        _ => Err(Errno::OPNOTSUPP),
+        _ => {
+            let file_type = FileType::from_raw_mode(u32::from(stat.stx_mode));
+            let device = sys::makedev(stat.stx_rdev_major, stat.stx_rdev_minor);
+            sys::mknodat(to_dir, to, file_type, Mode::from_raw_mode(0o600), device)?;
+            sys::chmodat(to_dir, to, mode, AtFlags::empty())
+        }
     }
 }
 
