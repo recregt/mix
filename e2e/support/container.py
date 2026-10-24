@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import pathlib
+import platform
 import re
 import shutil
 import subprocess
@@ -28,6 +29,24 @@ SNAPSHOT_TAG = re.compile(r"(\d+)-[0-9a-f]+")
 SNAPSHOT_TEST = "snapshot::bootstrapped"
 SNAPSHOT_LOCK = CACHE_DIR / "snapshot.lock"
 BOOTSTRAPPED_USER = mirror.MIRROR_TEST_USERS[0]
+REDIRECT_HOST = """
+import sys
+
+host, address = sys.argv[1:3]
+lines = []
+with open("/etc/hosts") as hosts:
+    for line in hosts.read().splitlines():
+        fields = line.split("#", 1)[0].split()
+        if host in fields[1:]:
+            others = [name for name in fields[1:] if name != host]
+            if not others:
+                continue
+            line = "\\t".join([fields[0], *others])
+        lines.append(line)
+lines.append(f"{address}\\t{host}")
+with open("/etc/hosts", "w") as hosts:
+    hosts.write("\\n".join(lines) + "\\n")
+"""
 
 
 def wait_any(*events: threading.Event) -> None:
@@ -170,13 +189,7 @@ class Container:
             ["podman", "cp", str(TESTS_ROOT / "support/gate.py"), f"{self.name}:/run/mix-gate.py"],
             check=True,
         )
-        self.exec(
-            "sh",
-            "-c",
-            f"grep -v ' {host}$' /etc/hosts > /tmp/hosts && echo '127.0.0.2 {host}' >> /tmp/hosts"
-            " && cat /tmp/hosts > /etc/hosts",
-            check=True,
-        )
+        self.exec("python3", "-c", REDIRECT_HOST, host, "127.0.0.2", check=True)
         self.start_background(
             "python3", "/run/mix-gate.py", "127.0.0.2", port, upstream, pattern, Gate.DIRECTORY
         )
@@ -431,14 +444,27 @@ def daemon_trusts(container: Container, user: str) -> bool:
     return bool(json.loads(result.stdout)["trusted"])
 
 
+def nix_build(attribute: str) -> pathlib.Path:
+    """Builds a flake output of the repository and returns its store path."""
+    system = f"{platform.machine()}-linux"
+    built = subprocess.run(
+        [
+            "nix",
+            "build",
+            "--no-link",
+            "--print-out-paths",
+            f"{REPO_ROOT}#{attribute.format(system=system)}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return pathlib.Path(built.stdout.strip())
+
+
 @pytest.fixture(scope="session")
 def mix_binary():
-    subprocess.run(
-        ["cargo", "build", "--release", "-p", "mix-cli", "-p", "mix-daemon"],
-        cwd=REPO_ROOT,
-        check=True,
-    )
-    return REPO_ROOT / "target/release/mix"
+    return nix_build("packages.{system}.default") / "bin/mix"
 
 
 @pytest.fixture(scope="session")
