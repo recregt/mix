@@ -173,7 +173,7 @@ fn a_socket_and_a_fifo_are_copied_with_their_type_and_mode() {
     root.apply(Action::CopyTree {
         from: "/var/run".into(),
         to: "/var/copy".into(),
-        owner: (me(), me()),
+        owner: my_ids(),
         mode: 0o755,
     })
     .unwrap();
