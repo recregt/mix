@@ -1,14 +1,9 @@
-//! Reading `nix --log-format internal-json`, so a build can be shown as counters instead of a
-//! wall of text that scrolls past faster than anyone can read it.
+//! Reader for the output of `nix`: the progress counters of `--log-format internal-json`, and the
+//! failure named by its last error.
 //!
-//! nix writes one JSON record per line, prefixed with `@nix `. Records describe activities that
-//! start, report progress and stop, so the counts a user cares about (paths downloaded, bytes
-//! fetched, derivations built) have to be accumulated as the stream arrives. What nix expects
-//! grows and shrinks as it finds work, so totals come only from the plan it prints first.
-//!
-//! A build emits thousands of records a second, so every record is folded into the totals in
-//! constant time: the aggregate per activity type is maintained incrementally instead of being
-//! recomputed by walking the live activities.
+//! Note: nix writes one JSON record per line, prefixed with `@nix `. Each record is folded into
+//! running totals per activity type in constant time. Expected totals come from the plan nix
+//! prints before it starts, because its own estimates rise and fall as it finds work.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -19,8 +14,10 @@ use serde::{Deserialize, Deserializer};
 /// Prefix nix puts on every structured record it writes to stderr.
 pub const RECORD_PREFIX: &str = "@nix ";
 
-/// Activity types, from nix's `logging.hh`. Only the ones carrying a countable total are
-/// tracked; the rest are dropped before they reach the activity map.
+/// Activity types `mix` reads, from nix's `logging.hh`.
+///
+/// Note: Transfers, path copies and builds are counted; a single path copy or build is reported
+/// by name.
 const ACT_COPY_PATH: u64 = 100;
 const ACT_FILE_TRANSFER: u64 = 101;
 const ACT_COPY_PATHS: u64 = 103;
@@ -30,10 +27,10 @@ const ACT_BUILD: u64 = 105;
 /// Result types, from nix's `logging.hh`.
 const RES_PROGRESS: u64 = 105;
 
-/// nix verbosity levels: anything past `info` is detail the user did not ask for.
+/// The most verbose nix level whose messages are reported.
 const LVL_INFO: u8 = 3;
 
-/// Slots in [`NixLog::totals`], one per tracked activity type.
+/// Indexes into the totals of `NixLog`, one per counted activity type.
 const TRANSFER: usize = 0;
 const DOWNLOADS: usize = 1;
 const BUILDS: usize = 2;
@@ -48,7 +45,7 @@ fn tracked(activity_type: u64) -> Option<usize> {
     }
 }
 
-/// What nix is doing right now, reduced to the handful of numbers worth putting on a line.
+/// Builds, downloads and downloaded bytes so far, against what the plan expects.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct BuildProgress {
     pub builds_done: u64,
@@ -61,29 +58,27 @@ pub struct BuildProgress {
     pub bytes_expected: u64,
 }
 
-/// What a record means to whoever is drawing the screen.
+/// The meaning of one stderr line of nix.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Event<'a> {
-    /// Not a structured record: an ordinary stderr line, to be shown as-is.
+    /// A line that is not a structured record.
     Plain(&'a str),
-    /// A diagnostic from nix: worth showing, and worth keeping to explain a failure with.
+    /// A message at `info` level or below, kept to explain a failure.
     Message(Cow<'a, str>),
-    /// A description of what nix just started doing: worth showing while it lasts, not worth
-    /// keeping.
+    /// The description of an activity nix started, shown while it runs.
     Transient(Cow<'a, str>),
     Building(&'a str),
     Fetching(&'a str),
-    /// The counters moved; the caller should read [`NixLog::snapshot`].
+    /// The counters changed; `NixLog::snapshot` returns them.
     Progress,
-    /// A record that changes nothing on screen.
+    /// A record that changes no counter and carries nothing to show.
     Ignored,
 }
 
-/// The running counts for one activity type.
+/// Running counts for one activity type.
 ///
-/// `live_*` is the sum over the activities of this type that are still running, kept in step as
-/// their progress is reported so a snapshot never has to walk them. Only what is done is counted
-/// here: what nix expects grows and shrinks as it finds work, so totals come from its plan.
+/// Note: `live_*` sums the activities of this type that are still running and changes with each
+/// progress report, so a snapshot reads it without walking them.
 #[derive(Debug, Default, Clone, Copy)]
 struct Totals {
     finished_done: u64,
@@ -154,7 +149,7 @@ fn size(rendered: &str) -> Option<u64> {
     Some((value * 1024f64.powi(power)) as u64)
 }
 
-/// Folds a stream of `internal-json` records into [`BuildProgress`].
+/// Running state of one nix invocation's stderr, read line by line.
 #[derive(Debug, Default)]
 pub struct NixLog {
     live: HashMap<u64, Activity>,
@@ -168,7 +163,7 @@ impl NixLog {
         Self::default()
     }
 
-    /// Whether any structured record has been seen, i.e. whether the counters mean anything.
+    /// Whether any structured record has been read. Without one, the counters stay at zero.
     pub fn is_structured(&self) -> bool {
         self.structured
     }
@@ -197,10 +192,10 @@ impl NixLog {
         }
     }
 
-    /// Folds one stderr line into the totals.
+    /// Reads one stderr line into the totals and the plan.
     ///
-    /// A line that is not a record, or a record that does not parse, is handed back untouched so
-    /// a plain-text stream flows through unchanged.
+    /// Note: A line that is not a record, or a record that does not parse, is returned unchanged
+    /// as `Event::Plain`.
     #[inline]
     pub fn observe<'a>(&mut self, line: &'a str) -> Event<'a> {
         match line.strip_prefix(RECORD_PREFIX) {
@@ -293,10 +288,9 @@ impl NixLog {
     }
 }
 
-/// One `internal-json` record.
+/// One `internal-json` record, borrowed from its line.
 ///
-/// Borrows from the line it was parsed out of, so a record that carries no text costs no
-/// allocation at all.
+/// Note: A text field allocates only when it holds an escape sequence.
 #[derive(Deserialize)]
 struct Record<'a> {
     action: &'a str,
@@ -314,12 +308,11 @@ struct Record<'a> {
     fields: Fields<'a>,
 }
 
-/// The leading integers of a record's `fields` array.
-///
-/// Every field the counters need is an integer in the first few positions, so they are read into
-/// a fixed array: no record ever allocates a vector, whatever nix decides to put in there.
 const MAX_FIELDS: usize = 4;
 
+/// The leading integers of a record's `fields` array, and its first field when that is text.
+///
+/// Note: The integers are kept in a fixed array, so reading a record never allocates for them.
 #[derive(Debug, Default)]
 struct Fields<'a> {
     ints: [u64; MAX_FIELDS],
@@ -435,6 +428,7 @@ pub enum NixFailure {
     Build { package: String },
     UnknownPackage { name: String },
     DiskFull,
+    Download { url: String },
 }
 
 const DISK_FULL: [&str; 3] = [
@@ -512,12 +506,16 @@ pub fn nix_error(tail: &str) -> Option<NixError> {
         Some(NixFailure::Build {
             package: package_of(derivation),
         })
+    } else if let Some(name) =
+        quoted_after(&message, "attribute '").filter(|_| message.contains("' missing"))
+    {
+        Some(NixFailure::UnknownPackage {
+            name: name.to_string(),
+        })
     } else {
-        quoted_after(&message, "attribute '")
-            .filter(|_| message.contains("' missing"))
-            .map(|name| NixFailure::UnknownPackage {
-                name: name.to_string(),
-            })
+        quoted_after(&message, "unable to download '").map(|url| NixFailure::Download {
+            url: url.to_string(),
+        })
     };
     Some(NixError { message, failure })
 }
@@ -954,6 +952,44 @@ mod tests {
             "error: write of 64 bytes: No space left on device"
         );
         assert_eq!(database.failure, Some(NixFailure::DiskFull));
+    }
+
+    #[test]
+    fn a_failed_download_names_the_url_from_the_error_that_ended_the_fetch() {
+        let failed = nix_error(include_str!("../fixtures/nix/download-failed.txt")).unwrap();
+
+        assert_eq!(
+            failed.failure,
+            Some(NixFailure::Download {
+                url: "https://127.0.0.1/api/v3/repos/NixOS/nixpkgs/tarball/efe6f071ede9d21c37462d2d6682d5e670099684".into()
+            })
+        );
+        assert!(failed.message.starts_with("error: unable to download '"));
+    }
+
+    #[test]
+    fn a_rate_limited_download_is_a_failed_download() {
+        let tail = "error: unable to download 'https://api.github.com/repos/nix-community/home-manager/commits/master': HTTP error 403\n\n       response body:\n\n       {\"message\":\"API rate limit exceeded\"}";
+
+        assert_eq!(
+            nix_error(tail).unwrap().failure,
+            Some(NixFailure::Download {
+                url: "https://api.github.com/repos/nix-community/home-manager/commits/master"
+                    .into()
+            })
+        );
+    }
+
+    #[test]
+    fn a_download_retried_and_then_given_up_is_not_read_from_its_warnings() {
+        let tail = "warning: unable to download 'https://cache/x': timeout; retrying in 16 ms (attempt 1/5)\nerror: attribute 'nope' missing";
+
+        assert_eq!(
+            nix_error(tail).unwrap().failure,
+            Some(NixFailure::UnknownPackage {
+                name: "nope".into()
+            })
+        );
     }
 
     #[test]

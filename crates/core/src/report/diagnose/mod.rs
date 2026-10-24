@@ -15,6 +15,7 @@ fn command_code(tail: &str) -> Code {
         Some(NixFailure::Build { .. }) => Code::BuildFailed,
         Some(NixFailure::UnknownPackage { .. }) => Code::UnknownPackage,
         Some(NixFailure::DiskFull) => Code::DiskFull,
+        Some(NixFailure::Download { .. }) => Code::Network,
         None => Code::CommandFailed,
     }
 }
@@ -53,6 +54,16 @@ pub fn command_failure(
                 severity: Severity::Error as i32,
                 message: "the disk that holds the Nix store is full".to_string(),
                 causes: vec![cause(error.message)],
+                ..Diagnostic::default()
+            };
+        }
+        Some(NixFailure::Download { url }) => {
+            return Diagnostic {
+                code: Code::Network as i32,
+                severity: Severity::Error as i32,
+                message: format!("couldn't download {url}"),
+                causes: vec![cause(error.message)],
+                detail: Some(Detail::Network(NetworkDetail { url })),
                 ..Diagnostic::default()
             };
         }

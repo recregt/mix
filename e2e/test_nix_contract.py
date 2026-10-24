@@ -1,5 +1,6 @@
 import json
 import os
+import re
 
 import pytest
 
@@ -125,6 +126,18 @@ def test_nix_never_rewrites_the_lock(container, mock_nix_server, mirror_cache):
 
 
 PREFETCHED = REPO_ROOT / "crates/shell/fixtures/nix"
+BRANCHES = REPO_ROOT / "crates/shell/fixtures/git/ls-remote-branches.txt"
+PROFILE_GIT = f"/home/{USER}/.nix-profile/bin/git"
+BRANCH_LINE = re.compile(r"[0-9a-f]{40}\trefs/heads/\S+")
+
+
+def _needs_network(what: str):
+    if os.environ.get(ALLOW_NETWORK_ENV, "").strip().lower() not in ("1", "true", "yes"):
+        pytest.skip(f"{what} needs the network: set {ALLOW_NETWORK_ENV}=1")
+
+
+def _without_github_api(container):
+    container.exec("sh", "-c", "echo '0.0.0.0 api.github.com' >> /etc/hosts", check=True)
 
 
 @pytest.mark.bootstrapped
@@ -138,12 +151,58 @@ PREFETCHED = REPO_ROOT / "crates/shell/fixtures/nix"
 def test_a_prefetched_input_is_printed_the_way_mix_reads_it(
     container, mock_nix_server, mirror_cache, reference, fixture
 ):
-    if os.environ.get(ALLOW_NETWORK_ENV, "").strip().lower() not in ("1", "true", "yes"):
-        pytest.skip(f"prefetching from GitHub needs the network: set {ALLOW_NETWORK_ENV}=1")
+    _needs_network("prefetching from GitHub")
+    _without_github_api(container)
 
     result = container.exec(
-        NIX_BINARY, "flake", "prefetch", "--json", reference, user=USER, check=True
+        NIX_BINARY,
+        "flake",
+        "prefetch",
+        "--json",
+        "--flake-registry",
+        "",
+        reference,
+        user=USER,
+        check=True,
     )
 
     expected = _fixture(PREFETCHED / fixture, result.stdout.strip() + "\n")
     assert json.loads(result.stdout) == json.loads(expected)
+
+
+@pytest.mark.bootstrapped
+@pytest.mark.parametrize(
+    ("remote", "branch"),
+    [
+        ("https://github.com/NixOS/nixpkgs", "nixos-unstable"),
+        ("https://github.com/nix-community/home-manager", "master"),
+    ],
+)
+def test_branch_heads_are_listed_the_way_mix_reads_them(
+    container, mock_nix_server, mirror_cache, remote, branch
+):
+    _needs_network("listing branches on GitHub")
+    _without_github_api(container)
+
+    result = container.exec(PROFILE_GIT, "ls-remote", "--branches", remote, user=USER, check=True)
+
+    lines = result.stdout.splitlines()
+    assert all(BRANCH_LINE.fullmatch(line) for line in lines), lines
+    assert any(line.endswith(f"\trefs/heads/{branch}") for line in lines)
+    assert all(BRANCH_LINE.fullmatch(line) for line in BRANCHES.read_text().splitlines())
+
+
+def _unable_to_download(output: str) -> str:
+    rest = output[output.rindex("error: unable to download '") :]
+    return rest.split("'")[1]
+
+
+def test_a_failed_download_is_reported_the_way_mix_reads_it(container, mock_nix_server):
+    bootstrap_root(container, mock_nix_server)
+    reference = f"github:NixOS/nixpkgs/{NIXPKGS_REV}?host=127.0.0.1"
+
+    result = _nix(container, "flake", "prefetch", "--json", "--flake-registry", "", reference)
+
+    assert result.returncode != 0
+    expected = _fixture(FIXTURES / "download-failed.txt", result.stderr)
+    assert _unable_to_download(result.stderr) == _unable_to_download(expected)

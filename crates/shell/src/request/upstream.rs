@@ -4,14 +4,16 @@ use std::pin::Pin;
 use mix_core::declared::identity::InvokingUser;
 use mix_core::declared::paths::DEFAULT_PROFILE_NIX;
 use mix_core::declared::pins::locked;
+use mix_core::effect::Failure;
 use mix_core::ops::update::Versions;
 use mix_core::{Error, Result};
 use mix_exec::Scope;
 use mix_nixgen::lock::LockedInput;
-use mix_nixgen::{Input, Pins};
+use mix_nixgen::{Input, Pins, Rev};
 use serde_json::Value;
 
 use crate::effect::exec::run_as;
+use crate::effect::git::Git;
 
 pub type Newest<'a> = Pin<Box<dyn Future<Output = Result<Pins<LockedInput>>> + Send + 'a>>;
 
@@ -58,18 +60,51 @@ impl Upstream for Nix {
     }
 }
 
-pub fn reference(input: &Input) -> String {
-    format!("github:{}/{}/{}", input.owner, input.repo, input.branch)
+pub fn remote(input: &Input) -> String {
+    format!("https://github.com/{}/{}", input.owner, input.repo)
+}
+
+pub fn reference(input: &Input, rev: &Rev) -> String {
+    format!("github:{}/{}/{}", input.owner, input.repo, rev.as_str())
+}
+
+pub fn head(listing: &str, branch: &str) -> Option<Rev> {
+    let wanted = format!("refs/heads/{branch}");
+    listing.lines().find_map(|line| {
+        let (rev, name) = line.split_once('\t')?;
+        (name == wanted).then(|| Rev::parse(rev).ok()).flatten()
+    })
+}
+
+async fn newest_rev(user: &InvokingUser, input: &Input, scope: &Scope) -> Result<Rev> {
+    let remote = remote(input);
+    let Some(listing) = Git::of(user).branches(user, &remote, scope).await? else {
+        return Err(Error::Effect(Box::new(Failure::Network { url: remote })));
+    };
+    head(&listing, input.branch).ok_or_else(|| Error::Command {
+        command: "git ls-remote".to_string(),
+        detail: format!("{remote} has no branch {}", input.branch),
+    })
 }
 
 async fn prefetch(user: &InvokingUser, input: &Input, scope: &Scope) -> Result<LockedInput> {
-    let reference = reference(input);
-    let args = ["flake", "prefetch", "--refresh", "--json", &reference];
+    let rev = newest_rev(user, input, scope).await?;
+    let reference = reference(input, &rev);
+    let args = [
+        "flake",
+        "prefetch",
+        "--json",
+        "--flake-registry",
+        "",
+        &reference,
+    ];
     let answer = run_as(user, DEFAULT_PROFILE_NIX, &args, scope).await?;
-    parse(input, &answer).ok_or_else(|| Error::Command {
-        command: "nix flake prefetch".to_string(),
-        detail: format!("its answer for {reference} could not be read"),
-    })
+    parse(input, &answer)
+        .filter(|locked| locked.rev == rev)
+        .ok_or_else(|| Error::Command {
+            command: "nix flake prefetch".to_string(),
+            detail: format!("its answer for {reference} could not be read"),
+        })
 }
 
 pub fn parse(input: &Input, answer: &str) -> Option<LockedInput> {
@@ -126,15 +161,62 @@ mod tests {
         assert!(parse(mix_nixgen::Pin::HomeManager.input(), NIXPKGS).is_none());
     }
 
+    const BRANCHES: &str = include_str!("../../fixtures/git/ls-remote-branches.txt");
+
     #[test]
-    fn each_input_follows_its_own_branch() {
+    fn each_input_is_looked_up_in_its_own_repository() {
         assert_eq!(
-            reference(mix_nixgen::Pin::Nixpkgs.input()),
-            "github:NixOS/nixpkgs/nixos-unstable"
+            remote(mix_nixgen::Pin::Nixpkgs.input()),
+            "https://github.com/NixOS/nixpkgs"
         );
         assert_eq!(
-            reference(mix_nixgen::Pin::HomeManager.input()),
-            "github:nix-community/home-manager/master"
+            remote(mix_nixgen::Pin::HomeManager.input()),
+            "https://github.com/nix-community/home-manager"
+        );
+    }
+
+    #[test]
+    fn an_input_is_fetched_at_the_revision_its_branch_points_to() {
+        let rev = Rev::parse("2cd3234928f60bbff695a7ee56115ef7799c47cd").unwrap();
+        assert_eq!(
+            reference(mix_nixgen::Pin::HomeManager.input(), &rev),
+            "github:nix-community/home-manager/2cd3234928f60bbff695a7ee56115ef7799c47cd"
+        );
+    }
+
+    #[test]
+    fn the_head_of_a_branch_is_read_from_what_git_lists() {
+        assert_eq!(
+            head(BRANCHES, mix_nixgen::Pin::HomeManager.input().branch),
+            Some(Rev::parse("2cd3234928f60bbff695a7ee56115ef7799c47cd").unwrap())
+        );
+        assert_eq!(
+            head(BRANCHES, "release-25.05"),
+            Some(Rev::parse("44831a7eaba4360fb81f2acc5ea6de5fde90aaa3").unwrap())
+        );
+    }
+
+    #[test]
+    fn only_the_branch_with_exactly_that_name_counts() {
+        assert!(BRANCHES.contains("\trefs/heads/update/master\n"));
+        assert_eq!(
+            head(BRANCHES, "update/master").map(|rev| rev.as_str().to_string()),
+            Some("40e3b99d82cf8c56dfc18f45f448c406257b0462".to_string())
+        );
+        assert_eq!(head(BRANCHES, "aster"), None);
+        assert_eq!(head(BRANCHES, "nixos-unstable"), None);
+    }
+
+    #[test]
+    fn a_listing_that_is_not_a_branch_list_names_no_head() {
+        assert_eq!(head("", "master"), None);
+        assert_eq!(head("short\trefs/heads/master\n", "master"), None);
+        assert_eq!(
+            head(
+                "2cd3234928f60bbff695a7ee56115ef7799c47cd refs/heads/master\n",
+                "master"
+            ),
+            None
         );
     }
 }

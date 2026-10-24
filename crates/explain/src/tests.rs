@@ -181,6 +181,23 @@ fn a_network_failure_points_at_the_connection() {
 }
 
 #[test]
+fn a_failed_download_with_a_url_names_it_and_points_at_the_connection() {
+    let url = "https://github.com/NixOS/nixpkgs/archive/efe6f07.tar.gz";
+    let message = says(
+        UPDATE,
+        &mix_core::Error::Command {
+            command: "nix flake prefetch".into(),
+            detail: format!("error: unable to download '{url}': HTTP error 503"),
+        },
+    );
+
+    assert!(message.starts_with(&format!("couldn't download {url}")));
+    assert!(message.contains("internet connection"));
+    assert!(message.contains("mix update"));
+    assert!(!message.contains("setup files"));
+}
+
+#[test]
 fn a_damaged_download_reads_the_same_however_it_was_caught() {
     let integrity = says(
         BOOTSTRAP,
