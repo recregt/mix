@@ -1,0 +1,43 @@
+name: Feature
+description: A new behavior of `mix` whose design is settled
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: Not settled yet? Start in [Discussions](https://github.com/recregt/mix/discussions) and open this once the idea is clear.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What a user cannot do today, or what goes wrong, and for whom.
+    validations:
+      required: true
+
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Behavior
+      description: What `mix` does once this is done, with the commands, flags, output and errors a user sees.
+    validations:
+      required: true
+
+  - type: textarea
+    id: design
+    attributes:
+      label: Design
+      description: How it works, the facts it rests on, and the alternatives that were turned down and why.
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Out of scope
+      description: What this deliberately does not do.
+
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: The checks that show it works, such as tests or a command and its output.
+    validations:
+      required: true
