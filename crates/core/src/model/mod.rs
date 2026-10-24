@@ -101,6 +101,7 @@ pub struct World {
     pub users: BTreeMap<String, UserFacts>,
     pub units: BTreeMap<String, Unit>,
     pub profiles: BTreeMap<u32, Profile>,
+    aside_profiles: BTreeMap<PathBuf, (u32, Profile)>,
     pub journals: Vec<crate::effect::Abandoned>,
     pub logs: BTreeMap<String, Vec<crate::run::journal::Record>>,
     pub held: std::collections::BTreeSet<String>,
@@ -119,6 +120,7 @@ impl PartialEq for World {
             && self.users == other.users
             && self.meaningful_units().eq(other.meaningful_units())
             && self.profiles == other.profiles
+            && self.aside_profiles == other.aside_profiles
             && self.journals == other.journals
             && self.logs == other.logs
             && self.clobbered == other.clobbered
@@ -238,6 +240,7 @@ impl Default for World {
             users: BTreeMap::new(),
             units: BTreeMap::new(),
             profiles: BTreeMap::new(),
+            aside_profiles: BTreeMap::new(),
             journals: Vec::new(),
             logs: BTreeMap::new(),
             held: std::collections::BTreeSet::new(),
@@ -637,6 +640,12 @@ impl World {
             }
             Action::SetAside { path, .. } => {
                 let aside = self.sibling(path, "aside");
+                if path.ends_with(crate::declared::paths::NIX_PROFILES_DIR)
+                    && let Some(uid) = self.files.get(path).map(|entry| entry.owner.0)
+                    && let Some(profile) = self.profiles.remove(&uid)
+                {
+                    self.aside_profiles.insert(aside.clone(), (uid, profile));
+                }
                 self.move_tree(path, &aside);
                 self.pend(aside.clone());
                 done(vec![Action::Restore {
@@ -772,6 +781,9 @@ impl World {
                     self.files.remove(&discarded);
                 }
                 self.move_tree(from, path);
+                if let Some((uid, profile)) = self.aside_profiles.remove(from) {
+                    self.profiles.insert(uid, profile);
+                }
                 for pending in self.pending.values_mut() {
                     pending.retain(|pending| pending != from);
                 }
@@ -1050,6 +1062,7 @@ impl World {
             Action::Commit => {
                 let committed = self.pending.remove(&self.acting_for).unwrap_or_default();
                 for pending in committed {
+                    self.aside_profiles.remove(&pending);
                     for path in self.subtree(&pending) {
                         self.files.remove(&path);
                     }

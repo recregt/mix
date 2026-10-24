@@ -1,5 +1,13 @@
-from support.container import MIX_USERS_GROUP, create_user, daemon_trusts, group_members
-from support.mirror import nix_conf_content
+import pytest
+
+from support.container import (
+    BOOTSTRAPPED_USER,
+    MIX_USERS_GROUP,
+    create_user,
+    daemon_trusts,
+    group_members,
+)
+from support.mirror import mirror_args, nix_conf_content
 
 
 def test_bootstrap_accepts_mirror_as_a_cli_flag(container, mock_nix_server):
@@ -73,3 +81,20 @@ def test_bootstrap_auto_escalates_for_a_sudo_user(container, mock_nix_server, mi
     doctor = container.mix("doctor", user="ciuser")
     assert doctor.succeeded(), doctor
     assert all("finding" not in report for report in doctor.result("doctor")["reports"])
+
+
+@pytest.mark.bootstrapped
+def test_forcing_over_an_installation_leaves_a_healthy_machine(
+    container, mock_nix_server, mirror_cache
+):
+    profiles = f"/home/{BOOTSTRAPPED_USER}/.local/state/nix/profiles"
+
+    run = container.mix(
+        "bootstrap", "--force", *mirror_args(mock_nix_server, mirror_cache), user=BOOTSTRAPPED_USER
+    )
+
+    assert run.succeeded(), run
+    dangling = container.exec("find", profiles, "-xtype", "l", check=True).stdout.split()
+    assert dangling == [], dangling
+    doctor = container.mix("doctor", user=BOOTSTRAPPED_USER)
+    assert doctor.exit_code == 0, doctor
