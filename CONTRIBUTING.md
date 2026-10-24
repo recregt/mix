@@ -17,11 +17,27 @@ flowchart LR
     merge --> e2e["E2E runs on main"]
 ```
 
-1. Branch from `main`. Do not push to `main`.
+1. Start from an issue (see [How work is tracked](#how-work-is-tracked)), and branch from `main`. Do not push to `main`.
 2. Change the code and add the test that covers it.
 3. Run `nix flake check -L`.
 4. Open a pull request with a title in commit format (see [Commits](#commits)).
 5. Fix whatever CI reports in the same pull request.
+
+## How work is tracked
+
+Discussions prepare work, issues hold it, and pull requests do it.
+
+- **Discussions** are for questions (Q&A) and for ideas that are not settled yet (Ideas). An idea is worked out there until it is clear what to build. Then each piece of work is opened as its own issue, and the discussion links to those issues and is closed.
+- **Issues** describe one piece of work each, completely: the problem, the evidence, what should happen and what is out of scope. An issue does not depend on a discussion to be understood. There are two kinds, each with its own form and label:
+
+  | Kind | Label | For |
+  |---|---|---|
+  | Bug | `bug` | Behavior that is wrong whatever the intent, or an error that does not say what happened. |
+  | Feature | `enhancement` | A new behavior whose design is settled. |
+
+- **Pull requests** fix one issue each and close it with `Fixes #<issue>`.
+
+Every change users can notice has an issue, however small. Two kinds of change go without one: CI, tooling, test-only and dependency changes, and a bug found while working on a pull request and fixed in that same pull request, which its summary mentions.
 
 ## Set up
 
@@ -127,7 +143,7 @@ The `commit-msg` hook enforces this, because pull requests are squash-merged and
 ## Pull requests
 
 - The title follows the commit rules, because the pull request is squash-merged and the title becomes the commit.
-- Fill in the template: a one or two sentence summary, and `Fixes #<issue>` if there is an issue.
+- Fill in the template: a one or two sentence summary, and `Fixes #<issue>`. Leave the line out only for a change that needs no issue.
 - If users can notice the change, add a line for it under `Unreleased` in [CHANGELOG.md](CHANGELOG.md), with a link to the pull request. Changes to CI, tests or tooling get no line.
 - Keep a pull request to one change. Split unrelated work.
 - If your branch builds on another pull request, rebase it after the base merges. Squash-merging rewrites history, so use `git rebase --onto main <old-base> <branch>`.
