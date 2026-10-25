@@ -16,7 +16,7 @@ pub mod lock;
 pub mod parse;
 
 pub use escape::NulByte;
-pub use facts::{derivations, package_facts};
+pub use facts::{derivations, package_checks, package_facts};
 pub use flake::{FlakeConfig, InvalidRev, Rev, System};
 pub(crate) use header::GENERATED_HEADER;
 pub use home::{CopyIntoGeneration, HomeModule, InvalidInput, StateVersion};

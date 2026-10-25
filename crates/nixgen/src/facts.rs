@@ -2,6 +2,7 @@ use crate::ast::Expr;
 use crate::escape::NulByte;
 
 const FACTS: &str = include_str!("package-facts.nix");
+const CHECK: &str = include_str!("package-check.nix");
 
 pub fn package_facts<'a>(names: impl IntoIterator<Item = &'a str>) -> Result<String, NulByte> {
     let names = names
@@ -26,9 +27,32 @@ pub fn derivations<'a>(names: impl IntoIterator<Item = &'a str>) -> Result<Strin
     ))
 }
 
+pub fn package_checks<'a>(names: impl IntoIterator<Item = &'a str>) -> Result<String, NulByte> {
+    let names = names
+        .into_iter()
+        .map(Expr::string)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(format!(
+        "pkgs: let names = {}; in {{ facts = ({}) pkgs names; checks = ({}) pkgs names; }}",
+        Expr::List(names).print(),
+        FACTS.trim_end(),
+        CHECK.trim_end()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checks_and_facts_are_read_for_the_same_names() {
+        let applied = package_checks(["git", "a\"b"]).unwrap();
+
+        assert!(applied.starts_with("pkgs: let names = [\n  \"git\"\n  \"a\\\"b\"\n]; in {"));
+        assert!(applied.contains(" facts = (pkgs: names:\n"));
+        assert!(applied.contains(" checks = (pkgs: names:\n"));
+        assert!(package_checks(["a\0b"]).is_err());
+    }
 
     #[test]
     fn each_name_is_evaluated_to_its_derivation() {
