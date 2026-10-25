@@ -88,7 +88,11 @@ pub(super) fn finished<W: Write + ?Sized>(
                     ),
                     others => mix_ui::note_to(
                         out,
-                        &mix_ui::note!("{} still use `mix` on this machine", others.join(", ")),
+                        &mix_ui::note!(
+                            "{} still {} `mix` on this machine",
+                            others.join(", "),
+                            if others.len() == 1 { "uses" } else { "use" }
+                        ),
                         Some(&mix_ui::help!(
                             "run `sudo mix purge` to remove it for everyone, after asking"
                         )),
