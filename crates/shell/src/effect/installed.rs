@@ -768,7 +768,7 @@ mod tests {
         }
     }
 
-    const COMMIT: Rev = Rev::new_static("8f02d2b8397a3e8e5945017b8ca33ee91ef67eb0");
+    const COMMIT: Rev = Rev::new_static("2a831be483e05ccc96ba70ee9442faf5e21be29e");
 
     fn locked_at(pins: Pins<LockedInput>) -> Locked {
         Locked { rev: COMMIT, pins }
