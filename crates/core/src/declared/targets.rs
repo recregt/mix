@@ -34,6 +34,7 @@ Description=mix daemon socket
 ListenStream=/run/mix/daemon.sock
 SocketMode=0666
 DirectoryMode=0755
+RemoveOnStop=yes
 
 [Install]
 WantedBy=sockets.target

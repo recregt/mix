@@ -34,6 +34,7 @@ All notable changes to `mix` are listed here. The format follows [Keep a Changel
 - When the disk that holds the Nix store runs out of inodes, commands say so and point to `df -i`, instead of saying the disk is full while `df -h` shows free space. ([#197](https://github.com/recregt/mix/pull/197))
 - When two packages provide the same file, such as two versions of Lua, commands name both packages and the file, instead of "couldn't build home-manager-generation". ([#198](https://github.com/recregt/mix/pull/198))
 - `mix purge` and `mix user remove` say "Removing mix from /data/home" for the step that removes a user's `mix` files, instead of "Removing /data/home", which read as if the whole home would be deleted. ([#199](https://github.com/recregt/mix/pull/199))
+- `mix purge` removes `/run/mix` and the daemon's socket in it, instead of leaving them until the next reboot. ([#200](https://github.com/recregt/mix/pull/200))
 
 ## [0.1.0-alpha.2] - 2026-10-19
 
