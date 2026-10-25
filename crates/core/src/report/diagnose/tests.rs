@@ -49,6 +49,7 @@ fn every_failure() -> Vec<Failure> {
         Failure::Conflict { .. }
         | Failure::Io { .. }
         | Failure::CommandFailed { .. }
+        | Failure::NoInodes { .. }
         | Failure::SpawnFailed { .. }
         | Failure::Unit(_)
         | Failure::SystemdUnreachable
@@ -71,6 +72,11 @@ fn every_failure() -> Vec<Failure> {
             program: "nix build".into(),
             status: Some(1),
             output_tail: "error".into(),
+        },
+        Failure::NoInodes {
+            program: "nix build".into(),
+            status: Some(1),
+            output_tail: "error: write of 64 bytes: No space left on device".into(),
         },
         Failure::SpawnFailed {
             program: "nix".into(),
@@ -304,6 +310,27 @@ fn an_unknown_package_is_named_in_the_message_and_the_command_is_the_cause() {
         &diagnostic.causes[0].detail,
         Some(Detail::Command(command)) if command.command.ends_with("nix build")
     ));
+}
+
+#[test]
+fn a_build_stopped_by_running_out_of_inodes_says_so_and_keeps_nix_s_error() {
+    let failure = Failure::NoInodes {
+        program: "/nix/var/nix/profiles/default/bin/nix build".into(),
+        status: None,
+        output_tail: "error: creating file \"/nix/store/aaa-gcc-15.3.0/lib/liblsan.a\": No space left on device".into(),
+    };
+
+    let found = diagnostic(&failure);
+
+    assert_eq!(found.code(), Code::NoInodes);
+    assert_eq!(
+        found.message,
+        "the disk that holds the Nix store has no free inodes"
+    );
+    let Some(Detail::Command(command)) = &found.causes[0].detail else {
+        panic!("the command is the cause");
+    };
+    assert!(command.output_tail.contains("No space left on device"));
 }
 
 #[test]

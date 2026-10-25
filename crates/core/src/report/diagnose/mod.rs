@@ -250,6 +250,18 @@ pub fn diagnostic(failure: &Failure) -> Diagnostic {
         } => {
             return command_failure(program, *status, output_tail, format!("{program} failed"));
         }
+        Failure::NoInodes {
+            program,
+            status,
+            output_tail,
+        } => {
+            let full = command_failure(program, *status, output_tail, format!("{program} failed"));
+            return Diagnostic {
+                code: Code::NoInodes as i32,
+                message: "the disk that holds the Nix store has no free inodes".to_string(),
+                ..full
+            };
+        }
         Failure::SpawnFailed { program, kind } => {
             (Code::SpawnFailed, format!("{program}: {kind}"), None)
         }

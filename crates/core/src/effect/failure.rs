@@ -26,6 +26,11 @@ pub enum Failure {
         status: Option<i32>,
         output_tail: String,
     },
+    NoInodes {
+        program: String,
+        status: Option<i32>,
+        output_tail: String,
+    },
     SpawnFailed {
         program: String,
         #[serde(with = "error_kind")]

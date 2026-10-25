@@ -135,6 +135,15 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
             ),
             command,
         ),
+        Code::NoInodes => Diagnostic::hinting(
+            phrase!("the disk that holds the Nix store has no free inodes"),
+            help_around!(
+                "remove files from the disk, for example with `mix clean --all`, then run `",
+                "` again"
+            ),
+            command,
+        )
+        .note(note!("`df -i` shows how many are in use")),
         Code::Io | Code::CommandFailed | Code::SpawnFailed => failed(context.action),
         Code::Internal | Code::Unspecified => bug(),
         Code::JournalUnwritable => Diagnostic::new(phrase!("`mix` couldn't record its progress"))
