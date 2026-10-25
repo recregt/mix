@@ -236,6 +236,14 @@ pub fn explanation(code: Code) -> Explanation {
                 "run the command again"
             ]
         ),
+        Code::NoInodes => explained!(
+            "The disk that holds the Nix store has no free inodes left.",
+            "Every file needs an inode, and the file system has a fixed number of them. Nix stopped when they ran out, even though there may still be free space, and `mix` put back what it had changed. `df -i` shows how many are in use. Nix's own words are under `Caused by`.",
+            [
+                "remove files from the disk, for example with `mix clean --all`",
+                "run the command again"
+            ]
+        ),
         Code::UpdateUnavailable => explained!(
             "`mix` cannot update from here.",
             "This machine fetches from a mirror, which holds exactly the versions that your copy of `mix` was released with. Newer versions are not on it.",

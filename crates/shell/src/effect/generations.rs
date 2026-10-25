@@ -61,6 +61,35 @@ pub fn core_failure(error: mix_core::Error) -> Failure {
     }
 }
 
+fn out_of_inodes(failure: Failure, no_inodes: impl FnOnce() -> bool) -> Failure {
+    match failure {
+        Failure::CommandFailed {
+            program,
+            status,
+            output_tail,
+        } if mix_nixlog::nix_error(&output_tail).and_then(|error| error.failure)
+            == Some(mix_nixlog::NixFailure::DiskFull)
+            && no_inodes() =>
+        {
+            Failure::NoInodes {
+                program,
+                status,
+                output_tail,
+            }
+        }
+        other => other,
+    }
+}
+
+fn exhausted(files: u64, free: u64) -> bool {
+    files > 0 && free == 0
+}
+
+fn store_has_no_inodes() -> bool {
+    rustix::fs::statvfs(mix_core::declared::paths::NIX_STORE)
+        .is_ok_and(|stat| exhausted(stat.f_files, stat.f_ffree))
+}
+
 fn undo_activation(user: &InvokingUser, previous: Option<u64>, new: u64) -> Vec<Action> {
     vec![
         Action::SwitchGeneration {
@@ -306,7 +335,7 @@ async fn activate(
     prepared(&undo_activation(user, previous, predicted))?;
     let generation = profile::switch(user, source, context.mirror.as_deref(), activity, scope)
         .await
-        .map_err(core_failure)?;
+        .map_err(|error| out_of_inodes(core_failure(error), store_has_no_inodes))?;
     let new = profile(home, user).await?.active.unwrap_or(predicted);
     if let Err(error) =
         profile::activate_generation(user, &generation, activity, &scope.shielded()).await
@@ -361,6 +390,55 @@ mod tests {
     use mix_core::declared::paths::nix_profiles_dir;
 
     use super::*;
+
+    const OUT_OF_INODES: &str = "error: creating file \"/nix/store/8sjgd7q3mdks1rb7rbcv0sallhvrhai5-gcc-15.3.0/lib/liblsan.a\": No space left on device";
+
+    fn build_failed(output_tail: &str) -> Failure {
+        Failure::CommandFailed {
+            program: "nix build".into(),
+            status: Some(1),
+            output_tail: output_tail.into(),
+        }
+    }
+
+    #[test]
+    fn a_full_disk_with_no_inodes_left_is_reported_as_out_of_inodes() {
+        assert_eq!(
+            out_of_inodes(build_failed(OUT_OF_INODES), || true),
+            Failure::NoInodes {
+                program: "nix build".into(),
+                status: Some(1),
+                output_tail: OUT_OF_INODES.into(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_full_disk_with_inodes_left_stays_a_full_disk() {
+        assert_eq!(
+            out_of_inodes(build_failed(OUT_OF_INODES), || false),
+            build_failed(OUT_OF_INODES)
+        );
+    }
+
+    #[test]
+    fn a_failure_that_is_not_a_full_disk_never_looks_at_the_disk() {
+        let unknown = "error: attribute 'ripgrep2' missing";
+
+        assert_eq!(
+            out_of_inodes(build_failed(unknown), || unreachable!(
+                "only a full disk is checked"
+            )),
+            build_failed(unknown)
+        );
+    }
+
+    #[test]
+    fn inodes_run_out_only_on_a_file_system_that_counts_them() {
+        assert!(exhausted(6_000, 0));
+        assert!(!exhausted(6_000, 1));
+        assert!(!exhausted(0, 0));
+    }
 
     #[test]
     fn the_pins_of_a_generation_are_read_from_its_own_lock() {

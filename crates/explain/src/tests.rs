@@ -181,6 +181,24 @@ fn a_network_failure_points_at_the_connection() {
 }
 
 #[test]
+fn running_out_of_inodes_points_at_df_i_and_at_making_room() {
+    let message = says(
+        INSTALL,
+        &mix_core::effect::Failure::NoInodes {
+            program: "nix build".into(),
+            status: Some(1),
+            output_tail: "error: write of 64 bytes: No space left on device".into(),
+        },
+    );
+
+    assert!(message.starts_with("the disk that holds the Nix store has no free inodes"));
+    assert!(message.contains("`df -i`"));
+    assert!(message.contains("mix clean --all"));
+    assert!(message.contains("mix install"));
+    assert!(!message.contains("is full"));
+}
+
+#[test]
 fn a_failed_download_with_a_url_names_it_and_points_at_the_connection() {
     let url = "https://github.com/NixOS/nixpkgs/archive/efe6f07.tar.gz";
     let message = says(
