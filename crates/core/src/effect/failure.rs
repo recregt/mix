@@ -31,6 +31,7 @@ pub enum Failure {
         status: Option<i32>,
         output_tail: String,
     },
+    Collision(Box<CollisionFailure>),
     SpawnFailed {
         program: String,
         #[serde(with = "error_kind")]
@@ -76,6 +77,15 @@ impl UnitOperation {
             Self::Restart => "restart",
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CollisionFailure {
+    pub program: String,
+    pub status: Option<i32>,
+    pub output_tail: String,
+    pub file: String,
+    pub packages: [String; 2],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

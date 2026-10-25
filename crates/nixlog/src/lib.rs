@@ -429,7 +429,11 @@ pub enum NixFailure {
     UnknownPackage { name: String },
     DiskFull,
     Download { url: String },
+    Collision { file: String, paths: [String; 2] },
 }
+
+const COLLISION: &str = "two given paths contain a conflicting subpath:";
+const STORE: &str = "/nix/store/";
 
 const DISK_FULL: [&str; 3] = [
     "No space left on device",
@@ -481,6 +485,25 @@ fn package_of(derivation: &str) -> String {
     package_name(derivation).to_string()
 }
 
+fn in_store(path: &str) -> Option<(&str, &str)> {
+    let (name, file) = path.strip_prefix(STORE)?.split_once('/')?;
+    Some((&path[..STORE.len() + name.len()], file))
+}
+
+fn collision(error: &str) -> Option<NixFailure> {
+    let listed = &error[error.find(COLLISION)? + COLLISION.len()..];
+    let mut quoted = listed
+        .split('`')
+        .skip(1)
+        .filter_map(|part| part.split_once('\'').map(|(path, _)| path));
+    let (first, file) = in_store(quoted.next()?)?;
+    let (second, _) = in_store(quoted.next()?)?;
+    Some(NixFailure::Collision {
+        file: file.to_string(),
+        paths: [first.to_string(), second.to_string()],
+    })
+}
+
 pub fn nix_error(tail: &str) -> Option<NixError> {
     let clean = without_escapes(tail);
     let starts: Vec<usize> = clean
@@ -499,6 +522,15 @@ pub fn nix_error(tail: &str) -> Option<NixError> {
         return Some(NixError {
             message: error.to_string(),
             failure: Some(NixFailure::DiskFull),
+        });
+    }
+    if let Some((error, failure)) = errors
+        .iter()
+        .find_map(|error| collision(error).map(|failure| (error, failure)))
+    {
+        return Some(NixError {
+            message: error.to_string(),
+            failure: Some(failure),
         });
     }
     let message = errors.last()?.to_string();
@@ -700,6 +732,34 @@ mod tests {
             }
         }
         tail
+    }
+
+    #[test]
+    fn a_collision_in_a_home_manager_build_names_both_paths_and_the_file() {
+        let collided = nix_error(&decoded(include_str!(
+            "../fixtures/nix/collision-build.txt"
+        )))
+        .unwrap();
+
+        assert_eq!(
+            collided.failure,
+            Some(NixFailure::Collision {
+                file: "include/luaconf.h".into(),
+                paths: [
+                    "/nix/store/9l8xf80ah70hycq9nd24vlri2rzinzcp-lua-5.4.7".into(),
+                    "/nix/store/k7qqryx7cwwyb6gpck0bh56izx9g6bpa-lua-5.3.6".into(),
+                ],
+            })
+        );
+        assert!(collided.message.contains("conflicting subpath"));
+        assert!(!collided.message.contains("1 dependency failed"));
+    }
+
+    #[test]
+    fn a_conflict_naming_paths_outside_the_store_is_not_a_collision() {
+        let tail = "error: two given paths contain a conflicting subpath:\n  `/tmp/a/bin/x' and\n  `/tmp/b/bin/x'";
+
+        assert_eq!(nix_error(tail).unwrap().failure, None);
     }
 
     #[test]

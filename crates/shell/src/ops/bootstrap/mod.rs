@@ -77,6 +77,10 @@ pub fn error_from(failure: Failure) -> Error {
             command: program,
             detail: output_tail,
         }),
+        Failure::Collision(collided) => Error::Core(mix_core::Error::Command {
+            command: collided.program,
+            detail: collided.output_tail,
+        }),
         Failure::SpawnFailed { program, kind } => Error::Core(mix_core::Error::Exec {
             command: program,
             source: std::io::Error::from(kind),

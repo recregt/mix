@@ -4,7 +4,7 @@ use mix_events::v1::Cancellation;
 use mix_events::{Diagnose, Fault};
 
 use super::*;
-use crate::effect::{UnitFailure, UnitOperation};
+use crate::effect::{CollisionFailure, UnitFailure, UnitOperation};
 
 fn every_error() -> Vec<Error> {
     let exhaustive = |error: &Error| match error {
@@ -50,6 +50,7 @@ fn every_failure() -> Vec<Failure> {
         | Failure::Io { .. }
         | Failure::CommandFailed { .. }
         | Failure::NoInodes { .. }
+        | Failure::Collision(_)
         | Failure::SpawnFailed { .. }
         | Failure::Unit(_)
         | Failure::SystemdUnreachable
@@ -78,6 +79,13 @@ fn every_failure() -> Vec<Failure> {
             status: Some(1),
             output_tail: "error: write of 64 bytes: No space left on device".into(),
         },
+        Failure::Collision(Box::new(CollisionFailure {
+            program: "nix build".into(),
+            status: Some(1),
+            output_tail: "error: two given paths contain a conflicting subpath:\n  `/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lua-5.4.7/bin/lua' and\n  `/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-lua-5.3.6/bin/lua'".into(),
+            file: "bin/lua".into(),
+            packages: ["lua5_4".into(), "lua5_3".into()],
+        })),
         Failure::SpawnFailed {
             program: "nix".into(),
             kind: ErrorKind::NotFound,
@@ -310,6 +318,55 @@ fn an_unknown_package_is_named_in_the_message_and_the_command_is_the_cause() {
         &diagnostic.causes[0].detail,
         Some(Detail::Command(command)) if command.command.ends_with("nix build")
     ));
+}
+
+const COLLIDED: &str = "error: Cannot build '/nix/store/aaa-home-manager-path.drv'.\n       Reason: builder failed with exit code 25.\n       Last 6 log lines:\n       > pkgs.buildEnv error: two given paths contain a conflicting subpath:\n       >   `/nix/store/9l8xf80ah70hycq9nd24vlri2rzinzcp-lua-5.4.7/include/luaconf.h' and\n       >   `/nix/store/k7qqryx7cwwyb6gpck0bh56izx9g6bpa-lua-5.3.6/include/luaconf.h'\nerror: Cannot build '/nix/store/bbb-home-manager-generation.drv'.\n       Reason: 1 dependency failed.";
+
+#[test]
+fn a_collision_names_both_packages_and_the_file_and_keeps_nix_s_words() {
+    let failure = Failure::Collision(Box::new(CollisionFailure {
+        program: "nix build".into(),
+        status: None,
+        output_tail: COLLIDED.into(),
+        file: "include/luaconf.h".into(),
+        packages: ["lua5_4".into(), "lua5_3".into()],
+    }));
+
+    let found = diagnostic(&failure);
+
+    assert_eq!(found.code(), Code::PackageCollision);
+    assert_eq!(
+        found.message,
+        "`lua5_4` and `lua5_3` both provide include/luaconf.h"
+    );
+    assert_eq!(
+        found.detail,
+        Some(Detail::Packages(PackagesDetail {
+            packages: vec!["lua5_4".into(), "lua5_3".into()]
+        }))
+    );
+    let Some(Detail::Command(command)) = &found.causes[0].detail else {
+        panic!("the command is the cause");
+    };
+    assert!(command.output_tail.contains("conflicting subpath"));
+    assert!(!command.output_tail.contains("1 dependency failed"));
+}
+
+#[test]
+fn a_collision_nobody_named_names_the_packages_by_their_store_names() {
+    let error = Error::Command {
+        command: "nix build".into(),
+        detail: COLLIDED.into(),
+    };
+
+    let Fault::Failed(found) = error.fault() else {
+        panic!("a failed command is a failure");
+    };
+    assert_eq!(found.code(), Code::PackageCollision);
+    assert_eq!(
+        found.message,
+        "`lua-5.4.7` and `lua-5.3.6` both provide include/luaconf.h"
+    );
 }
 
 #[test]

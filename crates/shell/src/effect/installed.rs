@@ -391,6 +391,64 @@ pub async fn assess(
     })
 }
 
+pub async fn outputs_of(
+    user: &InvokingUser,
+    source: FlakeSource,
+    names: &[String],
+    mirror: Option<&str>,
+    scope: &Scope,
+) -> Result<Vec<CheckedPackage>> {
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let args = outputs_args(user, source, names, mirror)?;
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let answer = run_as(user, DEFAULT_PROFILE_NIX, &args, scope).await?;
+    parse_assessment(&answer).map_err(|error| unreadable("nix eval", error))
+}
+
+fn outputs_args(
+    user: &InvokingUser,
+    source: FlakeSource,
+    names: &[String],
+    mirror: Option<&str>,
+) -> Result<Vec<String>> {
+    let apply = mix_nixgen::package_checks(names.iter().map(String::as_str))
+        .map_err(|error| unreadable("nix eval", error))?;
+    let installable = Installable::new(
+        activation::flake(user, source),
+        AttrPath::new(["homeConfigurations", &user.name, "pkgs"])
+            .expect("an invoking user's name never holds a quote"),
+    )
+    .render();
+    let mut args = vec![
+        "eval".to_string(),
+        "--read-only".to_string(),
+        "--json".to_string(),
+        installable,
+        "--apply".to_string(),
+        apply,
+        "--no-write-lock-file".to_string(),
+    ];
+    args.extend(activation::nix_options(mirror));
+    Ok(args)
+}
+
+pub fn owner_of(packages: &[CheckedPackage], path: &str) -> String {
+    packages
+        .iter()
+        .find(|package| {
+            package
+                .outputs
+                .iter()
+                .any(|output| output.store_path == path)
+        })
+        .map_or_else(
+            || mix_nixlog::package_name(path).to_string(),
+            |package| package.name.clone(),
+        )
+}
+
 enum Fetched {
     From(String, BTreeMap<String, (u64, u64)>),
     Nowhere,
@@ -932,6 +990,57 @@ mod tests {
         assert_eq!(
             closure["/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84"],
             (35_073_128, 10_250_422)
+        );
+    }
+
+    #[test]
+    fn a_store_path_is_named_by_the_package_whose_output_it_is() {
+        let packages = parse_assessment(ASSESSED).unwrap();
+
+        assert_eq!(
+            owner_of(
+                &packages,
+                "/nix/store/xl1h9i29pgq2q5cszjhm5wpfxfbbqwyi-hello-2.12.3"
+            ),
+            "hello"
+        );
+        assert_eq!(
+            owner_of(
+                &packages,
+                "/nix/store/k7qqryx7cwwyb6gpck0bh56izx9g6bpa-lua-5.3.6"
+            ),
+            "lua-5.3.6"
+        );
+    }
+
+    #[test]
+    fn the_outputs_of_a_profile_are_evaluated_from_the_flake_its_build_used() {
+        let names = ["lua5_3".to_string(), "lua5_4".to_string()];
+
+        let first = outputs_args(&user(), FlakeSource::Path, &names, None).unwrap();
+        let mirrored = outputs_args(
+            &user(),
+            FlakeSource::Git,
+            &names,
+            Some("http://mirror.internal"),
+        )
+        .unwrap();
+
+        assert_eq!(&first[..3], ["eval", "--read-only", "--json"]);
+        assert_eq!(
+            first[3],
+            "path:/home/alice/.local/state/mix#homeConfigurations.alice.pkgs"
+        );
+        assert!(first[5].contains("checks = (pkgs: names:"));
+        assert!(!first.iter().any(|arg| arg == "--override-input"));
+        assert_eq!(
+            mirrored[3],
+            "git+file:///home/alice/.local/state/mix#homeConfigurations.alice.pkgs"
+        );
+        assert!(
+            mirrored
+                .iter()
+                .any(|arg| arg.starts_with("tarball+http://mirror.internal"))
         );
     }
 
