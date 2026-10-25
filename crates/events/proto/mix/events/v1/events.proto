@@ -804,6 +804,7 @@ enum Code {
   CODE_DISK_FULL = 78;
   CODE_NO_INODES = 79;
   CODE_PACKAGE_COLLISION = 80;
+  CODE_OUT_OF_MEMORY = 81;
 }
 
 enum Host {

@@ -52,6 +52,7 @@ def test_the_daemon_is_an_enabled_running_service_whose_units_verify(container):
 
     assert verify.returncode == 0, verify.stderr
     assert _show(container, "UnitFileState") == "enabled"
+    assert _show(container, "OOMPolicy") == "continue"
     _service(
         container,
         lambda: _show(container, "StatusText") == "Waiting for requests",

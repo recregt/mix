@@ -81,6 +81,46 @@ fn out_of_inodes(failure: Failure, no_inodes: impl FnOnce() -> bool) -> Failure 
     }
 }
 
+fn out_of_memory(
+    failure: Failure,
+    before: Option<u64>,
+    after: impl FnOnce() -> Option<u64>,
+) -> Failure {
+    match failure {
+        Failure::CommandFailed {
+            program,
+            status,
+            output_tail,
+        } if before.is_some_and(|before| after().is_some_and(|after| after > before)) => {
+            Failure::OutOfMemory {
+                program,
+                status,
+                output_tail,
+            }
+        }
+        other => other,
+    }
+}
+
+fn own_cgroup(listing: &str) -> Option<&str> {
+    listing.lines().find_map(|line| line.strip_prefix("0::"))
+}
+
+fn oom_kill_count(events: &str) -> Option<u64> {
+    events
+        .lines()
+        .find_map(|line| line.strip_prefix("oom_kill "))
+        .and_then(|count| count.trim().parse().ok())
+}
+
+#[allow(clippy::disallowed_methods)]
+fn oom_kills() -> Option<u64> {
+    let listing = std::fs::read_to_string("/proc/self/cgroup").ok()?;
+    let cgroup = own_cgroup(&listing)?;
+    let events = std::fs::read_to_string(format!("/sys/fs/cgroup{cgroup}/memory.events")).ok()?;
+    oom_kill_count(&events)
+}
+
 async fn named(
     failure: Failure,
     user: &InvokingUser,
@@ -385,10 +425,12 @@ async fn activate(
     let predicted = before.iter().max().map_or(1, |last| last + 1);
     prepared(&undo_activation(user, previous, predicted))?;
     let mirror = context.mirror.as_deref();
+    let kills = oom_kills();
     let generation = match profile::switch(user, source, mirror, activity, scope).await {
         Ok(generation) => generation,
         Err(error) => {
             let failure = out_of_inodes(core_failure(error), store_has_no_inodes);
+            let failure = out_of_memory(failure, kills, oom_kills);
             return Err(named(failure, user, source, mirror, home, scope).await);
         }
     };
@@ -494,6 +536,69 @@ mod tests {
         assert!(exhausted(6_000, 0));
         assert!(!exhausted(6_000, 1));
         assert!(!exhausted(0, 0));
+    }
+
+    #[test]
+    fn a_build_that_fails_while_the_cgroup_counts_an_oom_kill_ran_out_of_memory() {
+        assert_eq!(
+            out_of_memory(build_failed(""), Some(0), || Some(1)),
+            Failure::OutOfMemory {
+                program: "nix build".into(),
+                status: Some(1),
+                output_tail: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_build_that_fails_with_no_new_oom_kill_stays_a_failed_command() {
+        assert_eq!(
+            out_of_memory(build_failed(OUT_OF_INODES), Some(2), || Some(2)),
+            build_failed(OUT_OF_INODES)
+        );
+    }
+
+    #[test]
+    fn without_a_count_from_before_the_build_no_oom_kill_is_claimed() {
+        assert_eq!(
+            out_of_memory(build_failed(""), None, || unreachable!(
+                "nothing to compare with"
+            )),
+            build_failed("")
+        );
+        assert_eq!(
+            out_of_memory(build_failed(""), Some(0), || None),
+            build_failed("")
+        );
+    }
+
+    #[test]
+    fn a_cancelled_build_is_never_called_out_of_memory() {
+        assert_eq!(
+            out_of_memory(Failure::Cancelled, Some(0), || Some(1)),
+            Failure::Cancelled
+        );
+    }
+
+    #[test]
+    fn the_unified_cgroup_is_read_from_the_process_listing() {
+        assert_eq!(
+            own_cgroup("0::/system.slice/mix-daemon.service\n"),
+            Some("/system.slice/mix-daemon.service")
+        );
+        assert_eq!(
+            own_cgroup("12:memory:/system.slice\n0::/system.slice/mix-daemon.service\n"),
+            Some("/system.slice/mix-daemon.service")
+        );
+        assert_eq!(own_cgroup("4:memory:/system.slice\n"), None);
+    }
+
+    #[test]
+    fn the_oom_kill_count_is_read_apart_from_the_group_kill_count() {
+        let events = "low 0\nhigh 0\nmax 12\noom 1\noom_kill 3\noom_group_kill 0\n";
+
+        assert_eq!(oom_kill_count(events), Some(3));
+        assert_eq!(oom_kill_count("low 0\nhigh 0\n"), None);
     }
 
     #[test]

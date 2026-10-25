@@ -50,6 +50,7 @@ fn every_failure() -> Vec<Failure> {
         | Failure::Io { .. }
         | Failure::CommandFailed { .. }
         | Failure::NoInodes { .. }
+        | Failure::OutOfMemory { .. }
         | Failure::Collision(_)
         | Failure::SpawnFailed { .. }
         | Failure::Unit(_)
@@ -78,6 +79,11 @@ fn every_failure() -> Vec<Failure> {
             program: "nix build".into(),
             status: Some(1),
             output_tail: "error: write of 64 bytes: No space left on device".into(),
+        },
+        Failure::OutOfMemory {
+            program: "nix build".into(),
+            status: None,
+            output_tail: String::new(),
         },
         Failure::Collision(Box::new(CollisionFailure {
             program: "nix build".into(),
@@ -388,6 +394,24 @@ fn a_build_stopped_by_running_out_of_inodes_says_so_and_keeps_nix_s_error() {
         panic!("the command is the cause");
     };
     assert!(command.output_tail.contains("No space left on device"));
+}
+
+#[test]
+fn a_build_killed_for_memory_says_so_and_keeps_the_command() {
+    let failure = Failure::OutOfMemory {
+        program: "/nix/var/nix/profiles/default/bin/nix build".into(),
+        status: None,
+        output_tail: "evaluating derivation 'homeConfigurations.alice.activationPackage'".into(),
+    };
+
+    let found = diagnostic(&failure);
+
+    assert_eq!(found.code(), Code::OutOfMemory);
+    assert_eq!(found.message, "the build ran out of memory");
+    let Some(Detail::Command(command)) = &found.detail else {
+        panic!("the command is the detail");
+    };
+    assert!(command.output_tail.contains("activationPackage"));
 }
 
 #[test]

@@ -252,6 +252,14 @@ pub fn explanation(code: Code) -> Explanation {
                 "run the command again"
             ]
         ),
+        Code::OutOfMemory => explained!(
+            "The build ran out of memory, and the kernel stopped it.",
+            "Reading the package set and building packages can take a lot of memory. When it ran out, the kernel stopped Nix and `mix` put back what it had changed. `journalctl -k` shows the kernel's record of it.",
+            [
+                "make more memory available, for example by closing other programs or adding swap",
+                "run the command again"
+            ]
+        ),
         Code::UpdateUnavailable => explained!(
             "`mix` cannot update from here.",
             "This machine fetches from a mirror, which holds exactly the versions that your copy of `mix` was released with. Newer versions are not on it.",

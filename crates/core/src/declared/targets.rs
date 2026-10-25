@@ -56,6 +56,7 @@ TimeoutStopSec=infinity
 Restart=on-failure
 RestartForceExitStatus=75
 SuccessExitStatus=75
+OOMPolicy=continue
 ProtectSystem=yes
 PrivateTmp=yes
 PrivateDevices=yes

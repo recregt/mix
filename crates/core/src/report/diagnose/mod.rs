@@ -283,6 +283,18 @@ pub fn diagnostic(failure: &Failure) -> Diagnostic {
                 ..full
             };
         }
+        Failure::OutOfMemory {
+            program,
+            status,
+            output_tail,
+        } => {
+            let full = command_failure(program, *status, output_tail, format!("{program} failed"));
+            return Diagnostic {
+                code: Code::OutOfMemory as i32,
+                message: "the build ran out of memory".to_string(),
+                ..full
+            };
+        }
         Failure::Collision(collided) => {
             let program = &collided.program;
             let full = command_failure(
