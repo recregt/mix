@@ -1118,9 +1118,11 @@ fn left(others: &[&str]) -> Vec<Envelope> {
 #[test]
 fn a_user_who_leaves_learns_who_still_uses_mix_and_how_to_remove_it_for_everyone() {
     let shared = rendered(&captured(&left(&["bob", "carol"])).1, Detail::Step);
+    let one = rendered(&captured(&left(&["bob"])).1, Detail::Step);
     let alone = rendered(&captured(&left(&[])).1, Detail::Step);
 
     assert!(shared.contains("bob, carol still use `mix`"), "{shared}");
+    assert!(one.contains("bob still uses `mix`"), "{one}");
     assert!(shared.contains("`sudo mix purge`"), "{shared}");
     assert!(
         alone.contains("no one else on this machine uses `mix`"),
