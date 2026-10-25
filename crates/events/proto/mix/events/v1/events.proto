@@ -516,6 +516,49 @@ message InstallResult {
   repeated string added = 1;
   repeated string skipped = 2;
   bool restored = 3;
+  repeated CheckedPackage checked = 4;
+  optional FetchPlan plan = 5;
+}
+
+enum PackageVerdict {
+  PACKAGE_VERDICT_UNSPECIFIED = 0;
+  PACKAGE_VERDICT_AVAILABLE = 1;
+  PACKAGE_VERDICT_UNKNOWN = 2;
+  PACKAGE_VERDICT_UNFREE = 3;
+  PACKAGE_VERDICT_BROKEN = 4;
+  PACKAGE_VERDICT_INSECURE = 5;
+  PACKAGE_VERDICT_REFUSED = 6;
+}
+
+message CheckedPackage {
+  string name = 1;
+  PackageVerdict verdict = 2;
+  optional string pname = 3;
+  optional string version = 4;
+  optional string description = 5;
+  optional string homepage = 6;
+  repeated string licenses = 7;
+  optional string main_program = 8;
+  optional string changelog = 9;
+  optional string derivation = 10;
+  repeated PlannedOutput outputs = 11;
+}
+
+message PlannedOutput {
+  string output = 1;
+  string store_path = 2;
+  bool present = 3;
+  optional string substituter = 4;
+  optional uint64 nar_size = 5;
+  optional uint64 download_size = 6;
+}
+
+message FetchPlan {
+  uint32 paths = 1;
+  uint64 download_bytes = 2;
+  uint64 unpacked_bytes = 3;
+  repeated string built = 4;
+  bool complete = 5;
 }
 
 message RemoveResult {
