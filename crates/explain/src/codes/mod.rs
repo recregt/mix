@@ -220,6 +220,14 @@ pub fn explanation(code: Code) -> Explanation {
             "The package collection `mix` installs from has nothing by that name. Usually the name is misspelt, or the package goes by another name.",
             ["check the name", "run the command again"]
         ),
+        Code::PackageCollision => explained!(
+            "Two packages contain a file at the same path, and nothing was changed.",
+            "Your profile links the files of every package you install into one place, so two packages cannot both provide the same file. This often happens with two versions of the same program. Nix's own words, with both files, are under `Caused by`.",
+            [
+                "install only one of the two packages",
+                "remove the one already installed with `mix remove`, then run the command again"
+            ]
+        ),
         Code::BuildFailed => explained!(
             "A package could not be built from source, and nothing was changed.",
             "The build's own output is under `Caused by`. A package that fails to build here usually fails for everyone.",

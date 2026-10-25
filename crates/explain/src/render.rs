@@ -291,6 +291,7 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
         | Code::InvalidState
         | Code::ProtectedPackage
         | Code::UnknownPackage
+        | Code::PackageCollision
         | Code::BuildFailed => return None,
     };
     Some(words)
@@ -400,6 +401,14 @@ fn detailed(diagnostic: &Wire, context: &Context<'_>) -> Diagnostic {
             [package, ..] => Diagnostic::new(phrase!("couldn't build {package}"))
                 .help(help!("run it again with `-vv` to see the whole build")),
             [] => bug(),
+        },
+        Code::PackageCollision => match packages(diagnostic) {
+            [_, _] => Diagnostic::new(phrase!("{}", diagnostic.message))
+                .note(note!("a profile can hold only one file at each path"))
+                .help(help!(
+                    "install only one of them, or remove the other with `mix remove` if it is already installed"
+                )),
+            _ => bug(),
         },
         Code::InvalidState => match packages(diagnostic) {
             [name, ..] => bad_name(name),

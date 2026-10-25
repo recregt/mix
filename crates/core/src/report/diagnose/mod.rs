@@ -16,7 +16,24 @@ fn command_code(tail: &str) -> Code {
         Some(NixFailure::UnknownPackage { .. }) => Code::UnknownPackage,
         Some(NixFailure::DiskFull) => Code::DiskFull,
         Some(NixFailure::Download { .. }) => Code::Network,
+        Some(NixFailure::Collision { .. }) => Code::PackageCollision,
         None => Code::CommandFailed,
+    }
+}
+
+pub fn collision(packages: [&str; 2], file: &str, cause: Diagnostic) -> Diagnostic {
+    Diagnostic {
+        code: Code::PackageCollision as i32,
+        severity: Severity::Error as i32,
+        message: format!(
+            "`{}` and `{}` both provide {file}",
+            packages[0], packages[1]
+        ),
+        causes: vec![cause],
+        detail: Some(Detail::Packages(PackagesDetail {
+            packages: packages.map(str::to_string).to_vec(),
+        })),
+        ..Diagnostic::default()
     }
 }
 
@@ -66,6 +83,10 @@ pub fn command_failure(
                 detail: Some(Detail::Network(NetworkDetail { url })),
                 ..Diagnostic::default()
             };
+        }
+        Some(NixFailure::Collision { file, paths }) => {
+            let names = paths.each_ref().map(|path| mix_nixlog::package_name(path));
+            return collision(names, &file, cause(error.message));
         }
         Some(NixFailure::Build { package }) => (
             Code::BuildFailed,
@@ -261,6 +282,21 @@ pub fn diagnostic(failure: &Failure) -> Diagnostic {
                 message: "the disk that holds the Nix store has no free inodes".to_string(),
                 ..full
             };
+        }
+        Failure::Collision(collided) => {
+            let program = &collided.program;
+            let full = command_failure(
+                program,
+                collided.status,
+                &collided.output_tail,
+                format!("{program} failed"),
+            );
+            let cause = full.causes.into_iter().next().unwrap_or_default();
+            return collision(
+                collided.packages.each_ref().map(String::as_str),
+                &collided.file,
+                cause,
+            );
         }
         Failure::SpawnFailed { program, kind } => {
             (Code::SpawnFailed, format!("{program}: {kind}"), None)

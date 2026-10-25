@@ -81,6 +81,57 @@ fn out_of_inodes(failure: Failure, no_inodes: impl FnOnce() -> bool) -> Failure 
     }
 }
 
+async fn named(
+    failure: Failure,
+    user: &InvokingUser,
+    source: mix_core::effect::FlakeSource,
+    mirror: Option<&str>,
+    home: &mut Home<'_>,
+    scope: &Scope,
+) -> Failure {
+    let Failure::CommandFailed {
+        program,
+        status,
+        output_tail,
+    } = failure
+    else {
+        return failure;
+    };
+    let Some(mix_nixlog::NixFailure::Collision { file, paths }) =
+        mix_nixlog::nix_error(&output_tail).and_then(|error| error.failure)
+    else {
+        return Failure::CommandFailed {
+            program,
+            status,
+            output_tail,
+        };
+    };
+    let names = listed(user, home).await;
+    let owners = crate::effect::installed::outputs_of(user, source, &names, mirror, scope)
+        .await
+        .unwrap_or_default();
+    Failure::Collision(Box::new(mix_core::effect::CollisionFailure {
+        program,
+        status,
+        output_tail,
+        file,
+        packages: paths.map(|path| crate::effect::installed::owner_of(&owners, &path)),
+    }))
+}
+
+async fn listed(user: &InvokingUser, home: &mut Home<'_>) -> Vec<String> {
+    let state = mix_core::declared::paths::mix_state_dir(&user.home)
+        .join(mix_core::declared::paths::STATE_FILE);
+    match home.observe(&Query::Contents(state)).await {
+        Ok(Some(Fact::Contents(Some(bytes)))) => {
+            mix_core::declared::state::StateManifest::parse(&String::from_utf8_lossy(&bytes))
+                .map(|manifest| manifest.packages)
+                .unwrap_or_default()
+        }
+        _ => Vec::new(),
+    }
+}
+
 fn exhausted(files: u64, free: u64) -> bool {
     files > 0 && free == 0
 }
@@ -333,9 +384,14 @@ async fn activate(
     }
     let predicted = before.iter().max().map_or(1, |last| last + 1);
     prepared(&undo_activation(user, previous, predicted))?;
-    let generation = profile::switch(user, source, context.mirror.as_deref(), activity, scope)
-        .await
-        .map_err(|error| out_of_inodes(core_failure(error), store_has_no_inodes))?;
+    let mirror = context.mirror.as_deref();
+    let generation = match profile::switch(user, source, mirror, activity, scope).await {
+        Ok(generation) => generation,
+        Err(error) => {
+            let failure = out_of_inodes(core_failure(error), store_has_no_inodes);
+            return Err(named(failure, user, source, mirror, home, scope).await);
+        }
+    };
     let new = profile(home, user).await?.active.unwrap_or(predicted);
     if let Err(error) =
         profile::activate_generation(user, &generation, activity, &scope.shielded()).await

@@ -181,6 +181,24 @@ fn a_network_failure_points_at_the_connection() {
 }
 
 #[test]
+fn a_collision_names_both_packages_and_how_to_keep_one() {
+    let message = says(
+        INSTALL,
+        &mix_core::effect::Failure::Collision(Box::new(mix_core::effect::CollisionFailure {
+            program: "nix build".into(),
+            status: Some(1),
+            output_tail: "error: two given paths contain a conflicting subpath:\n  `/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lua-5.4.7/bin/lua' and\n  `/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-lua-5.3.6/bin/lua'".into(),
+            file: "bin/lua".into(),
+            packages: ["lua5_4".into(), "lua5_3".into()],
+        })),
+    );
+
+    assert!(message.starts_with("`lua5_4` and `lua5_3` both provide bin/lua"));
+    assert!(message.contains("mix remove"));
+    assert!(!message.contains("dependency failed"));
+}
+
+#[test]
 fn running_out_of_inodes_points_at_df_i_and_at_making_room() {
     let message = says(
         INSTALL,
