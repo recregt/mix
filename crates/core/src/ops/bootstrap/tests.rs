@@ -392,6 +392,11 @@ fn a_stop_after_any_change_leaves_the_machine_as_it_was_unless_only_the_record_i
 
         let run = run(&mut world, &settings, Script::stopping_after(stop_after));
 
+        assert_eq!(
+            run.cancellable_at_stop,
+            Some(record != Some(stop_after)),
+            "{stop_after}"
+        );
         if record == Some(stop_after) {
             assert_eq!(run.report().verdict, Verdict::Succeeded, "{stop_after}");
             continue;

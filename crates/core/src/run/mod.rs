@@ -91,6 +91,10 @@ impl<'id, 'r> Session<'id, 'r> {
         self.runner.shielded()
     }
 
+    pub fn cancellable(&self) -> bool {
+        self.runner.cancellable()
+    }
+
     pub fn in_doubt(&mut self, undo: Vec<Action>) {
         self.runner.in_doubt(undo);
     }
@@ -319,6 +323,16 @@ impl Runner {
 
     fn rolling_back(&self) -> bool {
         matches!(self.phase, Phase::RollingBack { .. })
+    }
+
+    fn cancellable(&self) -> bool {
+        let last = self.steps.len();
+        match &self.phase {
+            Phase::Opening | Phase::RollingBack { .. } => true,
+            Phase::Checking { step, .. } => *step < last,
+            Phase::Executing { step, .. } => !self.steps[*step].shielded() || step + 1 < last,
+            Phase::Committing { .. } | Phase::Closing | Phase::Closed => false,
+        }
     }
 
     fn shielded(&self) -> bool {
