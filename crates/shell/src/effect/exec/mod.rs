@@ -39,6 +39,8 @@ pub(crate) fn exec_error(error: mix_exec::Error) -> mix_core::Error {
 /// never change what mix builds.
 const NIX_USER_CONF_FILES: &str = "/dev/null";
 
+const NIX_CONFIG: &str = "warn-dirty = false";
+
 /// A process run as `user` in an environment of its own: `HOME`, `USER`, `PATH` and no user
 /// Nix configuration, whatever the process that started mix had set.
 pub(crate) fn command_as(user: &InvokingUser, program: &str, args: &[&str]) -> Command {
@@ -47,6 +49,7 @@ pub(crate) fn command_as(user: &InvokingUser, program: &str, args: &[&str]) -> C
         .as_user(user.uid, user.gid)
         .env_clear()
         .env("NIX_USER_CONF_FILES", NIX_USER_CONF_FILES)
+        .env("NIX_CONFIG", NIX_CONFIG)
         .env("HOME", &user.home)
         .env("USER", &user.name)
         .env("PATH", search_path(user))
@@ -367,8 +370,12 @@ mod tests {
             .filter_map(|line| line.split_once('=').map(|(name, _)| name))
             .collect();
         names.sort_unstable();
-        assert_eq!(names, ["HOME", "NIX_USER_CONF_FILES", "PATH", "USER"]);
+        assert_eq!(
+            names,
+            ["HOME", "NIX_CONFIG", "NIX_USER_CONF_FILES", "PATH", "USER"]
+        );
         assert!(output.contains("NIX_USER_CONF_FILES=/dev/null"));
+        assert!(output.contains("NIX_CONFIG=warn-dirty = false"));
     }
 
     #[tokio::test]
