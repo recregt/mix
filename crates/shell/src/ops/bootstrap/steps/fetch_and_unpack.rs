@@ -526,9 +526,10 @@ mod tests {
     #[test]
     fn find_single_child_rejects_ambiguous_matches() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(dir.path().join("aaaa-nix-2.35.2")).unwrap();
-        std::fs::create_dir(dir.path().join("bbbb-nix-cmd-2.35.2")).unwrap();
-        std::fs::create_dir(dir.path().join("cccc-nix-util-2.35.2")).unwrap();
+        let nix = format!("aaaa-nix-{NIX_VERSION}");
+        std::fs::create_dir(dir.path().join(&nix)).unwrap();
+        std::fs::create_dir(dir.path().join(format!("bbbb-nix-cmd-{NIX_VERSION}"))).unwrap();
+        std::fs::create_dir(dir.path().join(format!("cccc-nix-util-{NIX_VERSION}"))).unwrap();
 
         assert!(find_single_child(dir.path(), |name| name.contains("-nix-")).is_err());
 
@@ -536,7 +537,7 @@ mod tests {
             name.ends_with(&format!("-nix-{NIX_VERSION}"))
         })
         .unwrap();
-        assert_eq!(found, dir.path().join("aaaa-nix-2.35.2"));
+        assert_eq!(found, dir.path().join(nix));
     }
 
     #[test]

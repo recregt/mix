@@ -590,7 +590,10 @@ mod tests {
     #[test]
     fn pin_filename_extracts_the_last_url_segment() {
         let pin = pin_for("x86_64-linux").unwrap();
-        assert_eq!(pin_filename(pin), "nix-2.35.2-x86_64-linux.tar.xz");
+        assert_eq!(
+            pin_filename(pin),
+            format!("nix-{}-x86_64-linux.tar.xz", mix_pins::NIX_VERSION)
+        );
     }
 
     #[test]

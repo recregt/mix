@@ -1021,7 +1021,7 @@ mod tests {
         assert_eq!(
             failed.failure,
             Some(NixFailure::Download {
-                url: "https://127.0.0.1/api/v3/repos/NixOS/nixpkgs/tarball/efe6f071ede9d21c37462d2d6682d5e670099684".into()
+                url: "https://127.0.0.1/api/v3/repos/NixOS/nixpkgs/tarball/3ec636362e1816bc2f0888fa0fa2c69f1bc9e504".into()
             })
         );
         assert!(failed.message.starts_with("error: unable to download '"));
