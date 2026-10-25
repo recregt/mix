@@ -155,6 +155,19 @@ impl Verb {
             }),
         }
     }
+
+    fn unchanged(&self, change: &Change) -> node_finished::Result {
+        match self {
+            Verb::Install => node_finished::Result::Install(InstallResult {
+                skipped: change.skipped.clone(),
+                ..InstallResult::default()
+            }),
+            Verb::Remove => node_finished::Result::Remove(RemoveResult {
+                skipped: change.skipped.clone(),
+                ..RemoveResult::default()
+            }),
+        }
+    }
 }
 
 pub async fn run(
@@ -174,7 +187,7 @@ pub async fn run(
 pub async fn run_with(
     ctx: &Context,
     root: &mut Root,
-    performer: Performer,
+    mut performer: Performer,
     cfg: &UserConfig,
     verb: Verb,
     change: &Change,
@@ -186,7 +199,13 @@ pub async fn run_with(
             Ok(steps) => steps,
             Err(error) => return root.refuse(Error::from(error)),
         };
-    perform(ctx, root, performer, steps, result).await
+    match run_steps(ctx, root, &mut performer, steps).await {
+        Ok(Verdict::Failed { failure, .. }) => {
+            root.conclude(Ending::failed(diagnostic(&failure)).with_result(verb.unchanged(change)))
+        }
+        Ok(verdict) => conclude(root, verdict, result),
+        Err(concluded) => *concluded,
+    }
 }
 
 pub async fn perform(
@@ -300,5 +319,28 @@ mod tests {
         assert!(!restored(Source::File));
         assert!(!restored(Source::Generation));
         assert!(restored(Source::Fresh));
+    }
+
+    #[test]
+    fn a_failed_change_reports_only_what_it_skipped() {
+        let change = Change {
+            changed: vec!["unrar".to_string()],
+            skipped: vec!["jq".to_string()],
+            manifest: StateManifest::seed(),
+            source: Source::File,
+        };
+
+        match (
+            Verb::Install.unchanged(&change),
+            Verb::Remove.unchanged(&change),
+        ) {
+            (node_finished::Result::Install(install), node_finished::Result::Remove(remove)) => {
+                assert!(install.added.is_empty());
+                assert_eq!(install.skipped, ["jq"]);
+                assert!(remove.removed.is_empty());
+                assert_eq!(remove.skipped, ["jq"]);
+            }
+            other => panic!("expected an install and a remove result, got {other:?}"),
+        }
     }
 }

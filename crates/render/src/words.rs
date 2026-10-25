@@ -21,11 +21,18 @@ pub fn name(request: &Request) -> &'static str {
     }
 }
 
-pub fn action(request: &Request) -> Box<dyn Display + '_> {
+pub fn action<'a>(request: &'a Request, skipped: &[String]) -> Box<dyn Display + 'a> {
+    let changed = |packages: &'a [String]| -> Vec<&'a str> {
+        packages
+            .iter()
+            .filter(|package| !skipped.contains(package))
+            .map(String::as_str)
+            .collect()
+    };
     match request {
         Request::Bootstrap(_) => Box::new("finish setting up `mix`"),
-        Request::Install(install) => Box::new(Packages("install", &install.packages)),
-        Request::Remove(remove) => Box::new(Packages("remove", &remove.packages)),
+        Request::Install(install) => Box::new(Packages("install", changed(&install.packages))),
+        Request::Remove(remove) => Box::new(Packages("remove", changed(&remove.packages))),
         Request::Clean(_) => Box::new("clean up your profile"),
         Request::Repair(_) => Box::new("finish the repair"),
         Request::Doctor(_) => Box::new("finish the health check"),
@@ -53,8 +60,8 @@ pub fn stopping(request: &Request) -> Option<Note> {
     }
 }
 
-pub fn outcome(request: &Request, fault: &Fault) -> Diagnostic {
-    mix_explain::outcome(name(request), &*action(request), fault)
+pub fn outcome(request: &Request, skipped: &[String], fault: &Fault) -> Diagnostic {
+    mix_explain::outcome(name(request), &*action(request, skipped), fault)
 }
 
 pub fn second_ctrl_c() -> Help {
@@ -69,13 +76,13 @@ pub fn detached() -> Note {
     note!("`mix` is finishing the cleanup in the background")
 }
 
-struct Packages<'a>(&'static str, &'a [String]);
+struct Packages<'a>(&'static str, Vec<&'a str>);
 
 impl Display for Packages<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Packages(verb, packages) = self;
         f.write_str(verb)?;
-        match packages {
+        match packages.as_slice() {
             [] => f.write_str(" the packages"),
             [first, rest @ ..] if rest.len() < 3 => {
                 f.write_str(" ")?;
@@ -96,17 +103,33 @@ mod tests {
 
     #[test]
     fn a_long_list_of_packages_is_counted() {
-        let packages: Vec<String> = ["a", "b", "c", "d"].map(String::from).to_vec();
+        let packages = vec!["a", "b", "c", "d"];
 
-        assert_eq!(Packages("install", &packages[..1]).to_string(), "install a");
         assert_eq!(
-            Packages("install", &packages[..3]).to_string(),
+            Packages("install", packages[..1].to_vec()).to_string(),
+            "install a"
+        );
+        assert_eq!(
+            Packages("install", packages[..3].to_vec()).to_string(),
             "install a, b, c"
         );
         assert_eq!(
-            Packages("install", &packages).to_string(),
+            Packages("install", packages).to_string(),
             "install 4 packages"
         );
+    }
+
+    #[test]
+    fn a_failed_install_names_only_the_packages_it_would_have_added() {
+        let request = Request::Install(mix_events::v1::InstallRequest {
+            packages: ["unrar", "olm", "jq"].map(String::from).to_vec(),
+        });
+
+        assert_eq!(
+            action(&request, &["jq".to_string()]).to_string(),
+            "install unrar, olm"
+        );
+        assert_eq!(action(&request, &[]).to_string(), "install unrar, olm, jq");
     }
 
     #[test]
@@ -146,7 +169,7 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                outcome(&request, &fault).message(),
+                outcome(&request, &[], &fault).message(),
                 format!("couldn't {action}\nrun it again with `-v` to see what went wrong")
             );
         }
