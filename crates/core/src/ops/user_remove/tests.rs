@@ -160,3 +160,14 @@ fn a_user_removal_discards_no_tree_so_it_shows_no_reclaim_step() {
     let keys = run.step_keys();
     assert!(!keys.iter().any(|key| key == "reclaim"), "{keys:?}");
 }
+
+#[test]
+fn a_user_removal_titles_its_home_step_as_removing_mix_not_the_home() {
+    let user = alice();
+    let steps = steps(&Settings { user: user.clone() });
+
+    let title = steps[0].title();
+
+    assert_eq!(title.verb, Verb::Removing);
+    assert_eq!(title.subject, format!("mix from {}", user.home.display()));
+}

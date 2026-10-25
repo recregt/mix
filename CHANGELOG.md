@@ -33,6 +33,7 @@ All notable changes to `mix` are listed here. The format follows [Keep a Changel
 - `mix install --dry-run` checks with Nix that each new package exists and fails the way the install would for one it does not know, instead of ending with "nothing was changed". The check updates only Nix's own cache in `~/.cache/nix`. ([#196](https://github.com/recregt/mix/pull/196))
 - When the disk that holds the Nix store runs out of inodes, commands say so and point to `df -i`, instead of saying the disk is full while `df -h` shows free space. ([#197](https://github.com/recregt/mix/pull/197))
 - When two packages provide the same file, such as two versions of Lua, commands name both packages and the file, instead of "couldn't build home-manager-generation". ([#198](https://github.com/recregt/mix/pull/198))
+- `mix purge` and `mix user remove` say "Removing mix from /data/home" for the step that removes a user's `mix` files, instead of "Removing /data/home", which read as if the whole home would be deleted. ([#199](https://github.com/recregt/mix/pull/199))
 
 ## [0.1.0-alpha.2] - 2026-10-19
 

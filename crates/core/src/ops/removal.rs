@@ -85,7 +85,10 @@ impl StepSpec for RemoveHome {
     }
 
     fn title(&self) -> Title {
-        Title::new(Verb::Removing, self.user.home.display().to_string())
+        Title::new(
+            Verb::Removing,
+            format!("mix from {}", self.user.home.display()),
+        )
     }
 
     fn queries(&self) -> Vec<Query> {
