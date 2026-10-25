@@ -53,3 +53,18 @@ def test_an_unknown_package_is_named_and_nothing_changes(container, mock_nix_ser
     assert run.code == "CODE_UNKNOWN_PACKAGE", run
     assert run.document["problems"][0]["packages"]["packages"] == ["ripgrep2"], run
     assert container.exec("cat", f"{state_dir}/state", check=True).stdout == before
+
+
+@pytest.mark.bootstrapped
+def test_a_dry_run_names_an_unknown_package_as_the_install_would(
+    container, mock_nix_server, mirror_cache
+):
+    state_dir = f"/home/{USER}/.local/state/mix"
+    before = container.exec("cat", f"{state_dir}/state", check=True).stdout
+
+    run = container.mix("install", "--dry-run", "ripgrep2", user=USER)
+
+    assert run.exit_code == 1, run
+    assert run.code == "CODE_UNKNOWN_PACKAGE", run
+    assert run.document["problems"][0]["packages"]["packages"] == ["ripgrep2"], run
+    assert container.exec("cat", f"{state_dir}/state", check=True).stdout == before
