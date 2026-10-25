@@ -15,9 +15,37 @@ pub fn package_facts<'a>(names: impl IntoIterator<Item = &'a str>) -> Result<Str
     ))
 }
 
+pub fn derivations<'a>(names: impl IntoIterator<Item = &'a str>) -> Result<String, NulByte> {
+    let names = names
+        .into_iter()
+        .map(Expr::string)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(format!(
+        "pkgs: map (name: pkgs.${{name}}.drvPath) {}",
+        Expr::List(names).print()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_name_is_evaluated_to_its_derivation() {
+        assert_eq!(
+            derivations(["git", "ripgrep"]).unwrap(),
+            "pkgs: map (name: pkgs.${name}.drvPath) [\n  \"git\"\n  \"ripgrep\"\n]"
+        );
+    }
+
+    #[test]
+    fn a_name_checked_never_ends_its_string_or_opens_an_interpolation() {
+        assert_eq!(
+            derivations(["a\"b", "${c}"]).unwrap(),
+            "pkgs: map (name: pkgs.${name}.drvPath) [\n  \"a\\\"b\"\n  \"\\${c}\"\n]"
+        );
+        assert!(derivations(["a\0b"]).is_err());
+    }
 
     fn arguments(applied: &str) -> &str {
         applied
