@@ -4,7 +4,7 @@
 //! one. A finding this build does not know is shown as a failed check.
 
 use mix_events::v1::finding::Kind;
-use mix_events::v1::{Finding, InspectionReport, Unfixable};
+use mix_events::v1::{InspectionReport, Unfixable};
 use mix_ui::text::{decimal, octal};
 use mix_ui::{Labels, around, help, note, note_around, note_parts, phrase, phrase_parts};
 
@@ -209,47 +209,12 @@ pub fn check(report: &InspectionReport) -> Diagnostic {
     }
 }
 
-pub fn labels(finding: &Finding) -> Labels {
-    match finding.kind {
-        Some(Kind::UnitDrift(_)) => Labels {
-            added: phrase!("not in the Nix runtime's copy"),
-            changed: phrase!("differs from the Nix runtime's copy"),
-            missing: note_around!("lines of the Nix runtime's copy are missing at line ", ""),
-            fix: phrase!("`mix repair` puts back the Nix runtime's copy"),
-        },
-        Some(
-            Kind::Missing(_)
-            | Kind::Unreadable(_)
-            | Kind::NotADirectory(_)
-            | Kind::NotALink(_)
-            | Kind::NewerState(_)
-            | Kind::Mode(_)
-            | Kind::Owner(_)
-            | Kind::ContentDrift(_)
-            | Kind::GroupMissing(_)
-            | Kind::GroupGid(_)
-            | Kind::NotAMember(_)
-            | Kind::NoSuchUser(_)
-            | Kind::UserMissing(_)
-            | Kind::UserIds(_)
-            | Kind::UnitMissing(_)
-            | Kind::UnitInactive(_)
-            | Kind::RuntimeMissing(_)
-            | Kind::RepositoryBroken(_)
-            | Kind::RepositoryLocked(_)
-            | Kind::Interrupted(_)
-            | Kind::Leftovers(_)
-            | Kind::GenerationDangling(_)
-            | Kind::InTheWay(_)
-            | Kind::ProfileStale(_)
-            | Kind::OldGenerations(_),
-        )
-        | None => Labels {
-            added: phrase!("not written by `mix`"),
-            changed: phrase!("differs from what `mix` wrote"),
-            missing: note_around!("lines `mix` wrote are missing at line ", ""),
-            fix: phrase!("`mix repair` puts back what `mix` wrote"),
-        },
+pub fn labels() -> Labels {
+    Labels {
+        added: phrase!("not written by `mix`"),
+        changed: phrase!("differs from what `mix` wrote"),
+        missing: note_around!("lines `mix` wrote are missing at line ", ""),
+        fix: phrase!("`mix repair` puts back what `mix` wrote"),
     }
 }
 

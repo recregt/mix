@@ -459,7 +459,10 @@ fn audited(out: &dyn Out, reports: &[InspectionReport], level: Detail, elapsed: 
                 waiting.join(", ")
             )),
         };
-        let labels = report.finding.as_ref().map(mix_explain::doctor::labels);
+        let labels = report
+            .finding
+            .as_ref()
+            .map(|_| mix_explain::doctor::labels());
         let lines = report
             .drift
             .as_ref()
