@@ -1291,7 +1291,9 @@ pub async fn drive<'r>(
     let mut unfinished = false;
     loop {
         if let Some(cause) = stopped() {
-            announce(&mut stopping, tree, Some(cause));
+            if runner.cancellable() {
+                announce(&mut stopping, tree, Some(cause));
+            }
             runner.stop(cause);
         }
         let next = runner.step(tree, input.take());
@@ -1314,6 +1316,7 @@ pub async fn drive<'r>(
                 };
                 let node = runner.current_node();
                 let reverting = runner.rolling_back();
+                let cancellable = runner.cancellable();
                 let committing = action == Action::Commit;
                 if committing {
                     if let Err(failure) = journal.append(&Record::Committing) {
@@ -1354,7 +1357,7 @@ pub async fn drive<'r>(
                             Some(signal) = receiver.recv() => {
                                 apply(tree, node.unwrap_or(ROOT), signal);
                             }
-                            _ = scope.stopped(), if !stopping => {
+                            _ = scope.stopped(), if !stopping && cancellable => {
                                 announce(&mut stopping, tree, stopped());
                             }
                         }

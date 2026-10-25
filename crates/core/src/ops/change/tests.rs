@@ -897,6 +897,11 @@ fn an_interrupt_at_any_change_puts_the_change_back_unless_only_the_record_is_lef
             .position(|action| matches!(action, Action::RecordState { .. }))
             == Some(stop);
         let report = stopped.report();
+        assert_eq!(
+            stopped.cancellable_at_stop,
+            Some(!record_left),
+            "stop at {stop}"
+        );
         if record_left {
             assert_eq!(report.verdict, Verdict::Succeeded, "stop at {stop}");
             assert_eq!(listed(&world), listed_with(&["ripgrep"]));

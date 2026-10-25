@@ -702,6 +702,9 @@ proptest! {
 
         let run = drive(&mut world, build(&kinds), Script { fail_at, stop_after, ..Script::default() });
 
+        if fail_at.is_none() && let Some(cancellable) = run.cancellable_at_stop {
+            prop_assert_eq!(cancellable, matches!(run.report().verdict, Verdict::Cancelled(_)));
+        }
         match run.report().verdict {
             Verdict::Succeeded => {
                 prop_assert!(world.pending().is_empty());

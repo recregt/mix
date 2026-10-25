@@ -112,6 +112,7 @@ pub struct Run {
     pub undos: usize,
     pub journal: Vec<Record>,
     pub crashed: bool,
+    pub cancellable_at_stop: Option<bool>,
 }
 
 #[expect(
@@ -128,6 +129,7 @@ pub fn drive(world: &mut World, mut runner: Runner, command: Start, script: &Scr
     let mut shielded = Vec::new();
     let mut changes = 0;
     let mut undos = 0;
+    let mut cancellable_at_stop = None;
     let mut journal = vec![Record::Began {
         request: REQUEST.into(),
     }];
@@ -169,6 +171,7 @@ pub fn drive(world: &mut World, mut runner: Runner, command: Start, script: &Scr
                         undos,
                         journal,
                         crashed: true,
+                        cancellable_at_stop,
                     };
                 }
                 let outcome = if runner.rolling_back() {
@@ -195,6 +198,7 @@ pub fn drive(world: &mut World, mut runner: Runner, command: Start, script: &Scr
                     } else {
                         let outcome = world.apply(&action);
                         if script.stop_after == Some(changes - 1) {
+                            cancellable_at_stop = Some(runner.cancellable());
                             runner.stop(Cancellation::Interrupted);
                         }
                         outcome
@@ -230,6 +234,7 @@ pub fn drive(world: &mut World, mut runner: Runner, command: Start, script: &Scr
         undos,
         journal,
         crashed: false,
+        cancellable_at_stop,
     }
 }
 
