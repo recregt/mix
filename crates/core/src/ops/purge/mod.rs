@@ -6,9 +6,9 @@ use crate::declared::identity::{
 };
 use crate::declared::paths::{
     LOGIN_DEFS, MIX_BIN_DIR, MIX_DAEMON_SERVICE_DEST, MIX_DAEMON_SERVICE_UNIT,
-    MIX_DAEMON_SOCKET_DEST, MIX_DAEMON_SOCKET_UNIT, NIX_CONF_DEST, NIX_DAEMON_SERVICE_DEST,
-    NIX_DAEMON_SERVICE_UNIT, NIX_DAEMON_SOCKET_DEST, NIX_DAEMON_SOCKET_UNIT, NIX_ENTRIES,
-    POLICY_FILE, PROFILE_SNIPPET_DEST, mix_state_dir,
+    MIX_DAEMON_SOCKET_DEST, MIX_DAEMON_SOCKET_UNIT, MIX_RUN_DIR, NIX_CONF_DEST,
+    NIX_DAEMON_SERVICE_DEST, NIX_DAEMON_SERVICE_UNIT, NIX_DAEMON_SOCKET_DEST,
+    NIX_DAEMON_SOCKET_UNIT, NIX_ENTRIES, POLICY_FILE, PROFILE_SNIPPET_DEST, mix_state_dir,
 };
 use crate::effect::{Action, Fact, Failure, Query, UnitFacts};
 use crate::ops::removal::{RemoveHome, path, set_aside_each, set_aside_units};
@@ -127,6 +127,7 @@ impl RemoveMachine {
                 PROFILE_SNIPPET_DEST,
                 policy_dir(),
                 MIX_BIN_DIR,
+                MIX_RUN_DIR,
             ])
             .map(PathBuf::from)
             .collect()
@@ -139,7 +140,7 @@ impl StepSpec for RemoveMachine {
     }
 
     fn title(&self) -> Title {
-        Title::new(Verb::Removing, "/nix, /etc and /var/lib/mix")
+        Title::new(Verb::Removing, "/nix, /etc, /run/mix and /var/lib/mix")
     }
 
     fn queries(&self) -> Vec<Query> {

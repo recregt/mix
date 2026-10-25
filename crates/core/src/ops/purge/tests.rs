@@ -21,6 +21,8 @@ fn bootstrapped() -> World {
     let mut world = enrolled(&[alice()]);
     world.with_file("/home/alice/.bashrc", b"linked", 0o644, (1000, 1000));
     world.with_file("/home/alice/notes", b"mine", 0o644, (1000, 1000));
+    world.with_dir("/run", 0o755, (0, 0));
+    world.with_dir("/run/mix", 0o755, (0, 0));
     world
         .linked
         .insert(1000, vec!["/home/alice/.bashrc".into()]);
@@ -65,6 +67,7 @@ fn a_purge_leaves_nothing_mix_made_and_keeps_the_users_own_files() {
         "/etc/profile.d/mix-nix.sh",
         "/etc/mix",
         "/var/lib/mix/bin",
+        "/run/mix",
         "/etc/systemd/system/nix-daemon.socket",
         "/etc/systemd/system/mix-daemon.service",
         "/home/alice/.bashrc",

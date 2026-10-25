@@ -20,6 +20,7 @@ MACHINE_PATHS = [
     "/etc/profile.d/mix-nix.sh",
     "/etc/mix",
     "/var/lib/mix",
+    "/run/mix",
     *UNIT_FILES,
 ]
 
