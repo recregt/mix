@@ -1325,7 +1325,7 @@ dependencies = [
 
 [[package]]
 name = "mix-cli"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "clap",
  "mimalloc",
@@ -1343,7 +1343,7 @@ dependencies = [
 
 [[package]]
 name = "mix-conformance"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "mimalloc",
  "mix-core",
@@ -1364,7 +1364,7 @@ dependencies = [
 
 [[package]]
 name = "mix-core"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "codspeed-divan-compat",
  "generativity",
@@ -1382,7 +1382,7 @@ dependencies = [
 
 [[package]]
 name = "mix-daemon"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "futures-util",
  "mimalloc",
@@ -1400,7 +1400,7 @@ dependencies = [
 
 [[package]]
 name = "mix-events"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "pbjson",
  "pbjson-build",
@@ -1418,7 +1418,7 @@ dependencies = [
 
 [[package]]
 name = "mix-exec"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "mix-testchild",
  "nix",
@@ -1429,7 +1429,7 @@ dependencies = [
 
 [[package]]
 name = "mix-explain"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "codspeed-divan-compat",
  "mix-core",
@@ -1441,7 +1441,7 @@ dependencies = [
 
 [[package]]
 name = "mix-fs"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "mix-core",
  "nix",
@@ -1451,7 +1451,7 @@ dependencies = [
 
 [[package]]
 name = "mix-home"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "mix-core",
  "mix-exec",
@@ -1466,7 +1466,7 @@ dependencies = [
 
 [[package]]
 name = "mix-nixgen"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "codspeed-divan-compat",
  "mix-exec",
@@ -1479,7 +1479,7 @@ dependencies = [
 
 [[package]]
 name = "mix-nixlog"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "codspeed-divan-compat",
  "serde",
@@ -1488,11 +1488,11 @@ dependencies = [
 
 [[package]]
 name = "mix-pins"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 
 [[package]]
 name = "mix-render"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "mix-core",
  "mix-events",
@@ -1504,7 +1504,7 @@ dependencies = [
 
 [[package]]
 name = "mix-rpc"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "codspeed-divan-compat",
  "futures-util",
@@ -1525,7 +1525,7 @@ dependencies = [
 
 [[package]]
 name = "mix-shell"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "codspeed-divan-compat",
  "futures-util",
@@ -1556,14 +1556,14 @@ dependencies = [
 
 [[package]]
 name = "mix-testchild"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "nix",
 ]
 
 [[package]]
 name = "mix-ui"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "annotate-snippets",
  "anstyle-query",

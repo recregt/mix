@@ -4,6 +4,8 @@ All notable changes to `mix` are listed here. The format follows [Keep a Changel
 
 ## [Unreleased]
 
+## [0.1.0-alpha.3] - 2026-10-25
+
 ### Added
 
 - With `--json`, `mix install --dry-run` reports every new package in one run instead of stopping at the first bad name, with whether it can be installed, its version and licenses, and what the install would download or build. ([#196](https://github.com/recregt/mix/pull/196))
@@ -83,6 +85,7 @@ The first public alpha.
 - `mix self remove` takes `mix`, Nix and every user's `mix` state off the machine.
 - Interrupted requests are finished or undone the next time `mix` runs.
 
-[Unreleased]: https://github.com/recregt/mix/compare/v0.1.0-alpha.2...HEAD
+[Unreleased]: https://github.com/recregt/mix/compare/v0.1.0-alpha.3...HEAD
+[0.1.0-alpha.3]: https://github.com/recregt/mix/compare/v0.1.0-alpha.2...v0.1.0-alpha.3
 [0.1.0-alpha.2]: https://github.com/recregt/mix/compare/v0.1.0-alpha.1...v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/recregt/mix/releases/tag/v0.1.0-alpha.1

@@ -89,7 +89,7 @@ curl -fsSL https://mix.recregt.com/install.sh | sh
 The [script](scripts/install.sh) downloads the newest release for your architecture, checks it against its published checksum and puts `mix` and `mix-daemon` into `/usr/local/bin`. It uses `sudo` for that one step and changes nothing else. To install a specific release, give the script its tag:
 
 ```sh
-curl -fsSL https://mix.recregt.com/install.sh | MIX_VERSION=v0.1.0-alpha.2 sh
+curl -fsSL https://mix.recregt.com/install.sh | MIX_VERSION=v0.1.0-alpha.3 sh
 ```
 
 ### Install by hand
