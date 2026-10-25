@@ -42,6 +42,7 @@ All notable changes to `mix` are listed here. The format follows [Keep a Changel
 - When the machine runs out of memory during an install, the command says the build ran out of memory and exits 1, instead of saying it was cancelled and exiting 130. The daemon keeps running instead of being stopped by systemd. ([#201](https://github.com/recregt/mix/pull/201))
 - A long Nix error, such as the one for a package nixpkgs marks insecure, is shown as text instead of a raw `@nix` record cut in two. ([#214](https://github.com/recregt/mix/pull/214))
 - A Ctrl-C that comes too late to cancel, while `mix` records a finished change, no longer says it is putting the package list back. ([#215](https://github.com/recregt/mix/pull/215))
+- A failure no longer lists Nix's "Git tree is dirty" warning as its cause. ([#216](https://github.com/recregt/mix/pull/216))
 
 ## [0.1.0-alpha.2] - 2026-10-19
 
