@@ -158,7 +158,7 @@ mod tests {
     use mix_nixgen::{Pins, Rev};
 
     use crate::request::ran::ran;
-    use crate::request::upstream::{Checked, Evaluated, Newest, Upstream};
+    use crate::request::upstream::{Assessed, Assessment, Evaluated, Newest, Upstream};
 
     struct Fixed {
         newest: Option<Pins<LockedInput>>,
@@ -175,14 +175,14 @@ mod tests {
             })
         }
 
-        fn check<'a>(
+        fn assess<'a>(
             &'a self,
             _: &'a InvokingUser,
-            _: &'a [String],
+            packages: &'a [String],
             _: Option<&'a str>,
             _: &'a mix_exec::Scope,
-        ) -> Checked<'a> {
-            Box::pin(async { Ok(()) })
+        ) -> Assessed<'a> {
+            Box::pin(async { Ok(Assessment::available(packages)) })
         }
 
         fn versions<'a>(

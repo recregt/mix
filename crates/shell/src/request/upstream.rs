@@ -7,6 +7,7 @@ use mix_core::declared::pins::locked;
 use mix_core::effect::Failure;
 use mix_core::ops::update::Versions;
 use mix_core::{Error, Result};
+use mix_events::v1::{CheckedPackage, FetchPlan, PackageVerdict};
 use mix_exec::Scope;
 use mix_nixgen::lock::LockedInput;
 use mix_nixgen::{Input, Pins, Rev};
@@ -19,18 +20,41 @@ pub type Newest<'a> = Pin<Box<dyn Future<Output = Result<Pins<LockedInput>>> + S
 
 pub type Evaluated<'a> = Pin<Box<dyn Future<Output = Result<Versions>> + Send + 'a>>;
 
-pub type Checked<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+pub type Assessed<'a> = Pin<Box<dyn Future<Output = Result<Assessment>> + Send + 'a>>;
+
+#[derive(Debug, Default)]
+pub struct Assessment {
+    pub packages: Vec<CheckedPackage>,
+    pub plan: Option<FetchPlan>,
+    pub refusal: Option<Error>,
+}
+
+impl Assessment {
+    pub fn available(packages: &[String]) -> Self {
+        Self {
+            packages: packages
+                .iter()
+                .map(|name| CheckedPackage {
+                    name: name.clone(),
+                    verdict: PackageVerdict::Available as i32,
+                    ..CheckedPackage::default()
+                })
+                .collect(),
+            ..Self::default()
+        }
+    }
+}
 
 pub trait Upstream: Send + Sync {
     fn newest<'a>(&'a self, user: &'a InvokingUser, scope: &'a Scope) -> Newest<'a>;
 
-    fn check<'a>(
+    fn assess<'a>(
         &'a self,
         user: &'a InvokingUser,
         packages: &'a [String],
         mirror: Option<&'a str>,
         scope: &'a Scope,
-    ) -> Checked<'a>;
+    ) -> Assessed<'a>;
 
     fn versions<'a>(
         &'a self,
@@ -57,14 +81,14 @@ impl Upstream for Nix {
         })
     }
 
-    fn check<'a>(
+    fn assess<'a>(
         &'a self,
         user: &'a InvokingUser,
         packages: &'a [String],
         mirror: Option<&'a str>,
         scope: &'a Scope,
-    ) -> Checked<'a> {
-        Box::pin(crate::effect::installed::evaluate(
+    ) -> Assessed<'a> {
+        Box::pin(crate::effect::installed::assess(
             user, packages, mirror, scope,
         ))
     }
