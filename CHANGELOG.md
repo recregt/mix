@@ -4,6 +4,10 @@ All notable changes to `mix` are listed here. The format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+
+- With `--json`, `mix install --dry-run` reports every new package in one run instead of stopping at the first bad name, with whether it can be installed, its version and licenses, and what the install would download or build. ([#196](https://github.com/recregt/mix/pull/196))
+
 ### Fixed
 
 - A user outside `mix-users` can no longer slow down or block `mix` for other users by holding connections to the daemon open, and the daemon no longer stops when it runs out of file descriptors. ([#157](https://github.com/recregt/mix/pull/157))
@@ -26,6 +30,7 @@ All notable changes to `mix` are listed here. The format follows [Keep a Changel
 - After `mix bootstrap --force`, `mix doctor` no longer reports old Home Manager generations whose store paths are gone, because the old profile links are moved aside with the old Nix. A forced bootstrap or purge also works when `/nix` holds the daemon's socket, and a purge finds unit links even after the unit file is gone. ([#182](https://github.com/recregt/mix/pull/182))
 - `mix update` no longer fails with GitHub's API rate limit, because it finds the newest nixpkgs and home-manager with `git` and fetches that exact revision. A failed download says which URL it could not fetch and suggests checking the connection, instead of showing Nix's raw error. ([#184](https://github.com/recregt/mix/pull/184))
 - While an interrupted request waits to be finished or undone, `mix doctor` says so and that the next change or `mix repair` settles it, instead of saying it couldn't be put back and that `mix repair` can't fix it. The files it still holds are shown as waiting on it, instead of "changed outside `mix`". ([#185](https://github.com/recregt/mix/pull/185))
+- `mix install --dry-run` checks with Nix that each new package exists and fails the way the install would for one it does not know, instead of ending with "nothing was changed". The check updates only Nix's own cache in `~/.cache/nix`. ([#196](https://github.com/recregt/mix/pull/196))
 
 ## [0.1.0-alpha.2] - 2026-10-19
 

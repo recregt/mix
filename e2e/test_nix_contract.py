@@ -206,3 +206,24 @@ def test_a_failed_download_is_reported_the_way_mix_reads_it(container, mock_nix_
     assert result.returncode != 0
     expected = _fixture(FIXTURES / "download-failed.txt", result.stderr)
     assert _unable_to_download(result.stderr) == _unable_to_download(expected)
+
+
+DERIVATIONS = 'pkgs: map (name: pkgs.${name}.drvPath) [\n  "jq"\n  "make"\n]'
+ONE_PACKAGE = '{ jq = derivation { name = "jq"; system = "x86_64-linux"; builder = "/bin/sh"; }; }'
+
+
+def _last_error(output: str) -> str:
+    return output[output.rindex("error: ") :].splitlines()[0]
+
+
+def test_a_package_nix_does_not_know_is_reported_the_way_mix_reads_it(container, mock_nix_server):
+    bootstrap_root(container, mock_nix_server)
+
+    result = _nix(
+        container, "eval", "--read-only", "--json", "--expr", ONE_PACKAGE, "--apply", DERIVATIONS
+    )
+
+    assert result.returncode != 0
+    assert _last_error(result.stderr) == "error: attribute 'make' missing"
+    expected = (PREFETCHED / "eval-missing.txt").read_text()
+    assert _last_error(expected) == _last_error(result.stderr)

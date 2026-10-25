@@ -16,7 +16,7 @@ use mix_shell::drive::Faults;
 use mix_shell::request::context::Host;
 use mix_shell::request::installed::{Ask, Gathering, Installed, Source};
 use mix_shell::request::lock::Locks;
-use mix_shell::request::upstream::{Evaluated, Newest, Upstream};
+use mix_shell::request::upstream::{Assessed, Assessment, Evaluated, Newest, Upstream};
 use mix_shell::{Caller, Session};
 use serde_json::Value;
 
@@ -129,6 +129,16 @@ impl Channel {
 impl Upstream for Channel {
     fn newest<'a>(&'a self, _: &'a InvokingUser, _: &'a mix_exec::Scope) -> Newest<'a> {
         Box::pin(async move { Ok(self.pins()) })
+    }
+
+    fn assess<'a>(
+        &'a self,
+        _: &'a InvokingUser,
+        packages: &'a [String],
+        _: Option<&'a str>,
+        _: &'a mix_exec::Scope,
+    ) -> Assessed<'a> {
+        Box::pin(async { Ok(Assessment::available(packages)) })
     }
 
     fn versions<'a>(

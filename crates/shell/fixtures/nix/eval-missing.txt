@@ -1,0 +1,9 @@
+error:
+       … while evaluating list element at index 1
+
+       error: attribute 'make' missing
+       at «string»:1:18:
+            1| pkgs: map (name: pkgs.${name}.drvPath) [
+             |                  ^
+            2|   "jq"
+       Did you mean one of bmake, cmake, imake, jake or mage?

@@ -9,7 +9,7 @@ use mix_core::effect::FlakeSource;
 use mix_core::ops::list::{Described, Stored, join};
 use mix_core::ops::update::Versions;
 use mix_core::{Error, Result};
-use mix_events::v1::InstalledPackage;
+use mix_events::v1::{CheckedPackage, FetchPlan, InstalledPackage, PackageVerdict, PlannedOutput};
 use mix_exec::Scope;
 use mix_home::Active;
 use mix_nixgen::lock::LockedInput;
@@ -19,6 +19,7 @@ use serde::Deserialize;
 use crate::effect::exec::run_as;
 
 use crate::profile::activation;
+use crate::request::upstream::Assessment;
 
 const HOME_PATH: &str = "home-path";
 
@@ -241,6 +242,284 @@ pub async fn versions_at(
         .into_iter()
         .map(|described| (described.name, described.version))
         .collect())
+}
+
+pub async fn evaluate(
+    user: &InvokingUser,
+    names: &[String],
+    mirror: Option<&str>,
+    scope: &Scope,
+) -> Result<()> {
+    if names.is_empty() {
+        return Ok(());
+    }
+    let args = evaluate_args(user, names, mirror)?;
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_as(user, DEFAULT_PROFILE_NIX, &args, scope)
+        .await
+        .map(|_| ())
+}
+
+#[derive(Deserialize)]
+struct Assessed {
+    facts: Vec<Facts>,
+    checks: Vec<Check>,
+}
+
+#[derive(Deserialize)]
+struct Check {
+    name: String,
+    known: bool,
+    #[serde(default)]
+    evaluates: bool,
+    #[serde(default)]
+    unfree: bool,
+    #[serde(default)]
+    broken: bool,
+    #[serde(default)]
+    insecure: bool,
+    derivation: Option<String>,
+    #[serde(default)]
+    outputs: Vec<CheckedOutput>,
+}
+
+#[derive(Deserialize)]
+struct CheckedOutput {
+    output: String,
+    path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Narinfo {
+    nar_size: u64,
+    download_size: Option<u64>,
+}
+
+fn verdict(check: &Check) -> PackageVerdict {
+    match check {
+        Check { known: false, .. } => PackageVerdict::Unknown,
+        Check {
+            evaluates: true, ..
+        } => PackageVerdict::Available,
+        Check { unfree: true, .. } => PackageVerdict::Unfree,
+        Check { broken: true, .. } => PackageVerdict::Broken,
+        Check { insecure: true, .. } => PackageVerdict::Insecure,
+        _ => PackageVerdict::Refused,
+    }
+}
+
+pub fn parse_assessment(text: &str) -> serde_json::Result<Vec<CheckedPackage>> {
+    let assessed: Assessed = serde_json::from_str(text)?;
+    let facts: BTreeMap<&str, &Facts> = assessed
+        .facts
+        .iter()
+        .map(|facts| (facts.name.as_str(), facts))
+        .collect();
+    Ok(assessed
+        .checks
+        .iter()
+        .map(|check| {
+            let found = facts.get(check.name.as_str());
+            let fact = |pick: fn(&Facts) -> &Option<String>| found.and_then(|f| pick(f).clone());
+            CheckedPackage {
+                name: check.name.clone(),
+                verdict: verdict(check) as i32,
+                pname: fact(|f| &f.pname),
+                version: fact(|f| &f.version),
+                description: fact(|f| &f.description),
+                homepage: fact(|f| &f.homepage),
+                licenses: found.map(|f| f.licenses.clone()).unwrap_or_default(),
+                main_program: fact(|f| &f.main_program),
+                changelog: fact(|f| &f.changelog),
+                derivation: check.derivation.clone(),
+                outputs: check
+                    .outputs
+                    .iter()
+                    .map(|output| PlannedOutput {
+                        output: output.output.clone(),
+                        store_path: output.path.clone(),
+                        ..PlannedOutput::default()
+                    })
+                    .collect(),
+            }
+        })
+        .collect())
+}
+
+pub fn parse_narinfo(text: &str) -> serde_json::Result<BTreeMap<String, (u64, u64)>> {
+    Ok(
+        serde_json::from_str::<BTreeMap<String, Option<Narinfo>>>(text)?
+            .into_iter()
+            .filter_map(|(path, info)| {
+                info.map(|info| (path, (info.nar_size, info.download_size.unwrap_or(0))))
+            })
+            .collect(),
+    )
+}
+
+pub async fn assess(
+    user: &InvokingUser,
+    names: &[String],
+    mirror: Option<&str>,
+    scope: &Scope,
+) -> Result<Assessment> {
+    if names.is_empty() {
+        return Ok(Assessment::default());
+    }
+    let apply = mix_nixgen::package_checks(names.iter().map(String::as_str))
+        .map_err(|error| unreadable("nix eval", error))?;
+    let mut args = eval_args(user, apply, &Evaluation::AsItStands, mirror);
+    args.insert(1, "--read-only".to_string());
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let answer = run_as(user, DEFAULT_PROFILE_NIX, &args, scope).await?;
+    let mut packages = parse_assessment(&answer).map_err(|error| unreadable("nix eval", error))?;
+    let refused: Vec<String> = packages
+        .iter()
+        .filter(|package| package.verdict() != PackageVerdict::Available)
+        .map(|package| package.name.clone())
+        .collect();
+    let refusal = match refused.is_empty() {
+        true => None,
+        false => evaluate(user, &refused, mirror, scope).await.err(),
+    };
+    let plan = plan(user, &mut packages, scope).await;
+    Ok(Assessment {
+        packages,
+        plan: Some(plan),
+        refusal,
+    })
+}
+
+enum Fetched {
+    From(String, BTreeMap<String, (u64, u64)>),
+    Nowhere,
+    Unknown,
+}
+
+async fn invalid(user: &InvokingUser, paths: &[&str], scope: &Scope) -> Result<Vec<String>> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut args = vec!["--check-validity", "--print-invalid"];
+    args.extend(paths);
+    let listed = run_as(user, DEFAULT_PROFILE_NIX_STORE, &args, scope).await?;
+    Ok(listed.lines().map(str::to_string).collect())
+}
+
+async fn fetched_from(
+    user: &InvokingUser,
+    substituters: &[String],
+    path: &str,
+    scope: &Scope,
+) -> Fetched {
+    let mut unknown = false;
+    for substituter in substituters {
+        let args = [
+            "path-info",
+            "--store",
+            substituter,
+            "--recursive",
+            "--json",
+            "--json-format",
+            "1",
+            path,
+        ];
+        match run_as(user, DEFAULT_PROFILE_NIX, &args, scope).await {
+            Ok(answer) => match parse_narinfo(&answer) {
+                Ok(closure) => return Fetched::From(substituter.clone(), closure),
+                Err(_) => unknown = true,
+            },
+            Err(Error::Command { detail, .. }) if detail.contains("is not valid") => {}
+            Err(_) => unknown = true,
+        }
+    }
+    if unknown {
+        Fetched::Unknown
+    } else {
+        Fetched::Nowhere
+    }
+}
+
+async fn plan(user: &InvokingUser, packages: &mut [CheckedPackage], scope: &Scope) -> FetchPlan {
+    let mut plan = FetchPlan {
+        complete: true,
+        ..FetchPlan::default()
+    };
+    let outputs: Vec<String> = packages
+        .iter()
+        .flat_map(|package| {
+            package
+                .outputs
+                .iter()
+                .map(|output| output.store_path.clone())
+        })
+        .collect();
+    let paths: Vec<&str> = outputs.iter().map(String::as_str).collect();
+    let (Ok(missing), Ok(substituters)) = (
+        invalid(user, &paths, scope).await,
+        run_as(
+            user,
+            DEFAULT_PROFILE_NIX,
+            &["config", "show", "substituters"],
+            scope,
+        )
+        .await,
+    ) else {
+        plan.complete = false;
+        return plan;
+    };
+    let substituters: Vec<String> = substituters
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    let mut closure = BTreeMap::new();
+    for output in packages
+        .iter_mut()
+        .flat_map(|package| package.outputs.iter_mut())
+    {
+        output.present = !missing.contains(&output.store_path);
+        if output.present {
+            continue;
+        }
+        match fetched_from(user, &substituters, &output.store_path, scope).await {
+            Fetched::From(substituter, found) => {
+                if let Some((nar_size, download_size)) = found.get(&output.store_path) {
+                    output.nar_size = Some(*nar_size);
+                    output.download_size = Some(*download_size);
+                }
+                output.substituter = Some(substituter);
+                closure.extend(found);
+            }
+            Fetched::Nowhere => plan.built.push(output.store_path.clone()),
+            Fetched::Unknown => plan.complete = false,
+        }
+    }
+    let paths: Vec<&str> = closure.keys().map(String::as_str).collect();
+    let Ok(needed) = invalid(user, &paths, scope).await else {
+        plan.complete = false;
+        return plan;
+    };
+    for path in &needed {
+        if let Some((nar_size, download_size)) = closure.get(path) {
+            plan.paths += 1;
+            plan.unpacked_bytes += nar_size;
+            plan.download_bytes += download_size;
+        }
+    }
+    plan
+}
+
+fn evaluate_args(
+    user: &InvokingUser,
+    names: &[String],
+    mirror: Option<&str>,
+) -> Result<Vec<String>> {
+    let apply = mix_nixgen::derivations(names.iter().map(String::as_str))
+        .map_err(|error| unreadable("nix eval", error))?;
+    let mut args = eval_args(user, apply, &Evaluation::AsItStands, mirror);
+    args.insert(1, "--read-only".to_string());
+    Ok(args)
 }
 
 async fn stored(user: &InvokingUser, home_path: &Path, scope: &Scope) -> Result<Vec<Stored>> {
@@ -566,6 +845,100 @@ mod tests {
             "git+file:///home/alice/.local/state/mix#homeConfigurations.alice.pkgs"
         );
         assert!(!args.iter().any(|arg| arg == "--override-input"));
+    }
+
+    #[test]
+    fn new_packages_are_evaluated_read_only_in_the_profile_as_it_stands() {
+        let names = ["make".to_string(), "jq".to_string()];
+
+        let args = evaluate_args(&user(), &names, None).unwrap();
+
+        assert_eq!(&args[..2], ["eval", "--read-only"]);
+        assert_eq!(
+            args[3],
+            "git+file:///home/alice/.local/state/mix#homeConfigurations.alice.pkgs"
+        );
+        assert_eq!(
+            args[5],
+            "pkgs: map (name: pkgs.${name}.drvPath) [\n  \"make\"\n  \"jq\"\n]"
+        );
+        assert!(!args.iter().any(|arg| arg == "--override-input"));
+    }
+
+    #[test]
+    fn new_packages_on_a_mirror_are_evaluated_from_it() {
+        let args =
+            evaluate_args(&user(), &["jq".to_string()], Some("http://mirror.internal")).unwrap();
+
+        assert!(
+            args.iter()
+                .any(|arg| arg.starts_with("tarball+http://mirror.internal"))
+        );
+        assert!(!args.iter().any(|arg| arg.starts_with("github:")));
+    }
+
+    const ASSESSED: &str = include_str!("../../fixtures/nix/assess.json");
+    const CLOSURE: &str = include_str!("../../fixtures/nix/path-info-closure.json");
+
+    #[test]
+    fn what_nix_says_about_new_packages_becomes_one_verdict_each_with_its_facts() {
+        let packages = parse_assessment(ASSESSED).unwrap();
+
+        let verdicts: Vec<(&str, PackageVerdict)> = packages
+            .iter()
+            .map(|package| (package.name.as_str(), package.verdict()))
+            .collect();
+        assert_eq!(
+            verdicts,
+            [
+                ("hello", PackageVerdict::Available),
+                ("make", PackageVerdict::Unknown),
+                ("unrar", PackageVerdict::Unfree),
+                ("python2", PackageVerdict::Refused),
+            ]
+        );
+        let hello = &packages[0];
+        assert_eq!(hello.version.as_deref(), Some("2.12.3"));
+        assert_eq!(hello.licenses, ["GPL-3.0-or-later"]);
+        assert_eq!(
+            hello.derivation.as_deref(),
+            Some("/nix/store/gdxx5ilpli16l40mg2z9vs4b0w6wa1gf-hello-2.12.3.drv")
+        );
+        assert_eq!(
+            hello
+                .outputs
+                .iter()
+                .map(|output| (output.output.as_str(), output.store_path.as_str()))
+                .collect::<Vec<_>>(),
+            [(
+                "out",
+                "/nix/store/xl1h9i29pgq2q5cszjhm5wpfxfbbqwyi-hello-2.12.3"
+            )]
+        );
+        assert_eq!(packages[2].licenses, ["unfreeRedistributable"]);
+        assert!(packages[2].derivation.is_none() && packages[2].outputs.is_empty());
+        assert!(packages[1].version.is_none() && packages[1].licenses.is_empty());
+    }
+
+    #[test]
+    fn a_closure_from_the_cache_holds_the_unpacked_and_download_size_of_each_path() {
+        let closure = parse_narinfo(CLOSURE).unwrap();
+
+        assert_eq!(closure.len(), 5);
+        assert_eq!(
+            closure["/nix/store/xl1h9i29pgq2q5cszjhm5wpfxfbbqwyi-hello-2.12.3"],
+            (279_624, 75_355)
+        );
+        assert_eq!(
+            closure["/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84"],
+            (35_073_128, 10_250_422)
+        );
+    }
+
+    #[test]
+    fn an_answer_that_is_not_an_assessment_is_an_error() {
+        assert!(parse_assessment("[]").is_err());
+        assert!(parse_narinfo("[]").is_err());
     }
 
     #[test]

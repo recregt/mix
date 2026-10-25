@@ -35,7 +35,7 @@ pub enum Error {
     #[error("no managed environment was found for the invoking user")]
     NotBootstrapped,
 
-    #[error("an interrupted request could not be put back, so nothing more was changed")]
+    #[error("an interrupted request could not be finished or undone, so nothing more was changed")]
     Unrecovered,
 
     #[error(
@@ -125,6 +125,7 @@ pub async fn settled(
     mix_core::ops::change::settle(text(0).as_deref(), text(1).as_deref())
 }
 
+#[derive(Clone, Copy)]
 pub enum Verb {
     Install,
     Remove,
@@ -138,13 +139,14 @@ impl Verb {
         }
     }
 
-    fn result(&self, change: &Change) -> node_finished::Result {
+    pub(crate) fn result(&self, change: &Change) -> node_finished::Result {
         let reset = change.source == Source::Fresh;
         match self {
             Verb::Install => node_finished::Result::Install(InstallResult {
                 added: change.changed.clone(),
                 skipped: change.skipped.clone(),
                 restored: reset,
+                ..InstallResult::default()
             }),
             Verb::Remove => node_finished::Result::Remove(RemoveResult {
                 removed: change.changed.clone(),
@@ -163,13 +165,28 @@ pub async fn run(
     verb: Verb,
     change: &Change,
 ) -> Concluded {
+    run_with(ctx, root, performer, cfg, verb, change, || {
+        verb.result(change)
+    })
+    .await
+}
+
+pub async fn run_with(
+    ctx: &Context,
+    root: &mut Root,
+    performer: Performer,
+    cfg: &UserConfig,
+    verb: Verb,
+    change: &Change,
+    result: impl FnOnce() -> node_finished::Result,
+) -> Concluded {
     let steps =
         match mix_core::ops::change::steps(cfg, &ctx.policy, change, verb.doing(), &ctx.request.id)
         {
             Ok(steps) => steps,
             Err(error) => return root.refuse(Error::from(error)),
         };
-    perform(ctx, root, performer, steps, || verb.result(change)).await
+    perform(ctx, root, performer, steps, result).await
 }
 
 pub async fn perform(

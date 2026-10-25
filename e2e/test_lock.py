@@ -74,6 +74,7 @@ def test_the_same_users_next_command_waits_and_names_the_one_it_waits_for(
         "added": [],
         "skipped": [INSTALL_TEST_PACKAGE],
         "restored": False,
+        "checked": [],
     }, queued
     assert queued.waits == [{"lock": f"user {USER}", "holder": USER, "command": "install"}], queued
 
