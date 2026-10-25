@@ -4,6 +4,10 @@ All notable changes to `mix` are listed here. The format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+
+- With `--json`, `mix install --dry-run` reports every new package in one run instead of stopping at the first bad name, with whether it can be installed, its version and licenses, and what the install would download or build. ([#196](https://github.com/recregt/mix/pull/196))
+
 ### Fixed
 
 - A user outside `mix-users` can no longer slow down or block `mix` for other users by holding connections to the daemon open, and the daemon no longer stops when it runs out of file descriptors. ([#157](https://github.com/recregt/mix/pull/157))
