@@ -31,6 +31,7 @@ All notable changes to `mix` are listed here. The format follows [Keep a Changel
 - `mix update` no longer fails with GitHub's API rate limit, because it finds the newest nixpkgs and home-manager with `git` and fetches that exact revision. A failed download says which URL it could not fetch and suggests checking the connection, instead of showing Nix's raw error. ([#184](https://github.com/recregt/mix/pull/184))
 - While an interrupted request waits to be finished or undone, `mix doctor` says so and that the next change or `mix repair` settles it, instead of saying it couldn't be put back and that `mix repair` can't fix it. The files it still holds are shown as waiting on it, instead of "changed outside `mix`". ([#185](https://github.com/recregt/mix/pull/185))
 - `mix install --dry-run` checks with Nix that each new package exists and fails the way the install would for one it does not know, instead of ending with "nothing was changed". The check updates only Nix's own cache in `~/.cache/nix`. ([#196](https://github.com/recregt/mix/pull/196))
+- When the disk that holds the Nix store runs out of inodes, commands say so and point to `df -i`, instead of saying the disk is full while `df -h` shows free space. ([#197](https://github.com/recregt/mix/pull/197))
 
 ## [0.1.0-alpha.2] - 2026-10-19
 
