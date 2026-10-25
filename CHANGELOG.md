@@ -36,6 +36,7 @@ All notable changes to `mix` are listed here. The format follows [Keep a Changel
 - `mix purge` and `mix user remove` say "Removing mix from /data/home" for the step that removes a user's `mix` files, instead of "Removing /data/home", which read as if the whole home would be deleted. ([#199](https://github.com/recregt/mix/pull/199))
 - `mix purge` removes `/run/mix` and the daemon's socket in it, instead of leaving them until the next reboot. ([#200](https://github.com/recregt/mix/pull/200))
 - When the machine runs out of memory during an install, the command says the build ran out of memory and exits 1, instead of saying it was cancelled and exiting 130. The daemon keeps running instead of being stopped by systemd. ([#201](https://github.com/recregt/mix/pull/201))
+- A long Nix error, such as the one for a package nixpkgs marks insecure, is shown as text instead of a raw `@nix` record cut in two. ([#214](https://github.com/recregt/mix/pull/214))
 
 ## [0.1.0-alpha.2] - 2026-10-19
 
