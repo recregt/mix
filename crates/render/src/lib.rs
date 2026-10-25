@@ -161,7 +161,7 @@ impl View {
         let Some(request) = &command.request else {
             return documented;
         };
-        let words = words::outcome(request, fault);
+        let words = words::outcome(request, &[], fault);
         let code = (self.verbose > 0)
             .then(|| fault.code())
             .flatten()

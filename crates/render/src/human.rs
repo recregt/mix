@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use mix_events::v1::command::Request;
 use mix_events::v1::{
-    Envelope, NodeFinished, NodeProgress, Status as Ended, envelope::Event, node_progress,
-    node_started,
+    Envelope, NodeFinished, NodeProgress, Status as Ended, envelope::Event, node_finished,
+    node_progress, node_started,
 };
 use mix_events::{Detail, Fault, NodeId, ROOT};
 use mix_ui::{Display, Out, Severity, Status, StepLine};
@@ -323,7 +323,7 @@ impl Human {
             Ended::Unspecified | Ended::Succeeded | Ended::AlreadySatisfied => return,
         };
         let words = match &self.request {
-            Some(request) => crate::words::outcome(request, &fault),
+            Some(request) => crate::words::outcome(request, skipped(node), &fault),
             None => mix_explain::outcome("mix", &"finish", &fault),
         };
         let code = self
@@ -440,6 +440,14 @@ impl Human {
                 }
             }
         }
+    }
+}
+
+fn skipped(node: &NodeFinished) -> &[String] {
+    match &node.result {
+        Some(node_finished::Result::Install(install)) => &install.skipped,
+        Some(node_finished::Result::Remove(remove)) => &remove.skipped,
+        _ => &[],
     }
 }
 
