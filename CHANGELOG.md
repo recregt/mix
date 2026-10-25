@@ -10,7 +10,7 @@ All notable changes to `mix` are listed here. The format follows [Keep a Changel
 
 ### Changed
 
-- `mix bootstrap` installs Nix 2.35.4 instead of 2.35.2, which fixes several security issues, and new setups start from nixpkgs and home-manager as of October 2026. ([#202](https://github.com/recregt/mix/pull/202))
+- A new setup installs Nix 2.35.4 instead of 2.35.2, which fixes several security issues. A machine set up before keeps the Nix it has. `mix bootstrap` moves every user to nixpkgs and home-manager as of October 2026. ([#202](https://github.com/recregt/mix/pull/202))
 
 ### Fixed
 
