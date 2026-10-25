@@ -144,6 +144,14 @@ fn plain(code: Code, context: &Context<'_>) -> Option<Diagnostic> {
             command,
         )
         .note(note!("`df -i` shows how many are in use")),
+        Code::OutOfMemory => Diagnostic::hinting(
+            phrase!("the build ran out of memory"),
+            help_around!(
+                "make more memory available, for example by closing other programs or adding swap, then run `",
+                "` again"
+            ),
+            command,
+        ),
         Code::Io | Code::CommandFailed | Code::SpawnFailed => failed(context.action),
         Code::Internal | Code::Unspecified => bug(),
         Code::JournalUnwritable => Diagnostic::new(phrase!("`mix` couldn't record its progress"))

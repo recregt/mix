@@ -217,6 +217,23 @@ fn running_out_of_inodes_points_at_df_i_and_at_making_room() {
 }
 
 #[test]
+fn running_out_of_memory_says_so_and_points_at_freeing_memory() {
+    let message = says(
+        INSTALL,
+        &mix_core::effect::Failure::OutOfMemory {
+            program: "nix build".into(),
+            status: None,
+            output_tail: String::new(),
+        },
+    );
+
+    assert!(message.starts_with("the build ran out of memory"));
+    assert!(message.contains("adding swap"));
+    assert!(message.contains("mix install"));
+    assert!(!message.contains("cancel"));
+}
+
+#[test]
 fn a_failed_download_with_a_url_names_it_and_points_at_the_connection() {
     let url = "https://github.com/NixOS/nixpkgs/archive/efe6f07.tar.gz";
     let message = says(

@@ -31,6 +31,11 @@ pub enum Failure {
         status: Option<i32>,
         output_tail: String,
     },
+    OutOfMemory {
+        program: String,
+        status: Option<i32>,
+        output_tail: String,
+    },
     Collision(Box<CollisionFailure>),
     SpawnFailed {
         program: String,

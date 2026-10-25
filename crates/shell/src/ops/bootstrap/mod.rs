@@ -73,6 +73,11 @@ pub fn error_from(failure: Failure) -> Error {
             program,
             output_tail,
             ..
+        }
+        | Failure::OutOfMemory {
+            program,
+            output_tail,
+            ..
         } => Error::Core(mix_core::Error::Command {
             command: program,
             detail: output_tail,
