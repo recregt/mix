@@ -583,6 +583,8 @@ fn doctor_counts_what_it_shows_and_says_nothing_when_all_is_well() {
             "{subject} is not shown:\n{default}"
         );
     }
+    assert!(default.contains("Nice=10"), "{default}");
+    assert!(!default.contains("runtime's copy"), "{default}");
     let quiet = rendered(&problems, Detail::Outcome);
     let found: usize = quiet
         .lines()

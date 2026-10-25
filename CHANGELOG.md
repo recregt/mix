@@ -44,6 +44,7 @@ All notable changes to `mix` are listed here. The format follows [Keep a Changel
 - A Ctrl-C that comes too late to cancel, while `mix` records a finished change, no longer says it is putting the package list back. ([#215](https://github.com/recregt/mix/pull/215))
 - A failure no longer lists Nix's "Git tree is dirty" warning as its cause. ([#216](https://github.com/recregt/mix/pull/216))
 - `mix user remove` says "recregt still uses `mix`" when one other user is left, instead of "still use". ([#217](https://github.com/recregt/mix/pull/217))
+- `mix doctor` says a changed unit file "differs from what `mix` wrote", instead of calling the `mix-daemon` units the Nix runtime's copy. ([#218](https://github.com/recregt/mix/pull/218))
 
 ## [0.1.0-alpha.2] - 2026-10-19
 
