@@ -35,7 +35,7 @@ pub enum Error {
     #[error("no managed environment was found for the invoking user")]
     NotBootstrapped,
 
-    #[error("an interrupted request could not be put back, so nothing more was changed")]
+    #[error("an interrupted request could not be finished or undone, so nothing more was changed")]
     Unrecovered,
 
     #[error(

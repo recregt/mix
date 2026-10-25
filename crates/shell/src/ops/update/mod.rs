@@ -158,7 +158,7 @@ mod tests {
     use mix_nixgen::{Pins, Rev};
 
     use crate::request::ran::ran;
-    use crate::request::upstream::{Evaluated, Newest, Upstream};
+    use crate::request::upstream::{Checked, Evaluated, Newest, Upstream};
 
     struct Fixed {
         newest: Option<Pins<LockedInput>>,
@@ -173,6 +173,16 @@ mod tests {
                     detail: "no route to host".to_string(),
                 })
             })
+        }
+
+        fn check<'a>(
+            &'a self,
+            _: &'a InvokingUser,
+            _: &'a [String],
+            _: Option<&'a str>,
+            _: &'a mix_exec::Scope,
+        ) -> Checked<'a> {
+            Box::pin(async { Ok(()) })
         }
 
         fn versions<'a>(

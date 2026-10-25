@@ -19,6 +19,15 @@ pub(crate) async fn install(ctx: &Context, root: &mut Root, request: &InstallReq
         Ok(decided) => decided,
         Err(refused) => return root.refuse(change::Error::from(refused)),
     };
+    if ctx.dry_run
+        && !decided.changed.is_empty()
+        && let Err(error) = ctx
+            .upstream
+            .check(&cfg.user, &decided.changed, ctx.mirror(), &ctx.scope)
+            .await
+    {
+        return root.refuse(change::Error::Core(error));
+    }
     change::run(ctx, root, performer, cfg, change::Verb::Install, &decided).await
 }
 
@@ -32,7 +41,89 @@ mod tests {
     use mix_events::v1::command::Request;
     use mix_events::v1::{Code, InstallRequest, InstallResult, node_finished};
 
-    use crate::request::ran::{Ran, ran};
+    use std::sync::{Arc, Mutex};
+
+    use mix_core::ops::update::Versions;
+    use mix_nixgen::Pins;
+    use mix_nixgen::lock::LockedInput;
+
+    use crate::request::ran::{Ran, ran, ran_command};
+    use crate::request::upstream::{Checked, Evaluated, Newest, Upstream};
+
+    const MISSING: &str = include_str!("../../../fixtures/nix/eval-missing.txt");
+
+    #[derive(Default)]
+    struct Rejecting {
+        asked: Mutex<Vec<Vec<String>>>,
+    }
+
+    impl Upstream for Rejecting {
+        fn newest<'a>(&'a self, _: &'a InvokingUser, _: &'a mix_exec::Scope) -> Newest<'a> {
+            unreachable!("an install never asks for the newest pins")
+        }
+
+        fn check<'a>(
+            &'a self,
+            _: &'a InvokingUser,
+            packages: &'a [String],
+            _: Option<&'a str>,
+            _: &'a mix_exec::Scope,
+        ) -> Checked<'a> {
+            self.asked.lock().unwrap().push(packages.to_vec());
+            Box::pin(async {
+                Err(mix_core::Error::Command {
+                    command: "nix eval".to_string(),
+                    detail: MISSING.to_string(),
+                })
+            })
+        }
+
+        fn versions<'a>(
+            &'a self,
+            _: &'a InvokingUser,
+            _: &'a [String],
+            _: &'a Pins<LockedInput>,
+            _: &'a mix_exec::Scope,
+        ) -> Evaluated<'a> {
+            Box::pin(async { Ok(Versions::new()) })
+        }
+    }
+
+    async fn dry_run(home: &std::path::Path, upstream: Arc<Rejecting>, packages: &[&str]) -> Ran {
+        let packages = packages.iter().map(|package| package.to_string()).collect();
+        let mut command = mix_events::command(Request::Install(InstallRequest { packages }));
+        command.dry_run = true;
+        ran_command(context(home).with_upstream(upstream), command).await
+    }
+
+    #[tokio::test]
+    async fn a_dry_run_install_fails_the_way_the_install_would_for_a_package_nix_does_not_know() {
+        let home = seeded_home();
+        let state_before =
+            std::fs::read_to_string(mix_state_dir(home.path()).join(STATE_FILE)).unwrap();
+        let upstream = Arc::new(Rejecting::default());
+
+        let ran = dry_run(home.path(), Arc::clone(&upstream), &["git", "make"]).await;
+
+        assert_eq!(ran.code(), Some(Code::UnknownPackage));
+        assert_eq!(*upstream.asked.lock().unwrap(), [vec!["make".to_string()]]);
+        assert_eq!(
+            std::fs::read_to_string(mix_state_dir(home.path()).join(STATE_FILE)).unwrap(),
+            state_before
+        );
+        assert!(!mix_state_dir(home.path()).join(HOME_NIX).exists());
+    }
+
+    #[tokio::test]
+    async fn a_dry_run_install_of_packages_already_there_asks_nix_nothing() {
+        let home = seeded_home();
+        let upstream = Arc::new(Rejecting::default());
+
+        let ran = dry_run(home.path(), Arc::clone(&upstream), &["git"]).await;
+
+        assert_eq!(installed(&ran).skipped, vec!["git".to_string()]);
+        assert!(upstream.asked.lock().unwrap().is_empty());
+    }
 
     fn seeded_home() -> tempfile::TempDir {
         let home = tempfile::tempdir().unwrap();

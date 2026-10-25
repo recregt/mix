@@ -19,8 +19,18 @@ pub type Newest<'a> = Pin<Box<dyn Future<Output = Result<Pins<LockedInput>>> + S
 
 pub type Evaluated<'a> = Pin<Box<dyn Future<Output = Result<Versions>> + Send + 'a>>;
 
+pub type Checked<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+
 pub trait Upstream: Send + Sync {
     fn newest<'a>(&'a self, user: &'a InvokingUser, scope: &'a Scope) -> Newest<'a>;
+
+    fn check<'a>(
+        &'a self,
+        user: &'a InvokingUser,
+        packages: &'a [String],
+        mirror: Option<&'a str>,
+        scope: &'a Scope,
+    ) -> Checked<'a>;
 
     fn versions<'a>(
         &'a self,
@@ -45,6 +55,18 @@ impl Upstream for Nix {
                 nixpkgs: nixpkgs?,
             })
         })
+    }
+
+    fn check<'a>(
+        &'a self,
+        user: &'a InvokingUser,
+        packages: &'a [String],
+        mirror: Option<&'a str>,
+        scope: &'a Scope,
+    ) -> Checked<'a> {
+        Box::pin(crate::effect::installed::evaluate(
+            user, packages, mirror, scope,
+        ))
     }
 
     fn versions<'a>(

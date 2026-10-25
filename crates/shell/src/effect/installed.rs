@@ -243,6 +243,34 @@ pub async fn versions_at(
         .collect())
 }
 
+pub async fn evaluate(
+    user: &InvokingUser,
+    names: &[String],
+    mirror: Option<&str>,
+    scope: &Scope,
+) -> Result<()> {
+    if names.is_empty() {
+        return Ok(());
+    }
+    let args = evaluate_args(user, names, mirror)?;
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_as(user, DEFAULT_PROFILE_NIX, &args, scope)
+        .await
+        .map(|_| ())
+}
+
+fn evaluate_args(
+    user: &InvokingUser,
+    names: &[String],
+    mirror: Option<&str>,
+) -> Result<Vec<String>> {
+    let apply = mix_nixgen::derivations(names.iter().map(String::as_str))
+        .map_err(|error| unreadable("nix eval", error))?;
+    let mut args = eval_args(user, apply, &Evaluation::AsItStands, mirror);
+    args.insert(1, "--read-only".to_string());
+    Ok(args)
+}
+
 async fn stored(user: &InvokingUser, home_path: &Path, scope: &Scope) -> Result<Vec<Stored>> {
     let home_path = home_path.to_string_lossy();
     let listed = run_as(
@@ -566,6 +594,36 @@ mod tests {
             "git+file:///home/alice/.local/state/mix#homeConfigurations.alice.pkgs"
         );
         assert!(!args.iter().any(|arg| arg == "--override-input"));
+    }
+
+    #[test]
+    fn new_packages_are_evaluated_read_only_in_the_profile_as_it_stands() {
+        let names = ["make".to_string(), "jq".to_string()];
+
+        let args = evaluate_args(&user(), &names, None).unwrap();
+
+        assert_eq!(&args[..2], ["eval", "--read-only"]);
+        assert_eq!(
+            args[3],
+            "git+file:///home/alice/.local/state/mix#homeConfigurations.alice.pkgs"
+        );
+        assert_eq!(
+            args[5],
+            "pkgs: map (name: pkgs.${name}.drvPath) [\n  \"make\"\n  \"jq\"\n]"
+        );
+        assert!(!args.iter().any(|arg| arg == "--override-input"));
+    }
+
+    #[test]
+    fn new_packages_on_a_mirror_are_evaluated_from_it() {
+        let args =
+            evaluate_args(&user(), &["jq".to_string()], Some("http://mirror.internal")).unwrap();
+
+        assert!(
+            args.iter()
+                .any(|arg| arg.starts_with("tarball+http://mirror.internal"))
+        );
+        assert!(!args.iter().any(|arg| arg.starts_with("github:")));
     }
 
     #[test]
