@@ -33,7 +33,7 @@ fn split_streamed_output_into_lines(bencher: divan::Bencher, lines: usize) {
     let chunks = chunks(&bytes, 8 * KIB);
 
     bencher.bench_local(|| {
-        let mut splitter = LineSplitter::new();
+        let mut splitter = LineSplitter::new(64 * KIB);
         let mut seen = 0usize;
         for chunk in &chunks {
             splitter.push(divan::black_box(chunk), |line| seen += line.len());

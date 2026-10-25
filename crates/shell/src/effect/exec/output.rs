@@ -3,9 +3,6 @@
 use mix_core::ActivityReporter;
 use mix_nixlog::{Event, NixLog};
 
-/// Bytes a single unterminated line may buffer before it is handed over anyway.
-const MAX_LINE: usize = 4 * 1024;
-
 /// Everything a streamed process's output is put through: split into lines, folded into
 /// counters, reported as it arrives, and kept — only as far as a failure would be explained
 /// from it.
@@ -26,7 +23,7 @@ pub struct StreamDrain {
 impl StreamDrain {
     pub fn new(cap: usize) -> Self {
         Self {
-            splitter: LineSplitter::new(),
+            splitter: LineSplitter::new(cap),
             tail: TailBuffer::new(cap),
             decoded: TailBuffer::new(cap),
             log: NixLog::new(),
@@ -94,15 +91,20 @@ fn report(line: &str, log: &mut NixLog, decoded: &mut TailBuffer, activity: &dyn
 ///
 /// Build tools redraw in place with carriage returns, so `\r` ends a line here just like `\n`.
 /// Lines that are complete within one chunk are handed over as slices of that chunk; only a
-/// trailing partial line is copied, so a chunk that ends on a boundary never allocates.
-#[derive(Default)]
+/// trailing partial line is copied, so a chunk that ends on a boundary never allocates. An
+/// unterminated line is handed over once it reaches `limit`, the most of it a reader could be
+/// shown.
 pub struct LineSplitter {
     partial: Vec<u8>,
+    limit: usize,
 }
 
 impl LineSplitter {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(limit: usize) -> Self {
+        Self {
+            partial: Vec::new(),
+            limit,
+        }
     }
 
     pub fn push(&mut self, chunk: &[u8], mut on_line: impl FnMut(&str)) {
@@ -121,7 +123,7 @@ impl LineSplitter {
             }
         }
 
-        if self.partial.len() + rest.len() > MAX_LINE {
+        if self.partial.len() + rest.len() > self.limit {
             self.partial.extend_from_slice(rest);
             emit(&self.partial, &mut on_line);
             self.partial.clear();
@@ -211,7 +213,7 @@ mod tests {
     use super::*;
 
     fn split(chunks: &[&[u8]]) -> Vec<String> {
-        let mut splitter = LineSplitter::new();
+        let mut splitter = LineSplitter::new(4096);
         let mut lines = Vec::new();
         for chunk in chunks {
             splitter.push(chunk, |line| lines.push(line.to_string()));
@@ -260,18 +262,18 @@ mod tests {
 
     #[test]
     fn hands_over_an_overlong_line_instead_of_buffering_it_forever() {
-        let mut splitter = LineSplitter::new();
+        let mut splitter = LineSplitter::new(4096);
         let mut lines = 0;
         for _ in 0..64 {
             splitter.push(&[b'x'; 1024], |_| lines += 1);
-            assert!(splitter.partial.len() <= MAX_LINE);
+            assert!(splitter.partial.len() <= 4096);
         }
         assert!(lines > 0);
     }
 
     #[test]
     fn keeps_no_state_once_every_line_has_been_handed_over() {
-        let mut splitter = LineSplitter::new();
+        let mut splitter = LineSplitter::new(4096);
         splitter.push(b"done\n", |_| {});
         assert!(splitter.partial.is_empty());
     }
@@ -343,5 +345,24 @@ mod tests {
         drain.finish(&builds);
 
         assert_eq!(*builds.0.lock().unwrap(), ["/nix/store/x-a.drv"]);
+    }
+
+    #[test]
+    fn a_record_longer_than_a_read_is_decoded_whole() {
+        let builds = Builds::default();
+        let mut drain = StreamDrain::new(64 * 1024);
+        let reason = "known issue ".repeat(1000);
+        let record = format!(
+            "@nix {}\n",
+            serde_json::json!({"action": "msg", "level": 0, "msg": format!("error: refused\n{reason}")})
+        );
+
+        for chunk in record.as_bytes().chunks(4096) {
+            drain.push(chunk, &builds);
+        }
+        let shown = String::from_utf8(drain.finish(&builds)).unwrap();
+
+        assert!(shown.starts_with("error: refused\n"), "{shown:.80}");
+        assert!(!shown.contains("@nix"));
     }
 }
