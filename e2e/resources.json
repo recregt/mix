@@ -1,152 +1,500 @@
 {
-  "snapshot::bootstrapped": {
-    "peak_bytes": 1910984704,
-    "cpu_cores": 1.745,
-    "seconds": 44.6
-  },
   "test_bootstrap.py::test_bootstrap_accepts_mirror_as_a_cli_flag": {
-    "peak_bytes": 243359744,
-    "cpu_cores": 0.474,
-    "seconds": 8.3
+    "peak_bytes": 285089792,
+    "cpu_cores": 0.361,
+    "seconds": 9.4,
+    "inotify_instances": 10
   },
   "test_bootstrap.py::test_bootstrap_auto_escalates_for_a_sudo_user": {
-    "peak_bytes": 2286096384,
-    "cpu_cores": 1.625,
-    "seconds": 66.4
+    "peak_bytes": 2495098880,
+    "cpu_cores": 0.542,
+    "seconds": 96.2,
+    "inotify_instances": 10
   },
   "test_bootstrap.py::test_forcing_over_an_installation_leaves_a_healthy_machine": {
-    "peak_bytes": 2770743296,
-    "cpu_cores": 0.106,
-    "seconds": 293.0
+    "peak_bytes": 3317600256,
+    "cpu_cores": 0.151,
+    "seconds": 201.8,
+    "inotify_instances": 10
   },
   "test_cancellation.py::test_a_second_ctrl_c_leaves_the_worker_to_finish_the_rollback": {
-    "peak_bytes": 2326188032,
-    "cpu_cores": 1.539,
-    "seconds": 62.0
+    "peak_bytes": 2351607808,
+    "cpu_cores": 0.556,
+    "seconds": 139.7,
+    "inotify_instances": 11
   },
-  "test_cancellation.py::test_an_interrupted_install_stops_a_frozen_nix_then_puts_the_list_back": {
-    "peak_bytes": 261783552,
-    "cpu_cores": 0.272,
-    "seconds": 7.7
+  "test_cancellation.py::test_an_interrupted_install_stops_a_held_nix_then_puts_the_list_back": {
+    "peak_bytes": 679469056,
+    "cpu_cores": 0.317,
+    "seconds": 12.9,
+    "inotify_instances": 11
   },
   "test_cancellation.py::test_ctrl_z_pauses_nix_and_resuming_lets_the_install_finish": {
-    "peak_bytes": 684945408,
-    "cpu_cores": 0.722,
-    "seconds": 13.0
+    "peak_bytes": 775282688,
+    "cpu_cores": 0.413,
+    "seconds": 14.8,
+    "inotify_instances": 11
   },
   "test_cancellation.py::test_ctrl_z_pauses_the_workers_nix_and_resuming_lets_bootstrap_finish": {
-    "peak_bytes": 2086191104,
-    "cpu_cores": 1.648,
-    "seconds": 47.3
+    "peak_bytes": 2598121472,
+    "cpu_cores": 0.65,
+    "seconds": 88.0,
+    "inotify_instances": 11
+  },
+  "test_contract.py::test_every_profile_action_and_its_undo_do_what_the_model_says": {
+    "peak_bytes": 586911744,
+    "cpu_cores": 0.855,
+    "seconds": 5.9,
+    "inotify_instances": 10
+  },
+  "test_contract.py::test_installing_and_removing_the_runtime_do_what_the_model_says": {
+    "peak_bytes": 248877056,
+    "cpu_cores": 0.484,
+    "seconds": 4.7,
+    "inotify_instances": 10
+  },
+  "test_contract.py::test_the_machine_does_what_the_model_says[accounts]": {
+    "peak_bytes": 36749312,
+    "cpu_cores": 0.209,
+    "seconds": 21.5,
+    "inotify_instances": 10
+  },
+  "test_contract.py::test_the_machine_does_what_the_model_says[files]": {
+    "peak_bytes": 31916032,
+    "cpu_cores": 0.092,
+    "seconds": 4.3,
+    "inotify_instances": 10
+  },
+  "test_contract.py::test_the_machine_does_what_the_model_says[git]": {
+    "peak_bytes": 228429824,
+    "cpu_cores": 0.71,
+    "seconds": 30.6,
+    "inotify_instances": 10
+  },
+  "test_contract.py::test_the_machine_does_what_the_model_says[units]": {
+    "peak_bytes": 50155520,
+    "cpu_cores": 0.871,
+    "seconds": 147.4,
+    "inotify_instances": 10
+  },
+  "test_contract.py::test_the_versions_mix_evaluates_at_a_profiles_pins_are_the_ones_it_lists": {
+    "peak_bytes": 449187840,
+    "cpu_cores": 0.248,
+    "seconds": 42.2,
+    "inotify_instances": 10
+  },
+  "test_dependencies.py::test_a_file_in_the_way_of_a_managed_one_is_reported_and_left_alone": {
+    "peak_bytes": 229937152,
+    "cpu_cores": 0.287,
+    "seconds": 4.8,
+    "inotify_instances": 10
+  },
+  "test_dependencies.py::test_a_generation_whose_store_path_is_gone_is_deleted": {
+    "peak_bytes": 229281792,
+    "cpu_cores": 0.339,
+    "seconds": 4.2,
+    "inotify_instances": 10
+  },
+  "test_dependencies.py::test_a_profile_lock_someone_else_holds_is_waited_for_in_the_open": {
+    "peak_bytes": 766095360,
+    "cpu_cores": 0.656,
+    "seconds": 8.2,
+    "inotify_instances": 10
+  },
+  "test_dependencies.py::test_a_users_own_nix_settings_never_change_what_mix_builds": {
+    "peak_bytes": 770977792,
+    "cpu_cores": 0.778,
+    "seconds": 6.3,
+    "inotify_instances": 10
+  },
+  "test_dependencies.py::test_an_altered_daemon_binary_is_replaced_by_the_running_one": {
+    "peak_bytes": 240148480,
+    "cpu_cores": 0.505,
+    "seconds": 5.4,
+    "inotify_instances": 10
+  },
+  "test_dependencies.py::test_an_interrupted_request_repair_cannot_put_back_is_given_up": {
+    "peak_bytes": 271900672,
+    "cpu_cores": 0.575,
+    "seconds": 4.5,
+    "inotify_instances": 10
+  },
+  "test_dependencies.py::test_what_an_interrupted_write_left_is_reported_and_removed": {
+    "peak_bytes": 227209216,
+    "cpu_cores": 0.298,
+    "seconds": 4.5,
+    "inotify_instances": 10
+  },
+  "test_dry_run.py::test_a_dry_run_of_a_fresh_bootstrap_writes_nothing": {
+    "peak_bytes": 124624896,
+    "cpu_cores": 0.157,
+    "seconds": 6.1,
+    "inotify_instances": 10
+  },
+  "test_dry_run.py::test_a_dry_run_of_every_command_writes_nothing_but_nix_s_own_cache": {
+    "peak_bytes": 254574592,
+    "cpu_cores": 0.462,
+    "seconds": 10.1,
+    "inotify_instances": 10
+  },
+  "test_install.py::test_a_dry_run_describes_each_new_package_and_what_it_would_fetch": {
+    "peak_bytes": 248938496,
+    "cpu_cores": 0.638,
+    "seconds": 4.3,
+    "inotify_instances": 10
+  },
+  "test_install.py::test_a_dry_run_names_an_unknown_package_as_the_install_would": {
+    "peak_bytes": 259964928,
+    "cpu_cores": 0.564,
+    "seconds": 4.6,
+    "inotify_instances": 10
+  },
+  "test_install.py::test_a_refused_dry_run_still_plans_the_packages_that_would_install": {
+    "peak_bytes": 254963712,
+    "cpu_cores": 0.741,
+    "seconds": 4.2,
+    "inotify_instances": 10
   },
   "test_install.py::test_an_unknown_package_is_named_and_nothing_changes": {
-    "peak_bytes": 228184064,
-    "cpu_cores": 0.495,
-    "seconds": 5.0
+    "peak_bytes": 263450624,
+    "cpu_cores": 0.581,
+    "seconds": 4.6,
+    "inotify_instances": 10
   },
   "test_install.py::test_install_adds_a_package_as_a_regular_user_with_no_sudo": {
-    "peak_bytes": 688304128,
-    "cpu_cores": 0.575,
-    "seconds": 15.4
+    "peak_bytes": 771493888,
+    "cpu_cores": 0.588,
+    "seconds": 10.0,
+    "inotify_instances": 10
+  },
+  "test_install_script.py::test_an_archive_that_does_not_match_its_checksum_installs_nothing": {
+    "peak_bytes": 31027200,
+    "cpu_cores": 0.065,
+    "seconds": 5.5,
+    "inotify_instances": 10
+  },
+  "test_install_script.py::test_the_installer_puts_both_programs_on_the_path_through_sudo": {
+    "peak_bytes": 81694720,
+    "cpu_cores": 0.054,
+    "seconds": 9.4,
+    "inotify_instances": 10
+  },
+  "test_install_script.py::test_without_curl_or_wget_the_installer_says_so_and_installs_nothing": {
+    "peak_bytes": 30064640,
+    "cpu_cores": 0.071,
+    "seconds": 7.9,
+    "inotify_instances": 10
   },
   "test_interruption.py::test_hard_kill_during_fetch_and_unpack_then_bootstrap_converges": {
-    "peak_bytes": 262148096,
-    "cpu_cores": 0.324,
-    "seconds": 18.0
+    "peak_bytes": 283111424,
+    "cpu_cores": 0.254,
+    "seconds": 16.2,
+    "inotify_instances": 10
+  },
+  "test_list.py::test_list_follows_an_install_and_a_remove": {
+    "peak_bytes": 768909312,
+    "cpu_cores": 0.786,
+    "seconds": 8.6,
+    "inotify_instances": 10
+  },
+  "test_list.py::test_list_names_what_was_installed_and_none_of_home_managers_own_packages": {
+    "peak_bytes": 252321792,
+    "cpu_cores": 0.671,
+    "seconds": 2.2,
+    "inotify_instances": 10
+  },
+  "test_list.py::test_list_serves_no_user_outside_mix_users": {
+    "peak_bytes": 231104512,
+    "cpu_cores": 0.519,
+    "seconds": 3.8,
+    "inotify_instances": 10
   },
   "test_lock.py::test_collecting_the_store_waits_for_a_running_install": {
-    "peak_bytes": 694411264,
-    "cpu_cores": 0.772,
-    "seconds": 13.0
+    "peak_bytes": 788492288,
+    "cpu_cores": 0.538,
+    "seconds": 11.5,
+    "inotify_instances": 11
   },
   "test_lock.py::test_install_works_in_the_same_session_as_bootstrap": {
-    "peak_bytes": 2317529088,
-    "cpu_cores": 1.692,
-    "seconds": 53.3
+    "peak_bytes": 2527367168,
+    "cpu_cores": 0.66,
+    "seconds": 91.9,
+    "inotify_instances": 10
   },
   "test_lock.py::test_the_same_users_next_command_waits_and_names_the_one_it_waits_for": {
-    "peak_bytes": 711565312,
-    "cpu_cores": 0.666,
-    "seconds": 13.5
+    "peak_bytes": 791236608,
+    "cpu_cores": 0.452,
+    "seconds": 13.9,
+    "inotify_instances": 11
   },
   "test_lock.py::test_two_users_change_their_profiles_at_the_same_time": {
-    "peak_bytes": 1200803840,
-    "cpu_cores": 1.697,
-    "seconds": 37.7
+    "peak_bytes": 1467494400,
+    "cpu_cores": 1.552,
+    "seconds": 31.9,
+    "inotify_instances": 11
   },
   "test_multi_user.py::test_a_legacy_group_trust_is_removed_and_reaches_the_running_daemon": {
-    "peak_bytes": 2270896128,
-    "cpu_cores": 1.65,
-    "seconds": 53.2
+    "peak_bytes": 2530832384,
+    "cpu_cores": 0.623,
+    "seconds": 90.8,
+    "inotify_instances": 10
   },
   "test_multi_user.py::test_no_enrolled_user_is_trusted_and_every_one_installs_from_the_policy": {
-    "peak_bytes": 2086158336,
-    "cpu_cores": 1.506,
-    "seconds": 94.0
+    "peak_bytes": 2519855104,
+    "cpu_cores": 0.814,
+    "seconds": 126.4,
+    "inotify_instances": 10
   },
   "test_nix_contract.py::test_a_build_starting_is_logged_the_way_mix_reads_it": {
-    "peak_bytes": 242769920,
-    "cpu_cores": 0.457,
-    "seconds": 9.1
+    "peak_bytes": 279334912,
+    "cpu_cores": 0.336,
+    "seconds": 8.6,
+    "inotify_instances": 10
+  },
+  "test_nix_contract.py::test_a_failed_download_is_reported_the_way_mix_reads_it": {
+    "peak_bytes": 272674816,
+    "cpu_cores": 0.503,
+    "seconds": 8.7,
+    "inotify_instances": 10
   },
   "test_nix_contract.py::test_a_missing_package_is_reported_the_way_mix_reads_it": {
-    "peak_bytes": 248328192,
-    "cpu_cores": 0.451,
-    "seconds": 8.7
+    "peak_bytes": 282451968,
+    "cpu_cores": 0.344,
+    "seconds": 8.9,
+    "inotify_instances": 10
+  },
+  "test_nix_contract.py::test_a_package_nix_does_not_know_is_reported_the_way_mix_reads_it": {
+    "peak_bytes": 337465344,
+    "cpu_cores": 0.389,
+    "seconds": 9.5,
+    "inotify_instances": 10
+  },
+  "test_nix_contract.py::test_a_prefetched_input_is_printed_the_way_mix_reads_it[github:NixOS/nixpkgs/3ec636362e1816bc2f0888fa0fa2c69f1bc9e504-prefetch-nixpkgs.json]": {
+    "peak_bytes": 1044238336,
+    "cpu_cores": 0.231,
+    "seconds": 159.0,
+    "inotify_instances": 10
+  },
+  "test_nix_contract.py::test_a_prefetched_input_is_printed_the_way_mix_reads_it[github:nix-community/home-manager/c216bf5a1f173b0481bd5c8c489ebe5595ecc68c-prefetch-home-manager.json]": {
+    "peak_bytes": 227340288,
+    "cpu_cores": 0.255,
+    "seconds": 11.8,
+    "inotify_instances": 10
+  },
+  "test_nix_contract.py::test_branch_heads_are_listed_the_way_mix_reads_them[https://github.com/NixOS/nixpkgs-nixos-unstable]": {
+    "peak_bytes": 228020224,
+    "cpu_cores": 0.322,
+    "seconds": 3.3,
+    "inotify_instances": 10
+  },
+  "test_nix_contract.py::test_branch_heads_are_listed_the_way_mix_reads_them[https://github.com/nix-community/home-manager-master]": {
+    "peak_bytes": 228777984,
+    "cpu_cores": 0.38,
+    "seconds": 3.3,
+    "inotify_instances": 10
   },
   "test_nix_contract.py::test_nix_never_rewrites_the_lock": {
-    "peak_bytes": 692928512,
-    "cpu_cores": 0.774,
-    "seconds": 11.4
+    "peak_bytes": 766066688,
+    "cpu_cores": 0.799,
+    "seconds": 8.5,
+    "inotify_instances": 10
   },
-  "test_privilege.py::test_no_command_writes_into_a_home_directory_as_root": {
-    "peak_bytes": 2384986112,
-    "cpu_cores": 1.433,
-    "seconds": 88.6
+  "test_privilege.py::test_no_command_touches_a_home_directory_as_root": {
+    "peak_bytes": 2592092160,
+    "cpu_cores": 0.847,
+    "seconds": 136.2,
+    "inotify_instances": 10
+  },
+  "test_purge.py::test_a_dry_run_of_a_purge_lists_the_changes_and_makes_none": {
+    "peak_bytes": 295993344,
+    "cpu_cores": 0.336,
+    "seconds": 3.3,
+    "inotify_instances": 10
+  },
+  "test_purge.py::test_a_purge_leaves_no_trace_of_mix_on_the_machine_or_in_any_home": {
+    "peak_bytes": 1215684608,
+    "cpu_cores": 1.244,
+    "seconds": 45.6,
+    "inotify_instances": 10
+  },
+  "test_purge.py::test_a_purge_on_a_terminal_shows_the_daemons_plan_with_every_home_before_asking": {
+    "peak_bytes": 1243238400,
+    "cpu_cores": 2.134,
+    "seconds": 19.9,
+    "inotify_instances": 10
+  },
+  "test_purge.py::test_a_purge_stopped_while_reclaiming_is_finished_by_the_next_purge": {
+    "peak_bytes": 290263040,
+    "cpu_cores": 0.476,
+    "seconds": 13.3,
+    "inotify_instances": 10
+  },
+  "test_purge.py::test_a_purge_without_a_terminal_or_yes_is_refused_and_changes_nothing": {
+    "peak_bytes": 239271936,
+    "cpu_cores": 0.23,
+    "seconds": 5.7,
+    "inotify_instances": 10
   },
   "test_remove.py::test_remove_drops_a_package_as_a_regular_user_with_no_sudo": {
-    "peak_bytes": 1914585088,
-    "cpu_cores": 1.389,
-    "seconds": 69.2
+    "peak_bytes": 2487390208,
+    "cpu_cores": 0.596,
+    "seconds": 92.0,
+    "inotify_instances": 10
   },
-  "test_worker.py::test_a_command_run_through_the_worker_streams_json_and_nothing_else": {
-    "peak_bytes": 32894976,
-    "cpu_cores": 0.183,
-    "seconds": 3.2
+  "test_repository.py::test_a_damaged_repository_is_found_and_replaced_so_installs_work_again": {
+    "peak_bytes": 784945152,
+    "cpu_cores": 0.66,
+    "seconds": 8.7,
+    "inotify_instances": 10
+  },
+  "test_repository.py::test_a_repository_root_wrote_into_is_given_back_with_its_history": {
+    "peak_bytes": 786616320,
+    "cpu_cores": 0.584,
+    "seconds": 11.7,
+    "inotify_instances": 10
+  },
+  "test_service.py::test_a_daemon_killed_after_the_switch_leaves_a_consistent_profile": {
+    "peak_bytes": 766304256,
+    "cpu_cores": 0.574,
+    "seconds": 14.5,
+    "inotify_instances": 11
+  },
+  "test_service.py::test_a_daemon_killed_before_the_switch_is_rolled_back_when_it_comes_back": {
+    "peak_bytes": 771457024,
+    "cpu_cores": 0.477,
+    "seconds": 19.5,
+    "inotify_instances": 11
+  },
+  "test_service.py::test_a_drain_lets_a_running_install_finish_and_the_daemon_comes_back": {
+    "peak_bytes": 774017024,
+    "cpu_cores": 0.485,
+    "seconds": 13.9,
+    "inotify_instances": 11
+  },
+  "test_service.py::test_every_request_leaves_an_audit_entry_in_the_journal": {
+    "peak_bytes": 280420352,
+    "cpu_cores": 0.683,
+    "seconds": 2.0,
+    "inotify_instances": 12
+  },
+  "test_service.py::test_stopping_the_daemon_mid_install_rolls_the_install_back": {
+    "peak_bytes": 671207424,
+    "cpu_cores": 0.369,
+    "seconds": 11.8,
+    "inotify_instances": 11
+  },
+  "test_service.py::test_the_daemon_is_an_enabled_running_service_whose_units_verify": {
+    "peak_bytes": 228552704,
+    "cpu_cores": 0.297,
+    "seconds": 4.6,
+    "inotify_instances": 10
+  },
+  "test_update.py::test_a_dry_run_update_on_a_mirrored_machine_is_refused_the_same_way": {
+    "peak_bytes": 230522880,
+    "cpu_cores": 0.18,
+    "seconds": 5.9,
+    "inotify_instances": 10
+  },
+  "test_update.py::test_a_machine_that_fetches_from_a_mirror_cannot_update_and_nothing_changes": {
+    "peak_bytes": 229515264,
+    "cpu_cores": 0.179,
+    "seconds": 6.7,
+    "inotify_instances": 10
+  },
+  "test_user_remove.py::test_a_dry_run_of_a_user_removal_makes_no_change": {
+    "peak_bytes": 228384768,
+    "cpu_cores": 0.353,
+    "seconds": 4.2,
+    "inotify_instances": 10
+  },
+  "test_user_remove.py::test_a_user_can_leave_while_another_users_command_is_running": {
+    "peak_bytes": 1263124480,
+    "cpu_cores": 1.816,
+    "seconds": 24.8,
+    "inotify_instances": 11
+  },
+  "test_user_remove.py::test_a_user_removal_takes_that_user_and_leaves_the_machine_and_the_others": {
+    "peak_bytes": 1304653824,
+    "cpu_cores": 1.616,
+    "seconds": 28.4,
+    "inotify_instances": 10
+  },
+  "test_user_remove.py::test_a_user_removal_without_a_terminal_or_yes_is_refused_and_changes_nothing": {
+    "peak_bytes": 230129664,
+    "cpu_cores": 0.338,
+    "seconds": 4.1,
+    "inotify_instances": 10
+  },
+  "test_user_remove.py::test_a_user_who_left_is_refused_by_the_daemon": {
+    "peak_bytes": 253399040,
+    "cpu_cores": 0.442,
+    "seconds": 3.9,
+    "inotify_instances": 10
+  },
+  "test_user_remove.py::test_the_last_user_on_a_terminal_is_offered_the_machine_and_a_yes_purges_it": {
+    "peak_bytes": 229191680,
+    "cpu_cores": 0.356,
+    "seconds": 10.2,
+    "inotify_instances": 10
+  },
+  "test_user_remove.py::test_the_last_user_to_leave_sees_that_nobody_else_remains_and_a_purge_finishes_the_job": {
+    "peak_bytes": 230535168,
+    "cpu_cores": 0.244,
+    "seconds": 10.8,
+    "inotify_instances": 10
+  },
+  "test_user_remove.py::test_the_last_user_who_says_no_keeps_the_machine": {
+    "peak_bytes": 257564672,
+    "cpu_cores": 0.238,
+    "seconds": 6.2,
+    "inotify_instances": 10
   },
   "test_worker.py::test_a_killed_client_still_gets_its_changes_rolled_back": {
-    "peak_bytes": 197017600,
-    "cpu_cores": 0.212,
-    "seconds": 8.5
+    "peak_bytes": 97067008,
+    "cpu_cores": 0.082,
+    "seconds": 16.3,
+    "inotify_instances": 11
   },
   "test_worker.py::test_a_user_without_sudo_rights_cannot_bootstrap": {
-    "peak_bytes": 34496512,
-    "cpu_cores": 0.208,
-    "seconds": 3.1
+    "peak_bytes": 122413056,
+    "cpu_cores": 0.25,
+    "seconds": 3.1,
+    "inotify_instances": 10
   },
   "test_worker.py::test_an_enrolled_user_installs_through_the_daemon_without_sudo": {
-    "peak_bytes": 683110400,
-    "cpu_cores": 0.812,
-    "seconds": 10.6
+    "peak_bytes": 765657088,
+    "cpu_cores": 0.731,
+    "seconds": 8.2,
+    "inotify_instances": 10
   },
   "test_worker.py::test_bootstrap_works_when_sudo_only_allows_mix": {
-    "peak_bytes": 2310889472,
-    "cpu_cores": 1.824,
-    "seconds": 43.7
+    "peak_bytes": 2490998784,
+    "cpu_cores": 0.607,
+    "seconds": 85.2,
+    "inotify_instances": 10
   },
   "test_worker.py::test_ctrl_c_through_the_worker_rolls_back_and_says_so": {
-    "peak_bytes": 39669760,
-    "cpu_cores": 0.191,
-    "seconds": 7.3
+    "peak_bytes": 87056384,
+    "cpu_cores": 0.063,
+    "seconds": 19.5,
+    "inotify_instances": 11
+  },
+  "test_worker.py::test_json_output_is_one_document_on_stdout_even_when_verbose": {
+    "peak_bytes": 231591936,
+    "cpu_cores": 0.599,
+    "seconds": 2.7,
+    "inotify_instances": 10
   },
   "test_worker.py::test_repair_works_when_sudo_only_allows_mix": {
-    "peak_bytes": 2321653760,
-    "cpu_cores": 1.703,
-    "seconds": 59.2
+    "peak_bytes": 2562637824,
+    "cpu_cores": 0.618,
+    "seconds": 88.8,
+    "inotify_instances": 10
   },
   "test_worker.py::test_the_daemon_serves_no_user_outside_mix_users": {
-    "peak_bytes": 29921280,
-    "cpu_cores": 0.173,
-    "seconds": 3.3
+    "peak_bytes": 230514688,
+    "cpu_cores": 0.352,
+    "seconds": 3.6,
+    "inotify_instances": 10
   }
 }

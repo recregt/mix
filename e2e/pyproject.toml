@@ -3,6 +3,7 @@ name = "mix-e2e"
 version = "0.0.0"
 requires-python = ">=3.14"
 dependencies = [
+    "periplu",
     "pytest>=8.4",
     "pytest-xdist>=3.8",
 ]
@@ -10,9 +11,15 @@ dependencies = [
 [tool.uv]
 package = false
 
+[tool.uv.sources]
+periplu = { git = "https://github.com/recregt/periplu", tag = "v0.1.0" }
+
 [tool.pytest.ini_options]
 addopts = ["-p", "no:cacheprovider", "-rfE"]
 verbosity_assertions = 2
+periplu_project = "mix"
+periplu_baseline = "resources.json"
+periplu_failures = "../target/e2e-events"
 markers = [
     "bootstrapped: start from a container where ciuser already ran `mix bootstrap`",
     "unmounted: start a container without the built mix binaries mounted into /usr/local/bin",
