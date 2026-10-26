@@ -46,7 +46,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "periplu", git = "https://github.com/recregt/periplu?tag=v0.1.0" },
+    { name = "periplu", specifier = ">=0.1.1" },
     { name = "pytest", specifier = ">=8.4" },
     { name = "pytest-xdist", specifier = ">=3.8" },
 ]
@@ -65,11 +65,15 @@ wheels = [
 
 [[package]]
 name = "periplu"
-version = "0.1.0"
-source = { git = "https://github.com/recregt/periplu?tag=v0.1.0#276acab4e0417799f1300d29fca247c150156ea7" }
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pytest" },
     { name = "pytest-xdist" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c7/90/aedf76a4c3f3356dfae8aaccc8006802ce3d427a5695469ba774c04181c9/periplu-0.1.1.tar.gz", hash = "sha256:ef053ce713006468fbd47f16f401189630627f3f76d2dd0ca569201123f890ac", size = 23287, upload-time = "2026-10-26T11:35:46.372Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0d/7a/d4a9a042c6205417515d39a4e33abf4e6bc10158beaeeb651ac7bf2a22e5/periplu-0.1.1-py3-none-any.whl", hash = "sha256:2e28fdbfd501a113923e812745c473381c7a460efbe6c8c70674e25b4279291e", size = 24250, upload-time = "2026-10-26T11:35:45.205Z" },
 ]
 
 [[package]]
