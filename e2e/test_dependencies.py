@@ -1,8 +1,8 @@
 import json
 
 import pytest
+from periplu.container import until
 
-from support.container import until
 from support.mirror import INSTALL_TEST_PACKAGE, MIRROR_TEST_USERS
 
 USER = MIRROR_TEST_USERS[0]

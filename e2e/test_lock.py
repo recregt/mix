@@ -1,8 +1,9 @@
 import shlex
 
 import pytest
+from periplu.container import until
 
-from support.container import create_user, until
+from support.container import create_user
 from support.mirror import (
     INSTALL_TEST_PACKAGE,
     MIRROR_TEST_USERS,

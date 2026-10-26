@@ -1,4 +1,5 @@
-from support.container import wait_any
+from periplu.container import wait_any
+
 from support.mirror import silent_mirror
 
 PROVISIONING_MANIFEST = "/nix/.mix-provisioning-manifest"
