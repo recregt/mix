@@ -2,7 +2,9 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:best-practices"],
   "enabledManagers": ["cargo", "custom.regex", "github-actions", "nix", "rust-toolchain"],
-  "dependencyDashboard": true,
+  "dependencyDashboard": {
+    "enabled": true
+  },
   "semanticCommitScope": "",
   "lockFileMaintenance": {
     "enabled": false
