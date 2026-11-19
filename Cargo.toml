@@ -29,7 +29,7 @@ mix-rpc = { path = "crates/rpc" }
 mix-shell = { path = "crates/shell" }
 mix-testchild = { path = "crates/testchild" }
 mix-ui = { path = "crates/ui" }
-nix = { version = "0.31.3", features = ["user", "fs"] }
+nix = { version = "0.32.0", features = ["user", "fs"] }
 proptest = "1.11.0"
 prost = "0.14.4"
 protox = "0.10.0"
